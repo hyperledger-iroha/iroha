@@ -41,3 +41,4 @@ pricing_config,quote_api,deposit_lifecycle,settlement_execution,settlement_submi
 /runtime/sorafs/appeal-finance/multi-peer-reconciliation.json
 --governance-approval-evidence
 /runtime/sorafs/appeal-finance/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

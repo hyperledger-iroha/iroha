@@ -15,7 +15,7 @@ use super::{
     VegaPointWireV1, VegaScalarWireV1, VegaT256ScalarV1 as Scalar,
     circuit::{CircuitAssignment, MAX_CIRCUIT_ROWS},
     commitment::{Commitment, CommitmentKey, MAX_COMMITMENT_WORKERS},
-    nifs::NovaNifs,
+    nifs::{NovaNifs, NovaNifsProverInput},
     r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, Witness},
     spartan::RelaxedSpartanProof,
     sumcheck::{CompressedUnivariate, SumcheckProof},
@@ -165,6 +165,7 @@ impl MaskedRelaxedDimensionsV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 pub(super) struct MaskedRelaxedCommitmentWireV1 {
     pub(super) points: Vec<VegaPointWireV1>,
@@ -173,6 +174,7 @@ pub(super) struct MaskedRelaxedCommitmentWireV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 pub(super) struct MaskedRelaxedProofWireV1 {
     pub(super) version: u8,
@@ -264,13 +266,15 @@ pub(super) fn prove_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
             dimensions.error_commitment_points,
         )?);
         let (fold, next_instance, next_witness) = NovaNifs::prove(
-            &key,
-            &shape,
-            &folded_instance,
-            &folded_witness,
-            &regular_instance,
-            &regular_witness,
-            &cross_blindings,
+            NovaNifsProverInput {
+                key: &key,
+                shape: &shape,
+                relaxed_instance: &folded_instance,
+                relaxed_witness: &folded_witness,
+                regular_instance: &regular_instance,
+                regular_witness: &regular_witness,
+                cross_term_blindings: &cross_blindings,
+            },
             &mut transcript,
         )
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
@@ -544,13 +548,15 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
     assignment.extend_from_slice(&values);
     assignment.push(*relaxation);
     assignment.extend_from_slice(&public_inputs);
-    let (a, b, c) = shape
+    let products = shape
         .multiply(&assignment)
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
     let error = SecretScalars::new(
-        a.into_iter()
-            .zip(b)
-            .zip(c)
+        products
+            .a
+            .into_iter()
+            .zip(products.b)
+            .zip(products.c)
             .map(|((a, b), c)| a * b - *relaxation * c)
             .collect(),
     );

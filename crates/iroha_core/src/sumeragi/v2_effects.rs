@@ -99,6 +99,7 @@ use iroha_data_model::{
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
+#[cfg(test)]
 use norito::codec::Encode as _;
 
 use super::{

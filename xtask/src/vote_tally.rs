@@ -156,16 +156,43 @@ mod vote_tally_backend {
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
     };
     use iroha_core::zk::depth::VoteBoolCommitMerkle;
-    use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng as _};
+    use rand_chacha::{
+        ChaCha20Rng,
+        rand_core::{RngCore as RngCoreNew, SeedableRng as _},
+    };
+    use rand_core_06::{CryptoRng as CryptoRngOld, RngCore as RngCoreOld};
     use sha2::{Digest as ShaDigest, Sha256};
 
     use super::*;
 
-    #[allow(dead_code)]
-    fn _assert_scalar_hashable() {
-        fn assert_hash<T: std::hash::Hash>() {}
-        assert_hash::<Scalar>();
+    struct Halo2ProofRng(ChaCha20Rng);
+
+    impl Halo2ProofRng {
+        fn from_seed(seed: [u8; 32]) -> Self {
+            Self(ChaCha20Rng::from_seed(seed))
+        }
     }
+
+    impl RngCoreOld for Halo2ProofRng {
+        fn next_u32(&mut self) -> u32 {
+            RngCoreNew::next_u32(&mut self.0)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            RngCoreNew::next_u64(&mut self.0)
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            RngCoreNew::fill_bytes(&mut self.0, destination);
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            RngCoreNew::fill_bytes(&mut self.0, destination);
+            Ok(())
+        }
+    }
+
+    impl CryptoRngOld for Halo2ProofRng {}
 
     pub(super) fn write_bundle(out_dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
         fs::create_dir_all(out_dir)?;
@@ -222,7 +249,7 @@ mod vote_tally_backend {
         let root = compute_root(commit);
 
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        let instance_columns = vec![vec![commit], vec![root]];
+        let instance_columns = [vec![commit], vec![root]];
         let instances = instance_columns
             .iter()
             .map(|column| column.as_slice())
@@ -231,7 +258,7 @@ mod vote_tally_backend {
             IPACommitmentScheme<Curve>,
             ProverIPA<'_, Curve>,
             Challenge255<Curve>,
-            ChaCha20Rng,
+            Halo2ProofRng,
             Blake2bWrite<Vec<u8>, Curve, Challenge255<Curve>>,
             VoteBoolCommitMerkle<8>,
         >(
@@ -239,7 +266,7 @@ mod vote_tally_backend {
             &pk,
             &[circuit],
             &[&instances],
-            ChaCha20Rng::from_seed(RNG_SEED),
+            Halo2ProofRng::from_seed(RNG_SEED),
             &mut transcript,
         )?;
         let proof_raw = transcript.finalize();
@@ -353,6 +380,24 @@ mod vote_tally_backend {
         ShaDigest::update(&mut h, backend.as_bytes());
         ShaDigest::update(&mut h, bytes);
         h.finalize().into()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn halo2_proof_rng_is_seed_deterministic() {
+            let mut first_rng = Halo2ProofRng::from_seed([0x5a; 32]);
+            let mut second_rng = Halo2ProofRng::from_seed([0x5a; 32]);
+            let mut first = [0u8; 64];
+            let mut second = [0u8; 64];
+
+            RngCoreOld::fill_bytes(&mut first_rng, &mut first);
+            RngCoreOld::fill_bytes(&mut second_rng, &mut second);
+
+            assert_eq!(first, second);
+        }
     }
 }
 

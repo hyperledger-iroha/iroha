@@ -175,6 +175,7 @@ declare_permissions! {
 
     iroha_executor_data_model::permission::smart_contract::{CanRegisterSmartContractCode},
     iroha_executor_data_model::permission::smart_contract::{CanInvokeContractEntrypoint},
+    iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
     iroha_executor_data_model::permission::settlement::{CanManageFxCorridors},
     iroha_executor_data_model::permission::settlement::{CanSetFxCorridorPolicy},
     iroha_executor_data_model::permission::settlement::{CanSettleFxCorridor},
@@ -429,7 +430,7 @@ mod smart_contract {
 
 mod settlement {
     use iroha_executor_data_model::permission::settlement::{
-        CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+        CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
     };
 
     use super::*;
@@ -446,6 +447,41 @@ mod settlement {
             host: &Iroha,
         ) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+
+    fn validate_bilateral_settlement_consent(
+        permission: &CanExecuteSettlement,
+        authority: &AccountId,
+        context: &Context,
+    ) -> Result {
+        if context.curr_block.is_genesis() || permission.debited_asset.account() == authority {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "only the debited account may delegate or revoke exact bilateral settlement consent"
+                .to_owned(),
+        ))
+    }
+
+    impl ValidateGrantRevoke for CanExecuteSettlement {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            _host: &Iroha,
+        ) -> Result {
+            validate_bilateral_settlement_consent(self, authority, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            _host: &Iroha,
+        ) -> Result {
+            validate_bilateral_settlement_consent(self, authority, context)
         }
     }
 
@@ -2154,6 +2190,7 @@ mod tests {
         },
         peer::CanManagePeers,
         query::CanReadRestrictedDataspace,
+        settlement::CanExecuteSettlement,
     };
 
     use super::{
@@ -2170,7 +2207,7 @@ mod tests {
                 block::BlockHeader,
                 nexus::{DataSpaceId, FeeSponsorProgramId, UniversalAccountId},
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, AssetDefinitionId, DomainId, Json, RoleId},
+                prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, Json, RoleId},
             },
         },
     };
@@ -2339,6 +2376,38 @@ mod tests {
             .validate(&authority, &Iroha, &context)
             .expect_err("expected rejection");
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn bilateral_settlement_consent_is_controlled_by_debited_account() {
+        let debited_account = make_account_id();
+        let other = make_other_account_id();
+        let permission = CanExecuteSettlement {
+            debited_asset: AssetId::new(
+                AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("asset domain"),
+                    "rose".parse().expect("asset name"),
+                ),
+                debited_account.clone(),
+            ),
+            settlement_id: "permission_consent".parse().expect("settlement id"),
+            intent_hash: Hash::new(b"exact bilateral settlement intent"),
+        };
+        let debited_context = make_context(&debited_account, 2);
+        let other_context = make_context(&other, 2);
+
+        permission
+            .validate_grant(&debited_account, &debited_context, &Iroha)
+            .expect("debited account may grant exact consent");
+        permission
+            .validate_revoke(&debited_account, &debited_context, &Iroha)
+            .expect("debited account may revoke exact consent");
+        assert!(matches!(
+            permission
+                .validate_grant(&other, &other_context, &Iroha)
+                .expect_err("unrelated authority must not grant consent"),
+            ValidationFail::NotPermitted(_)
+        ));
     }
 
     #[test]

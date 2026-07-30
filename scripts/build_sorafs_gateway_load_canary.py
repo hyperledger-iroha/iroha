@@ -24,11 +24,11 @@ from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_P95_LATENCY_MS,
     DEFAULT_MAX_P99_LATENCY_MS,
     DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND,
+    DEFAULT_MIN_PROVIDER_COUNT,
     DEFAULT_MIN_STAGING_DURATION_SECS,
     DEFAULT_MIN_STREAMS,
     DEFAULT_MIN_SUCCESS_RATE_BPS,
     MAX_SUCCESS_RATE_BPS,
-    CACHE_STATE_ERROR,
     FORBIDDEN_STAGING_METADATA_MARKERS,
     GATEWAY_VERSION_ERROR,
     GATEWAY_VERSION_PATTERN,
@@ -37,9 +37,9 @@ from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     KIND_BY_NAME,
     PROVIDER_NAME_ERROR,
     PROVIDER_NAME_PATTERN,
+    REQUIRED_CORRUPTION_INJECTION_BPS,
     REQUIRED_METRICS,
     REQUIRED_SCENARIOS,
-    REQUIRED_CACHE_STATES,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -82,6 +82,16 @@ HEX64_LEN = 64
 HTTP3_ENDPOINT_COMMITTED_UNSUPPORTED_ERROR = (
     "--http3-endpoint-committed is unsupported until a reviewed "
     "SoraFS HTTP/3 gateway endpoint is committed"
+)
+STAGING_REQUIRED_TRUE_FLAGS = (
+    ("cold_cache_exercised", "--cold-cache-exercised"),
+    ("warm_cache_exercised", "--warm-cache-exercised"),
+    ("mixed_cache_exercised", "--mixed-cache-exercised"),
+    ("revocation_exercised", "--revocation-exercised"),
+    ("malformed_flood_exercised", "--malformed-flood-exercised"),
+    ("denylist_pressure_exercised", "--denylist-pressure-exercised"),
+    ("rate_limit_pressure_exercised", "--rate-limit-pressure-exercised"),
+    ("failover_exercised", "--failover-exercised"),
 )
 
 
@@ -188,14 +198,6 @@ def validate_staging_metadata_label(
         errors.append(f"{option} must not contain non-production markers {forbidden}")
 
 
-def validate_cache_state_arg(value: str | None, *, errors: list[str]) -> None:
-    """Validate a reviewed cache-state mode before writing a canary."""
-
-    validate_canonical_string(value, label="--cache-state", errors=errors)
-    if value and value not in REQUIRED_CACHE_STATES:
-        errors.append(CACHE_STATE_ERROR.replace("cache_state.mode", "--cache-state"))
-
-
 def require_kind_options(
     args: argparse.Namespace,
     errors: list[str],
@@ -230,6 +232,11 @@ def validate_provider_names(args: argparse.Namespace, errors: list[str]) -> None
         )
     if len(set(provider_names)) != len(provider_names):
         errors.append("--provider must not contain duplicates")
+    if len(set(provider_names)) < DEFAULT_MIN_PROVIDER_COUNT:
+        errors.append(
+            f"--provider must include at least {DEFAULT_MIN_PROVIDER_COUNT} "
+            "distinct providers"
+        )
     if args.provider_count != len(set(provider_names)):
         errors.append("--provider-count must match the number of unique --provider values")
     args.providers = provider_names
@@ -277,12 +284,31 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "policy_digest_hex": args.policy_digest_hex,
                 "gateway_version": args.gateway_version,
                 "hardware_profile": {"name": args.hardware_profile},
-                "cache_state": {"mode": args.cache_state},
+                "cache_coverage": {
+                    "cold_cache_exercised": args.cold_cache_exercised,
+                    "warm_cache_exercised": args.warm_cache_exercised,
+                    "mixed_cache_exercised": args.mixed_cache_exercised,
+                },
                 "duration_seconds": args.duration_seconds,
                 "stream_count": args.stream_count,
                 "streams": generated_stream_inventory(args.stream_count),
+                "peak_concurrent_range_streams": (
+                    args.peak_concurrent_range_streams
+                ),
                 "provider_count": args.provider_count,
                 "providers": [{"name": name} for name in args.providers],
+                "load_conditions": {
+                    "corruption_injection_bps": args.corruption_injection_bps,
+                    "revocation_exercised": args.revocation_exercised,
+                    "malformed_flood_exercised": args.malformed_flood_exercised,
+                    "denylist_pressure_exercised": (
+                        args.denylist_pressure_exercised
+                    ),
+                    "rate_limit_pressure_exercised": (
+                        args.rate_limit_pressure_exercised
+                    ),
+                    "failover_exercised": args.failover_exercised,
+                },
                 "success_rate_bps": args.success_rate_bps,
                 "error_rate_bps": args.error_rate_bps,
                 "p95_latency_ms": args.p95_latency_ms,
@@ -340,12 +366,38 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
 def validate_thresholds(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate threshold-bound facts before payload construction."""
 
-    if args.duration_seconds < DEFAULT_MIN_STAGING_DURATION_SECS:
+    if (
+        isinstance(args.duration_seconds, int)
+        and args.duration_seconds < DEFAULT_MIN_STAGING_DURATION_SECS
+    ):
         errors.append(
             f"--duration-seconds must be >= {DEFAULT_MIN_STAGING_DURATION_SECS}"
         )
     if args.stream_count < DEFAULT_MIN_STREAMS:
         errors.append(f"--stream-count must be >= {DEFAULT_MIN_STREAMS}")
+    if (
+        isinstance(args.peak_concurrent_range_streams, int)
+        and args.peak_concurrent_range_streams < DEFAULT_MIN_STREAMS
+    ):
+        errors.append(
+            "--peak-concurrent-range-streams must be >= "
+            f"{DEFAULT_MIN_STREAMS}"
+        )
+    if (
+        isinstance(args.peak_concurrent_range_streams, int)
+        and args.peak_concurrent_range_streams > args.stream_count
+    ):
+        errors.append(
+            "--peak-concurrent-range-streams must be <= --stream-count"
+        )
+    if (
+        args.corruption_injection_bps is not None
+        and args.corruption_injection_bps != REQUIRED_CORRUPTION_INJECTION_BPS
+    ):
+        errors.append(
+            "--corruption-injection-bps must be exactly "
+            f"{REQUIRED_CORRUPTION_INJECTION_BPS}"
+        )
     if args.success_rate_bps < DEFAULT_MIN_SUCCESS_RATE_BPS:
         errors.append(f"--success-rate-bps must be >= {DEFAULT_MIN_SUCCESS_RATE_BPS}")
     if args.success_rate_bps > MAX_SUCCESS_RATE_BPS:
@@ -373,6 +425,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors,
         field="--environment",
     )
+    if args.environment != "production":
+        errors.append("--environment must be production")
     if args.kind in SUITE_DIGEST_KINDS:
         validate_hex64(
             args.suite_report_digest_hex,
@@ -417,7 +471,15 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
                 ("--fixture-bundle-digest-hex", args.fixture_bundle_digest_hex),
                 ("--gateway-version", args.gateway_version),
                 ("--hardware-profile", args.hardware_profile),
-                ("--cache-state", args.cache_state),
+                ("--duration-seconds", args.duration_seconds),
+                (
+                    "--peak-concurrent-range-streams",
+                    args.peak_concurrent_range_streams,
+                ),
+                (
+                    "--corruption-injection-bps",
+                    args.corruption_injection_bps,
+                ),
             ),
         )
         validate_hex64(
@@ -433,7 +495,9 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             pattern_error=HARDWARE_PROFILE_ERROR,
             errors=errors,
         )
-        validate_cache_state_arg(args.cache_state, errors=errors)
+        for attribute, option in STAGING_REQUIRED_TRUE_FLAGS:
+            if getattr(args, attribute) is not True:
+                errors.append(f"{option} is required for staging_load")
         validate_provider_names(args, errors)
         validate_thresholds(args, errors)
     elif args.kind == "telemetry_slo":
@@ -545,17 +609,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--load-profile-window-seconds", type=positive_int_arg, default=60)
-    parser.add_argument("--duration-seconds", type=positive_int_arg, default=3_600)
+    parser.add_argument("--duration-seconds", type=positive_int_arg)
     parser.add_argument("--stream-count", type=positive_int_arg, default=1_200)
+    parser.add_argument("--peak-concurrent-range-streams", type=positive_int_arg)
     parser.add_argument("--provider-count", type=positive_int_arg, default=4)
     parser.add_argument("--provider", action="append", default=[])
+    parser.add_argument("--corruption-injection-bps", type=non_negative_int_arg)
+    parser.add_argument("--cold-cache-exercised", action="store_true")
+    parser.add_argument("--warm-cache-exercised", action="store_true")
+    parser.add_argument("--mixed-cache-exercised", action="store_true")
+    parser.add_argument("--revocation-exercised", action="store_true")
+    parser.add_argument("--malformed-flood-exercised", action="store_true")
+    parser.add_argument("--denylist-pressure-exercised", action="store_true")
+    parser.add_argument("--rate-limit-pressure-exercised", action="store_true")
+    parser.add_argument("--failover-exercised", action="store_true")
     parser.add_argument("--success-rate-bps", type=positive_int_arg, default=9_950)
     parser.add_argument("--error-rate-bps", type=non_negative_int_arg, default=50)
     parser.add_argument("--p95-latency-ms", type=positive_int_arg, default=1_200)
     parser.add_argument("--p99-latency-ms", type=positive_int_arg, default=2_200)
     parser.add_argument("--gateway-version")
     parser.add_argument("--hardware-profile")
-    parser.add_argument("--cache-state")
     parser.add_argument("--http3-endpoint-committed", action="store_true")
     raw_args = sys.argv[1:] if argv is None else argv
     try:

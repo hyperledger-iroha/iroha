@@ -115,25 +115,81 @@ if [[ -z "$APPLE_CARGO_LOCKFILE" \
   APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
 fi
 
-CHECK_PYTHON_BINARY=""
-for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [[ -x "$trusted_python" ]]; then
-    CHECK_PYTHON_BINARY="$trusted_python"
-    break
+resolve_trusted_python312() {
+  local candidate canonical
+  local override="${MOBILE_SDK_PYTHON_BINARY:-}"
+  local candidates=()
+
+  if [[ -n "$override" ]]; then
+    if [[ "$override" != /* || ! -f "$override" || -L "$override" || ! -x "$override" ]]; then
+      echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable" >&2
+      return 1
+    fi
+    candidates=("$override")
+  else
+    candidates=(
+      /opt/homebrew/opt/python@3.12/bin/python3.12
+      /opt/homebrew/bin/python3.12
+      /usr/local/opt/python@3.12/bin/python3.12
+      /usr/local/bin/python3.12
+      /usr/bin/python3.12
+      /usr/bin/python3
+    )
   fi
-done
-if [[ -z "$CHECK_PYTHON_BINARY" ]]; then
-  echo "[mobile-sdk-artifacts] ERROR: pinned Python 3 is required" >&2
-  exit 69
-fi
-CHECK_PYTHON_BINARY="$("$CHECK_PYTHON_BINARY" -I -c \
-  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-  "$CHECK_PYTHON_BINARY")"
-CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -c \
+
+  for candidate in "${candidates[@]}"; do
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    if ! canonical="$(
+      env -i \
+        HOME=/tmp \
+        PATH=/usr/bin:/bin \
+        TMPDIR=/tmp \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        "$candidate" -I -S -c '
+import os
+import pathlib
+import stat
+import sys
+
+if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
+    raise SystemExit(1)
+if "SDKROOT" in os.environ:
+    raise SystemExit(1)
+resolved = pathlib.Path(sys.executable).resolve(strict=True)
+metadata = resolved.stat()
+if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved, os.X_OK):
+    raise SystemExit(1)
+print(resolved)
+'
+    )"; then
+      continue
+    fi
+    if [[ "$canonical" != /* || ! -f "$canonical" || -L "$canonical" || ! -x "$canonical" ]]; then
+      continue
+    fi
+    if [[ -n "$override" && "$canonical" != "$override" ]]; then
+      echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_PYTHON_BINARY must already name its canonical executable" >&2
+      return 1
+    fi
+    printf '%s\n' "$canonical"
+    return 0
+  done
+
+  if [[ -n "$override" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_PYTHON_BINARY must be an isolated Python 3.12 executable" >&2
+  else
+    echo "[mobile-sdk-artifacts] ERROR: a trusted absolute Python 3.12 executable is required" >&2
+  fi
+  return 1
+}
+
+CHECK_PYTHON_BINARY="$(resolve_trusted_python312)" || exit 69
+CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -S -c \
   'import os,pathlib,pwd; print(pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True))' \
   2>/dev/null || true)"
 if [[ -z "$CHECK_USER_HOME_DIR" ]]; then
-  CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -c \
+  CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -S -c \
     'import pathlib; print(pathlib.Path.home().resolve(strict=True))')"
 fi
 CHECK_TMPDIR="/tmp"
@@ -157,7 +213,7 @@ run_isolated_checker_python() {
     TMPDIR="$CHECK_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$CHECK_PYTHON_BINARY" -I "$@"
+    "$CHECK_PYTHON_BINARY" -I -S "$@"
 }
 
 ANDROID_KOTLIN_BUILD_ROOT="$ROOT_DIR/kotlin"
@@ -250,10 +306,10 @@ initialize_source_seal_tools() {
       LC_ALL=C.UTF-8 \
       "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 rustc
   )"
-  SOURCE_SEAL_CARGO_BINARY="$("$CHECK_PYTHON_BINARY" -I -c \
+  SOURCE_SEAL_CARGO_BINARY="$(run_isolated_checker_python -c \
     'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
     "$SOURCE_SEAL_CARGO_BINARY")"
-  SOURCE_SEAL_RUSTC_BINARY="$("$CHECK_PYTHON_BINARY" -I -c \
+  SOURCE_SEAL_RUSTC_BINARY="$(run_isolated_checker_python -c \
     'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
     "$SOURCE_SEAL_RUSTC_BINARY")"
   if [[ ! -x "$SOURCE_SEAL_CARGO_BINARY" || ! -x "$SOURCE_SEAL_RUSTC_BINARY" ]]; then
@@ -277,7 +333,7 @@ run_bridge_source_seal() {
     NORITO_BRIDGE_SEAL_TMPDIR="$CHECK_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO="$SOURCE_SEAL_CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$SOURCE_SEAL_RUSTC_BINARY" \
-    "$CHECK_PYTHON_BINARY" -I "$ROOT_DIR/scripts/norito_bridge_source_seal.py" "$@"
+    "$CHECK_PYTHON_BINARY" -I -S "$ROOT_DIR/scripts/norito_bridge_source_seal.py" "$@"
 }
 
 run_bridge_source_git() {
@@ -377,6 +433,10 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_bundle_summary_v4
 )
 
+SORAFS_APPEAL_FINANCE_C_SYMBOLS=(
+  connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -395,6 +455,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_sorafs_reference_validate_governance_dag_head_chain_json
   connect_norito_validation_fee_current_policy_proof_request_v1
   connect_norito_validation_fee_current_policy_proof_verify_v1
+  "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
 
@@ -474,6 +535,20 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
+)
+
+SORAFS_APPEAL_FINANCE_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols
+  Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson
+  Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols
+  Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson
+)
+
+NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision
+  Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision
 )
 
 relpath() {
@@ -2047,7 +2122,11 @@ check_android_native_symbols() {
   local nm_tool
   local symbols
   local namespace
-  local expected_jni=("${VALIDATION_FEE_JNI_SYMBOLS[@]}")
+  local expected_jni=(
+    "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
+    "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
+    "${NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS[@]}"
+  )
 
   if ! nm_tool="$(find_android_nm)"; then
     fail "llvm-nm (or MOBILE_SDK_ANDROID_NM) is required to inspect client-android $abi native bridge"
@@ -2075,7 +2154,10 @@ check_android_native_symbols() {
       expected_jni+=("Java_${namespace}_KagemushaRecursiveSpendProver_${method}")
     done
   done
-  if ! run_isolated_checker_python - "$abi" "${KAGEMUSHA_C_SYMBOLS[@]}" -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
+  if ! run_isolated_checker_python - "$abi" \
+    "${KAGEMUSHA_C_SYMBOLS[@]}" \
+    "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
+    -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
 import os
 import sys
 
@@ -2093,6 +2175,7 @@ for raw in os.fdopen(3):
     if (
         symbol == "connect_norito_bridge_abi_version"
         or symbol.startswith("connect_norito_kagemusha_")
+        or symbol in expected_c
         or (
             symbol.startswith("Java_org_hyperledger_iroha_")
             and (
@@ -2100,6 +2183,7 @@ for raw in os.fdopen(3):
                 or "_ValidationFeeConsensusProofBridge_" in symbol
             )
         )
+        or symbol in expected_jni
     ):
         actual.add(symbol)
 missing = sorted(expected - actual)

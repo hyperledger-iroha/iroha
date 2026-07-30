@@ -60,7 +60,7 @@ Norito JSON میں مکمل ترتیب ، جو اس کو پابند کرنے ک�
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

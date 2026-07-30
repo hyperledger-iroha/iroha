@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import {
   buildDaIngestRequest,
+  computeDaIngestSigningDigest,
   emitDaProofSummaryArtifact,
   generateDaProofSummary,
 } from "../src/dataAvailability.js";
@@ -15,7 +16,7 @@ const PRIVATE_KEY = Buffer.alloc(32, 0x24);
 const CLIENT_BLOB_ID = "11".repeat(32);
 const PAYLOAD = Buffer.from("payload-for-da");
 
-test("buildDaIngestRequest signs payloads and encodes DA fields", () => {
+test("buildDaIngestRequest signs the complete canonical intent and encodes DA fields", () => {
   const chunkSize = 1024;
   const { request, artifacts } = buildDaIngestRequest({
     payload: PAYLOAD,
@@ -44,13 +45,15 @@ test("buildDaIngestRequest signs payloads and encodes DA fields", () => {
     compression: "Zstd",
   });
 
-  const expectedSignatureHex = signEd25519(PAYLOAD, PRIVATE_KEY)
+  const signingDigest = computeDaIngestSigningDigest(request);
+  const expectedSignatureHex = signEd25519(signingDigest, PRIVATE_KEY)
     .toString("hex")
     .toUpperCase();
   const expectedBlobId = Buffer.from(CLIENT_BLOB_ID, "hex");
 
   assert.equal(request.signature, expectedSignatureHex);
   assert.equal(request.signature, artifacts.signatureHex);
+  assert.equal(artifacts.signingDigestHex, signingDigest.toString("hex").toUpperCase());
   assert.equal(request.submitter, artifacts.submitterPublicKey);
   assert.deepEqual(request.client_blob_id, [Array.from(expectedBlobId.values())]);
   assert.equal(request.payload, PAYLOAD.toString("base64"));
@@ -64,6 +67,7 @@ test("buildDaIngestRequest signs payloads and encodes DA fields", () => {
   assert.deepEqual(request.erasure_profile, {
     data_shards: 2,
     parity_shards: 1,
+    row_parity_stripes: 0,
     chunk_alignment: 4,
     fec_scheme: { scheme: "Custom", value: 7 },
   });
@@ -83,6 +87,61 @@ test("buildDaIngestRequest signs payloads and encodes DA fields", () => {
       encryption: { cipher: "None", params: null },
     },
   ]);
+
+  const tampered = structuredClone(request);
+  tampered.erasure_profile.parity_shards = 2;
+  assert.notDeepEqual(
+    computeDaIngestSigningDigest(tampered),
+    signingDigest,
+    "resource-sensitive erasure fields must be signed",
+  );
+});
+
+test("DA intent digest matches the shared Rust protocol vector", () => {
+  const digest = computeDaIngestSigningDigest({
+    client_blob_id: [
+      Array.from({ length: 32 }, (_, index) => (0x11 + index) & 0xff),
+    ],
+    lane_id: 2,
+    epoch: 42,
+    sequence: 7,
+    blob_class: { class: "TaikaiSegment", value: null },
+    codec: ["cmaf"],
+    erasure_profile: {
+      data_shards: 8,
+      parity_shards: 4,
+      row_parity_stripes: 2,
+      chunk_alignment: 12,
+      fec_scheme: { scheme: "Rs12_10", value: null },
+    },
+    retention_policy: {
+      hot_retention_secs: 86_400,
+      cold_retention_secs: 30 * 86_400,
+      required_replicas: 4,
+      storage_class: { type: "Hot", value: null },
+      governance_tag: ["da.test"],
+    },
+    chunk_size: 1 << 20,
+    total_size: 23,
+    compression: "Identity",
+    norito_manifest: Buffer.from([0xaa, 0xbb, 0xcc]).toString("base64"),
+    payload: Buffer.from("hello data availability").toString("base64"),
+    metadata: {
+      items: [
+        {
+          key: "content_type",
+          value: Buffer.from("video/mp4").toString("base64"),
+          visibility: { visibility: "Public", value: null },
+          encryption: { cipher: "None", params: null },
+        },
+      ],
+    },
+  });
+
+  assert.equal(
+    digest.toString("hex").toUpperCase(),
+    "F73B79FFD1DB5BF28EE57E42AA42F10BA4AF865BA1E466471167818BBBC896E8",
+  );
 });
 
 test("generateDaProofSummary normalizes native output for JS callers", () => {

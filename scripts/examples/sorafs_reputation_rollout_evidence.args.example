@@ -33,3 +33,4 @@ provider-a
 artifacts/sorafs/reputation/staged/rollout-summary.json
 --require-kind
 publish,latest,provider,events,verify,metrics,transport,consumption
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

@@ -53,8 +53,9 @@ use super::{
     },
     p256_value_bus::{
         P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1, P256_VALUE_BUS_LIMBS_V1,
-        P256_VALUE_BUS_SEGMENT_ROWS_V1, P256ValueAccessKindV1, P256ValueBusErrorV1,
-        P256ValueBusFixedAccessV1, P256ValueBusTraceV1, p256_value_bus_execution_source_cell_v1,
+        P256_VALUE_BUS_SEGMENT_ROWS_V1, P256ValueAccessKindV1, P256ValueBusBaseEndpointTraceV1,
+        P256ValueBusErrorV1, P256ValueBusFixedAccessV1,
+        p256_value_bus_base_execution_source_cell_v1,
     },
 };
 use crate::privacy_engines::transparent_stark::{
@@ -946,7 +947,7 @@ pub(crate) struct P256CrossTraceWriterAuxRowV1 {
 /// Constant-memory deterministic provider for the `2^19` writer-source
 /// auxiliary rows.
 pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
-    value_bus: &'a P256ValueBusTraceV1,
+    value_bus: &'a P256ValueBusBaseEndpointTraceV1,
     fixed: Arc<P256CrossTraceWriterSourceFixedV1>,
     challenges: P256CrossTraceChallengesV1,
     terminal: [F; P256_CROSS_TRACE_LANES_V1],
@@ -1082,12 +1083,16 @@ impl P256CrossTraceWriterSourceFixedV1 {
 /// returned provider then regenerates all `2^20` rows sequentially without
 /// retaining the roughly 272 MiB row-major auxiliary trace.
 pub(crate) fn build_zk_x509_p256_cross_trace_writer_source_v1(
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
     role: P256EcdsaRoleV1,
     challenges: P256CrossTraceChallengesV1,
 ) -> Result<P256CrossTraceWriterSourceStreamV1<'_>, P256CrossTraceBusErrorV1> {
     challenges.validate()?;
-    if value_bus.execution.segments.len() != P256_CROSS_TRACE_VALUE_BUS_SEGMENTS_V1 {
+    let segment_count = value_bus.segment_count_v1().map_err(|error| match error {
+        P256ValueBusErrorV1::Resource => P256CrossTraceBusErrorV1::Resource,
+        _ => P256CrossTraceBusErrorV1::Topology,
+    })?;
+    if segment_count != P256_CROSS_TRACE_VALUE_BUS_SEGMENTS_V1 {
         return Err(P256CrossTraceBusErrorV1::Topology);
     }
     let fixed = Arc::new(P256CrossTraceWriterSourceFixedV1::compile_v1(role)?);
@@ -1103,7 +1108,7 @@ pub(crate) fn build_zk_x509_p256_cross_trace_writer_source_v1(
 }
 
 fn compute_writer_terminal_v1(
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
     fixed: &P256CrossTraceWriterSourceFixedV1,
     challenges: P256CrossTraceChallengesV1,
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256CrossTraceBusErrorV1> {
@@ -1353,7 +1358,7 @@ fn writer_cell_at_execution_ordinal_v1(
 }
 
 fn projected_writer_source_values_v1(
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
     packed_ordinal: usize,
     fixed: P256CrossTraceWriterFixedRowV1,
 ) -> Result<[F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1], P256CrossTraceBusErrorV1> {
@@ -1366,7 +1371,8 @@ fn projected_writer_source_values_v1(
         if ordinal >= P256_CROSS_TRACE_VALUE_BUS_ACTIVE_ROWS_V1 {
             continue;
         }
-        let (actual_fixed, value) = p256_value_bus_execution_source_cell_v1(value_bus, ordinal)?;
+        let (actual_fixed, value) =
+            p256_value_bus_base_execution_source_cell_v1(value_bus, ordinal)?;
         if fixed.events[slot].active == F::ONE {
             let address = u32::try_from(fixed.events[slot].address.0)
                 .map_err(|_| P256CrossTraceBusErrorV1::Resource)?;
@@ -1437,8 +1443,8 @@ mod tests {
             P256UnresolvedByteIoSourceV1,
         },
         p256_value_bus::{
-            P256ValueBusEndpointTraceV1, P256ValueBusEndpointV1, P256ValueBusSegmentV1,
-            P256ValueIdV1,
+            P256ValueBusBaseCellV1, P256ValueBusBaseEndpointTraceV1, P256ValueBusEndpointV1,
+            P256ValueBusFixedAccessV1, P256ValueIdV1,
         },
     };
 
@@ -2048,15 +2054,9 @@ mod tests {
 
     #[test]
     fn writer_stream_rejects_short_and_unshaped_execution_sources_before_emission() {
-        let empty = P256ValueBusTraceV1 {
-            execution: P256ValueBusEndpointTraceV1 {
-                endpoint: P256ValueBusEndpointV1::Execution,
-                segments: Vec::new(),
-            },
-            sorted: P256ValueBusEndpointTraceV1 {
-                endpoint: P256ValueBusEndpointV1::Sorted,
-                segments: Vec::new(),
-            },
+        let empty = P256ValueBusBaseEndpointTraceV1 {
+            endpoint: P256ValueBusEndpointV1::Execution,
+            rows: Vec::new(),
         };
         assert!(matches!(
             build_zk_x509_p256_cross_trace_writer_source_v1(
@@ -2067,23 +2067,15 @@ mod tests {
             Err(P256CrossTraceBusErrorV1::Topology)
         ));
 
-        let segments = (0..P256_CROSS_TRACE_VALUE_BUS_SEGMENTS_V1)
-            .map(|index| P256ValueBusSegmentV1 {
-                index: index as u32,
-                product_before: [F::ONE; P256_CROSS_TRACE_LANES_V1],
-                rows: Vec::new(),
-                product_after: [F::ONE; P256_CROSS_TRACE_LANES_V1],
-            })
-            .collect();
-        let unshaped = P256ValueBusTraceV1 {
-            execution: P256ValueBusEndpointTraceV1 {
-                endpoint: P256ValueBusEndpointV1::Execution,
-                segments,
-            },
-            sorted: P256ValueBusEndpointTraceV1 {
-                endpoint: P256ValueBusEndpointV1::Sorted,
-                segments: Vec::new(),
-            },
+        let unshaped = P256ValueBusBaseEndpointTraceV1 {
+            endpoint: P256ValueBusEndpointV1::Execution,
+            rows: vec![
+                P256ValueBusBaseCellV1 {
+                    fixed: P256ValueBusFixedAccessV1::Inactive,
+                    value: F::ZERO,
+                };
+                P256_CROSS_TRACE_VALUE_BUS_SEGMENTS_V1 * P256_VALUE_BUS_SEGMENT_ROWS_V1
+            ],
         };
         assert!(matches!(
             build_zk_x509_p256_cross_trace_writer_source_v1(

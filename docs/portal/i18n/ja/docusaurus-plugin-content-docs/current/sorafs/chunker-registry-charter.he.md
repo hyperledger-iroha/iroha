@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cb3d1cec933b2d64f0a0e4e8be9651d868b743c22d8e66048eff91da536c56ab
+source_hash: a5519bc474082c54e0b2bdc0a6c427933d0f0a51e77c18bc434ec344f2a8d2a6
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -61,7 +61,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - fixtures、提案、決定性レポート、レジストリ更新を含む PR を提出します。

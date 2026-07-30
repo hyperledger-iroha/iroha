@@ -996,6 +996,16 @@ under `[sorafs.gateway.compliance]`. Catalog construction, acknowledgement,
 promotion, rollback, and appeal/hold precedence remain operator-controlled; no
 repository bootstrap file authorizes live Taira mutation.
 
+An enabled controller must also pin
+`feed_transport_provider_handle`,
+`feed_transport_provider_revision`, and
+`feed_transport_provider_policy_digest_hex`. The digest is the runtime
+transport's non-zero lowercase digest of the exact canonical hostname/SPKI
+inventory in the same resolved configuration. Keep credentials out of the
+bundle. Missing, partial, zero, test-marked, substituted, or stale bindings
+abort startup, and Torii rechecks the identity around every DNS and HTTPS
+operation.
+
 Taira's public edge does not accept SoraFS payload uploads in V1. Public
 publishers submit only the canonical caller-signed pin-registration
 transaction. After finality, each independently administered provider consumes

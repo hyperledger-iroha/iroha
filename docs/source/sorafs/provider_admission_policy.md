@@ -66,15 +66,34 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- p
 - `proposal`
   - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<canonical XOR quantity>`, `--advert-key=<hex32>`,
-    `--jurisdiction-code=<ISO3166-1>`, and at least one `--endpoint=<kind:host>`.
+    `--por-vrf-key=<normal:hex48|small:hex96>`,
+    `--jurisdiction-code=<ISO3166-1>`, at least one capability selector, and at
+    least one `--endpoint=<kind:host>`.
     The stake amount is an exact canonical decimal XOR quantity (for example
     `5` or `0.000000001`), not an integer micro-XOR projection.
+  - V1 selectors are exact and case-sensitive. The profile must use the
+    canonical dot-form handle; numeric IDs, registry aliases, and slash-form
+    handles fail. Generic `--capability` values are
+    `torii|quic|potr-mldsa|vendor`. Typed range and SoraNet capabilities use
+    `--range-capability=max_span=…,min_granularity=…[,sparse=…,…]` and
+    `--soranet-pq=guard|majority|strict`. Range booleans are only
+    `true|false`; stream metadata uses
+    `--stream-budget=max_in_flight=…,max_bytes_per_sec=…[,burst=…]` and repeated
+    `--transport-hint=torii|quic|soranet|vendor:<priority>` entries. Aliases,
+    case folding, whitespace normalization, duplicate structured fields, and
+    the raw `--capability=range[:streams]` form are rejected.
   - Per-endpoint attestation expects `--endpoint-attestation-attested-at=<secs>`,
     `--endpoint-attestation-expires-at=<secs>`, a certificate via
-    `--endpoint-attestation-leaf=<path>` (plus optional `--endpoint-attestation-intermediate=<path>`
-    for each chain element) and any negotiated ALPN IDs
-    (`--endpoint-attestation-alpn=<token>`). QUIC endpoints may supply transport reports with
-    `--endpoint-attestation-report[-hex]=…`.
+    `--endpoint-attestation-leaf=<path>` or
+    `--endpoint-attestation-leaf-hex=<lowercase-hex>` (plus optional exact
+    `--endpoint-attestation-intermediate=<path>` or
+    `--endpoint-attestation-intermediate-hex=<lowercase-hex>` for each chain
+    element) and any negotiated ALPN IDs
+    (`--endpoint-attestation-alpn=<token>`). Endpoint kinds are exactly
+    `torii|quic|norito-rpc`; explicit attestation kinds are exactly
+    `mtls|quic`. QUIC endpoints may supply transport reports with
+    `--endpoint-attestation-report=<path>` or
+    `--endpoint-attestation-report-hex=<lowercase-hex>`.
   - Output: canonical Norito proposal bytes (`--proposal-out`) and a JSON summary
     (default stdout or `--json-out`).
 - `sign`

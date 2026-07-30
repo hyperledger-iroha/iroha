@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import {
   buildKaigiRosterJoinProof,
-  buildZkAceTransferAuthorizationV1,
   generateKeyPair,
   normalizeCryptoAlgorithm,
   supportedCryptoAlgorithms,
@@ -11,15 +10,21 @@ import {
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
 import * as distBrowserCrypto from "../dist/crypto.browser.js";
 
-test("browser crypto bundle exposes Kaigi roster proof helper as unsupported", () => {
+test("browser crypto bundle exposes Kaigi roster proof helper and omits retired ZK-ACE helpers", () => {
   assert.throws(
     () => buildKaigiRosterJoinProof({ seed: Buffer.from("seed") }),
     /buildKaigiRosterJoinProof is unavailable in browser-only crypto builds/,
   );
-  assert.throws(
-    () => buildZkAceTransferAuthorizationV1({}),
-    /buildZkAceTransferAuthorizationV1 is unavailable in browser-only crypto builds/,
-  );
+  for (const [label, crypto] of [
+    ["src", srcBrowserCrypto],
+    ["dist", distBrowserCrypto],
+  ]) {
+    assert.equal(
+      "buildZkAceTransferAuthorizationV1" in crypto,
+      false,
+      `${label} retired ZK-ACE builder must be absent`,
+    );
+  }
 });
 
 test("browser crypto normalizes all algorithm labels but only signs Ed25519 locally", () => {

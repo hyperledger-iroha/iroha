@@ -1245,55 +1245,179 @@ fn derive_struct_serialize(
         }
     }
 
-    // Build encoded_len_hint body: sum 8-byte prefixes plus field hints.
+    fn is_u8_array(ty: &syn::Type) -> bool {
+        matches!(
+            ty,
+            syn::Type::Array(arr)
+                if matches!(
+                    &*arr.elem,
+                    syn::Type::Path(tp) if tp.path.is_ident("u8")
+                )
+        )
+    }
+
+    fn needs_packed_size(field: &syn::Field) -> bool {
+        let attrs = FieldAttr::parse(&field.attrs);
+        attrs.needs_size
+            || is_staged_wrapper(&field.ty)
+            || !(is_self_delimiting(&field.ty) || is_fixed_size(&field.ty).is_some())
+    }
+
+    let has_signature_like_field = match fields {
+        Fields::Named(named) => named
+            .named
+            .iter()
+            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .any(|field| is_signature_like(&field.ty)),
+        Fields::Unnamed(unnamed) => unnamed
+            .unnamed
+            .iter()
+            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .any(|field| is_signature_like(&field.ty)),
+        Fields::Unit => false,
+    };
+    let field_bitset_enabled = if has_signature_like_field {
+        quote! { false }
+    } else {
+        quote! { norito::core::use_field_bitset() }
+    };
+
+    // Build encoded length bodies from the same runtime layout decisions used
+    // by `serialize`. In particular, `[u8; N]` struct fields use the raw-byte
+    // fast path, so their field payload is exactly `N` bytes rather than the
+    // generic array encoding.
     let len_hint_body: TokenStream2 = match fields {
         Fields::Named(named) => {
-            let mut parts: Vec<TokenStream2> = Vec::new();
+            let mut compat_parts = Vec::new();
+            let mut bitset_parts = Vec::new();
+            let mut offset_parts = Vec::new();
+            let mut count = 0usize;
             for f in &named.named {
                 let attrs = FieldAttr::parse(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
+                count += 1;
                 let name = f.ident.as_ref().unwrap();
+                let length = if is_u8_array(&f.ty) && !attrs.flatten {
+                    quote! { core::mem::size_of_val(&self.#name) }
+                } else {
+                    quote! {
+                        norito::core::NoritoSerialize::encoded_len_hint(&self.#name)?
+                    }
+                };
                 if attrs.flatten {
-                    parts.push(quote! {
-                        let __h = norito::core::NoritoSerialize::encoded_len_hint(&self.#name)?;
-                        __sum = __sum.saturating_add(__h);
+                    compat_parts.push(quote! {
+                        let __h = #length;
+                        __sum = __sum.checked_add(__h)?;
                     });
                 } else {
-                    parts.push(quote! {
-                        let __h = norito::core::NoritoSerialize::encoded_len_hint(&self.#name)?;
-                        __sum = __sum.saturating_add(8 + __h);
+                    compat_parts.push(quote! {
+                        let __h = #length;
+                        __sum = __sum
+                            .checked_add(norito::core::len_prefix_len(__h))?
+                            .checked_add(__h)?;
                     });
                 }
+                if needs_packed_size(f) {
+                    bitset_parts.push(quote! {
+                        let __h = #length;
+                        __sum = __sum
+                            .checked_add(norito::core::len_prefix_len(__h))?
+                            .checked_add(__h)?;
+                    });
+                } else {
+                    bitset_parts.push(quote! {
+                        let __h = #length;
+                        __sum = __sum.checked_add(__h)?;
+                    });
+                }
+                offset_parts.push(quote! {
+                    let __h = #length;
+                    __sum = __sum.checked_add(__h)?;
+                });
             }
-            quote! { #(#parts)* }
+            let bitset_len = count.div_ceil(8);
+            quote! {
+                if !#has_flatten_fields && norito::core::use_packed_struct() {
+                    if #field_bitset_enabled {
+                        __sum = __sum.checked_add(#bitset_len)?;
+                        #(#bitset_parts)*
+                    } else {
+                        __sum = __sum.checked_add((#count + 1_usize).checked_mul(8)?)?;
+                        #(#offset_parts)*
+                    }
+                } else {
+                    #(#compat_parts)*
+                }
+            }
         }
         Fields::Unnamed(unnamed) => {
-            let mut parts: Vec<TokenStream2> = Vec::new();
+            let mut compat_parts = Vec::new();
+            let mut bitset_parts = Vec::new();
+            let mut offset_parts = Vec::new();
+            let mut count = 0usize;
             for (i, f) in unnamed.unnamed.iter().enumerate() {
                 let attrs = FieldAttr::parse(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
+                count += 1;
                 let idx = Index::from(i);
-                parts.push(quote! {
-                    let __h = norito::core::NoritoSerialize::encoded_len_hint(&self.#idx)?;
-                    __sum = __sum.saturating_add(8 + __h);
+                let length = if is_u8_array(&f.ty) {
+                    quote! { core::mem::size_of_val(&self.#idx) }
+                } else {
+                    quote! {
+                        norito::core::NoritoSerialize::encoded_len_hint(&self.#idx)?
+                    }
+                };
+                compat_parts.push(quote! {
+                    let __h = #length;
+                    __sum = __sum
+                        .checked_add(norito::core::len_prefix_len(__h))?
+                        .checked_add(__h)?;
+                });
+                if needs_packed_size(f) {
+                    bitset_parts.push(quote! {
+                        let __h = #length;
+                        __sum = __sum
+                            .checked_add(norito::core::len_prefix_len(__h))?
+                            .checked_add(__h)?;
+                    });
+                } else {
+                    bitset_parts.push(quote! {
+                        let __h = #length;
+                        __sum = __sum.checked_add(__h)?;
+                    });
+                }
+                offset_parts.push(quote! {
+                    let __h = #length;
+                    __sum = __sum.checked_add(__h)?;
                 });
             }
-            quote! { #(#parts)* }
+            let bitset_len = count.div_ceil(8);
+            quote! {
+                if norito::core::use_packed_struct() {
+                    if #field_bitset_enabled {
+                        __sum = __sum.checked_add(#bitset_len)?;
+                        #(#bitset_parts)*
+                    } else {
+                        __sum = __sum.checked_add((#count + 1_usize).checked_mul(8)?)?;
+                        #(#offset_parts)*
+                    }
+                } else {
+                    #(#compat_parts)*
+                }
+            }
         }
         Fields::Unit => quote! {},
     };
 
-    // Build encoded_len_exact body depending on layout:
-    // - packed-struct hybrid: bitset bytes + sum(exact) for self-delim or fixed +
-    //   sum(prefix_len(exact)+exact) for needs-size fields
-    // - compat: sum(prefix_len + exact) per field (compact lengths when enabled)
     let len_exact_body: TokenStream2 = match fields {
         Fields::Named(named) => {
-            let mut parts: Vec<TokenStream2> = Vec::new();
+            let mut compat_parts = Vec::new();
+            let mut bitset_parts = Vec::new();
+            let mut offset_parts = Vec::new();
             let mut count = 0usize;
             for f in &named.named {
                 let attrs = FieldAttr::parse(&f.attrs);
@@ -1302,47 +1426,63 @@ fn derive_struct_serialize(
                 }
                 count += 1;
                 let name = f.ident.as_ref().unwrap();
-                let needs_size = !(is_self_delimiting(&f.ty) || is_fixed_size(&f.ty).is_some());
-                let part = if attrs.flatten {
-                    quote! {
-                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
-                        __sum = __sum.saturating_add(__e);
-                    }
-                } else if has_flatten_fields {
-                    quote! {
-                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
-                        __sum = __sum.saturating_add(norito::core::len_prefix_len(__e) + __e);
-                    }
-                } else if needs_size {
-                    quote! {
-                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
-                        let __prefix_len = norito::core::len_prefix_len(__e);
-                        __sum = __sum.saturating_add(__prefix_len + __e);
-                    }
+                let length = if is_u8_array(&f.ty) && !attrs.flatten {
+                    quote! { core::mem::size_of_val(&self.#name) }
                 } else {
                     quote! {
-                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
-                        #[cfg(feature = "packed-struct")]
-                        { __sum = __sum.saturating_add(__e); }
-                        #[cfg(not(feature = "packed-struct"))]
-                        { __sum = __sum.saturating_add(norito::core::len_prefix_len(__e) + __e); }
+                        norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?
                     }
                 };
-                parts.push(part);
+                if attrs.flatten {
+                    compat_parts.push(quote! {
+                        let __e = #length;
+                        __sum = __sum.checked_add(__e)?;
+                    });
+                } else {
+                    compat_parts.push(quote! {
+                        let __e = #length;
+                        __sum = __sum
+                            .checked_add(norito::core::len_prefix_len(__e))?
+                            .checked_add(__e)?;
+                    });
+                }
+                if needs_packed_size(f) {
+                    bitset_parts.push(quote! {
+                        let __e = #length;
+                        __sum = __sum
+                            .checked_add(norito::core::len_prefix_len(__e))?
+                            .checked_add(__e)?;
+                    });
+                } else {
+                    bitset_parts.push(quote! {
+                        let __e = #length;
+                        __sum = __sum.checked_add(__e)?;
+                    });
+                }
+                offset_parts.push(quote! {
+                    let __e = #length;
+                    __sum = __sum.checked_add(__e)?;
+                });
             }
-            let bitset_len: usize = count.div_ceil(8).max(1);
-            if has_flatten_fields {
-                quote! { #(#parts)* }
-            } else {
-                quote! {
-                    #[cfg(feature = "packed-struct")]
-                    { __sum = __sum.saturating_add(#bitset_len); }
-                    #(#parts)*
+            let bitset_len = count.div_ceil(8);
+            quote! {
+                if !#has_flatten_fields && norito::core::use_packed_struct() {
+                    if #field_bitset_enabled {
+                        __sum = __sum.checked_add(#bitset_len)?;
+                        #(#bitset_parts)*
+                    } else {
+                        __sum = __sum.checked_add((#count + 1_usize).checked_mul(8)?)?;
+                        #(#offset_parts)*
+                    }
+                } else {
+                    #(#compat_parts)*
                 }
             }
         }
         Fields::Unnamed(unnamed) => {
-            let mut parts: Vec<TokenStream2> = Vec::new();
+            let mut compat_parts = Vec::new();
+            let mut bitset_parts = Vec::new();
+            let mut offset_parts = Vec::new();
             let mut count = 0usize;
             for (i, f) in unnamed.unnamed.iter().enumerate() {
                 let attrs = FieldAttr::parse(&f.attrs);
@@ -1351,29 +1491,50 @@ fn derive_struct_serialize(
                 }
                 count += 1;
                 let idx = Index::from(i);
-                let needs_size = !(is_self_delimiting(&f.ty) || is_fixed_size(&f.ty).is_some());
-                let part = if needs_size {
-                    quote! {
-                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#idx)?;
-                        let __prefix_len = norito::core::len_prefix_len(__e);
-                        __sum = __sum.saturating_add(__prefix_len + __e);
-                    }
+                let length = if is_u8_array(&f.ty) {
+                    quote! { core::mem::size_of_val(&self.#idx) }
                 } else {
                     quote! {
-                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#idx)?;
-                        #[cfg(feature = "packed-struct")]
-                        { __sum = __sum.saturating_add(__e); }
-                        #[cfg(not(feature = "packed-struct"))]
-                        { __sum = __sum.saturating_add(norito::core::len_prefix_len(__e) + __e); }
+                        norito::core::NoritoSerialize::encoded_len_exact(&self.#idx)?
                     }
                 };
-                parts.push(part);
+                compat_parts.push(quote! {
+                    let __e = #length;
+                    __sum = __sum
+                        .checked_add(norito::core::len_prefix_len(__e))?
+                        .checked_add(__e)?;
+                });
+                if needs_packed_size(f) {
+                    bitset_parts.push(quote! {
+                        let __e = #length;
+                        __sum = __sum
+                            .checked_add(norito::core::len_prefix_len(__e))?
+                            .checked_add(__e)?;
+                    });
+                } else {
+                    bitset_parts.push(quote! {
+                        let __e = #length;
+                        __sum = __sum.checked_add(__e)?;
+                    });
+                }
+                offset_parts.push(quote! {
+                    let __e = #length;
+                    __sum = __sum.checked_add(__e)?;
+                });
             }
-            let bitset_len: usize = count.div_ceil(8).max(1);
+            let bitset_len = count.div_ceil(8);
             quote! {
-                #[cfg(feature = "packed-struct")]
-                { __sum = __sum.saturating_add(#bitset_len); }
-                #(#parts)*
+                if norito::core::use_packed_struct() {
+                    if #field_bitset_enabled {
+                        __sum = __sum.checked_add(#bitset_len)?;
+                        #(#bitset_parts)*
+                    } else {
+                        __sum = __sum.checked_add((#count + 1_usize).checked_mul(8)?)?;
+                        #(#offset_parts)*
+                    }
+                } else {
+                    #(#compat_parts)*
+                }
             }
         }
         Fields::Unit => quote! {},
@@ -1429,31 +1590,7 @@ fn derive_struct_serialize(
         Fields::Unit => {}
     }
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
-    let has_signature_like_field: bool = match fields {
-        Fields::Named(named) => named
-            .named
-            .iter()
-            .filter(|f| {
-                let attrs = FieldAttr::parse(&f.attrs);
-                !(attrs.skip)
-            })
-            .any(|f| is_signature_like(&f.ty)),
-        Fields::Unnamed(unnamed) => unnamed
-            .unnamed
-            .iter()
-            .filter(|f| {
-                let attrs = FieldAttr::parse(&f.attrs);
-                !(attrs.skip)
-            })
-            .any(|f| is_signature_like(&f.ty)),
-        Fields::Unit => false,
-    };
-    let field_bitset_enabled = if has_signature_like_field {
-        quote! { false }
-    } else {
-        quote! { norito::core::use_field_bitset() }
-    };
-    let field_bitset_enabled_encode = field_bitset_enabled;
+    let field_bitset_enabled_encode = field_bitset_enabled.clone();
     // Build bitset and size write tokens for packed-struct hybrid
     let (bitset_bytes, write_sizes_code, all_needs_false) = {
         let mut needs: ::std::vec::Vec<bool> = ::std::vec::Vec::new();
@@ -1464,13 +1601,7 @@ fn derive_struct_serialize(
                     if attrs.skip {
                         continue;
                     }
-                    let need = if attrs.needs_size {
-                        true
-                    } else {
-                        is_staged_wrapper(&f.ty)
-                            || !(is_self_delimiting(&f.ty) || is_fixed_size(&f.ty).is_some())
-                    };
-                    needs.push(need);
+                    needs.push(needs_packed_size(f));
                 }
             }
             Fields::Unnamed(unnamed) => {
@@ -1479,13 +1610,7 @@ fn derive_struct_serialize(
                     if attrs.skip {
                         continue;
                     }
-                    let need = if attrs.needs_size {
-                        true
-                    } else {
-                        is_staged_wrapper(&f.ty)
-                            || !(is_self_delimiting(&f.ty) || is_fixed_size(&f.ty).is_some())
-                    };
-                    needs.push(need);
+                    needs.push(needs_packed_size(f));
                 }
             }
             Fields::Unit => {}
@@ -2243,10 +2368,10 @@ fn derive_struct_deserialize(
                             if #field_bitset_enabled_decode_named {
                                 // Hybrid: read bitset, then sizes for needed fields; decode sequentially.
                                 let __bitset_len: usize = (#packed_named_count).div_ceil(8);
-                                let mut __bitset = ::std::vec::Vec::with_capacity(__bitset_len);
-                                unsafe {
-                                    __bitset.extend_from_slice(::std::slice::from_raw_parts(ptr.add(__o), __bitset_len));
-                                }
+                                let __bitset = norito::core::payload_range_from_ptr(
+                                    ptr.wrapping_add(__o),
+                                    __bitset_len,
+                                )?;
                                 if norito::debug_trace_enabled() {
                                     eprintln!(
                                         "decode struct {} bitset bytes={:?}",
@@ -2609,10 +2734,10 @@ fn derive_struct_deserialize(
                             if #field_bitset_enabled_decode_unnamed {
                                 // Read the presence bitset for unnamed fields (hybrid decoding)
                                 let __bitset_len: usize = __count.div_ceil(8);
-                                let mut __bitset = ::std::vec::Vec::with_capacity(__bitset_len);
-                                unsafe {
-                                    __bitset.extend_from_slice(::std::slice::from_raw_parts(ptr.add(__o), __bitset_len));
-                                }
+                                let __bitset = norito::core::payload_range_from_ptr(
+                                    ptr.wrapping_add(__o),
+                                    __bitset_len,
+                                )?;
                                 __o += __bitset_len;
                                 // Read sizes for variable-length fields that are present
                                 let mut __sizes: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
@@ -3447,9 +3572,11 @@ fn derive_enum_deserialize(
 
             fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> ::core::result::Result<Self, norito::core::Error> {
                 let ptr = archived as *const _ as *const u8;
-                // Read tag without assuming alignment
+                // Read the tag through the active, length-bounded payload
+                // context. Constructing a raw slice here would read beyond a
+                // truncated archive before the decoder could return an error.
                 let mut __tag_bytes = [0u8; 4];
-                unsafe { __tag_bytes.copy_from_slice(std::slice::from_raw_parts(ptr, 4)); }
+                __tag_bytes.copy_from_slice(norito::core::payload_range_from_ptr(ptr, 4)?);
                 let tag = u32::from_le_bytes(__tag_bytes);
                 let value = match tag {
                     #(#arms,)*
@@ -3550,6 +3677,14 @@ mod deserialize_codegen_tests {
                 "full-consumption validation must remain shared"
             );
         }
+        assert!(
+            struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len)"),
+            "packed-struct bitsets must use the bounded payload helper"
+        );
+        assert!(
+            enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
+            "enum tags must use the bounded payload helper"
+        );
     }
 }
 

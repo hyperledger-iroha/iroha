@@ -141,6 +141,11 @@ SorafsReferenceFfiBuffer sorafs_reference_validate_hedging_json(
     uint32_t kind, const uint8_t *bytes_ptr, size_t bytes_len,
     const uint8_t *label_ptr, size_t label_len, uint64_t generated_at);
 
+SorafsReferenceFfiBuffer
+sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    const uint8_t *bytes_ptr, size_t bytes_len, const uint8_t *label_ptr,
+    size_t label_len, uint64_t generated_at);
+
 /* PDP FFI validators are diagnostic-only. Even the three-payload validator
  * does not receive governed admission state: success is SFS-PDP-DIAG-000 with
  * production_acceptance=false, never production proof acceptance. */

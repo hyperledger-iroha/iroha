@@ -19,6 +19,10 @@ final class FeePaymentTests: XCTestCase {
             try intent.canonicalNorito().hexEncodedString(),
             "00000000190000000000000008000000000000000000000000000000010000000000000000"
         )
+        XCTAssertEqual(
+            try intent.compactNorito().hexEncodedString(),
+            "000000000b0800000000000000000100"
+        )
     }
 
     func testSponsorIntentRoundTripsWithoutRewritingSelection() throws {

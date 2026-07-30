@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/chunker-profile-authoring.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e7953ed28e5de83145f5a4dcd249488d25846b0b6f01f607b2b615908e17d69
+source_hash: 1ed5f8a497fc03f3847d246a6d33246240a903804b0b031ae50267575ac7c34e
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # ליצור manifest + CAR וללכוד chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   --json-out=sf2.report.json
 
 # להריץ שוב עם fetch plan שמור (מגן מפני offsets מיושנים)
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

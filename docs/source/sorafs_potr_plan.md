@@ -24,7 +24,15 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 > A captured receipt does not become queryable until an authorized transaction
 > forwarder commits it. Torii now builds `PotrFinalizedAdmissionReaderV1` from
 > `PotrStateFinalizedPolicySourceV1` and its council-verified admission
-> registry when the runtime signer roles are supplied. Remaining SF-14 work
+> registry only after the enabled `[sorafs.por.potr_runtime]` public binding
+> exactly matches the injected runtime signer roles. The binding independently
+> pins both signer handles/identities/qualifications, the gateway key, the
+> reader/source/resolver identities, and the complete baseline finalized
+> admission anchor; it never contains credentials or private keys. Partial,
+> disabled-stale, test-marked, shared, zero, non-canonical, or substituted
+> bindings fail closed. This configuration and startup comparison are
+> source-complete; focused and workspace Cargo validation remains pending.
+> Remaining SF-14 work
 > includes production forwarding/reconciliation across that boundary, genuine
 > live multi-provider rollout evidence, deployment-owned HSM/KMS adapters for
 > the shipped role-separated runtime signer interfaces, operator provisioning
@@ -158,9 +166,20 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
   Ed25519 seed. `PotrRuntimeSignerRolesV1` requires distinct gateway and
   provider runtime objects and stable non-zero administrative identities, plus
   separate reader/source/resolver identities and an exact non-zero baseline
-  anchor. Torii binds `PotrStateFinalizedPolicySourceV1` to authoritative state
-  and `PotrFinalizedAdmissionReaderV1` to the council-verified admission
-  registry. The reader resolves the council admission before signing and
+  anchor. Those injected values are not self-authorizing: enabled startup also
+  requires the independent `[sorafs.por.potr_runtime]` configuration and
+  compares every public handle, identity, revision, digest, gateway key, and
+  finalized-anchor field exactly. The provider signer revision/digest must
+  equal the baseline admission sequence/digest. Configuration without injected
+  roles, injected roles without enabled configuration, partial bindings,
+  disabled stale fields, test-marked/shared handles, and identity collisions
+  are rejected. The checked-in
+  [`potr_runtime_binding.toml`](sorafs/snippets/potr_runtime_binding.toml)
+  fragment shows the non-secret fields; deployment launchers keep all HSM/KMS
+  credentials outside `iroha_config`.
+  Torii binds `PotrStateFinalizedPolicySourceV1` to authoritative state and
+  `PotrFinalizedAdmissionReaderV1` to the council-verified admission registry.
+  The reader resolves the council admission before signing and
   rechecks the exact provider, policy identity/digest/sequence, finalized
   height/hash, and envelope after both signatures. A stale, revoked,
   unavailable, substituted, or mid-signature-changed policy fails closed.

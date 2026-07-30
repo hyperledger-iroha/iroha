@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-02-07
 | شهادة نقطة النهاية | سيتم الإعلان عن كل نقطة نهاية من خلال تقرير شهادة mTLS أو QUIC. | تحديد الحمولة Norito `EndpointAttestationV1` وتخزينها من خلال نقطة النهاية داخل حزمة القبول. |
 
 ## تدفق القبول1. **إنشاء مشروع**
-   - سطر الأوامر: أنادير `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - سطر الأوامر: أنادير `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      تم إنتاج `ProviderAdmissionProposalV1` + حزمة معتمدة.
    - التحقق: تأمين النطاق المطلوب، الحصة > 0، التعامل مع قانون القطع في `profile_id`.
 2. **إندوسو دي غوبيرنانزا**
@@ -61,7 +61,7 @@ translation_last_reviewed: 2026-02-07
 
 ### مرجع CLI
 
-قم بتشغيل كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+قم بتشغيل كل أمر عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام المطلوبة: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وعلى الأقل `--endpoint=<kind:host>`.
@@ -103,7 +103,7 @@ translation_last_reviewed: 2026-02-07
 1. قم ببناء نفس المستوى من الترويج/الإعلان اللاحق مع `provider-admission proposal` و`provider-admission sign`، وزيادة `--retention-epoch` وتحديث الحصة/نقاط النهاية حسب الضرورة.
 2. إخراج
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -119,7 +119,7 @@ translation_last_reviewed: 2026-02-07
 5. قم بتجديد التركيبات القانونية وتأكيدها عبر `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) يعمل على التحقق من أن منافذ Norito قابلة للاستمرار.#### إلغاء الطوارئ
 1. تحديد المظروف المخترق وإصدار إلغاء:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

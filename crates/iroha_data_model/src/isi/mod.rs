@@ -1165,8 +1165,23 @@ impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::prelude::ReviseReplicationOrderAssignments> for InstructionBox {
+    fn from(i: crate::prelude::ReviseReplicationOrderAssignments) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::prelude::ExpireReplicationOrder> for InstructionBox {
     fn from(i: crate::prelude::ExpireReplicationOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::SetProviderIngestCompletionAuthority> for InstructionBox {
+    fn from(i: crate::prelude::SetProviderIngestCompletionAuthority) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::RevokeProviderIngestCompletionAuthority> for InstructionBox {
+    fn from(i: crate::prelude::RevokeProviderIngestCompletionAuthority) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2049,21 +2064,36 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
 }
 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+    #[cfg(feature = "packed-struct")]
+    {
+        // `packed-struct` selects the derive's alternate exact-size formula at
+        // compile time, while `Instruction::dyn_encode_into` emits the canonical
+        // adaptive payload and records its actual layout flags. Measure that
+        // payload before exposing an exact length so the wrapper never promotes
+        // an alternate-layout capacity estimate into a byte-exact contract.
+        let payload = encoded_instruction_payload(instr)?;
+        encoded_instruction_tuple_len(payload.name, payload.framed_payload_len)
     }
-    let type_name = Instruction::id(inner);
-    let entry = {
-        let registry = instruction_registry();
-        registry.entry_for_type_name(type_name)?
-    };
-    let payload_len = {
-        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        Instruction::dyn_encoded_len(inner)?
-    };
-    let framed_payload_len = (entry.frame_len)(payload_len)?;
-    encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
+
+    #[cfg(not(feature = "packed-struct"))]
+    {
+        let inner = peel_instruction_box(&**instr);
+        if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+            return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+        }
+        let type_name = Instruction::id(inner);
+        let entry = {
+            let registry = instruction_registry();
+            registry.entry_for_type_name(type_name)?
+        };
+        let payload_len = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            Instruction::dyn_encoded_len(inner)?
+        };
+        let framed_payload_len = (entry.frame_len)(payload_len)?;
+        encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
+    }
 }
 
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
@@ -2364,6 +2394,24 @@ fn json_quantity_opt(
 }
 
 #[cfg(feature = "json")]
+fn json_asset_transfer_target(
+    params: &norito::json::Map,
+) -> Result<(crate::account::AccountId, crate::asset::AssetDefinitionId), norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let account_id = crate::account::AccountId::parse_encoded(
+        json_required_string(params, "account_id")?.as_str(),
+    )
+    .map(crate::account::ParsedAccountId::into_account_id)
+    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+        json_required_string(params, "asset_definition_id")?.as_str(),
+    )
+    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    Ok((account_id, asset_definition_id))
+}
+
+#[cfg(feature = "json")]
 fn instruction_box_from_object(
     map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
@@ -2393,15 +2441,7 @@ fn instruction_box_from_object(
                     "unsupported SetAssetTransferAvailability field `{unexpected}`"
                 )));
             }
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetTransferAvailability::new(
                     account_id,
@@ -2415,15 +2455,7 @@ fn instruction_box_from_object(
             )
         }
         "SetAssetHoldingLimit" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetHoldingLimit::new(
                     account_id,
@@ -2434,15 +2466,7 @@ fn instruction_box_from_object(
             )
         }
         "SetAssetTransferBlacklist" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetTransferBlacklist::new(
                     account_id,
@@ -2453,15 +2477,7 @@ fn instruction_box_from_object(
             )
         }
         "SetAssetTransferControl" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             let limits = params
                 .get("limits")
                 .and_then(norito::json::Value::as_array)
@@ -4354,8 +4370,10 @@ pub mod prelude {
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
             RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,

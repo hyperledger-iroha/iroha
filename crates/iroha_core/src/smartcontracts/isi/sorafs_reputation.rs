@@ -25,7 +25,8 @@ use iroha_data_model::{
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEvents,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReputationJournalEvents,
         },
     },
     sorafs::{
@@ -67,6 +68,7 @@ const CAN_RECORD_ENTRY: &str = "CanRecordSorafsReputationJournal";
 const CAN_RESOLVE_DISPUTE: &str = "CanResolveSorafsCapacityDispute";
 
 const STATE_MAX_BYTES: usize = 128 * 1024;
+const REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1: usize = 1_024;
 const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     STATE_MAX_BYTES,
     STATE_MAX_BYTES,
@@ -244,6 +246,14 @@ fn read_policy_history(
             "stored reputation recorder-policy history is invalid: {error}"
         ))
     })?;
+    if usize::try_from(record.policy.revision)
+        .ok()
+        .is_none_or(|revision| revision > REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1)
+    {
+        return Err(corrupt_state(
+            "reputation recorder-policy revision exceeds the V1 history bound",
+        ));
+    }
     if &record.policy_digest != digest {
         return Err(corrupt_state(
             "reputation recorder-policy history key does not match its digest",
@@ -305,6 +315,130 @@ fn read_active_policy(
     }
     validate_policy_predecessor(world, &record)?;
     Ok(Some(record))
+}
+
+/// Return the complete active recorder-policy predecessor chain in ascending
+/// revision order from one immutable world view.
+///
+/// This is a crate-internal capture primitive for the finalized reputation
+/// archive. It never substitutes current state for the supplied view and
+/// fails closed when the active record, any predecessor artifact, or the
+/// direct revision/digest/activation ordering is malformed. `maximum_records`
+/// is a hard allocation and traversal bound.
+pub(crate) fn read_reputation_authority_policy_history(
+    world: &impl WorldReadOnly,
+    maximum_records: usize,
+) -> Result<Vec<ReputationJournalAuthorityPolicyRecordV1>, InstructionExecutionError> {
+    if maximum_records == 0
+        || maximum_records > REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1
+    {
+        return Err(invalid_parameter(
+            "reputation recorder-policy history bound must be within the V1 revision ceiling",
+        ));
+    }
+    let mut current = read_active_policy(world)?
+        .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
+    let mut descending = Vec::new();
+    loop {
+        if descending.len() >= maximum_records {
+            return Err(corrupt_state(
+                "reputation recorder-policy history exceeds the finalized capture bound",
+            ));
+        }
+        validate_policy_predecessor(world, &current)?;
+        let revision = current.policy.revision;
+        let predecessor_digest = current.policy.predecessor_policy_digest;
+        descending.push(current);
+        match (revision, predecessor_digest) {
+            (1, None) => break,
+            (1, Some(_)) => {
+                return Err(corrupt_state(
+                    "first reputation recorder policy unexpectedly has a predecessor",
+                ));
+            }
+            (_, None) => {
+                return Err(corrupt_state(
+                    "reputation recorder-policy history ended before revision one",
+                ));
+            }
+            (_, Some(predecessor_digest)) => {
+                let predecessor =
+                    read_policy_history(world, &predecessor_digest)?.ok_or_else(|| {
+                        corrupt_state(
+                            "reputation recorder-policy predecessor is missing from immutable history",
+                        )
+                    })?;
+                let successor = descending.last().ok_or_else(|| {
+                    corrupt_state("reputation recorder-policy traversal lost its current successor")
+                })?;
+                if predecessor.policy.revision.checked_add(1) != Some(successor.policy.revision)
+                    || successor.policy.predecessor_policy_digest != Some(predecessor.policy_digest)
+                    || predecessor.activated_at_unix_ms > successor.activated_at_unix_ms
+                {
+                    return Err(corrupt_state(
+                        "reputation recorder-policy history is skipped, substituted, or non-monotonic",
+                    ));
+                }
+                current = predecessor;
+            }
+        }
+    }
+    descending.reverse();
+    Ok(descending)
+}
+
+fn read_policy_at_source_time(
+    world: &impl WorldReadOnly,
+    active: ReputationJournalAuthorityPolicyRecordV1,
+    policy_digest: [u8; 32],
+    source_time_unix_ms: u64,
+) -> Result<ReputationJournalAuthorityPolicyRecordV1, InstructionExecutionError> {
+    let requested = read_policy_history(world, &policy_digest)?.ok_or_else(|| {
+        invalid_parameter("reputation entry references unknown recorder-policy history")
+    })?;
+    if requested.policy.revision > active.policy.revision {
+        return Err(invalid_parameter(
+            "reputation entry references a recorder policy newer than the active policy",
+        ));
+    }
+
+    let mut cursor = active;
+    let mut successor_activated_at = None;
+    let mut traversed = 0usize;
+    loop {
+        if traversed >= REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1 {
+            return Err(corrupt_state(
+                "reputation recorder-policy lineage exceeds the V1 history bound",
+            ));
+        }
+        traversed += 1;
+        validate_policy_predecessor(world, &cursor)?;
+        if cursor.policy.revision == requested.policy.revision {
+            if cursor != requested {
+                return Err(corrupt_state(
+                    "reputation recorder-policy history is not on the active predecessor chain",
+                ));
+            }
+            if source_time_unix_ms < cursor.activated_at_unix_ms
+                || successor_activated_at
+                    .is_some_and(|activated_at| source_time_unix_ms >= activated_at)
+            {
+                return Err(invalid_parameter(
+                    "reputation source observation falls outside its recorder-policy activation interval",
+                ));
+            }
+            return Ok(cursor);
+        }
+        let predecessor_digest = cursor.policy.predecessor_policy_digest.ok_or_else(|| {
+            corrupt_state(
+                "active reputation recorder-policy lineage ended before the requested revision",
+            )
+        })?;
+        successor_activated_at = Some(cursor.activated_at_unix_ms);
+        cursor = read_policy_history(world, &predecessor_digest)?.ok_or_else(|| {
+            corrupt_state("active reputation recorder-policy predecessor history is missing")
+        })?;
+    }
 }
 
 fn read_journal_head(
@@ -453,20 +587,24 @@ fn validate_event_successor(
     }
 }
 
-fn validate_event_indexes(
+fn validate_event_intrinsic_indexes(
     world: &impl WorldReadOnly,
     record: &ReputationJournalCommittedEventRecordV1,
 ) -> Result<(), InstructionExecutionError> {
-    let policy =
-        read_policy_history(world, &record.entry.authority_policy_digest)?.ok_or_else(|| {
-            corrupt_state("reputation event references missing immutable recorder-policy history")
-        })?;
-    validate_policy_predecessor(world, &policy)?;
-    if policy.activated_at_unix_ms > record.entry.source_time_unix_ms {
-        return Err(corrupt_state(
-            "reputation source observation predates its recorder-policy activation",
-        ));
-    }
+    let active = read_active_policy(world)?.ok_or_else(|| {
+        corrupt_state("reputation event exists without an active recorder policy")
+    })?;
+    let policy = read_policy_at_source_time(
+        world,
+        active,
+        record.entry.authority_policy_digest,
+        record.entry.source_time_unix_ms,
+    )
+    .map_err(|error| {
+        corrupt_state(format!(
+            "reputation event violates recorder-policy activation history: {error}"
+        ))
+    })?;
     record
         .entry
         .validate_at_commit(&policy.policy, record.recorded_at_unix_ms)
@@ -482,6 +620,68 @@ fn validate_event_indexes(
             "reputation event-id index points to another sequence",
         ));
     }
+    Ok(())
+}
+
+fn validate_provider_dispute_revision_edge(
+    predecessor: &ReputationJournalCommittedEventRecordV1,
+    successor: &ReputationJournalCommittedEventRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    let (
+        ReputationJournalPayloadV1::ProviderDispute(opened),
+        ReputationJournalPayloadV1::ProviderDispute(resolved),
+    ) = (&predecessor.entry.payload, &successor.entry.payload)
+    else {
+        return Err(corrupt_state(
+            "reputation source revision edge crosses payload families",
+        ));
+    };
+    if predecessor.sequence >= successor.sequence
+        || predecessor.target_block_height > successor.target_block_height
+        || (predecessor.target_block_height == successor.target_block_height
+            && predecessor.event_index >= successor.event_index)
+        || predecessor.recorded_at_unix_ms > successor.recorded_at_unix_ms
+        || predecessor.entry.source_id != successor.entry.source_id
+        || predecessor.entry.provider_id != successor.entry.provider_id
+        || predecessor.entry.source_revision != 1
+        || successor.entry.source_revision != 2
+        || successor.entry.predecessor_event_id != Some(predecessor.entry.event_id)
+        || opened.dispute_id != resolved.dispute_id
+        || opened.kind != resolved.kind
+        || opened.evidence_digest != resolved.evidence_digest
+        || opened.submitted_at_unix_ms != resolved.submitted_at_unix_ms
+        || !matches!(&opened.status, ProviderDisputeStatusV1::Opened)
+        || !matches!(&resolved.status, ProviderDisputeStatusV1::Resolved(_))
+    {
+        return Err(corrupt_state(
+            "reputation provider-dispute revision edge is missing or substituted",
+        ));
+    }
+    Ok(())
+}
+
+fn read_source_predecessor(
+    world: &impl WorldReadOnly,
+    event_id: ReputationJournalEventIdV1,
+) -> Result<ReputationJournalCommittedEventRecordV1, InstructionExecutionError> {
+    let sequence = read_event_id_sequence(world, event_id)?.ok_or_else(|| {
+        corrupt_state("reputation source predecessor is missing its event-id index")
+    })?;
+    let predecessor = read_event(world, sequence)?
+        .ok_or_else(|| corrupt_state("reputation source predecessor event is missing"))?;
+    if predecessor.entry.event_id != event_id {
+        return Err(corrupt_state(
+            "reputation source predecessor index resolves another event",
+        ));
+    }
+    Ok(predecessor)
+}
+
+fn validate_event_indexes(
+    world: &impl WorldReadOnly,
+    record: &ReputationJournalCommittedEventRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    validate_event_intrinsic_indexes(world, record)?;
     let source_head = read_source_head(world, record.entry.source_id)?
         .ok_or_else(|| corrupt_state("reputation event is missing its source head"))?;
     if source_head.source_kind != record.entry.source_kind()
@@ -500,24 +700,30 @@ fn validate_event_indexes(
                 "reputation source head does not identify its latest event",
             ));
         }
+        if record.entry.source_revision == 2 {
+            let predecessor_event_id = record.entry.predecessor_event_id.ok_or_else(|| {
+                corrupt_state("reputation source revision two has no predecessor event id")
+            })?;
+            let predecessor = read_source_predecessor(world, predecessor_event_id)?;
+            validate_event_intrinsic_indexes(world, &predecessor)?;
+            validate_provider_dispute_revision_edge(&predecessor, record)?;
+        }
     } else {
         let terminal = read_event(world, source_head.sequence)?.ok_or_else(|| {
             corrupt_state("reputation source head points to a missing terminal event")
         })?;
         if terminal.entry.source_id != record.entry.source_id
             || terminal.entry.provider_id != record.entry.provider_id
-            || terminal.entry.source_revision != record.entry.source_revision.saturating_add(1)
-            || terminal.entry.predecessor_event_id != Some(record.entry.event_id)
+            || source_head.source_kind != terminal.entry.source_kind()
+            || source_head.source_revision != terminal.entry.source_revision
             || source_head.event_id != terminal.entry.event_id
         {
             return Err(corrupt_state(
                 "reputation source head does not form an exact predecessor chain",
             ));
         }
-        // Validate only after binding the terminal to this exact source. This
-        // keeps corrupt cross-source heads from creating an unbounded recursive
-        // validation walk.
-        validate_event_indexes(world, &terminal)?;
+        validate_event_intrinsic_indexes(world, &terminal)?;
+        validate_provider_dispute_revision_edge(record, &terminal)?;
     }
     Ok(())
 }
@@ -536,21 +742,20 @@ fn ensure_no_event_after_head(
                 .starts_with(EVENT_STATE_KEY_PREFIX)
                 .then_some(key)
         });
-    match (head, first) {
+    let head = match (head, first) {
         (None, None) => return Ok(()),
         (None, Some(_)) => {
             return Err(corrupt_state(
                 "reputation journal contains events without a journal head",
             ));
         }
-        (Some(_), Some(key)) if key == &event_key(1) => {}
+        (Some(head), Some(key)) if key == &event_key(1) => head,
         (Some(_), _) => {
             return Err(corrupt_state(
                 "reputation journal does not begin at global sequence one",
             ));
         }
-    }
-    let head = head.expect("event-prefix validation returned early without a journal head");
+    };
     let terminal_key = event_key(head.last_sequence);
     for (key, _) in world.smart_contract_state().range(terminal_key.clone()..) {
         if !key.to_string().starts_with(EVENT_STATE_KEY_PREFIX) {
@@ -691,23 +896,24 @@ fn validate_entry_commit_context(
     entry: &ReputationJournalEntryV1,
     recorded_at_unix_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let policy = read_active_policy(world)?
+    let active = read_active_policy(world)?
         .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
-    if policy.activated_at_unix_ms > recorded_at_unix_ms {
+    if active.activated_at_unix_ms > recorded_at_unix_ms {
         return Err(corrupt_state(
             "active reputation policy activation is later than the executing block",
         ));
     }
-    if entry.source_time_unix_ms < policy.activated_at_unix_ms {
-        return Err(invalid_parameter(
-            "reputation source observation predates the active recorder policy",
-        ));
-    }
+    let policy = read_policy_at_source_time(
+        world,
+        active,
+        entry.authority_policy_digest,
+        entry.source_time_unix_ms,
+    )?;
     entry
         .validate_at_commit(&policy.policy, recorded_at_unix_ms)
         .map_err(|error| {
             invalid_parameter(format!(
-                "reputation entry does not match the active recorder policy: {error}"
+                "reputation entry does not match its source-time recorder policy: {error}"
             ))
         })
 }
@@ -1122,6 +1328,14 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
         self.policy.validate().map_err(|error| {
             invalid_parameter(format!("invalid reputation recorder policy: {error}"))
         })?;
+        if usize::try_from(self.policy.revision)
+            .ok()
+            .is_none_or(|revision| revision > REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1)
+        {
+            return Err(invalid_parameter(
+                "reputation recorder-policy revision exceeds the V1 history bound",
+            ));
+        }
         let policy_digest = self.policy.canonical_digest().map_err(|error| {
             invalid_parameter(format!("invalid reputation recorder policy: {error}"))
         })?;
@@ -1481,6 +1695,175 @@ fn load_cursor_event(
     Ok(record)
 }
 
+fn validate_selected_event_neighbors(
+    state_ro: &impl StateReadOnly,
+    record: &ReputationJournalCommittedEventRecordV1,
+    journal_head: ReputationJournalHeadStateV1,
+    finalized_cursor: ReputationJournalFinalizedCursorV1,
+) -> Result<(), QueryExecutionFail> {
+    let world = state_ro.world();
+    if record.sequence > journal_head.last_sequence {
+        return Err(QueryExecutionFail::Conversion(
+            "reputation source head points beyond the journal head".to_owned(),
+        ));
+    }
+    let predecessor = if record.sequence == 1 {
+        None
+    } else {
+        let predecessor_sequence = record.sequence - 1;
+        let predecessor = read_event(world, predecessor_sequence)
+            .map_err(query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(format!(
+                    "reputation journal is missing selected-event predecessor sequence {predecessor_sequence}"
+                ))
+            })?;
+        validate_event_indexes(world, &predecessor).map_err(query_failure)?;
+        resolve_validated_finalized_event(state_ro, &predecessor, finalized_cursor)?;
+        Some(predecessor)
+    };
+    validate_event_successor(predecessor.as_ref(), record).map_err(query_failure)?;
+
+    if record.sequence < journal_head.last_sequence {
+        let successor_sequence = record.sequence.checked_add(1).ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reputation selected-event successor sequence overflow".to_owned(),
+            )
+        })?;
+        let successor = read_event(world, successor_sequence)
+            .map_err(query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(format!(
+                    "reputation journal is missing selected-event successor sequence {successor_sequence}"
+                ))
+        })?;
+        validate_event_indexes(world, &successor).map_err(query_failure)?;
+        validate_event_successor(Some(record), &successor).map_err(query_failure)?;
+        resolve_validated_finalized_event(state_ro, &successor, finalized_cursor)?;
+    }
+    Ok(())
+}
+
+fn validate_selected_source_predecessor(
+    state_ro: &impl StateReadOnly,
+    record: &ReputationJournalCommittedEventRecordV1,
+    selected: &ReputationJournalFinalizedEventV1,
+    finalized_cursor: ReputationJournalFinalizedCursorV1,
+) -> Result<(), QueryExecutionFail> {
+    let Some(predecessor_event_id) = record.entry.predecessor_event_id else {
+        return Ok(());
+    };
+    let predecessor =
+        read_source_predecessor(state_ro.world(), predecessor_event_id).map_err(query_failure)?;
+    validate_provider_dispute_revision_edge(&predecessor, record).map_err(query_failure)?;
+    let predecessor = resolve_validated_finalized_event(state_ro, &predecessor, finalized_cursor)?;
+    let strictly_precedes = predecessor.sequence < selected.sequence
+        && (predecessor.block_height < selected.block_height
+            || (predecessor.block_height == selected.block_height
+                && predecessor.block_hash == selected.block_hash
+                && predecessor.event_index < selected.event_index));
+    if !strictly_precedes {
+        return Err(QueryExecutionFail::Conversion(
+            "reputation source predecessor does not strictly precede its selected revision"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_validated_finalized_event(
+    state_ro: &impl StateReadOnly,
+    record: &ReputationJournalCommittedEventRecordV1,
+    finalized_cursor: ReputationJournalFinalizedCursorV1,
+) -> Result<ReputationJournalFinalizedEventV1, QueryExecutionFail> {
+    let event = resolve_finalized_event(state_ro, record)?;
+    event.validate(finalized_cursor).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "finalized reputation event is invalid at the selected view: {error}"
+        ))
+    })?;
+    Ok(event)
+}
+
+fn validate_finalized_journal_terminal(
+    state_ro: &impl StateReadOnly,
+    journal_head: ReputationJournalHeadStateV1,
+    finalized_cursor: ReputationJournalFinalizedCursorV1,
+) -> Result<(), QueryExecutionFail> {
+    let terminal = read_event(state_ro.world(), journal_head.last_sequence)
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reputation journal head points to a missing terminal event".to_owned(),
+            )
+        })?;
+    if terminal.target_block_height != journal_head.last_target_block_height
+        || terminal.event_index != journal_head.last_event_index
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "reputation journal head differs from its terminal event".to_owned(),
+        ));
+    }
+    resolve_validated_finalized_event(state_ro, &terminal, finalized_cursor)?;
+    Ok(())
+}
+
+fn query_event_by_source_id(
+    query: &FindSorafsReputationJournalEventBySourceId,
+    state_ro: &impl StateReadOnly,
+) -> Result<ReputationJournalFinalizedEventV1, QueryExecutionFail> {
+    if query.source_id == ReputationJournalSourceIdV1::ZERO {
+        return Err(QueryExecutionFail::Conversion(
+            "reputation source identifier must be non-zero".to_owned(),
+        ));
+    }
+    let actual_finalized_cursor = finalized_cursor(state_ro)?;
+    if query
+        .expected_finalized_cursor
+        .is_some_and(|expected| expected != actual_finalized_cursor)
+    {
+        return Err(QueryExecutionFail::Expired);
+    }
+
+    let journal_head = validate_journal_head(state_ro.world()).map_err(query_failure)?;
+    if let Some(journal_head) = journal_head {
+        validate_finalized_journal_terminal(state_ro, journal_head, actual_finalized_cursor)?;
+    }
+    let source_head = read_source_head(state_ro.world(), query.source_id).map_err(query_failure)?;
+    let Some(source_head) = source_head else {
+        return Err(QueryExecutionFail::Find(
+            FindError::SorafsReputationJournalEvent(query.source_id),
+        ));
+    };
+    let journal_head = journal_head.ok_or_else(|| {
+        QueryExecutionFail::Conversion(
+            "reputation source head exists without a journal head".to_owned(),
+        )
+    })?;
+    let record = read_event(state_ro.world(), source_head.sequence)
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reputation source head points to a missing event".to_owned(),
+            )
+        })?;
+    if record.entry.source_id != query.source_id
+        || record.entry.source_kind() != source_head.source_kind
+        || record.entry.source_revision != source_head.source_revision
+        || record.entry.event_id != source_head.event_id
+        || record.sequence != source_head.sequence
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "reputation source head differs from its indexed event".to_owned(),
+        ));
+    }
+    validate_event_indexes(state_ro.world(), &record).map_err(query_failure)?;
+    validate_selected_event_neighbors(state_ro, &record, journal_head, actual_finalized_cursor)?;
+    let event = resolve_validated_finalized_event(state_ro, &record, actual_finalized_cursor)?;
+    validate_selected_source_predecessor(state_ro, &record, &event, actual_finalized_cursor)?;
+    Ok(event)
+}
+
 fn query_event_page(
     query: &FindSorafsReputationJournalEvents,
     state_ro: &impl StateReadOnly,
@@ -1524,6 +1907,7 @@ fn query_event_page(
         ));
     }
     validate_event_indexes(state_ro.world(), &head_record).map_err(query_failure)?;
+    resolve_validated_finalized_event(state_ro, &head_record, finalized_cursor)?;
 
     let mut previous = query
         .after
@@ -1626,6 +2010,15 @@ impl ValidSingularQuery for FindSorafsReputationJournalAuthorityPolicy {
     }
 }
 
+impl ValidSingularQuery for FindSorafsReputationJournalEventBySourceId {
+    fn execute(
+        &self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<ReputationJournalFinalizedEventV1, QueryExecutionFail> {
+        query_event_by_source_id(self, state_ro)
+    }
+}
+
 impl ValidSingularQuery for FindSorafsReputationJournalEvents {
     fn execute(
         &self,
@@ -1650,6 +2043,7 @@ mod tests {
         sorafs::{
             capacity::CapacityDeclarationRecord,
             reputation::{
+                PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
@@ -1714,8 +2108,11 @@ mod tests {
             source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [unique; 32],
-                request_digest: [unique.wrapping_add(1); 32],
+                binding: iroha_data_model::sorafs::reputation::StreamTokenValidationBindingV1 {
+                    gateway_id: [unique; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [unique.wrapping_add(1); 32],
+                },
                 token_body_digest: Some([unique.wrapping_add(2); 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: source_time_unix_ms,
@@ -1723,6 +2120,40 @@ mod tests {
             }),
         )
         .expect("canonical token reputation entry")
+    }
+
+    fn por_entry_at(
+        authority: &AccountId,
+        provider_id: ProviderId,
+        policy_digest: [u8; 32],
+        unique: u8,
+        source_time_unix_ms: u64,
+    ) -> ReputationJournalEntryV1 {
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy_digest,
+            authority.clone(),
+            source_time_unix_ms,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(PorTerminalOutcomeV1 {
+                challenge_id: [unique; 32],
+                manifest_digest: [0x41; 32],
+                epoch_id: 7,
+                drand_round: 11,
+                forced: false,
+                sample_count: 4,
+                failed_samples: 0,
+                issued_at_unix_ms: source_time_unix_ms - 2_000,
+                deadline_at_unix_ms: source_time_unix_ms - 500,
+                responded_at_unix_ms: Some(source_time_unix_ms - 750),
+                decided_at_unix_ms: source_time_unix_ms,
+                proof_digest: Some([0x42; 32]),
+                repair_task_id: None,
+                verifier_latency_ms: Some(17),
+                status: PorTerminalStatusV1::Verified,
+            }),
+        )
+        .expect("canonical PoR reputation entry")
     }
 
     fn state_with_reputation_accounts() -> (State, AccountId, AccountId, ProviderId) {
@@ -1808,6 +2239,235 @@ mod tests {
         Ok(())
     }
 
+    fn state_with_finalized_por_events(
+        unique_values: &[u8],
+    ) -> (
+        State,
+        Vec<ReputationJournalEntryV1>,
+        ReputationJournalFinalizedCursorV1,
+    ) {
+        assert!(
+            !unique_values.is_empty(),
+            "finalized PoR fixture needs at least one event"
+        );
+        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let recorder_policy = policy(&authority);
+        let policy_digest = recorder_policy
+            .canonical_digest()
+            .expect("recorder policy digest");
+        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(recorder_policy)
+                .execute(&authority, transaction)
+        })
+        .expect("activate reputation recorder policy");
+        let mut entries = Vec::with_capacity(unique_values.len());
+        for (index, unique) in unique_values.iter().copied().enumerate() {
+            let offset = u64::try_from(index)
+                .expect("fixture event index fits u64")
+                .checked_add(1)
+                .expect("fixture timestamp offset");
+            let timestamp_ms = TEST_NOW_MS
+                .checked_add(offset.saturating_mul(1_000))
+                .expect("fixture timestamp");
+            let entry = por_entry_at(&authority, provider_id, policy_digest, unique, timestamp_ms);
+            transact_test(&mut state, offset + 1, timestamp_ms, |transaction| {
+                AppendSorafsPorReputationJournalEntry::new(entry.clone())
+                    .execute(&authority, transaction)
+            })
+            .expect("commit finalized PoR reputation event");
+            entries.push(entry);
+        }
+        let finalized_cursor =
+            finalized_cursor(&state.view()).expect("resolve finalized reputation cursor");
+        (state, entries, finalized_cursor)
+    }
+
+    fn state_with_finalized_por_event() -> (
+        State,
+        ReputationJournalEntryV1,
+        ReputationJournalFinalizedCursorV1,
+    ) {
+        let (state, mut entries, finalized_cursor) = state_with_finalized_por_events(&[0x91]);
+        let entry = entries.pop().expect("one finalized PoR fixture event");
+        (state, entry, finalized_cursor)
+    }
+
+    fn state_with_finalized_resolved_dispute() -> (
+        State,
+        ReputationJournalEntryV1,
+        ReputationJournalEntryV1,
+        ReputationJournalFinalizedCursorV1,
+    ) {
+        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let recorder_policy = policy(&authority);
+        let policy_digest = recorder_policy
+            .canonical_digest()
+            .expect("recorder policy digest");
+        let dispute_id = iroha_data_model::sorafs::capacity::CapacityDisputeId::new([0xB1; 32]);
+        let record = CapacityDisputeRecord::new_pending(
+            dispute_id,
+            provider_id,
+            [0xB2; 32],
+            None,
+            2,
+            TEST_NOW_MS / 1_000,
+            "bounded source-query dispute".to_owned(),
+            Some("restore source lifecycle".to_owned()),
+            iroha_data_model::sorafs::capacity::CapacityDisputeEvidence {
+                digest: [0xB3; 32],
+                media_type: Some("application/norito".to_owned()),
+                uri: None,
+                size_bytes: Some(128),
+            },
+            vec![0xB4],
+        );
+        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(recorder_policy)
+                .execute(&authority, transaction)?;
+            append_capacity_dispute_opened(transaction, &authority, &record)?;
+            transaction
+                .world
+                .capacity_disputes
+                .insert(dispute_id, record);
+            Ok(())
+        })
+        .expect("commit opened dispute");
+        transact_test(&mut state, 2, TEST_NOW_MS + 1_000, |transaction| {
+            ResolveSorafsCapacityDispute::new(
+                dispute_id,
+                policy_digest,
+                iroha_data_model::sorafs::capacity::CapacityDisputeOutcome::Upheld,
+                [0xB5; 32],
+                Some("bounded lifecycle confirmed".to_owned()),
+            )
+            .execute(&authority, transaction)
+        })
+        .expect("commit resolved dispute");
+        let view = state.view();
+        let opened = read_event(view.world(), 1)
+            .expect("read opened dispute event")
+            .expect("opened dispute event")
+            .entry;
+        let resolved = read_event(view.world(), 2)
+            .expect("read resolved dispute event")
+            .expect("resolved dispute event")
+            .entry;
+        let finalized_cursor =
+            finalized_cursor(&view).expect("resolve finalized reputation cursor");
+        drop(view);
+        (state, opened, resolved, finalized_cursor)
+    }
+
+    fn state_with_finalized_interleaved_resolved_dispute() -> (
+        State,
+        ReputationJournalEntryV1,
+        ReputationJournalFinalizedCursorV1,
+    ) {
+        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let recorder_policy = policy(&authority);
+        let policy_digest = recorder_policy
+            .canonical_digest()
+            .expect("recorder policy digest");
+        let dispute_id = iroha_data_model::sorafs::capacity::CapacityDisputeId::new([0xC1; 32]);
+        let record = CapacityDisputeRecord::new_pending(
+            dispute_id,
+            provider_id,
+            [0xC2; 32],
+            None,
+            3,
+            TEST_NOW_MS / 1_000,
+            "interleaved source-query dispute".to_owned(),
+            Some("prove source predecessor finality".to_owned()),
+            iroha_data_model::sorafs::capacity::CapacityDisputeEvidence {
+                digest: [0xC3; 32],
+                media_type: Some("application/norito".to_owned()),
+                uri: None,
+                size_bytes: Some(128),
+            },
+            vec![0xC4],
+        );
+        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(recorder_policy)
+                .execute(&authority, transaction)?;
+            append_capacity_dispute_opened(transaction, &authority, &record)?;
+            transaction
+                .world
+                .capacity_disputes
+                .insert(dispute_id, record);
+            Ok(())
+        })
+        .expect("commit opened interleaved dispute");
+        let unrelated = por_entry_at(
+            &authority,
+            provider_id,
+            policy_digest,
+            0xC5,
+            TEST_NOW_MS + 1_000,
+        );
+        transact_test(&mut state, 2, TEST_NOW_MS + 1_000, |transaction| {
+            AppendSorafsPorReputationJournalEntry::new(unrelated).execute(&authority, transaction)
+        })
+        .expect("commit unrelated interleaved reputation event");
+        transact_test(&mut state, 3, TEST_NOW_MS + 2_000, |transaction| {
+            ResolveSorafsCapacityDispute::new(
+                dispute_id,
+                policy_digest,
+                iroha_data_model::sorafs::capacity::CapacityDisputeOutcome::Upheld,
+                [0xC6; 32],
+                Some("interleaved lifecycle confirmed".to_owned()),
+            )
+            .execute(&authority, transaction)
+        })
+        .expect("commit resolved interleaved dispute");
+        let view = state.view();
+        let resolved = read_event(view.world(), 3)
+            .expect("read interleaved resolved dispute event")
+            .expect("interleaved resolved dispute event")
+            .entry;
+        let finalized_cursor =
+            finalized_cursor(&view).expect("resolve interleaved finalized reputation cursor");
+        drop(view);
+        (state, resolved, finalized_cursor)
+    }
+
+    fn replace_resolved_dispute_entry(
+        transaction: &mut StateTransaction<'_, '_>,
+        entry: ReputationJournalEntryV1,
+    ) -> ReputationJournalCommittedEventRecordV1 {
+        let mut terminal = read_event(transaction.world(), 2)
+            .expect("read resolved dispute record")
+            .expect("resolved dispute record");
+        transaction
+            .world
+            .smart_contract_state
+            .remove(event_id_key(terminal.entry.event_id));
+        terminal.entry = entry;
+        transaction.world.smart_contract_state.insert(
+            event_id_key(terminal.entry.event_id),
+            encode_state(&terminal.sequence, "forged dispute event-id index")
+                .expect("encode forged dispute event-id index"),
+        );
+        transaction.world.smart_contract_state.insert(
+            source_head_key(terminal.entry.source_id),
+            encode_state(
+                &ReputationJournalSourceHeadV1 {
+                    source_kind: terminal.entry.source_kind(),
+                    source_revision: terminal.entry.source_revision,
+                    event_id: terminal.entry.event_id,
+                    sequence: terminal.sequence,
+                },
+                "forged resolved dispute source head",
+            )
+            .expect("encode forged dispute source head"),
+        );
+        transaction.world.smart_contract_state.insert(
+            event_key(terminal.sequence),
+            encode_state(&terminal, "forged resolved dispute event")
+                .expect("encode forged resolved dispute event"),
+        );
+        terminal
+    }
+
     #[test]
     fn event_keys_preserve_global_sequence_order() {
         assert!(event_key(1) < event_key(2));
@@ -1837,6 +2497,781 @@ mod tests {
             Err(QueryExecutionFail::Find(
                 FindError::SorafsReputationJournalAuthorityPolicy
             ))
+        );
+    }
+
+    #[test]
+    fn source_query_resolves_the_finalized_indexed_event() {
+        let (state, entry, finalized_cursor) = state_with_finalized_por_event();
+        let event = FindSorafsReputationJournalEventBySourceId::new(
+            entry.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&state.view())
+        .expect("resolve finalized reputation event by source");
+
+        assert_eq!(event.sequence, 1);
+        assert_eq!(event.block_height, 2);
+        assert_eq!(event.entry, entry);
+        assert_eq!(event.block_hash, finalized_cursor.block_hash);
+    }
+
+    #[test]
+    fn finalized_cursor_uses_the_latest_kura_header_timestamp() {
+        let (mut state, _entry, event_cursor) = state_with_finalized_por_event();
+        let later_finalized_at_unix_ms = TEST_NOW_MS + 9_000;
+        transact_test(
+            &mut state,
+            event_cursor.height + 1,
+            later_finalized_at_unix_ms,
+            |_transaction| Ok(()),
+        )
+        .expect("commit later empty Kura block");
+
+        let view = state.view();
+        let latest_block = view.latest_block().expect("latest Kura block");
+        let cursor = finalized_cursor(&view).expect("resolve finalized cursor");
+        assert_eq!(
+            cursor.finalized_at_unix_ms,
+            latest_block.header().creation_time_ms
+        );
+        assert_eq!(cursor.finalized_at_unix_ms, later_finalized_at_unix_ms);
+        assert_ne!(
+            cursor.finalized_at_unix_ms,
+            event_cursor.finalized_at_unix_ms
+        );
+    }
+
+    #[test]
+    fn source_query_returns_precise_absence_error() {
+        let (state, _entry, finalized_cursor) = state_with_finalized_por_event();
+        let absent_source = ReputationJournalSourceIdV1([0xE1; 32]);
+        let query =
+            FindSorafsReputationJournalEventBySourceId::new(absent_source, Some(finalized_cursor));
+
+        assert_eq!(
+            query.execute(&state.view()),
+            Err(QueryExecutionFail::Find(
+                FindError::SorafsReputationJournalEvent(absent_source)
+            ))
+        );
+    }
+
+    #[test]
+    fn source_query_rejects_a_stale_finalized_cursor() {
+        let (state, entry, mut stale_cursor) = state_with_finalized_por_event();
+        stale_cursor.block_hash[0] ^= 0xFF;
+        let query =
+            FindSorafsReputationJournalEventBySourceId::new(entry.source_id, Some(stale_cursor));
+
+        assert_eq!(
+            query.execute(&state.view()),
+            Err(QueryExecutionFail::Expired)
+        );
+    }
+
+    #[test]
+    fn source_query_rejects_a_corrupt_source_index() {
+        let (state, entry, finalized_cursor) = state_with_finalized_por_event();
+        let header = BlockHeader::new(
+            3_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 2_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let forged_source_head = ReputationJournalSourceHeadV1 {
+            source_kind: entry.source_kind(),
+            source_revision: entry.source_revision,
+            event_id: ReputationJournalEventIdV1([0xF1; 32]),
+            sequence: 1,
+        };
+        transaction.world.smart_contract_state.insert(
+            source_head_key(entry.source_id),
+            encode_state(&forged_source_head, "forged reputation source head")
+                .expect("encode forged source head"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            entry.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("corrupt source index must fail closed");
+        assert!(
+            matches!(
+                error,
+                QueryExecutionFail::Conversion(ref message)
+                    if message.contains("source head")
+            ),
+            "unexpected corrupt-index error: {error}"
+        );
+    }
+
+    #[test]
+    fn source_query_returns_clean_absence_from_an_empty_finalized_journal() {
+        let (mut state, _authority, _other, _provider_id) = state_with_reputation_accounts();
+        transact_test(&mut state, 1, TEST_NOW_MS, |_transaction| Ok(()))
+            .expect("commit empty finalized block");
+        let absent_source = ReputationJournalSourceIdV1([0xE2; 32]);
+        let query = FindSorafsReputationJournalEventBySourceId::new(absent_source, None);
+
+        assert_eq!(
+            query.execute(&state.view()),
+            Err(QueryExecutionFail::Find(
+                FindError::SorafsReputationJournalEvent(absent_source)
+            ))
+        );
+    }
+
+    #[test]
+    fn source_query_rejects_zero_source_identity() {
+        let (mut state, _authority, _other, _provider_id) = state_with_reputation_accounts();
+        transact_test(&mut state, 1, TEST_NOW_MS, |_transaction| Ok(()))
+            .expect("commit empty finalized block");
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            ReputationJournalSourceIdV1::ZERO,
+            None,
+        )
+        .execute(&state.view())
+        .expect_err("zero source identity must fail");
+        assert!(matches!(error, QueryExecutionFail::Conversion(_)));
+    }
+
+    #[test]
+    fn source_query_validates_the_global_head_before_reporting_absence() {
+        let (state, entry, finalized_cursor) = state_with_finalized_por_event();
+        let header = BlockHeader::new(
+            3_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 2_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world
+            .smart_contract_state
+            .remove(source_head_key(entry.source_id));
+        let absent_source = ReputationJournalSourceIdV1([0xE3; 32]);
+
+        let error =
+            FindSorafsReputationJournalEventBySourceId::new(absent_source, Some(finalized_cursor))
+                .execute(&transaction)
+                .expect_err("corrupt journal must not report clean source absence");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("missing its source head")
+        ));
+    }
+
+    #[test]
+    fn source_query_rejects_a_missing_event_id_index() {
+        let (state, entry, finalized_cursor) = state_with_finalized_por_event();
+        let header = BlockHeader::new(
+            3_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 2_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world
+            .smart_contract_state
+            .remove(event_id_key(entry.event_id));
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            entry.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("missing event-id index must fail closed");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("missing its event-id index")
+        ));
+    }
+
+    #[test]
+    fn source_query_rejects_an_event_recorded_after_finality() {
+        let (state, entry, finalized_cursor) = state_with_finalized_por_event();
+        let header = BlockHeader::new(
+            3_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 2_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut record = read_event(transaction.world(), 1)
+            .expect("read selected event")
+            .expect("selected event");
+        record.recorded_at_unix_ms = finalized_cursor.finalized_at_unix_ms + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(1),
+            encode_state(&record, "future reputation event").expect("encode future event"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            entry.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("event timestamp after finality must fail");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("timestamp lies after finalized time")
+        ));
+    }
+
+    #[test]
+    fn source_query_resolves_a_historical_event_with_bounded_neighbors() {
+        let (state, entries, finalized_cursor) =
+            state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
+        let selected = &entries[1];
+
+        let event = FindSorafsReputationJournalEventBySourceId::new(selected.source_id, None)
+            .execute(&state.view())
+            .expect("resolve historical source with later unrelated events");
+        assert_eq!(event.sequence, 2);
+        assert_eq!(event.entry, *selected);
+        assert_eq!(finalized_cursor.height, 4);
+    }
+
+    #[test]
+    fn source_query_rejects_a_selected_successor_beyond_finality() {
+        let (state, entries, finalized_cursor) =
+            state_with_finalized_por_events(&[0x91, 0x92, 0x93, 0x94, 0x95]);
+        let selected = &entries[1];
+        let header = BlockHeader::new(
+            (finalized_cursor.height + 1)
+                .try_into()
+                .expect("nonzero height"),
+            None,
+            None,
+            None,
+            finalized_cursor.finalized_at_unix_ms + 1_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut successor = read_event(transaction.world(), 3)
+            .expect("read selected-event successor")
+            .expect("selected-event successor");
+        successor.target_block_height = finalized_cursor.height + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(3),
+            encode_state(&successor, "future selected-event successor")
+                .expect("encode future selected-event successor"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            selected.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("selected successor beyond finality must fail");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("targets non-finalized height")
+        ));
+    }
+
+    #[test]
+    fn source_query_rejects_a_selected_successor_after_finalized_time() {
+        let (state, entries, finalized_cursor) =
+            state_with_finalized_por_events(&[0x91, 0x92, 0x93, 0x94, 0x95]);
+        let selected = &entries[1];
+        let header = BlockHeader::new(
+            (finalized_cursor.height + 1)
+                .try_into()
+                .expect("nonzero height"),
+            None,
+            None,
+            None,
+            finalized_cursor.finalized_at_unix_ms + 1_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut successor = read_event(transaction.world(), 3)
+            .expect("read selected-event successor")
+            .expect("selected-event successor");
+        successor.recorded_at_unix_ms = finalized_cursor.finalized_at_unix_ms + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(3),
+            encode_state(&successor, "late selected-event successor")
+                .expect("encode late selected-event successor"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            selected.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("selected successor after finalized time must fail");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("timestamp lies after finalized time")
+        ));
+    }
+
+    #[test]
+    fn source_query_rejects_a_corrupt_selected_predecessor_edge() {
+        let (state, entries, finalized_cursor) =
+            state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
+        let selected = &entries[1];
+        let header = BlockHeader::new(
+            5_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 4_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut record = read_event(transaction.world(), 2)
+            .expect("read selected event")
+            .expect("selected event");
+        record.event_index = 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(2),
+            encode_state(&record, "misindexed reputation event").expect("encode misindexed event"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            selected.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("corrupt selected predecessor edge must fail");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("block height or event index is not contiguous")
+        ));
+    }
+
+    #[test]
+    fn source_query_rejects_a_global_terminal_beyond_finality() {
+        let (state, entries, finalized_cursor) = state_with_finalized_por_events(&[0x91, 0x92]);
+        let selected = &entries[0];
+        let header = BlockHeader::new(
+            4_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 3_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut terminal = read_event(transaction.world(), 2)
+            .expect("read terminal event")
+            .expect("terminal event");
+        terminal.target_block_height = finalized_cursor.height + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(2),
+            encode_state(&terminal, "future terminal reputation event")
+                .expect("encode future terminal"),
+        );
+        let mut journal_head = read_journal_head(transaction.world())
+            .expect("read journal head")
+            .expect("journal head");
+        journal_head.last_target_block_height = terminal.target_block_height;
+        transaction.world.smart_contract_state.insert(
+            journal_head_key().clone(),
+            encode_state(&journal_head, "future reputation journal head")
+                .expect("encode future head"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            selected.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("future global terminal must fail closed");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("targets non-finalized height")
+        ));
+    }
+
+    #[test]
+    fn absent_source_query_rejects_a_global_terminal_beyond_finality() {
+        let (state, _entries, finalized_cursor) = state_with_finalized_por_events(&[0x91, 0x92]);
+        let header = BlockHeader::new(
+            4_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 3_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut terminal = read_event(transaction.world(), 2)
+            .expect("read terminal event")
+            .expect("terminal event");
+        terminal.target_block_height = finalized_cursor.height + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(2),
+            encode_state(&terminal, "future terminal reputation event")
+                .expect("encode future terminal"),
+        );
+        let mut journal_head = read_journal_head(transaction.world())
+            .expect("read journal head")
+            .expect("journal head");
+        journal_head.last_target_block_height = terminal.target_block_height;
+        transaction.world.smart_contract_state.insert(
+            journal_head_key().clone(),
+            encode_state(&journal_head, "future reputation journal head")
+                .expect("encode future head"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            ReputationJournalSourceIdV1([0xE4; 32]),
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("future global terminal must preclude authoritative absence");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("targets non-finalized height")
+        ));
+    }
+
+    #[test]
+    fn early_event_page_rejects_a_global_terminal_beyond_finality() {
+        let (state, _entries, finalized_cursor) =
+            state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
+        let header = BlockHeader::new(
+            (finalized_cursor.height + 1)
+                .try_into()
+                .expect("nonzero height"),
+            None,
+            None,
+            None,
+            finalized_cursor.finalized_at_unix_ms + 1_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut terminal = read_event(transaction.world(), 3)
+            .expect("read global terminal")
+            .expect("global terminal");
+        terminal.target_block_height = finalized_cursor.height + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(3),
+            encode_state(&terminal, "future page terminal").expect("encode future page terminal"),
+        );
+        let mut journal_head = read_journal_head(transaction.world())
+            .expect("read journal head")
+            .expect("journal head");
+        journal_head.last_target_block_height = terminal.target_block_height;
+        transaction.world.smart_contract_state.insert(
+            journal_head_key().clone(),
+            encode_state(&journal_head, "future page journal head")
+                .expect("encode future page journal head"),
+        );
+
+        let error = FindSorafsReputationJournalEvents::new(Some(finalized_cursor), None, 1)
+            .execute(&transaction)
+            .expect_err("early page must validate the global terminal height");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("targets non-finalized height")
+        ));
+    }
+
+    #[test]
+    fn early_event_page_rejects_a_global_terminal_after_finalized_time() {
+        let (state, _entries, finalized_cursor) =
+            state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
+        let header = BlockHeader::new(
+            (finalized_cursor.height + 1)
+                .try_into()
+                .expect("nonzero height"),
+            None,
+            None,
+            None,
+            finalized_cursor.finalized_at_unix_ms + 1_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut terminal = read_event(transaction.world(), 3)
+            .expect("read global terminal")
+            .expect("global terminal");
+        terminal.recorded_at_unix_ms = finalized_cursor.finalized_at_unix_ms + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(3),
+            encode_state(&terminal, "late page terminal").expect("encode late page terminal"),
+        );
+
+        let error = FindSorafsReputationJournalEvents::new(Some(finalized_cursor), None, 1)
+            .execute(&transaction)
+            .expect_err("early page must validate the global terminal timestamp");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("timestamp lies after finalized time")
+        ));
+    }
+
+    #[test]
+    fn source_query_returns_the_latest_resolved_dispute_revision() {
+        let (state, opened, resolved, finalized_cursor) = state_with_finalized_resolved_dispute();
+
+        let event = FindSorafsReputationJournalEventBySourceId::new(
+            resolved.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&state.view())
+        .expect("resolve latest dispute source revision");
+        assert_eq!(event.sequence, 2);
+        assert_eq!(event.entry, resolved);
+        assert_eq!(event.entry.source_revision, 2);
+        assert_eq!(
+            event.entry.predecessor_event_id,
+            Some(opened.event_id),
+            "resolved revision must bind the exact opened event"
+        );
+    }
+
+    #[test]
+    fn source_query_rejects_a_nonadjacent_future_dispute_predecessor() {
+        let (state, resolved, finalized_cursor) =
+            state_with_finalized_interleaved_resolved_dispute();
+        let header = BlockHeader::new(
+            4_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 3_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut opened = read_event(transaction.world(), 1)
+            .expect("read interleaved opened dispute")
+            .expect("interleaved opened dispute");
+        opened.target_block_height = finalized_cursor.height + 1;
+        transaction.world.smart_contract_state.insert(
+            event_key(opened.sequence),
+            encode_state(&opened, "future interleaved dispute predecessor")
+                .expect("encode future interleaved dispute predecessor"),
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            resolved.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("future nonadjacent source predecessor must fail closed");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(ref message)
+                if message.contains("revision edge")
+                    || message.contains("strictly precede")
+                    || message.contains("non-finalized height")
+        ));
+    }
+
+    #[test]
+    fn source_query_rejects_a_resolved_dispute_with_missing_predecessor() {
+        let (state, _opened, resolved, finalized_cursor) = state_with_finalized_resolved_dispute();
+        let header = BlockHeader::new(
+            3_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 2_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let missing_predecessor = ReputationJournalEventIdV1([0xD1; 32]);
+        let forged_entry = ReputationJournalEntryV1::try_new(
+            resolved.provider_id,
+            resolved.authority_policy_digest,
+            resolved.recorded_by.clone(),
+            resolved.source_time_unix_ms,
+            Some(missing_predecessor),
+            resolved.payload.clone(),
+        )
+        .expect("canonical forged resolved dispute entry");
+        let terminal = replace_resolved_dispute_entry(&mut transaction, forged_entry);
+        let direct_error = validate_event_indexes(transaction.world(), &terminal)
+            .expect_err("missing lifecycle predecessor must fail intrinsic source validation");
+        assert!(
+            direct_error
+                .to_string()
+                .contains("predecessor is missing its event-id index")
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            resolved.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("query must reject a missing dispute predecessor");
+        assert!(matches!(error, QueryExecutionFail::Conversion(_)));
+    }
+
+    #[test]
+    fn source_query_rejects_substituted_dispute_revision_material() {
+        let (state, opened, resolved, finalized_cursor) = state_with_finalized_resolved_dispute();
+        let header = BlockHeader::new(
+            3_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS + 2_000,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut substituted_payload = resolved.payload.clone();
+        let ReputationJournalPayloadV1::ProviderDispute(dispute) = &mut substituted_payload else {
+            panic!("resolved fixture must carry a provider dispute");
+        };
+        dispute.evidence_digest = [0xD2; 32];
+        let forged_entry = ReputationJournalEntryV1::try_new(
+            resolved.provider_id,
+            resolved.authority_policy_digest,
+            resolved.recorded_by.clone(),
+            resolved.source_time_unix_ms,
+            Some(opened.event_id),
+            substituted_payload,
+        )
+        .expect("canonical substituted resolved dispute entry");
+        let terminal = replace_resolved_dispute_entry(&mut transaction, forged_entry);
+        let direct_error = validate_event_indexes(transaction.world(), &terminal)
+            .expect_err("substituted immutable dispute material must fail lifecycle validation");
+        assert!(
+            direct_error
+                .to_string()
+                .contains("revision edge is missing or substituted")
+        );
+
+        let error = FindSorafsReputationJournalEventBySourceId::new(
+            resolved.source_id,
+            Some(finalized_cursor),
+        )
+        .execute(&transaction)
+        .expect_err("query must reject substituted dispute lifecycle material");
+        assert!(matches!(error, QueryExecutionFail::Conversion(_)));
+    }
+
+    #[test]
+    fn recorder_policy_rejects_history_beyond_the_v1_revision_bound() {
+        let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
+        let header = BlockHeader::new(
+            1_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let maximum_revision = u64::try_from(REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1)
+            .expect("V1 policy-history bound fits u64");
+        let mut over_limit = policy(&authority);
+        over_limit.revision = maximum_revision + 1;
+        over_limit.predecessor_policy_digest = Some([0xA5; 32]);
+
+        let error = SetSorafsReputationJournalAuthorityPolicy::new(over_limit)
+            .execute(&authority, &mut transaction)
+            .expect_err("policy revision beyond the hard history bound must fail");
+        assert!(error.to_string().contains("exceeds the V1 history bound"));
+        assert!(
+            read_reputation_authority_policy_history(
+                transaction.world(),
+                REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1 + 1,
+            )
+            .is_err(),
+            "finalized history capture must reject a traversal bound above the same ceiling"
+        );
+    }
+
+    #[test]
+    fn source_time_policy_lookup_accepts_the_exact_v1_revision_bound() {
+        let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
+        let header = BlockHeader::new(
+            1_u64.try_into().expect("nonzero height"),
+            None,
+            None,
+            None,
+            TEST_NOW_MS
+                + u64::try_from(REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1)
+                    .expect("V1 policy-history bound fits u64"),
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut predecessor_policy_digest = None;
+        let mut first = None;
+        let mut active = None;
+        for revision in 1..=REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1 {
+            let revision = u64::try_from(revision).expect("policy revision fits u64");
+            let mut candidate = policy(&authority);
+            candidate.revision = revision;
+            candidate.predecessor_policy_digest = predecessor_policy_digest;
+            let record = ReputationJournalAuthorityPolicyRecordV1::try_new(
+                candidate,
+                authority.clone(),
+                TEST_NOW_MS + revision,
+            )
+            .expect("construct bounded authority-policy record");
+            transaction.world.smart_contract_state.insert(
+                policy_history_key(&record.policy_digest),
+                encode_state(&record, "bounded reputation recorder-policy history")
+                    .expect("encode bounded authority-policy record"),
+            );
+            first.get_or_insert_with(|| record.clone());
+            predecessor_policy_digest = Some(record.policy_digest);
+            active = Some(record);
+        }
+        let first = first.expect("revision-one record");
+        let active = active.expect("active bounded policy");
+        transaction.world.smart_contract_state.insert(
+            active_policy_key().clone(),
+            encode_state(&active, "active bounded reputation recorder policy")
+                .expect("encode active bounded authority-policy record"),
+        );
+
+        assert_eq!(
+            read_policy_at_source_time(
+                transaction.world(),
+                active,
+                first.policy_digest,
+                first.activated_at_unix_ms,
+            )
+            .expect("traverse the exact V1 policy-history bound"),
+            first
         );
     }
 
@@ -1882,6 +3317,15 @@ mod tests {
             second_record.policy.predecessor_policy_digest,
             Some(first_digest)
         );
+        assert_eq!(
+            read_reputation_authority_policy_history(transaction.world(), 2)
+                .expect("read exact bounded policy history"),
+            vec![first_record.clone(), second_record.clone()]
+        );
+        assert!(
+            read_reputation_authority_policy_history(transaction.world(), 1).is_err(),
+            "an undersized immutable-history bound must fail closed"
+        );
 
         SetSorafsReputationJournalAuthorityPolicy::new(first)
             .execute(&authority, &mut transaction)
@@ -1899,6 +3343,90 @@ mod tests {
                 .policy_digest,
             second_digest
         );
+    }
+
+    #[test]
+    fn por_append_uses_source_time_policy_across_rotation_and_replay() {
+        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let first = policy(&authority);
+        let first_digest = first.canonical_digest().expect("first policy digest");
+        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(first.clone())
+                .execute(&authority, transaction)
+        })
+        .expect("activate first recorder policy");
+
+        let queued_before_rotation = por_entry_at(
+            &authority,
+            provider_id,
+            first_digest,
+            0x61,
+            TEST_NOW_MS + 100,
+        );
+        let mut successor = first;
+        successor.revision = 2;
+        successor.predecessor_policy_digest = Some(first_digest);
+        let successor_digest = successor
+            .canonical_digest()
+            .expect("successor policy digest");
+        transact_test(&mut state, 2, TEST_NOW_MS + 200, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(successor.clone())
+                .execute(&authority, transaction)
+        })
+        .expect("rotate recorder policy");
+
+        transact_test(&mut state, 3, TEST_NOW_MS + 300, |transaction| {
+            AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
+                .execute(&authority, transaction)?;
+            AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
+                .execute(&authority, transaction)?;
+            assert_eq!(
+                read_journal_head(transaction.world())?
+                    .ok_or_else(|| corrupt_state("missing PoR reputation journal head"))?
+                    .last_sequence,
+                1,
+                "an exact crash replay must remain idempotent after policy rotation"
+            );
+            let retained = read_event(transaction.world(), 1)?
+                .ok_or_else(|| corrupt_state("missing retained historical PoR entry"))?;
+            validate_event_indexes(transaction.world(), &retained)?;
+            Ok(())
+        })
+        .expect("commit source-time-valid queued PoR terminal");
+
+        let superseded_at_boundary = por_entry_at(
+            &authority,
+            provider_id,
+            first_digest,
+            0x62,
+            TEST_NOW_MS + 200,
+        );
+        let current = por_entry_at(
+            &authority,
+            provider_id,
+            successor_digest,
+            0x63,
+            TEST_NOW_MS + 250,
+        );
+        transact_test(&mut state, 4, TEST_NOW_MS + 400, |transaction| {
+            let error = AppendSorafsPorReputationJournalEntry::new(superseded_at_boundary)
+                .execute(&authority, transaction)
+                .expect_err("the successor activation boundary belongs to the successor");
+            assert!(
+                error
+                    .to_string()
+                    .contains("outside its recorder-policy activation interval")
+            );
+            AppendSorafsPorReputationJournalEntry::new(current).execute(&authority, transaction)?;
+            assert_eq!(
+                read_journal_head(transaction.world())?
+                    .ok_or_else(|| corrupt_state("missing PoR reputation journal head"))?
+                    .last_sequence,
+                2
+            );
+            Ok(())
+        })
+        .expect("reject stale policy material and commit successor material atomically");
     }
 
     #[test]
@@ -1935,8 +3463,11 @@ mod tests {
         let digest = policy.canonical_digest().expect("policy digest");
         let payload = ReputationJournalPayloadV1::StreamTokenValidation(
             iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1 {
-                validation_id: [0x11; 32],
-                request_digest: [0x22; 32],
+                binding: iroha_data_model::sorafs::reputation::StreamTokenValidationBindingV1 {
+                    gateway_id: [0x11; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0x22; 32],
+                },
                 token_body_digest: Some([0x33; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_000,

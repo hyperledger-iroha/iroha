@@ -11712,7 +11712,7 @@ fileprivate enum ToriiVerifyingKeyRequestValidation {
         guard trimmed == value else {
             throw ToriiClientError.invalidPayload("\(field) must not contain surrounding whitespace.")
         }
-        guard VerifierBackendRegistryLabels.isSupported(value) else {
+        guard VerifyingKeyBackendTag.isProductionVerifyBackendLabel(value) else {
             throw ToriiClientError.invalidPayload(
                 "\(field) is not an exact supported verifier-registry label: \(value)."
             )
@@ -28700,7 +28700,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     ) async throws -> FeeQuoteResponse {
         let allowedFields: Set<String> = [
             "chain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "nonce", "fee_payment", "metadata",
+            "time_to_live_ms", "nonce", "fee_payment", "metadata", "attachments",
         ]
         let requiredFields: Set<String> = [
             "chain", "authority", "creation_time_ms", "instructions",
@@ -28748,6 +28748,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             default:
                 throw ToriiClientError.invalidPayload(
                     "unsignedPayload.\(optionalInteger) must be a positive integer when present."
+                )
+            }
+        }
+        if let attachments = unsignedPayload["attachments"] {
+            if case .null = attachments {
+                // An explicit JSON null is the canonical `Option::None` value.
+            } else if case let .string(encoded) = attachments,
+                      let decoded = Data(base64Encoded: encoded),
+                      !decoded.isEmpty,
+                      decoded.base64EncodedString() == encoded {
+                // `ProofAttachmentList` uses canonical Norito bytes in padded base64 JSON.
+            } else {
+                throw ToriiClientError.invalidPayload(
+                    "unsignedPayload.attachments must be canonical base64 when present."
                 )
             }
         }

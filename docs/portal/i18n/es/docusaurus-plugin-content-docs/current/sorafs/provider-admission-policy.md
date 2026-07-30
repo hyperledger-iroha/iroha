@@ -41,7 +41,7 @@ en tareas de ingeniería trazables.
 ## Flujo de admisión
 
 1. **Creación de propuesta**
-   - CLI: añadir `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: añadir `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      produciendo `ProviderAdmissionProposalV1` + bundle de atestado.
    - Validación: asegurar campos requeridos, stake > 0, handle canónico de chunker en `profile_id`.
 2. **Endoso de gobernanza**
@@ -67,7 +67,7 @@ El flujo de CLI ahora acepta bundles de certificados intermedios (`--endpoint-at
 
 ### Referencia de CLI
 
-Ejecuta cada comando vía `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+Ejecuta cada comando vía `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - Flags requeridos: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -115,7 +115,7 @@ Ejecuta cada comando vía `cargo run -p sorafs_manifest --bin sorafs_manifest_bu
 1. Construye el par propuesta/advert sucesor con `provider-admission proposal` y `provider-admission sign`, incrementando `--retention-epoch` y actualizando stake/endpoints según sea necesario.
 2. Ejecuta
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -133,7 +133,7 @@ Ejecuta cada comando vía `cargo run -p sorafs_manifest --bin sorafs_manifest_bu
 #### Revocación de emergencia
 1. Identifica el envelope comprometido y emite una revocación:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

@@ -212,7 +212,7 @@ public sealed class SoraFsFixtureBundlePayloadInput
 public static class SoraFsReferenceValidators
 {
     /// <summary>
-    /// First bridge ABI that contains both Governance DAG validator entrypoints.
+    /// First bridge ABI that contains the required V1 SoraFS reference entrypoints.
     /// </summary>
     public const uint RequiredBridgeAbiVersion = 21;
 
@@ -297,7 +297,7 @@ public static class SoraFsReferenceValidators
 
     /// <summary>
     /// Reports whether the current native bridge exposes the complete ABI-21
-    /// governance log-node and DAG reference surface.
+    /// governance and appeal-finance reference surface.
     /// </summary>
     public static bool IsAvailable()
     {
@@ -320,6 +320,15 @@ public static class SoraFsReferenceValidators
     public static bool IsFixtureBundleAvailable()
     {
         return IsFixtureBundleAvailable(PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Reports whether the current native bridge exposes appeal-finance
+    /// <c>CancelAssetLock</c> validation.
+    /// </summary>
+    public static bool IsAppealFinanceAvailable()
+    {
+        return IsAppealFinanceAvailable(PInvokeSoraFsReferenceNativeBoundary.Instance);
     }
 
     /// <summary>
@@ -348,6 +357,35 @@ public static class SoraFsReferenceValidators
     {
         return ValidateOrderbookPayloadJson(
             kind,
+            noritoBytes,
+            label,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Validates one canonical appeal-finance <c>CancelAssetLock</c> V1 payload.
+    /// </summary>
+    public static string ValidateAppealFinanceCancelAssetLockJson(
+        byte[] noritoBytes,
+        string? label = null)
+    {
+        return ValidateAppealFinanceCancelAssetLockJson(
+            noritoBytes,
+            label,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Validates one canonical appeal-finance <c>CancelAssetLock</c> V1 payload
+    /// with a caller-bound outcome timestamp.
+    /// </summary>
+    public static string ValidateAppealFinanceCancelAssetLockJson(
+        byte[] noritoBytes,
+        string? label,
+        long generatedAtUnix)
+    {
+        return ValidateAppealFinanceCancelAssetLockJson(
             noritoBytes,
             label,
             generatedAtUnix,
@@ -743,8 +781,9 @@ public static class SoraFsReferenceValidators
     {
         try
         {
-            return native.AbiVersion() >= RequiredBridgeAbiVersion
-                && native.HasGovernanceDagSymbols();
+            return native.AbiVersion() == RequiredBridgeAbiVersion
+                && native.HasGovernanceDagSymbols()
+                && native.HasAppealFinanceSymbols();
         }
         catch (Exception)
         {
@@ -756,7 +795,7 @@ public static class SoraFsReferenceValidators
     {
         try
         {
-            return native.AbiVersion() >= RequiredBridgeAbiVersion
+            return native.AbiVersion() == RequiredBridgeAbiVersion
                 && native.HasOrderbookPdpSymbols();
         }
         catch (Exception)
@@ -769,8 +808,21 @@ public static class SoraFsReferenceValidators
     {
         try
         {
-            return native.AbiVersion() >= RequiredBridgeAbiVersion
+            return native.AbiVersion() == RequiredBridgeAbiVersion
                 && native.HasFixtureBundleSymbols();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsAppealFinanceAvailable(ISoraFsReferenceNativeBoundary native)
+    {
+        try
+        {
+            return native.AbiVersion() == RequiredBridgeAbiVersion
+                && native.HasAppealFinanceSymbols();
         }
         catch (Exception)
         {
@@ -884,6 +936,47 @@ public static class SoraFsReferenceValidators
         }
         return ReadAndValidateOutcome(
             "SoraFS orderbook validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
+    }
+
+    internal static string ValidateAppealFinanceCancelAssetLockJson(
+        byte[] noritoBytes,
+        string? label,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        var payload = CopyInput(noritoBytes, nameof(noritoBytes));
+        var labelBytes = EncodeLabel(
+            ValidateLabel(
+                label,
+                "cancel_asset_lock_v1.to",
+                nameof(label)),
+            nameof(label));
+        RequireAggregateBound(
+            "Appeal-finance CancelAssetLock validation",
+            payload.Length,
+            labelBytes.Length);
+        RequireAppealFinanceBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidateAppealFinanceCancelAssetLock(
+                payload,
+                labelBytes,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS appeal-finance CancelAssetLock native validation failed.",
+                error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS appeal-finance CancelAssetLock validation",
             result,
             checked((ulong)generatedAtUnix),
             native);
@@ -1807,13 +1900,13 @@ public static class SoraFsReferenceValidators
         catch (Exception error)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} is unavailable; install ABI {RequiredBridgeAbiVersion} or later.",
+                $"{LibraryName} is unavailable; install exact ABI {RequiredBridgeAbiVersion}.",
                 error);
         }
-        if (version < RequiredBridgeAbiVersion)
+        if (version != RequiredBridgeAbiVersion)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} ABI {RequiredBridgeAbiVersion} or later is required; found {version}.");
+                $"{LibraryName} exact ABI {RequiredBridgeAbiVersion} is required; found {version}.");
         }
         bool hasSymbols;
         try
@@ -1843,13 +1936,13 @@ public static class SoraFsReferenceValidators
         catch (Exception error)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} is unavailable; install ABI {RequiredBridgeAbiVersion} or later.",
+                $"{LibraryName} is unavailable; install exact ABI {RequiredBridgeAbiVersion}.",
                 error);
         }
-        if (version < RequiredBridgeAbiVersion)
+        if (version != RequiredBridgeAbiVersion)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} ABI {RequiredBridgeAbiVersion} or later is required; found {version}.");
+                $"{LibraryName} exact ABI {RequiredBridgeAbiVersion} is required; found {version}.");
         }
         bool hasSymbols;
         try
@@ -1869,6 +1962,42 @@ public static class SoraFsReferenceValidators
         }
     }
 
+    private static void RequireAppealFinanceBridge(ISoraFsReferenceNativeBoundary native)
+    {
+        uint version;
+        try
+        {
+            version = native.AbiVersion();
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} is unavailable; install exact ABI {RequiredBridgeAbiVersion}.",
+                error);
+        }
+        if (version != RequiredBridgeAbiVersion)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} exact ABI {RequiredBridgeAbiVersion} is required; found {version}.");
+        }
+        bool hasSymbols;
+        try
+        {
+            hasSymbols = native.HasAppealFinanceSymbols();
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} does not expose the appeal-finance reference symbol.",
+                error);
+        }
+        if (!hasSymbols)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} does not expose the appeal-finance reference symbol.");
+        }
+    }
+
     private static void RequireFixtureBundleBridge(ISoraFsReferenceNativeBoundary native)
     {
         uint version;
@@ -1879,13 +2008,13 @@ public static class SoraFsReferenceValidators
         catch (Exception error)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} is unavailable; install ABI {RequiredBridgeAbiVersion} or later.",
+                $"{LibraryName} is unavailable; install exact ABI {RequiredBridgeAbiVersion}.",
                 error);
         }
-        if (version < RequiredBridgeAbiVersion)
+        if (version != RequiredBridgeAbiVersion)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} ABI {RequiredBridgeAbiVersion} or later is required; found {version}.");
+                $"{LibraryName} exact ABI {RequiredBridgeAbiVersion} is required; found {version}.");
         }
         bool hasSymbols;
         try
@@ -2377,6 +2506,30 @@ public static class SoraFsReferenceValidators
             }
         }
 
+        public bool HasAppealFinanceSymbols()
+        {
+            if (!NativeLibrary.TryLoad(
+                    LibraryName,
+                    typeof(SoraFsReferenceValidators).Assembly,
+                    null,
+                    out var handle))
+            {
+                return false;
+            }
+            try
+            {
+                return NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(handle, "connect_norito_free", out _);
+            }
+            finally
+            {
+                NativeLibrary.Free(handle);
+            }
+        }
+
         public NativeValidationResult ValidateOrderbookPayload(
             uint kind,
             byte[] bytes,
@@ -2385,6 +2538,22 @@ public static class SoraFsReferenceValidators
         {
             var code = NativeValidateOrderbookPayload(
                 kind,
+                bytes,
+                (UIntPtr)bytes.Length,
+                label,
+                (UIntPtr)label.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult ValidateAppealFinanceCancelAssetLock(
+            byte[] bytes,
+            byte[] label,
+            ulong generatedAt)
+        {
+            var code = NativeValidateAppealFinanceCancelAssetLock(
                 bytes,
                 (UIntPtr)bytes.Length,
                 label,
@@ -3024,6 +3193,38 @@ public static class SoraFsReferenceValidators
             return code;
         }
 
+        private static int NativeValidateAppealFinanceCancelAssetLock(
+            byte[] bytes,
+            UIntPtr bytesLength,
+            byte[] label,
+            UIntPtr labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeValidateAppealFinanceCancelAssetLockUnix(
+                    bytes,
+                    bytesLength,
+                    label,
+                    labelLength,
+                    generatedAt,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeValidateAppealFinanceCancelAssetLockWindows(
+                bytes,
+                checked((uint)bytesLength.ToUInt64()),
+                label,
+                checked((uint)labelLength.ToUInt64()),
+                generatedAt,
+                out output,
+                out var windowsLength);
+            outputLength = (UIntPtr)windowsLength;
+            return code;
+        }
+
         private static int NativeValidatePdpPayload(
             uint kind,
             byte[] bytes,
@@ -3433,6 +3634,34 @@ public static class SoraFsReferenceValidators
 
         [DllImport(
             LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidateAppealFinanceCancelAssetLockUnix(
+            [In] byte[] bytes,
+            UIntPtr bytesLength,
+            [In] byte[] label,
+            UIntPtr labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidateAppealFinanceCancelAssetLockWindows(
+            [In] byte[] bytes,
+            uint bytesLength,
+            [In] byte[] label,
+            uint labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
             EntryPoint = "connect_norito_sorafs_reference_validate_pdp_payload_json",
             CallingConvention = CallingConvention.Cdecl)]
         private static extern int NativeValidatePdpPayloadUnix(
@@ -3684,8 +3913,15 @@ internal interface ISoraFsReferenceNativeBoundary
 
     bool HasFixtureBundleSymbols();
 
+    bool HasAppealFinanceSymbols();
+
     NativeValidationResult ValidateOrderbookPayload(
         uint kind,
+        byte[] bytes,
+        byte[] label,
+        ulong generatedAt);
+
+    NativeValidationResult ValidateAppealFinanceCancelAssetLock(
         byte[] bytes,
         byte[] label,
         ulong generatedAt);

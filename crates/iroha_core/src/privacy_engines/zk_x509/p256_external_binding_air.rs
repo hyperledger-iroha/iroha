@@ -33,8 +33,8 @@ use super::{
     p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1},
     p256_value_bus::{
         P256_VALUE_BUS_LIMBS_V1, P256EqualityBindingV1, P256InitialValueKindV1,
-        P256ValueBusErrorV1, P256ValueBusTraceV1, P256ValueIdV1, P256ValueKindV1,
-        p256_value_bus_writer_limb_cell_v1,
+        P256ValueBusBaseEndpointTraceV1, P256ValueBusBaseSourceV1, P256ValueBusErrorV1,
+        P256ValueIdV1, P256ValueKindV1, p256_value_bus_base_writer_limb_cell_v1,
     },
     p256_window_air::{
         P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1, P256_WINDOW_ROWS_V1, P256WindowCoordinateV1,
@@ -394,6 +394,38 @@ impl core::fmt::Debug for P256ExternalBindingTraceV1 {
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
             .finish()
+    }
+}
+
+impl P256ExternalBindingTraceV1 {
+    /// Recursively overwrite every private source and copied witness cell.
+    ///
+    /// Fixed addresses and ownership manifests are public topology, but the
+    /// row allocation is cleared as well so no stale cells remain reachable
+    /// after an error path or ordinary drop.
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        for row in &mut self.rows {
+            row.writer_cells.fill(F::ZERO);
+            row.external_cells.fill(F::ZERO);
+        }
+        self.rows.clear();
+        self.input_selection.active = F::ZERO;
+        self.input_selection.real.zeroize_private_v1();
+        self.input_selection.selected.zeroize_private_v1();
+    }
+
+    #[cfg(test)]
+    fn private_is_zeroized_v1(&self) -> bool {
+        self.rows.is_empty()
+            && self.input_selection.active == F::ZERO
+            && self.input_selection.real.private_is_zeroized_v1()
+            && self.input_selection.selected.private_is_zeroized_v1()
+    }
+}
+
+impl Drop for P256ExternalBindingTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
     }
 }
 
@@ -821,10 +853,14 @@ pub(crate) fn compile_zk_x509_p256_external_cross_sources_v1(
     Ok(rows)
 }
 
-/// Build the complete binding trace and both ownership manifests.
-pub(crate) fn build_zk_x509_p256_external_binding_trace_v1(
+/// Build the complete binding trace from one already validated, challenged-free
+/// execution endpoint.
+///
+/// This narrow constructor remains private so production callers cannot
+/// substitute an arbitrary endpoint for the role-bound base material.
+fn build_external_binding_from_execution_endpoint_v1(
     material: &P256EcdsaTraceMaterialV1,
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
 ) -> Result<P256ExternalBindingTraceV1, P256ExternalBindingErrorV1> {
     let expected = expected_slots_v1(material, value_bus)?;
     let row_count = p256_external_binding_rows_v1(material.role);
@@ -862,12 +898,33 @@ pub(crate) fn build_zk_x509_p256_external_binding_trace_v1(
     Ok(trace)
 }
 
+/// Build the complete external binding from the sole validated value-bus
+/// pre-commitment capability.
+///
+/// The role check happens before projecting the execution endpoint. This is
+/// the production constructor used by MAIN; it does not rebuild the value bus
+/// and cannot depend on any post-X5B1 product accumulator.
+pub(crate) fn build_zk_x509_p256_external_binding_trace_v1(
+    material: &P256EcdsaTraceMaterialV1,
+    value_bus: &P256ValueBusBaseSourceV1,
+) -> Result<P256ExternalBindingTraceV1, P256ExternalBindingErrorV1> {
+    if value_bus.role_v1().map_err(map_writer_error_v1)? != material.role {
+        return Err(P256ExternalBindingErrorV1::Topology);
+    }
+    build_external_binding_from_execution_endpoint_v1(
+        material,
+        value_bus
+            .execution_endpoint_v1()
+            .map_err(map_writer_error_v1)?,
+    )
+}
+
 impl P256ExternalBindingTraceV1 {
     /// Validate exact coverage, ownership, source copies, equality, and padding.
     pub(crate) fn validate_v1(
         &self,
         material: &P256EcdsaTraceMaterialV1,
-        value_bus: &P256ValueBusTraceV1,
+        value_bus: &P256ValueBusBaseEndpointTraceV1,
     ) -> Result<(), P256ExternalBindingErrorV1> {
         let topology = validate_material_topology_v1(material)?;
         if self.role != material.role
@@ -945,7 +1002,7 @@ impl P256ExternalBindingTraceV1 {
         &mut self,
         selection: P256OptionalCertificateSelectionV1,
         material: &P256EcdsaTraceMaterialV1,
-        value_bus: &P256ValueBusTraceV1,
+        value_bus: &P256ValueBusBaseEndpointTraceV1,
     ) -> Result<(), P256ExternalBindingErrorV1> {
         let previous = self.input_selection;
         self.input_selection = selection;
@@ -1086,7 +1143,7 @@ impl ExpectedBindingV1 {
 
 fn expected_slots_v1(
     material: &P256EcdsaTraceMaterialV1,
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
 ) -> Result<Vec<ExpectedBindingV1>, P256ExternalBindingErrorV1> {
     let topology = validate_material_topology_v1(material)?;
     expected_slots_with_topology_v1(material, value_bus, &topology)
@@ -1094,7 +1151,7 @@ fn expected_slots_v1(
 
 fn expected_slots_with_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
     topology: &ExpectedTopologyV1,
 ) -> Result<Vec<ExpectedBindingV1>, P256ExternalBindingErrorV1> {
     let active = p256_external_binding_active_equalities_v1(material.role);
@@ -1946,7 +2003,7 @@ fn derived_id_v1(operation: usize) -> Result<P256ValueIdV1, P256ExternalBindingE
 }
 
 fn writer_cell_v1(
-    value_bus: &P256ValueBusTraceV1,
+    value_bus: &P256ValueBusBaseEndpointTraceV1,
     topology: &ExpectedTopologyV1,
     id: P256ValueIdV1,
     limb: usize,
@@ -1969,7 +2026,7 @@ fn writer_cell_v1(
     } else {
         P256ValueKindV1::Derived
     };
-    p256_value_bus_writer_limb_cell_v1(
+    p256_value_bus_base_writer_limb_cell_v1(
         value_bus,
         P256_EXTERNAL_INITIAL_VALUES_V1,
         id,
@@ -2035,7 +2092,9 @@ fn map_writer_error_v1(error: P256ValueBusErrorV1) -> P256ExternalBindingErrorV1
     match error {
         P256ValueBusErrorV1::Resource => P256ExternalBindingErrorV1::Resource,
         P256ValueBusErrorV1::Range => P256ExternalBindingErrorV1::Range,
-        P256ValueBusErrorV1::Topology => P256ExternalBindingErrorV1::Topology,
+        P256ValueBusErrorV1::Phase | P256ValueBusErrorV1::Topology => {
+            P256ExternalBindingErrorV1::Topology
+        }
         _ => P256ExternalBindingErrorV1::WriterSource,
     }
 }
@@ -2048,18 +2107,21 @@ mod tests {
 
     use super::*;
     use crate::privacy_engines::zk_x509::{
+        credential_pre_aux::{
+            ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPostBaseChallengesV1,
+            ZkX509CredentialMainPreAuxV1, derive_zk_x509_credential_pre_aux_binding_v1,
+        },
         p256_ecdsa_air::P256EcdsaWitnessV1,
         p256_trace::compile_p256_ecdsa_trace_material_v1,
         p256_value_bus::{
-            P256_VALUE_BUS_LANES_V1, P256_VALUE_BUS_SEGMENT_ROWS_V1, P256ValueAccessKindV1,
-            P256ValueBusEndpointTraceV1, P256ValueBusEndpointV1, P256ValueBusFixedAccessV1,
-            P256ValueBusRowV1, P256ValueBusSegmentV1,
+            P256_VALUE_BUS_SEGMENT_ROWS_V1, P256ValueAccessKindV1, P256ValueBusBaseCellV1,
+            P256ValueBusBaseEndpointTraceV1, P256ValueBusEndpointV1, P256ValueBusFixedAccessV1,
         },
     };
 
     struct FixtureV1 {
         material: P256EcdsaTraceMaterialV1,
-        value_bus: P256ValueBusTraceV1,
+        value_bus: P256ValueBusBaseEndpointTraceV1,
         trace: P256ExternalBindingTraceV1,
     }
 
@@ -2071,7 +2133,7 @@ mod tests {
     fn fixture_v1(role: P256EcdsaRoleV1, seed: u8) -> FixtureV1 {
         let material = material_v1(role, seed);
         let value_bus = synthetic_writer_endpoint_v1(&material);
-        let trace = build_zk_x509_p256_external_binding_trace_v1(&material, &value_bus)
+        let trace = build_external_binding_from_execution_endpoint_v1(&material, &value_bus)
             .expect("complete external bindings");
         FixtureV1 {
             material,
@@ -2083,6 +2145,24 @@ mod tests {
     fn material_v1(role: P256EcdsaRoleV1, seed: u8) -> P256EcdsaTraceMaterialV1 {
         compile_p256_ecdsa_trace_material_v1(role, signed_witness_v1(seed))
             .expect("valid compiler material")
+    }
+
+    fn post_base_v1(seed: u8) -> ZkX509CredentialMainPostBaseChallengesV1 {
+        let main = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
+                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+            }),
+        );
+        derive_zk_x509_credential_pre_aux_binding_v1(
+            main,
+            [seed.wrapping_add(0x20); 32],
+            [seed.wrapping_add(0x40); 32],
+            [seed.wrapping_add(0x60); 32],
+        )
+        .expect("opaque X5B1 binding")
+        .main_post_base()
     }
 
     fn signed_witness_v1(seed: u8) -> P256EcdsaWitnessV1 {
@@ -2109,37 +2189,30 @@ mod tests {
         }
     }
 
-    fn blank_bus_row_v1() -> P256ValueBusRowV1 {
-        P256ValueBusRowV1 {
+    fn blank_bus_row_v1() -> P256ValueBusBaseCellV1 {
+        P256ValueBusBaseCellV1 {
             fixed: P256ValueBusFixedAccessV1::Inactive,
             value: F::ZERO,
-            value_bits: [F::ZERO; P256_VALUE_BUS_LIMBS_V1],
-            product_before: [F::ZERO; P256_VALUE_BUS_LANES_V1],
-            product_after: [F::ZERO; P256_VALUE_BUS_LANES_V1],
         }
     }
 
-    fn synthetic_writer_endpoint_v1(material: &P256EcdsaTraceMaterialV1) -> P256ValueBusTraceV1 {
+    fn synthetic_writer_endpoint_v1(
+        material: &P256EcdsaTraceMaterialV1,
+    ) -> P256ValueBusBaseEndpointTraceV1 {
         let result_x_operation = usize::try_from(material.assigned.result_x.0)
             .expect("result x id")
             - material.initial_values.len();
-        let mut segments = (0..material.linked_operations.len())
-            .map(|index| P256ValueBusSegmentV1 {
-                index: index as u32,
-                product_before: [F::ZERO; P256_VALUE_BUS_LANES_V1],
-                rows: if index < material.initial_values.len() || index == result_x_operation {
-                    vec![blank_bus_row_v1(); P256_VALUE_BUS_SEGMENT_ROWS_V1]
-                } else {
-                    Vec::new()
-                },
-                product_after: [F::ZERO; P256_VALUE_BUS_LANES_V1],
-            })
-            .collect::<Vec<_>>();
+        let mut rows = vec![
+            blank_bus_row_v1();
+            material.linked_operations.len() * P256_VALUE_BUS_SEGMENT_ROWS_V1
+        ];
         for initial in &material.initial_values {
             let segment = usize::try_from(initial.id.0).expect("initial id");
             let limbs = bytes_be_to_limbs_le_v1(initial.value);
             for (limb, value) in limbs.into_iter().enumerate() {
-                segments[segment].rows[3 * P256_VALUE_BUS_LIMBS_V1 + limb] = P256ValueBusRowV1 {
+                let row =
+                    segment * P256_VALUE_BUS_SEGMENT_ROWS_V1 + 3 * P256_VALUE_BUS_LIMBS_V1 + limb;
+                rows[row] = P256ValueBusBaseCellV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: initial.id,
                         limb: limb as u8,
@@ -2151,17 +2224,17 @@ mod tests {
                         },
                     },
                     value: F(u64::from(value)),
-                    ..blank_bus_row_v1()
                 };
             }
         }
         for (operation, linked) in material.linked_operations.iter().enumerate() {
-            if segments[operation].rows.is_empty() {
+            if operation >= material.initial_values.len() && operation != result_x_operation {
                 continue;
             }
             let limbs = bytes_be_to_limbs_le_v1(linked.operation.c);
             for (limb, value) in limbs.into_iter().enumerate() {
-                segments[operation].rows[3 * limb + 2] = P256ValueBusRowV1 {
+                let row = operation * P256_VALUE_BUS_SEGMENT_ROWS_V1 + 3 * limb + 2;
+                rows[row] = P256ValueBusBaseCellV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: linked.c,
                         limb: limb as u8,
@@ -2170,19 +2243,12 @@ mod tests {
                         value_kind: P256ValueKindV1::Derived,
                     },
                     value: F(u64::from(value)),
-                    ..blank_bus_row_v1()
                 };
             }
         }
-        P256ValueBusTraceV1 {
-            execution: P256ValueBusEndpointTraceV1 {
-                endpoint: P256ValueBusEndpointV1::Execution,
-                segments,
-            },
-            sorted: P256ValueBusEndpointTraceV1 {
-                endpoint: P256ValueBusEndpointV1::Sorted,
-                segments: Vec::new(),
-            },
+        P256ValueBusBaseEndpointTraceV1 {
+            endpoint: P256ValueBusEndpointV1::Execution,
+            rows,
         }
     }
 
@@ -2569,20 +2635,54 @@ mod tests {
     }
 
     #[test]
+    fn production_base_source_path_matches_projection_binds_once_and_zeroizes_recursively() {
+        let fixture = wallet_fixture_v1();
+        let mut base = P256ValueBusBaseSourceV1::new_v1(&fixture.material)
+            .expect("validated challenge-independent value-bus source");
+        let mut production = build_zk_x509_p256_external_binding_trace_v1(&fixture.material, &base)
+            .expect("production external binding");
+        assert_eq!(production, fixture.trace);
+
+        let mut wrong_role = fixture.material.clone();
+        wrong_role.role = P256EcdsaRoleV1::CertificateOrCrl;
+        assert_eq!(
+            build_zk_x509_p256_external_binding_trace_v1(&wrong_role, &base),
+            Err(P256ExternalBindingErrorV1::Topology)
+        );
+
+        let bound = base
+            .bind_v1(post_base_v1(0x41))
+            .expect("source remains bindable after external base construction");
+        bound
+            .execution_aux_source_v1()
+            .expect("bound source mints auxiliary replay");
+        assert_eq!(
+            build_zk_x509_p256_external_binding_trace_v1(&fixture.material, &base),
+            Err(P256ExternalBindingErrorV1::Topology),
+            "consumed base capability was reusable after X5B1",
+        );
+
+        production.zeroize_private_v1();
+        assert!(production.private_is_zeroized_v1());
+        production.zeroize_private_v1();
+        assert!(production.private_is_zeroized_v1());
+    }
+
+    #[test]
     fn writer_window_and_coordinated_constant_source_mutations_fail() {
         let fixture = wallet_fixture_v1();
 
         let mut wrong_address = fixture.value_bus.clone();
-        wrong_address.execution.segments[0].rows[48].fixed = P256ValueBusFixedAccessV1::Inactive;
+        wrong_address.rows[48].fixed = P256ValueBusFixedAccessV1::Inactive;
         assert_eq!(
-            build_zk_x509_p256_external_binding_trace_v1(&fixture.material, &wrong_address,),
+            build_external_binding_from_execution_endpoint_v1(&fixture.material, &wrong_address,),
             Err(P256ExternalBindingErrorV1::WriterSource)
         );
 
         let mut wrong_writer = fixture.value_bus.clone();
-        wrong_writer.execution.segments[0].rows[48].value = F::ONE;
+        wrong_writer.rows[48].value = F::ONE;
         assert_eq!(
-            build_zk_x509_p256_external_binding_trace_v1(&fixture.material, &wrong_writer,),
+            build_external_binding_from_execution_endpoint_v1(&fixture.material, &wrong_writer,),
             Err(P256ExternalBindingErrorV1::Equality)
         );
 
@@ -2606,7 +2706,7 @@ mod tests {
             .validate_for_v1(P256WindowScalarV1::U1, 0)
             .expect("unselected candidate is constrained only by the binding");
         assert_eq!(
-            build_zk_x509_p256_external_binding_trace_v1(&wrong_window, &fixture.value_bus,),
+            build_external_binding_from_execution_endpoint_v1(&wrong_window, &fixture.value_bus,),
             Err(P256ExternalBindingErrorV1::Equality)
         );
 
@@ -2615,12 +2715,15 @@ mod tests {
             coordinated_window.windows[0].trace.base[row][external_column].add(F::ONE);
         let mut coordinated_bus = fixture.value_bus.clone();
         let candidate_segment = usize::try_from(candidate_id.0).expect("initial constant id");
-        coordinated_bus.execution.segments[candidate_segment].rows[48].value =
-            coordinated_bus.execution.segments[candidate_segment].rows[48]
-                .value
-                .add(F::ONE);
+        let candidate_row =
+            candidate_segment * P256_VALUE_BUS_SEGMENT_ROWS_V1 + 3 * P256_VALUE_BUS_LIMBS_V1;
+        coordinated_bus.rows[candidate_row].value =
+            coordinated_bus.rows[candidate_row].value.add(F::ONE);
         assert_eq!(
-            build_zk_x509_p256_external_binding_trace_v1(&coordinated_window, &coordinated_bus,),
+            build_external_binding_from_execution_endpoint_v1(
+                &coordinated_window,
+                &coordinated_bus,
+            ),
             Err(P256ExternalBindingErrorV1::Equality),
             "the independent fixed-constant binding defeats a coordinated table/writer mutation"
         );
@@ -2759,7 +2862,7 @@ mod tests {
         )
         .expect("dummy material");
         let value_bus = synthetic_writer_endpoint_v1(&material);
-        let mut trace = build_zk_x509_p256_external_binding_trace_v1(&material, &value_bus)
+        let mut trace = build_external_binding_from_execution_endpoint_v1(&material, &value_bus)
             .expect("dummy external binding");
         let inactive_real = P256EcdsaWitnessV1 {
             public_key_x_be: [0; 32],

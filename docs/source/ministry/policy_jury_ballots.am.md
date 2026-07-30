@@ -27,8 +27,8 @@ translator: machine-google-reviewed
 2. **`PolicyJuryBallotCommitV1`** - የታሸገ ቁርጠኝነት ከድምጽ መስጫዎች በፊት የተፃፈ
    ተገለጡ።  ክብ/ፕሮፖዛል/ዳኞች መለያዎችን፣ የ
    Blake2b-256 የዳኝነት መታወቂያ + የድምጽ ምርጫ + ያልሆነ tuple፣ ቀረጻ
-   የጊዜ ማህተም፣ እና የድምጽ መስጫ ሁነታ (`plaintext` ወይም `zk-envelope`
-   `zk-ballot` ባህሪ ንቁ ነው)።  `PolicyJuryBallotCommitV1::verify_reveal`
+   የጊዜ ማህተም፣ እና የድምጽ መስጫ ሁነታ (`plaintext` ወይም `zk-envelope`).
+   `PolicyJuryBallotCommitV1::verify_reveal`
    የተከማቸ መፍጨት ከግኝት ክፍያ ጭነት ጋር እንደሚዛመድ ያረጋግጣል።
 3. **`PolicyJuryBallotRevealV1`** - ህዝባዊ ገላጭ ነገርን የያዘ
    የድምጽ ምርጫ፣ በቁርጠኝነት ጊዜ ጥቅም ላይ ያልዋለ እና አማራጭ የZK ማረጋገጫ URIs።
@@ -56,7 +56,7 @@ translator: machine-google-reviewed
 - በመገለጥ ደረጃ፣ ዳኞች `PolicyJuryBallotRevealV1` ይለቃሉ።  ኦፕሬተሮች
   ክፍያውን በፊት ወደ `PolicyJuryBallotCommitV1::verify_reveal` ይመግቡ
   ድምጹን በመቀበል፣ መገለጡ እንዳልተለወጠ ወይም እንዳልተነካ ማረጋገጥ።
-- የ `zk-ballot` ባህሪ ሲነቃ ዳኞች ቆራጥነትን ማያያዝ ይችላሉ
+- በV1 `zk-envelope` ድምጽ መስጫዎች ዳኞች ቆራጥነትን ማያያዝ ይችላሉ
   ማስረጃ URIs (ለምሳሌ `sorafs://proofs/pj-2026-02/juror-5`) እንዲሁ ወደ ታች
   ኦዲተሮች በ የተጠቀሰውን የዜሮ እውቀት ምስክር ቅርቅብ ሰርስረው ማውጣት ይችላሉ።
   ቁርጠኝነት.ሦስቱም መዋቅሮች `Encode`፣ `Decode` እና `IntoSchema` ያመጣሉ ማለት ነው።

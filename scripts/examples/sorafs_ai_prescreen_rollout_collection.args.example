@@ -104,3 +104,4 @@ moderation-ballots-executor=/runtime/moderation/transparency/ballots-executor.js
 /runtime/moderation/governance-dag-rollout.json
 --e2e-evidence
 /runtime/moderation/end-to-end-rollout.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

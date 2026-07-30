@@ -6,6 +6,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonNumbers;
+import org.hyperledger.iroha.android.client.JsonParser;
 
 public final class SorafsReferenceValidatorsTests {
   private static final String MAX_SCALED_XOR =
@@ -171,6 +174,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
     rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
+    validatesAppealFinanceCancelAssetLockProfiles();
     validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable();
     validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable();
     validatesEveryReferenceSdkBundleOutcomeByteForByte();
@@ -230,12 +234,15 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 21;
     assert !SorafsReferenceValidators.isBridgeAbiSupported(20);
     assert SorafsReferenceValidators.isBridgeAbiSupported(21);
+    assert !SorafsReferenceValidators.isBridgeAbiSupported(22);
     assert !SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false);
     assert SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true);
     assert !SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, false);
     assert SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, true);
     assert !SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, false);
     assert SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, true);
+    assert !SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, false);
+    assert SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, true);
     assert SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 == 256;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1 == 64;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1 == 32;
@@ -554,9 +561,7 @@ public final class SorafsReferenceValidatorsTests {
   }
 
   private static void validatesOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     final byte[] payload =
         fixture("sorafs_manifest", "orderbook", "order_request_v1.to");
     final String json =
@@ -594,9 +599,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     final byte[] commitment =
         fixture("sorafs_manifest", "pdp", "commitment_v1.to");
     final byte[] challenge =
@@ -666,11 +669,74 @@ public final class SorafsReferenceValidatorsTests {
     }
   }
 
+  @SuppressWarnings("unchecked")
+  private static void validatesAppealFinanceCancelAssetLockProfiles() throws IOException {
+    requireNativeBridge();
+    final String[][] profiles = {
+      {"cancel_asset_lock_v1.to", "Ok", "SFS-OK-000", "validation"},
+      {
+        "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "Error",
+        "SFS-NORITO-001",
+        "norito"
+      },
+      {
+        "negative/cancel_asset_lock_zero_expected_v1.to",
+        "Error",
+        "SFS-VAL-001",
+        "validation"
+      },
+    };
+    for (final String[] profile : profiles) {
+      final String path = profile[0];
+      final String label = path.substring(path.lastIndexOf('/') + 1);
+      final String outcome =
+          SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJson(
+              sorafsFixture("appeal_finance/" + path),
+              label,
+              123L);
+      final Map<String, Object> fields = (Map<String, Object>) JsonParser.parse(outcome);
+      assert profile[1].equals(fields.get("status")) : path + ": " + outcome;
+      assert profile[2].equals(fields.get("code")) : path + ": " + outcome;
+      assert profile[3].equals(fields.get("category")) : path + ": " + outcome;
+      assert JsonNumbers.asLong(fields.get("version"), "version") == 1L
+          : path + ": " + outcome;
+      assert JsonNumbers.asLong(fields.get("generated_at"), "generated_at") == 123L
+          : path + ": " + outcome;
+      assert outcome.contains("\"sorafs.reference.appeal_finance\"")
+          : path + ": " + outcome;
+    }
+
+    final String[][] exactProfiles = {
+      {
+        "cancel_asset_lock_v1.to",
+        "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+      },
+      {
+        "negative/cancel_asset_lock_zero_expected_v1.to",
+        "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json"
+      },
+    };
+    for (final String[] profile : exactProfiles) {
+      final String path = profile[0];
+      final String label = path.substring(path.lastIndexOf('/') + 1);
+      final String outcome =
+          SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJson(
+              sorafsFixture("appeal_finance/" + path),
+              label,
+              123L);
+      assert new String(
+                  fixture("sorafs_manifest", "reference_sdk", profile[1]),
+                  StandardCharsets.UTF_8)
+              .equals(outcome)
+          : path + ": " + outcome;
+    }
+  }
+
+  @SuppressWarnings("unchecked")
   private static void validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     final String outcome =
         SorafsReferenceValidators.validateFixtureBundleJson(
             Arrays.asList(
@@ -684,16 +750,16 @@ public final class SorafsReferenceValidatorsTests {
                     "por-proof.to")),
             1_700_000_001L,
             1_700_001_238L);
-    assert outcome.contains("\"status\":\"Ok\"") : outcome;
-    assert outcome.contains("\"code\":\"SFS-OK-000\"") : outcome;
-    assert outcome.contains("\"generated_at\":1700001238") : outcome;
+    final Map<String, Object> fields = (Map<String, Object>) JsonParser.parse(outcome);
+    assert "Ok".equals(fields.get("status")) : outcome;
+    assert "SFS-OK-000".equals(fields.get("code")) : outcome;
+    assert JsonNumbers.asLong(fields.get("generated_at"), "generated_at") == 1_700_001_238L
+        : outcome;
   }
 
   private static void validatesEveryReferenceSdkBundleOutcomeByteForByte()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     assert REFERENCE_BUNDLE_PROFILES.length == 9;
     String previousOutcomePath = null;
     for (final FixtureBundleProfile profile : REFERENCE_BUNDLE_PROFILES) {
@@ -728,9 +794,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesModerationGovernanceLogNodeOutcomeByteForByte()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     final String actual =
         SorafsReferenceValidators.validateGovernanceLogNodeJson(
             fixture("sorafs_manifest", "moderation", "governance_node_v1.to"),
@@ -750,10 +814,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      requireGovernanceDagNativeBridge();
-      return;
-    }
+    requireNativeBridge();
     final byte[] first =
         fixture("sorafs_manifest", "governance", "dag_block_0_v1.to");
     final byte[] second =
@@ -892,30 +953,36 @@ public final class SorafsReferenceValidatorsTests {
         .equals(predecessorOutcome) : predecessorOutcome;
   }
 
-  private static void requireGovernanceDagNativeBridge() {
-    if ("1".equals(System.getenv("IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"))) {
+  private static void requireNativeBridge() {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
       throw new AssertionError(
-          "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
+          "ABI-21 connect_norito_bridge with all SoraFS reference symbols is required.");
     }
   }
 
+  @SuppressWarnings("unchecked")
   private static void signsOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     final byte[] payload =
         fixture("sorafs_manifest", "orderbook", "order_request_v1.to");
     final byte[] signed =
         SorafsReferenceValidators.signOrderbookPayload(
-            SorafsOrderbookPayloadKind.ORDER_REQUEST, payload, repeatedKey(0xB7));
+            SorafsOrderbookPayloadKind.ORDER_REQUEST, payload, repeatedKey(0xB8));
     assert signed.length > 0 : "signed payload should be returned";
     assert !java.util.Arrays.equals(signed, payload) : "signature should change encoded payload";
+    final String outcome =
+        SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST,
+            signed,
+            "order_request_resigned_v1.to",
+            123L);
+    final Map<String, Object> fields = (Map<String, Object>) JsonParser.parse(outcome);
+    assert "Ok".equals(fields.get("status")) : outcome;
+    assert "SFS-OK-000".equals(fields.get("code")) : outcome;
   }
 
   private static void derivesCanonicalOrderIdWhenNativeBridgeIsAvailable() {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      return;
-    }
+    requireNativeBridge();
     final byte[] owner = "buyer@sora".getBytes(StandardCharsets.UTF_8);
     final byte[] orderId = SorafsReferenceValidators.deriveOrderbookOrderId(owner, 7L);
     assert "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69"

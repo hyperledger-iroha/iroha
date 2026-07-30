@@ -5,6 +5,10 @@ ROOT_DIR="${CSHARP_SDK_PACKAGE_CONSUMER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}
 DOTNET_BIN="${CSHARP_SDK_PACKAGE_CONSUMER_DOTNET_BIN:-dotnet}"
 PACKAGE_DIR="${CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_DIR:-${ROOT_DIR}/csharp/artifacts/packages}"
 PACKAGE_VERSION="${CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_VERSION:-}"
+NATIVE_PACKAGE_ROOT="${CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT:-${ROOT_DIR}/csharp/artifacts/native-package}"
+NATIVE_PACKAGE_CHECKER="${ROOT_DIR}/scripts/package_csharp_native_artifacts.py"
+PYTHON_BIN="${CSHARP_SDK_PACKAGE_CONSUMER_PYTHON_BIN:-python3}"
+RUNTIME_IDENTIFIER="${CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER:-}"
 WORK_PARENT="${CSHARP_SDK_PACKAGE_CONSUMER_WORK_PARENT:-${TMPDIR:-/tmp}}"
 KEEP_WORK_DIR="${CSHARP_SDK_PACKAGE_CONSUMER_KEEP_WORK_DIR:-0}"
 MODE="${1:-}"
@@ -14,7 +18,9 @@ usage() {
 Usage: ci/check_csharp_sdk_package_consumer.sh [negative-control]
 
 Builds and runs a temporary net8.0 consumer project against the packed
-Hyperledger.Iroha.Sdk NuGet package from csharp/artifacts/packages.
+Hyperledger.Iroha.Sdk NuGet package from csharp/artifacts/packages. Set
+CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER to one of linux-x64,
+linux-arm64, osx-x64, osx-arm64, or win-x64.
 
 Negative controls:
   --negative-control-missing-local-package
@@ -103,6 +109,30 @@ require_dotnet() {
   "${DOTNET_BIN}" --info
 }
 
+require_runtime_identifier() {
+  case "${RUNTIME_IDENTIFIER}" in
+    linux-x64|linux-arm64|osx-x64|osx-arm64|win-x64) ;;
+    *)
+      echo "error: C# SDK package consumer requires one reviewed runtime identifier: linux-x64, linux-arm64, osx-x64, osx-arm64, or win-x64" >&2
+      return 1
+      ;;
+  esac
+}
+
+verify_native_package() {
+  local package_dir="$1"
+  local package_version="$2"
+  local package_path="${package_dir}/Hyperledger.Iroha.Sdk.${package_version}.nupkg"
+  if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    echo "error: C# SDK native package verification requires '${PYTHON_BIN}'" >&2
+    return 1
+  fi
+  "${PYTHON_BIN}" -I "${NATIVE_PACKAGE_CHECKER}" verify-package \
+    --package "${package_path}" \
+    --stage-root "${NATIVE_PACKAGE_ROOT}" \
+    --source-root "${ROOT_DIR}"
+}
+
 write_consumer_program() {
   local program_path="$1"
   local expected_query="$2"
@@ -112,6 +142,7 @@ using System.Text;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Sccp;
+using Hyperledger.Iroha.SoraFs;
 
 var seed = new byte[Ed25519Signer.PrivateKeySeedLength];
 for (var index = 0; index < seed.Length; index++)
@@ -144,6 +175,11 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
 EthereumMainnetSccp.RequireMainnetChainId(EthereumMainnetSccp.MainnetChainId);
 EthereumMainnetSccp.RequireInboundRoute(EthereumMainnetSccp.DomainEthereum, EthereumMainnetSccp.DomainSora);
 EthereumMainnetSccp.RequireOutboundRoute(EthereumMainnetSccp.DomainSora, EthereumMainnetSccp.DomainEthereum);
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 21u
+    || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
+{
+    throw new InvalidOperationException("Packed ABI-21 SoraFS native bridge is unavailable");
+}
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");
 EOF
@@ -186,6 +222,8 @@ run_consumer_smoke() {
   local inject_project_reference="$3"
   package_dir="$(cd "${package_dir}" && pwd)" || return 1
   require_local_package "${package_dir}" "${PACKAGE_VERSION}" || return 1
+  require_runtime_identifier || return 1
+  verify_native_package "${package_dir}" "${PACKAGE_VERSION}" || return 1
   require_dotnet || return 1
 
   WORK_DIR="$(mktemp -d "${WORK_PARENT}/iroha-csharp-sdk-package-consumer.XXXXXX")" || return 1
@@ -198,6 +236,13 @@ run_consumer_smoke() {
   export NUGET_PACKAGES="${NUGET_PACKAGES:-${WORK_DIR}/nuget-packages}"
 
   "${DOTNET_BIN}" new console --framework net8.0 --output "${app_dir}" --no-restore || return 1
+  cat > "${app_dir}/Directory.Build.props" <<EOF
+<Project>
+  <PropertyGroup>
+    <RuntimeIdentifier>${RUNTIME_IDENTIFIER}</RuntimeIdentifier>
+  </PropertyGroup>
+</Project>
+EOF
   cat > "${app_dir}/NuGet.Config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>

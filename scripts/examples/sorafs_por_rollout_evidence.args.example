@@ -13,3 +13,4 @@
 --max-report-latency-ms 3000
 --min-providers 3
 --min-challenges 3
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

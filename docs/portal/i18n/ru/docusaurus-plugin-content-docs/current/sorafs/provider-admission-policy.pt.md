@@ -37,7 +37,7 @@ tarefas de engenharia rastreaveis.
 ## Fluxo de admissao
 
 1. **Криасао да пропоста**
-   - CLI: дополнительный `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: дополнительный `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      производство `ProviderAdmissionProposalV1` + комплект проверки.
    - Проверка: требуется гарантия, ставка > 0, обработка канонического фрагмента в `profile_id`.
 2. **Конец правительства**
@@ -64,7 +64,7 @@ fornecidos или комбинация `--council-signature-public-key` с `--co
 
 ### Справочник по CLI
 
-Выполните cada comando через `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Выполните cada comando через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Требуемые флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     И18НИ00000063Х, И18НИ00000064Х, И18НИ00000065Х,
     `--jurisdiction-code=<ISO3166-1>`, и это снова `--endpoint=<kind:host>`.
@@ -109,7 +109,7 @@ fornecidos или комбинация `--council-signature-public-key` с `--co
    увеличение `--retention-epoch` и настройка доли/конечных точек в соответствии с необходимостью.
 2. Выполнить
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -129,7 +129,7 @@ fornecidos или комбинация `--council-signature-public-key` с `--co
 #### Отзыв о чрезвычайной ситуации
 1. Идентификация конверта, скомпрометированного и отправленного обратно:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

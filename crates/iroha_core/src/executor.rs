@@ -8917,6 +8917,10 @@ fn initial_permission_resource_authority(
                 })
                 || authority_has_permission(&state_transaction.world, authority, &registrar)?
         }
+        "CanExecuteSettlement" => {
+            let token = decode!(executor_permission::settlement::CanExecuteSettlement);
+            token.debited_asset.account() == authority
+        }
         "CanSetFxCorridorPolicy" | "CanSettleFxCorridor" => {
             if permission.name() == "CanSetFxCorridorPolicy" {
                 let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
@@ -10615,6 +10619,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
     "CanInvokeContractEntrypoint",
+    "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",
     "CanSettleFxCorridor",
@@ -20154,7 +20159,8 @@ seiyaku IdentityRequired {
         use iroha_data_model::query::sorafs::prelude::{
             FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
             FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
-            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReserveEvents,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReserveEvents,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -20174,6 +20180,13 @@ seiyaku IdentityRequired {
             QueryRequest::Singular(FindSorafsReserveEvents::new(None, None, 16).into());
         let reputation_policy =
             QueryRequest::Singular(FindSorafsReputationJournalAuthorityPolicy.into());
+        let reputation_event = QueryRequest::Singular(
+            FindSorafsReputationJournalEventBySourceId::new(
+                iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1([0x43; 32]),
+                None,
+            )
+            .into(),
+        );
         let own_eligibility = QueryRequest::Singular(
             FindSorafsModerationJurorEligibility::new(
                 "case-1".to_owned(),
@@ -20234,6 +20247,14 @@ seiyaku IdentityRequired {
             reputation_policy_error,
             ValidationFail::NotPermitted(_)
         ));
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reputation_event,
+            )
+            .expect("payload-free finalized reputation events must remain public");
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,

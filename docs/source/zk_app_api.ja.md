@@ -177,6 +177,6 @@ iroha ledger trigger register \
 ZK 投票関連のエンドポイントは Governance App API を参照（`private_key` がある場合は Torii が署名・送信し、ない場合はスケルトンを返す）:
 - `POST /v1/gov/ballots/zk` — `CastZkBallot` スケルトンを返す
 - `POST /v1/gov/ballots/zk-v1` — v1 形式 DTO
-- `POST /v1/gov/ballots/zk-v1/ballot-proof` — `BallotProof` JSON を直接受け付け（`zk-ballot` フィーチャー）
+- `POST /v1/gov/ballots/zk-v1/ballot-proof` — `BallotProof` JSON を直接受け付け
 
 詳細は `docs/source/governance_api.md` を参照。

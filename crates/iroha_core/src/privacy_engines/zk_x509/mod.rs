@@ -25,6 +25,7 @@ pub(crate) mod der_stark;
 pub(crate) mod engine;
 pub(crate) mod io_air;
 pub(crate) mod main_assembly;
+pub(crate) mod main_io;
 pub(crate) mod merkle;
 pub(crate) mod p256_aggregate_adapter;
 pub(crate) mod p256_air;

@@ -43,6 +43,7 @@ const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const UINT128_MASK = (1n << 128n) - 1n;
 const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
+const CANONICAL_HASH_LITERAL_RE = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
 const DEFAULT_SM2_DISTINGUISHED_ID = new Uint8Array(16);
 const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
@@ -73,6 +74,9 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
 ];
 const CANCEL_ASSET_LOCK_WIRE_ID =
   "iroha_data_model::isi::escrow::CancelAssetLock";
+const CANCEL_ASSET_LOCK_V1_SCHEMA_HASH = schemaHashForTypeName(
+  CANCEL_ASSET_LOCK_WIRE_ID,
+);
 const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
   "iroha.asset.transfer.availability.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
@@ -110,6 +114,14 @@ const EVENT_FILTER_BOX_SCHEMA_HASH = schemaHashForTypeName(
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1 =
+  "iroha.torii.v1.sorafs.billing.acknowledgement_proof";
+const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_V1 =
+  schemaHashForTypeName(
+    SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+  );
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 =
+  64 * 1024;
 const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
   "b4bb42540d44c468ed44d5f94c59b007",
   "hex",
@@ -186,12 +198,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::RegisterZkAsset",
   "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
     "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool",
-  "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment":
-    "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment",
-  "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment":
-    "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment",
-  "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment":
-    "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment",
   "zk::ScheduleConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
@@ -202,8 +208,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::ZkTransfer",
   "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
     "iroha_data_model::isi::zk::AssetHiddenZkTransfer",
-  "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer":
-    "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer",
   "iroha_data_model::isi::zk::Unshield":
     "iroha_data_model::isi::zk::Unshield",
   "iroha_data_model::isi::zk::CreateElection":
@@ -562,6 +566,93 @@ export function noritoEncodeTransactionPayloadBatch(payloads) {
   return frameNoritoPayload(
     payload,
     TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/**
+ * Encode the exact shared V1 SoraFS billing acknowledgement proof.
+ *
+ * The input surface is deliberately closed: nonce bytes, snake-case aliases,
+ * hexadecimal proof strings, and additional fields are not accepted.
+ *
+ * @param {{requestNonceHex: string, authenticationProof: ArrayBufferView | ArrayBuffer | Buffer}} proof
+ * @returns {Buffer}
+ */
+export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
+  if (!isPlainObject(proof)) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement proof must be an object",
+    );
+  }
+  const keys = Object.keys(proof);
+  if (
+    keys.length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(proof, "requestNonceHex") ||
+    !Object.prototype.hasOwnProperty.call(proof, "authenticationProof")
+  ) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement proof must contain exactly requestNonceHex and authenticationProof",
+    );
+  }
+  const requestNonceHex = proof.requestNonceHex;
+  if (
+    typeof requestNonceHex !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(requestNonceHex) ||
+    /^0{64}$/u.test(requestNonceHex)
+  ) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement requestNonceHex must be one non-zero lowercase 32-byte hexadecimal digest",
+    );
+  }
+  const authenticationProof = proof.authenticationProof;
+  if (
+    !Buffer.isBuffer(authenticationProof) &&
+    !ArrayBuffer.isView(authenticationProof) &&
+    !(authenticationProof instanceof ArrayBuffer)
+  ) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement authenticationProof must be binary bytes",
+    );
+  }
+  const proofBytes = Buffer.isBuffer(authenticationProof)
+    ? Buffer.from(authenticationProof)
+    : ArrayBuffer.isView(authenticationProof)
+      ? Buffer.from(
+          authenticationProof.buffer,
+          authenticationProof.byteOffset,
+          authenticationProof.byteLength,
+        )
+      : Buffer.from(authenticationProof);
+  if (
+    proofBytes.length === 0 ||
+    proofBytes.length >
+      SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
+  ) {
+    throw new RangeError(
+      `SoraFS billing acknowledgement authenticationProof must contain 1..=${SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes`,
+    );
+  }
+  const payload = withNoritoCompactLengths(() =>
+    encodeStructValue([
+      [
+        encodeFixedBytesValue(
+          Buffer.from(requestNonceHex, "hex"),
+          32,
+          "SoraFS billing acknowledgement requestNonceHex",
+        ),
+      ],
+      [
+        encodeByteVecValue(
+          proofBytes,
+          "SoraFS billing acknowledgement authenticationProof",
+        ),
+      ],
+    ]),
+  );
+  return frameNoritoPayload(
+    payload,
+    SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_V1,
     COMPACT_LEN_FLAG,
   );
 }
@@ -1948,15 +2039,11 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return decodeKaigiInstructionPayload(wireId, payload);
     case "iroha_data_model::isi::zk::RegisterZkAsset":
     case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
-    case "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment":
-    case "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment":
-    case "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment":
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
     case "iroha_data_model::isi::zk::Shield":
     case "iroha_data_model::isi::zk::ZkTransfer":
     case "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
-    case "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer":
     case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
@@ -2111,7 +2198,92 @@ function decodeRecordSccpMessagePayload(payload, innerFlags) {
   return { payload_bytes: Array.from(payloadBytes) };
 }
 
-function encodeCancelAssetLockInstruction(value) {
+function assertWellFormedUtf16(value, context) {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new TypeError(`${context} must not contain unpaired UTF-16 surrogates`);
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new TypeError(`${context} must not contain unpaired UTF-16 surrogates`);
+    }
+  }
+}
+
+function normalizeStrictCancelAssetLockV1(value) {
+  const prototype =
+    value !== null && typeof value === "object"
+      ? Object.getPrototypeOf(value)
+      : undefined;
+  if (
+    prototype !== Object.prototype &&
+    prototype !== null
+  ) {
+    throw new TypeError("CancelAssetLockV1 must be a plain object");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== 2 ||
+    !keys.includes("escrow_id") ||
+    !keys.includes("expected_remaining_amount")
+  ) {
+    throw new TypeError(
+      "CancelAssetLockV1 must contain exactly escrow_id and expected_remaining_amount",
+    );
+  }
+
+  const { escrow_id: escrowId, expected_remaining_amount: expectedRemainingAmount } =
+    value;
+  if (typeof escrowId !== "string") {
+    throw new TypeError("CancelAssetLockV1.escrow_id must be a string");
+  }
+  assertWellFormedUtf16(escrowId, "CancelAssetLockV1.escrow_id");
+  const hashMatch = CANONICAL_HASH_LITERAL_RE.exec(escrowId);
+  if (hashMatch === null) {
+    throw new TypeError(
+      "CancelAssetLockV1.escrow_id must be one canonical uppercase checksummed hash literal",
+    );
+  }
+  const [, hashBody, checksum] = hashMatch;
+  const expectedChecksum = computeHashLiteralCrc("hash", hashBody);
+  if (checksum !== expectedChecksum) {
+    throw new TypeError(
+      `CancelAssetLockV1.escrow_id has invalid checksum; expected ${expectedChecksum}`,
+    );
+  }
+  const hashBytes = Buffer.from(hashBody, "hex");
+  if ((hashBytes[hashBytes.length - 1] & 1) === 0) {
+    throw new TypeError(
+      "CancelAssetLockV1.escrow_id must use a native hash with its marker bit set",
+    );
+  }
+
+  if (typeof expectedRemainingAmount !== "string") {
+    throw new TypeError(
+      "CancelAssetLockV1.expected_remaining_amount must be a canonical quantity string",
+    );
+  }
+  assertWellFormedUtf16(
+    expectedRemainingAmount,
+    "CancelAssetLockV1.expected_remaining_amount",
+  );
+  const quantity = NumericV1.decodeQuantityJson(expectedRemainingAmount);
+  if (quantity.mantissa <= 0n) {
+    throw new RangeError(
+      "CancelAssetLockV1.expected_remaining_amount must be greater than zero",
+    );
+  }
+
+  return {
+    escrow_id: escrowId,
+    expected_remaining_amount: expectedRemainingAmount,
+  };
+}
+
+function encodeCancelAssetLockPayload(value) {
   if (!isPlainObject(value)) {
     throw new TypeError("CancelAssetLock must be an object");
   }
@@ -2148,7 +2320,14 @@ function encodeCancelAssetLockInstruction(value) {
       ),
     ],
   ]);
-  return encodeInstructionEnvelope(CANCEL_ASSET_LOCK_WIRE_ID, payload);
+  return payload;
+}
+
+function encodeCancelAssetLockInstruction(value) {
+  return encodeInstructionEnvelope(
+    CANCEL_ASSET_LOCK_WIRE_ID,
+    encodeCancelAssetLockPayload(value),
+  );
 }
 
 function decodeCancelAssetLockInstructionPayload(payload) {
@@ -2176,6 +2355,66 @@ function decodeCancelAssetLockInstructionPayload(payload) {
       expected_remaining_amount: expectedRemainingAmount,
     },
   };
+}
+
+/**
+ * Encode the schema-bound bare `CancelAssetLock` V1 archive.
+ *
+ * The input is the exact two-field wire object. Hash bytes, hex strings,
+ * base64 strings, camel-case aliases, and nested compatibility shapes are not
+ * accepted for either field.
+ *
+ * @param {{escrow_id: string, expected_remaining_amount: string}} value
+ * @returns {Buffer}
+ */
+export function encodeCancelAssetLockV1(value) {
+  const canonical = normalizeStrictCancelAssetLockV1(value);
+  const payload = withNoritoCompactLengths(() =>
+    encodeCancelAssetLockPayload(canonical),
+  );
+  return frameNoritoPayload(
+    payload,
+    CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/**
+ * Decode one exact schema-bound bare `CancelAssetLock` V1 archive.
+ *
+ * Only byte containers are accepted. Textual hex/base64 aliases, arrays,
+ * padding, substituted schemas or flags, and trailing bytes are rejected.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @returns {{escrow_id: string, expected_remaining_amount: string}}
+ */
+export function decodeCancelAssetLockV1(bytes) {
+  if (!isBinaryLike(bytes)) {
+    throw new TypeError(
+      "CancelAssetLockV1 archive must be a Buffer, ArrayBuffer, or typed array",
+    );
+  }
+  const archive = toBuffer(bytes);
+  const frame = validateNoritoFrame(archive, {
+    context: "CancelAssetLockV1",
+    expectedSchemaHash: CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  if (frame.flags !== COMPACT_LEN_FLAG) {
+    throw new Error(
+      "CancelAssetLockV1 must use exactly the compact-length Norito flag",
+    );
+  }
+  const decoded = withNoritoCompactLengths(
+    () => decodeCancelAssetLockInstructionPayload(frame.payload).CancelAssetLock,
+  );
+  const canonical = normalizeStrictCancelAssetLockV1(decoded);
+  const reencoded = encodeCancelAssetLockV1(canonical);
+  if (!archive.equals(reencoded)) {
+    throw new Error("CancelAssetLockV1 archive is not byte-canonical");
+  }
+  return canonical;
 }
 
 function encodeAssetTransferAvailabilityValue(value, context) {
@@ -3104,155 +3343,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment": {
-      const fields = decodeStructFields(payload, "zk.RegisterZkAceIdentityCommitment", [
-        "asset",
-        "identity_commitment",
-        "policy_hash",
-        "allowed_accounts",
-        "action_class",
-        "domain_tag",
-        "verifier_key",
-      ]);
-      return {
-        zk: {
-          RegisterZkAceIdentityCommitment: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.RegisterZkAceIdentityCommitment.asset",
-            ),
-            identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.identity_commitment,
-                32,
-                "zk.RegisterZkAceIdentityCommitment.identity_commitment",
-              ),
-            ),
-            policy_hash: Array.from(
-              decodeFixedBytesValue(
-                fields.policy_hash,
-                32,
-                "zk.RegisterZkAceIdentityCommitment.policy_hash",
-              ),
-            ),
-            allowed_accounts: decodeNoritoVec(
-              fields.allowed_accounts,
-              (entry, index) =>
-                decodeAccountIdValue(
-                  entry,
-                  `zk.RegisterZkAceIdentityCommitment.allowed_accounts[${index}]`,
-                ),
-              "zk.RegisterZkAceIdentityCommitment.allowed_accounts",
-            ),
-            action_class: decodeStringValue(
-              fields.action_class,
-              "zk.RegisterZkAceIdentityCommitment.action_class",
-            ),
-            domain_tag: decodeStringValue(
-              fields.domain_tag,
-              "zk.RegisterZkAceIdentityCommitment.domain_tag",
-            ),
-            verifier_key: decodeVerifyingKeyIdValue(
-              fields.verifier_key,
-              "zk.RegisterZkAceIdentityCommitment.verifier_key",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment": {
-      const fields = decodeStructFields(payload, "zk.RotateZkAceIdentityCommitment", [
-        "asset",
-        "old_identity_commitment",
-        "new_identity_commitment",
-        "policy_hash",
-        "allowed_accounts",
-        "action_class",
-        "domain_tag",
-        "verifier_key",
-      ]);
-      return {
-        zk: {
-          RotateZkAceIdentityCommitment: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.RotateZkAceIdentityCommitment.asset",
-            ),
-            old_identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.old_identity_commitment,
-                32,
-                "zk.RotateZkAceIdentityCommitment.old_identity_commitment",
-              ),
-            ),
-            new_identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.new_identity_commitment,
-                32,
-                "zk.RotateZkAceIdentityCommitment.new_identity_commitment",
-              ),
-            ),
-            policy_hash: Array.from(
-              decodeFixedBytesValue(
-                fields.policy_hash,
-                32,
-                "zk.RotateZkAceIdentityCommitment.policy_hash",
-              ),
-            ),
-            allowed_accounts: decodeNoritoVec(
-              fields.allowed_accounts,
-              (entry, index) =>
-                decodeAccountIdValue(
-                  entry,
-                  `zk.RotateZkAceIdentityCommitment.allowed_accounts[${index}]`,
-                ),
-              "zk.RotateZkAceIdentityCommitment.allowed_accounts",
-            ),
-            action_class: decodeStringValue(
-              fields.action_class,
-              "zk.RotateZkAceIdentityCommitment.action_class",
-            ),
-            domain_tag: decodeStringValue(
-              fields.domain_tag,
-              "zk.RotateZkAceIdentityCommitment.domain_tag",
-            ),
-            verifier_key: decodeVerifyingKeyIdValue(
-              fields.verifier_key,
-              "zk.RotateZkAceIdentityCommitment.verifier_key",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment": {
-      const fields = decodeStructFields(payload, "zk.RevokeZkAceIdentityCommitment", [
-        "asset",
-        "identity_commitment",
-        "reason_hash",
-      ]);
-      return {
-        zk: {
-          RevokeZkAceIdentityCommitment: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.RevokeZkAceIdentityCommitment.asset",
-            ),
-            identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.identity_commitment,
-                32,
-                "zk.RevokeZkAceIdentityCommitment.identity_commitment",
-              ),
-            ),
-            reason_hash: decodeOptionValue(
-              fields.reason_hash,
-              (entry, context) => Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.RevokeZkAceIdentityCommitment.reason_hash",
-            ),
-          },
-        },
-      };
-    }
     case "zk::ScheduleConfidentialPolicyTransition": {
       const fields = decodeStructFields(payload, "zk.ScheduleConfidentialPolicyTransition", [
         "asset",
@@ -3429,79 +3519,6 @@ function decodeZkInstructionPayload(wireId, payload) {
               (entry, context) =>
                 Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
               "zk.AssetHiddenZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer": {
-      const fields = decodeStructFields(payload, "zk.SubmitZkAceAuthorizedTransfer", [
-        "from",
-        "to",
-        "asset",
-        "amount",
-        "identity_commitment",
-        "tx_digest",
-        "chain_id",
-        "domain_tag",
-        "action_class",
-        "replay_nullifier",
-        "policy_hash",
-        "proof",
-      ]);
-      return {
-        zk: {
-          SubmitZkAceAuthorizedTransfer: {
-            from: decodeAccountIdValue(fields.from, "zk.SubmitZkAceAuthorizedTransfer.from"),
-            to: decodeAccountIdValue(fields.to, "zk.SubmitZkAceAuthorizedTransfer.to"),
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.SubmitZkAceAuthorizedTransfer.asset",
-            ),
-            amount: decodeQuantityValue(
-              fields.amount,
-              "zk.SubmitZkAceAuthorizedTransfer.amount",
-            ),
-            identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.identity_commitment,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.identity_commitment",
-              ),
-            ),
-            tx_digest: Array.from(
-              decodeFixedBytesValue(
-                fields.tx_digest,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.tx_digest",
-              ),
-            ),
-            chain_id: decodeStringValue(fields.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"),
-            domain_tag: decodeStringValue(
-              fields.domain_tag,
-              "zk.SubmitZkAceAuthorizedTransfer.domain_tag",
-            ),
-            action_class: decodeStringValue(
-              fields.action_class,
-              "zk.SubmitZkAceAuthorizedTransfer.action_class",
-            ),
-            replay_nullifier: Array.from(
-              decodeFixedBytesValue(
-                fields.replay_nullifier,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.replay_nullifier",
-              ),
-            ),
-            policy_hash: Array.from(
-              decodeFixedBytesValue(
-                fields.policy_hash,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.policy_hash",
-              ),
-            ),
-            proof: decodeProofAttachmentValue(
-              fields.proof,
-              "zk.SubmitZkAceAuthorizedTransfer.proof",
             ),
           },
         },
@@ -4331,6 +4348,202 @@ function decodeReplicationIdValue(payload, context) {
   return bytes.toString("hex");
 }
 
+function assertExactObjectKeys(value, expectedKeys, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, expectedKeys, context);
+  const missing = expectedKeys.find(
+    (key) => !Object.prototype.hasOwnProperty.call(value, key),
+  );
+  if (missing !== undefined) {
+    throw new TypeError(`${context} is missing field ${missing}`);
+  }
+}
+
+function decodeNonzeroFixedBytesHex(payload, context) {
+  const bytes = decodeFixedBytesValue(payload, 32, context);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${context} must not be zero`);
+  }
+  return bytes.toString("hex");
+}
+
+function encodeExactAccountIdValue(value, context) {
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw new TypeError(`${context} must be an exact canonical I105 account id`);
+  }
+  const canonical = normalizeAccountId(value, context);
+  if (canonical !== value) {
+    throw new TypeError(`${context} must be an exact canonical I105 account id`);
+  }
+  return encodeAccountIdValue(canonical, context);
+}
+
+function encodeProviderIngestCompletionSignerPolicyValue(value, context) {
+  assertExactObjectKeys(
+    value,
+    ["policy_id", "revision", "predecessor_digest", "policy_digest"],
+    context,
+  );
+  const revision = normalizeU64Input(value.revision, `${context}.revision`);
+  if (revision === 0n) {
+    throw new TypeError(`${context}.revision must be greater than zero`);
+  }
+  if (revision === 1n && value.predecessor_digest !== null) {
+    throw new TypeError(
+      `${context}.predecessor_digest must be null at revision 1`,
+    );
+  }
+  if (revision > 1n && value.predecessor_digest === null) {
+    throw new TypeError(
+      `${context}.predecessor_digest is required after revision 1`,
+    );
+  }
+  const policyId = decodeCanonicalReplicationId(
+    value.policy_id,
+    `${context}.policy_id`,
+  );
+  const policyDigest = decodeCanonicalReplicationId(
+    value.policy_digest,
+    `${context}.policy_digest`,
+  );
+  return encodeStructValue([
+    [policyId],
+    [encodeU64Value(revision, `${context}.revision`)],
+    [
+      encodeOptionValue(
+        value.predecessor_digest,
+        (entry, innerContext) =>
+          encodeFixedByteArrayArchiveValue(
+            decodeCanonicalReplicationId(entry, innerContext),
+            32,
+            innerContext,
+          ),
+        `${context}.predecessor_digest`,
+      ),
+    ],
+    [policyDigest],
+  ]);
+}
+
+function decodeProviderIngestCompletionSignerPolicyValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "policy_id",
+    "revision",
+    "predecessor_digest",
+    "policy_digest",
+  ]);
+  const revision = decodeU64NumberValue(fields.revision, `${context}.revision`);
+  if (revision === 0) {
+    throw new TypeError(`${context}.revision must be greater than zero`);
+  }
+  const predecessorDigest = decodeOptionValue(
+    fields.predecessor_digest,
+    (entry, innerContext) => {
+      const bytes = decodeFixedByteArrayArchiveValue(entry, 32, innerContext);
+      if (bytes.every((byte) => byte === 0)) {
+        throw new TypeError(`${innerContext} must not be zero`);
+      }
+      return bytes.toString("hex");
+    },
+    `${context}.predecessor_digest`,
+  );
+  if (revision === 1 && predecessorDigest !== null) {
+    throw new TypeError(
+      `${context}.predecessor_digest must be null at revision 1`,
+    );
+  }
+  if (revision > 1 && predecessorDigest === null) {
+    throw new TypeError(
+      `${context}.predecessor_digest is required after revision 1`,
+    );
+  }
+  return {
+    policy_id: decodeNonzeroFixedBytesHex(
+      fields.policy_id,
+      `${context}.policy_id`,
+    ),
+    revision,
+    predecessor_digest: predecessorDigest,
+    policy_digest: decodeNonzeroFixedBytesHex(
+      fields.policy_digest,
+      `${context}.policy_digest`,
+    ),
+  };
+}
+
+function encodeProviderIngestCompletionAuthorityValue(value, context) {
+  assertExactObjectKeys(
+    value,
+    ["provider_owner", "signer_policy"],
+    context,
+  );
+  return encodeStructValue([
+    [
+      encodeExactAccountIdValue(
+        value.provider_owner,
+        `${context}.provider_owner`,
+      ),
+    ],
+    [
+      encodeProviderIngestCompletionSignerPolicyValue(
+        value.signer_policy,
+        `${context}.signer_policy`,
+      ),
+    ],
+  ]);
+}
+
+function decodeProviderIngestCompletionAuthorityValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "provider_owner",
+    "signer_policy",
+  ]);
+  return {
+    provider_owner: decodeAccountIdValue(
+      fields.provider_owner,
+      `${context}.provider_owner`,
+    ),
+    signer_policy: decodeProviderIngestCompletionSignerPolicyValue(
+      fields.signer_policy,
+      `${context}.signer_policy`,
+    ),
+  };
+}
+
+function encodeProviderIngestFinalizedAnchorValue(value, context) {
+  assertExactObjectKeys(value, ["height", "block_hash"], context);
+  const height = normalizeU64Input(value.height, `${context}.height`);
+  if (height === 0n) {
+    throw new TypeError(`${context}.height must be greater than zero`);
+  }
+  return encodeStructValue([
+    [encodeU64Value(height, `${context}.height`)],
+    [
+      decodeCanonicalReplicationId(
+        value.block_hash,
+        `${context}.block_hash`,
+      ),
+    ],
+  ]);
+}
+
+function decodeProviderIngestFinalizedAnchorValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["height", "block_hash"]);
+  const height = decodeU64NumberValue(fields.height, `${context}.height`);
+  if (height === 0) {
+    throw new TypeError(`${context}.height must be greater than zero`);
+  }
+  return {
+    height,
+    block_hash: decodeNonzeroFixedBytesHex(
+      fields.block_hash,
+      `${context}.block_hash`,
+    ),
+  };
+}
+
 function decodeReplicationAssignmentProvider(payload, context) {
   const fields = decodeStructFields(payload, context, [
     "provider_id",
@@ -4530,13 +4743,33 @@ function encodeReplicationOrderInstruction(instruction) {
     );
   }
   if (isPlainObject(instruction.CompleteReplicationOrder)) {
-    assertOnlyObjectKeys(instruction, ["CompleteReplicationOrder"], "instruction");
+    assertExactObjectKeys(
+      instruction,
+      ["CompleteReplicationOrder"],
+      "instruction",
+    );
     const value = instruction.CompleteReplicationOrder;
-    assertOnlyObjectKeys(
+    assertExactObjectKeys(
       value,
-      ["order_id", "provider_id", "completion_epoch"],
+      [
+        "order_id",
+        "provider_id",
+        "completion_epoch",
+        "expected_authority",
+        "expected_assignment_revision",
+        "finalized_anchor",
+      ],
       "CompleteReplicationOrder",
     );
+    const expectedAssignmentRevision = normalizeU64Input(
+      value.expected_assignment_revision,
+      "CompleteReplicationOrder.expected_assignment_revision",
+    );
+    if (expectedAssignmentRevision === 0n) {
+      throw new TypeError(
+        "CompleteReplicationOrder.expected_assignment_revision must be greater than zero",
+      );
+    }
     return encodeInstructionEnvelope(
       COMPLETE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
@@ -4556,6 +4789,24 @@ function encodeReplicationOrderInstruction(instruction) {
           value.completion_epoch,
           "CompleteReplicationOrder.completion_epoch",
         )],
+        [
+          encodeProviderIngestCompletionAuthorityValue(
+            value.expected_authority,
+            "CompleteReplicationOrder.expected_authority",
+          ),
+        ],
+        [
+          encodeU64Value(
+            expectedAssignmentRevision,
+            "CompleteReplicationOrder.expected_assignment_revision",
+          ),
+        ],
+        [
+          encodeProviderIngestFinalizedAnchorValue(
+            value.finalized_anchor,
+            "CompleteReplicationOrder.finalized_anchor",
+          ),
+        ],
       ]),
     );
   }
@@ -4630,7 +4881,19 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       "order_id",
       "provider_id",
       "completion_epoch",
+      "expected_authority",
+      "expected_assignment_revision",
+      "finalized_anchor",
     ]);
+    const expectedAssignmentRevision = decodeU64NumberValue(
+      fields.expected_assignment_revision,
+      "CompleteReplicationOrder.expected_assignment_revision",
+    );
+    if (expectedAssignmentRevision === 0) {
+      throw new TypeError(
+        "CompleteReplicationOrder.expected_assignment_revision must be greater than zero",
+      );
+    }
     return {
       CompleteReplicationOrder: {
         order_id: decodeReplicationIdValue(
@@ -4644,6 +4907,15 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
         completion_epoch: decodeU64NumberValue(
           fields.completion_epoch,
           "CompleteReplicationOrder.completion_epoch",
+        ),
+        expected_authority: decodeProviderIngestCompletionAuthorityValue(
+          fields.expected_authority,
+          "CompleteReplicationOrder.expected_authority",
+        ),
+        expected_assignment_revision: expectedAssignmentRevision,
+        finalized_anchor: decodeProviderIngestFinalizedAnchorValue(
+          fields.finalized_anchor,
+          "CompleteReplicationOrder.finalized_anchor",
         ),
       },
     };
@@ -5163,15 +5435,11 @@ function encodeZkInstruction(instruction) {
   const entries = [
     ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
     ["RegisterAssetHiddenZkPool", "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool", encodeRegisterAssetHiddenZkPoolPayload],
-    ["RegisterZkAceIdentityCommitment", "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment", encodeRegisterZkAceIdentityCommitmentPayload],
-    ["RotateZkAceIdentityCommitment", "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment", encodeRotateZkAceIdentityCommitmentPayload],
-    ["RevokeZkAceIdentityCommitment", "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment", encodeRevokeZkAceIdentityCommitmentPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
     ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
     ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
     ["AssetHiddenZkTransfer", "iroha_data_model::isi::zk::AssetHiddenZkTransfer", encodeAssetHiddenZkTransferPayload],
-    ["SubmitZkAceAuthorizedTransfer", "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer", encodeSubmitZkAceAuthorizedTransferPayload],
     ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
@@ -5205,49 +5473,6 @@ function encodeRegisterAssetHiddenZkPoolPayload(value) {
     [encodeAssetDefinitionIdValue(value.storage_asset, "zk.RegisterAssetHiddenZkPool.storage_asset")],
     [encodeFixedBytesValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
     [encodeVerifyingKeyIdValue(value.vk_transfer, "zk.RegisterAssetHiddenZkPool.vk_transfer")],
-  ]);
-}
-
-function encodeRegisterZkAceIdentityCommitmentPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RegisterZkAceIdentityCommitment.asset")],
-    [encodeFixedBytesValue(value.identity_commitment, 32, "zk.RegisterZkAceIdentityCommitment.identity_commitment")],
-    [encodeFixedBytesValue(value.policy_hash, 32, "zk.RegisterZkAceIdentityCommitment.policy_hash")],
-    [encodeNoritoVec(value.allowed_accounts ?? [], (entry, index) =>
-      encodeAccountIdValue(entry, `zk.RegisterZkAceIdentityCommitment.allowed_accounts[${index}]`),
-    )],
-    [encodeNoritoStringValue(assertNonEmptyString(value.action_class, "zk.RegisterZkAceIdentityCommitment.action_class"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.RegisterZkAceIdentityCommitment.domain_tag"))],
-    [encodeVerifyingKeyIdValue(value.verifier_key, "zk.RegisterZkAceIdentityCommitment.verifier_key")],
-  ]);
-}
-
-function encodeRotateZkAceIdentityCommitmentPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RotateZkAceIdentityCommitment.asset")],
-    [encodeFixedBytesValue(value.old_identity_commitment, 32, "zk.RotateZkAceIdentityCommitment.old_identity_commitment")],
-    [encodeFixedBytesValue(value.new_identity_commitment, 32, "zk.RotateZkAceIdentityCommitment.new_identity_commitment")],
-    [encodeFixedBytesValue(value.policy_hash, 32, "zk.RotateZkAceIdentityCommitment.policy_hash")],
-    [encodeNoritoVec(value.allowed_accounts ?? [], (entry, index) =>
-      encodeAccountIdValue(entry, `zk.RotateZkAceIdentityCommitment.allowed_accounts[${index}]`),
-    )],
-    [encodeNoritoStringValue(assertNonEmptyString(value.action_class, "zk.RotateZkAceIdentityCommitment.action_class"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.RotateZkAceIdentityCommitment.domain_tag"))],
-    [encodeVerifyingKeyIdValue(value.verifier_key, "zk.RotateZkAceIdentityCommitment.verifier_key")],
-  ]);
-}
-
-function encodeRevokeZkAceIdentityCommitmentPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RevokeZkAceIdentityCommitment.asset")],
-    [encodeFixedBytesValue(value.identity_commitment, 32, "zk.RevokeZkAceIdentityCommitment.identity_commitment")],
-    [
-      encodeOptionValue(
-        value.reason_hash,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.RevokeZkAceIdentityCommitment.reason_hash",
-      ),
-    ],
   ]);
 }
 
@@ -5315,23 +5540,6 @@ function encodeAssetHiddenZkTransferPayload(value) {
         "zk.AssetHiddenZkTransfer.root_hint",
       ),
     ],
-  ]);
-}
-
-function encodeSubmitZkAceAuthorizedTransferPayload(value) {
-  return encodeStructValue([
-    [encodeAccountIdValue(value.from, "zk.SubmitZkAceAuthorizedTransfer.from")],
-    [encodeAccountIdValue(value.to, "zk.SubmitZkAceAuthorizedTransfer.to")],
-    [encodeAssetDefinitionIdValue(value.asset, "zk.SubmitZkAceAuthorizedTransfer.asset")],
-    [encodeQuantityValue(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
-    [encodeFixedBytesValue(value.identity_commitment, 32, "zk.SubmitZkAceAuthorizedTransfer.identity_commitment")],
-    [encodeFixedBytesValue(value.tx_digest, 32, "zk.SubmitZkAceAuthorizedTransfer.tx_digest")],
-    [encodeNoritoStringValue(assertNonEmptyString(value.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.SubmitZkAceAuthorizedTransfer.domain_tag"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.action_class, "zk.SubmitZkAceAuthorizedTransfer.action_class"))],
-    [encodeFixedBytesValue(value.replay_nullifier, 32, "zk.SubmitZkAceAuthorizedTransfer.replay_nullifier")],
-    [encodeFixedBytesValue(value.policy_hash, 32, "zk.SubmitZkAceAuthorizedTransfer.policy_hash")],
-    [encodeProofAttachmentValue(value.proof, "zk.SubmitZkAceAuthorizedTransfer.proof")],
   ]);
 }
 
@@ -6235,17 +6443,14 @@ function encodeEscrowIdValue(value, context) {
   if ((bytes[bytes.length - 1] & 1) === 0) {
     throw new TypeError(`${context} must use a native hash with its marker bit set`);
   }
-  return encodeNoritoField(bytes);
+  return bytes;
 }
 
 function decodeEscrowIdValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const bytes = readNoritoField(reader, "hash");
-  reader.assertEof();
-  if (bytes.length !== 32 || (bytes[bytes.length - 1] & 1) === 0) {
+  if (payload.length !== 32 || (payload[payload.length - 1] & 1) === 0) {
     throw new TypeError(`${context} must use a native hash with its marker bit set`);
   }
-  return decodeHashValue(bytes, `${context}.hash`);
+  return decodeHashValue(payload, context);
 }
 
 function encodeStringValue(value, context) {

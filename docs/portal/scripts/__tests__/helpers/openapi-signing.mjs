@@ -53,7 +53,7 @@ export function buildOpenApiManifest({
   generatedUnixMs = 1_700_000_000_000,
   generatorCommit = 'ab'.repeat(20),
   generatorDirty = false,
-  generatorSourceSha256Hex = generatorDirty ? 'cd'.repeat(32) : undefined,
+  generatorSourceSha256Hex = 'cd'.repeat(32),
   sha256Hex,
   blake3Hex,
   privateKeyHex = TEST_ED25519_PRIVATE_KEY_HEX,
@@ -67,9 +67,7 @@ export function buildOpenApiManifest({
     generated_unix_ms: generatedUnixMs,
     generator_commit: generatorDirty ? null : generatorCommit,
     generator_dirty: generatorDirty,
-    ...(generatorDirty
-      ? {generator_source_sha256_hex: generatorSourceSha256Hex}
-      : {}),
+    generator_source_sha256_hex: generatorSourceSha256Hex,
     artifact: {
       path,
       bytes: bytes.length,

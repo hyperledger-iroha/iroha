@@ -167,6 +167,41 @@ def test_guard_rejects_missing_daemon_runtime_forwarding(tmp_path: Path) -> None
     )
 
 
+def test_guard_rejects_missing_acme_identity_fences(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    copy_contract_fixture(root)
+
+    acme = root / "crates/iroha_torii/src/sorafs/gateway/acme.rs"
+    text = acme.read_text(encoding="utf-8")
+    text = text.replace(
+        "qualify_acme_client(&self.client_binding, &self.client)",
+        "Ok(())",
+    )
+    text = text.replace(
+        "pub trait AcmeClient: Send + Sync",
+        "pub trait AcmeClient: std::fmt::Debug + Send + Sync",
+    )
+    text = text.replace(
+        '.field("client", &"<runtime-only>")',
+        '.field("client", &self.client)',
+    )
+    acme.write_text(text, encoding="utf-8")
+
+    torii = root / "crates/iroha_torii/src/lib.rs"
+    text = torii.read_text(encoding="utf-8")
+    text = text.replace(
+        "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled",
+        "provider binding omitted",
+    )
+    torii.write_text(text, encoding="utf-8")
+
+    failures = MODULE.check_contract(root)
+    assert "acme-harness:missing-operation-qualification-fence" in failures
+    assert "acme-harness:runtime-client-debug-exposure" in failures
+    assert "acme-harness:runtime-client-state-not-redacted" in failures
+    assert "torii:missing-provider-binding-startup-failure" in failures
+
+
 def test_guard_rejects_symlinked_contract_source(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     copy_contract_fixture(root)

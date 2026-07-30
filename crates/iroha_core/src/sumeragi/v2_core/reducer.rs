@@ -4977,9 +4977,8 @@ mod source_link_tests {
 
     #[test]
     fn same_round_timeout_upgrade_accepts_the_last_generation() {
-        let (mut pending, event) = pending_same_round_timeout_upgrade_at_generation(
-            Generation::new(u64::MAX - 1),
-        );
+        let (mut pending, event) =
+            pending_same_round_timeout_upgrade_at_generation(Generation::new(u64::MAX - 1));
 
         let outcome = pending
             .step(event)

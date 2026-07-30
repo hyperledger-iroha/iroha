@@ -62,7 +62,6 @@ ws_integration_tests = ["app_api_wss"]
 gov_vrf = []
 ## Prototype: read-only debug endpoints for proof tag index; forwards to `iroha_core/zk-proof-tags`.
 zk-proof-tags = ["iroha_core/zk-proof-tags"]
-zk-ballot = ["iroha_data_model/zk-ballot"]
 goldilocks_backend = [
     "dep:iroha_zkp_halo2",
     "iroha_zkp_halo2/goldilocks_backend",

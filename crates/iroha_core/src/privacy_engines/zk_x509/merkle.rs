@@ -432,10 +432,10 @@ const fn governance_lifecycle_v1(lifecycle: PrivacyZkX509RecordLifecycleV1) -> [
 }
 
 fn governance_key_usage_v1(key_usage: PrivacyX509KeyUsageV1) -> [u8; 1] {
-    [u8::from(key_usage.digital_signature)
-        | (u8::from(key_usage.content_commitment) << 1)
-        | (u8::from(key_usage.key_encipherment) << 2)
-        | (u8::from(key_usage.key_agreement) << 3)]
+    [u8::from(key_usage.digital_signature.is_required())
+        | (u8::from(key_usage.content_commitment.is_required()) << 1)
+        | (u8::from(key_usage.key_encipherment.is_required()) << 2)
+        | (u8::from(key_usage.key_agreement.is_required()) << 3)]
 }
 
 const fn governance_eku_code_v1(usage: PrivacyX509ExtendedKeyUsageV1) -> u8 {
@@ -593,7 +593,8 @@ pub(crate) fn crl_record_preimage_v1(
 mod tests {
     use iroha_data_model::privacy::{
         PrivacyIssuerIdV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
-        PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509TrustStoreDigestV1,
+        PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+        PrivacyX509KeyUsageRequirementV1, PrivacyX509TrustStoreDigestV1,
     };
 
     use super::*;
@@ -669,10 +670,10 @@ mod tests {
             1,
             PrivacyPolicyDigestV1::new([0x33; 32]),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -696,10 +697,10 @@ mod tests {
             2,
             PrivacyPolicyDigestV1::new([0x33; 32]),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: true,
-                key_encipherment: true,
-                key_agreement: true,
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(true),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(true),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(true),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,

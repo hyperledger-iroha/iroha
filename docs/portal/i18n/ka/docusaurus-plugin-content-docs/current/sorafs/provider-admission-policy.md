@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
 ## მისაღები სამუშაო პროცესი
 
 1. **წინადადების შექმნა **
-   - CLI: დაამატეთ `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …`
+   - CLI: დაამატეთ `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …`
      აწარმოებს `ProviderAdmissionProposalV1` + საატესტაციო პაკეტს.
    - ვალიდაცია: უზრუნველყოს საჭირო ველები, ფსონი > 0, კანონიკური ცუნკერის სახელური `profile_id`-ში.
 2. **მმართველობის მოწონება **
@@ -70,7 +70,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
 
 ### CLI მითითება
 
-გაუშვით თითოეული ბრძანება `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …`-ის საშუალებით.
+გაუშვით თითოეული ბრძანება `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …`-ის საშუალებით.
 
 - `proposal`
   - საჭირო დროშები: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -117,7 +117,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
 1. შექმენით მემკვიდრე წინადადება/რეკლამის წყვილი `provider-admission proposal`-ით და `provider-admission sign`-ით, გაზარდეთ `--retention-epoch` და განაახლეთ ფსონი/ბოლო წერტილები საჭიროებისამებრ.
 2. შეასრულეთ  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
 #### გადაუდებელი გაუქმება
 1. დაადგინეთ კომპრომეტირებული კონვერტი და გააუქმეთ:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

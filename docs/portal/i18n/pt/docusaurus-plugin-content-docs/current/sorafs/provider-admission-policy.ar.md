@@ -35,7 +35,7 @@ A chave SoraFS pode ser usada para remover o problema.
 ## سير عمل القبول
 
 1. **إنشاء المقترح**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      Para `ProviderAdmissionProposalV1` + número de telefone.
    - التحقق: ضمان الحقول المطلوبة, وstake > 0, ومقبض chunker قياسي في `profile_id`.
 2. **اعتماد الحوكمة**
@@ -58,7 +58,7 @@ A chave SoraFS pode ser usada para remover o problema.
 
 ### مرجع CLI
 
-Este é o `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+Este é o `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Nome do código: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, e o `--endpoint=<kind:host>` também.
@@ -95,7 +95,7 @@ Este é o `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provide
 1. أنشئ زوج المقترح/advert اللاحق باستخدام `provider-admission proposal` و`provider-admission sign`, مع زيادة `--retention-epoch` وتحديث stake/endpoints حسب الحاجة.
 2. Não
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -111,7 +111,7 @@ Este é o `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provide
 #### إلغاء طارئ
 1. Abra o envelope do envelope e coloque-o:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

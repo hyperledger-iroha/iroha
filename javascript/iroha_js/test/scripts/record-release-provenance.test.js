@@ -44,6 +44,7 @@ test("recordReleaseProvenance writes metadata, checksums, and npm-pack manifest"
     packRunner,
     npmVersionProvider,
     gitDescribe: "deadbeef",
+    nativeInfoProvider: async () => null,
     quiet: true,
   });
 

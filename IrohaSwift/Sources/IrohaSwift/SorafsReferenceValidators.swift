@@ -8,6 +8,7 @@ public enum SorafsReferenceValidationError: Error, Equatable {
     case invalidGovernanceLogNodeInput(String)
     case invalidGovernanceDagInput(String)
     case invalidFixtureBundleInput(String)
+    case invalidAppealFinanceInput(String)
     case unsupportedOrderbookPayloadKind(SorafsOrderbookPayloadKind)
 }
 
@@ -314,6 +315,10 @@ public enum SorafsReferenceValidators {
         NoritoNativeBridge.shared.isSorafsReferenceHedgingValidationAvailable
     }
 
+    public static var isAppealFinanceNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isSorafsReferenceAppealFinanceValidationAvailable
+    }
+
     public static var isGovernanceDagNativeAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceGovernanceDagValidationAvailable
     }
@@ -392,6 +397,38 @@ public enum SorafsReferenceValidators {
             label: resolvedLabel,
             generatedAtUnix: generatedAtUnix
         ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    /// Validate one canonical appeal-finance `CancelAssetLock` V1 payload.
+    public static func validateAppealFinanceCancelAssetLockJSON(
+        payload: Data,
+        label: String? = nil,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        guard payload.count <= referenceMaxInputBytesV1 else {
+            throw SorafsReferenceValidationError.invalidAppealFinanceInput(
+                "payload must be at most \(referenceMaxInputBytesV1) bytes"
+            )
+        }
+        let resolvedLabel = try validatorLabel(
+            label,
+            fallback: "cancel_asset_lock_v1.to"
+        )
+        guard payload.count + resolvedLabel.utf8.count <= referenceMaxInputBytesV1 else {
+            throw SorafsReferenceValidationError.invalidAppealFinanceInput(
+                "appeal-finance inputs exceed \(referenceMaxInputBytesV1) aggregate bytes"
+            )
+        }
+        guard let json =
+            NoritoNativeBridge.shared.sorafsReferenceValidateAppealFinanceCancelAssetLock(
+                payload: payload,
+                label: resolvedLabel,
+                generatedAtUnix: generatedAtUnix
+            )
+        else {
             throw SorafsReferenceValidationError.bridgeUnavailable
         }
         return json

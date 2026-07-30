@@ -128,10 +128,11 @@ public final class SignedTransactionHasherTests {
 
   private static void canonicalBytesWrapsEntrypoint() throws Exception {
     final SignedTransaction transaction = newTransaction((byte) 0x33);
-    final byte[] encoded = SignedTransactionEncoder.encode(transaction);
+    final byte[] encodedPayload = transaction.encodedPayload();
     final byte[] canonical = SignedTransactionHasher.canonicalBytes(transaction);
-    final byte[] expectedLength = SignedTransactionHasher.encodeCompactLength(encoded.length);
-    assert canonical.length == encoded.length + 4 + expectedLength.length
+    final byte[] expectedLength =
+        SignedTransactionHasher.encodeCompactLength(encodedPayload.length);
+    assert canonical.length == encodedPayload.length + 4 + expectedLength.length
         : "Canonical bytes must include entrypoint wrapper";
     for (int i = 0; i < 4; i++) {
       assert canonical[i] == 0 : "Entrypoint discriminant must be zero";
@@ -142,7 +143,8 @@ public final class SignedTransactionHasherTests {
         : "Entrypoint length must use minimal COMPACT_LEN encoding";
     final byte[] payload =
         Arrays.copyOfRange(canonical, 4 + expectedLength.length, canonical.length);
-    assert Arrays.equals(payload, encoded) : "Entrypoint payload must match signed transaction";
+    assert Arrays.equals(payload, encodedPayload)
+        : "Entrypoint payload must match the signed transaction intent";
   }
 
   private static void compactLengthBoundariesAreCanonical() {

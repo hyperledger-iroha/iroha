@@ -7,8 +7,10 @@ final class ConnectClientTests: XCTestCase {
     }
 
     private func requireConnectCodec() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
-                      "NoritoBridge connect codec unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCodecAvailable,
+            "NoritoBridge connect codec unavailable"
+        )
     }
 
     func testStartResumesOnlyOnce() async {

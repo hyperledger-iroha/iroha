@@ -26,15 +26,12 @@ impl TransportPolicy {
         }
     }
 
-    /// Parses a [`TransportPolicy`] from textual input.
+    /// Parses a [`TransportPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
-        let token = label.trim().to_ascii_lowercase();
-        match token.as_str() {
-            "soranet_first" | "soranet-first" => Some(Self::SoranetPreferred),
-            "soranet_strict" | "soranet-strict" | "soranet_only" | "soranet-only" => {
-                Some(Self::SoranetStrict)
-            }
-            "direct_only" | "direct-only" => Some(Self::DirectOnly),
+        match label {
+            "soranet-first" => Some(Self::SoranetPreferred),
+            "soranet-strict" => Some(Self::SoranetStrict),
+            "direct-only" => Some(Self::DirectOnly),
             _ => None,
         }
     }
@@ -70,19 +67,12 @@ impl AnonymityPolicy {
         }
     }
 
-    /// Parses an [`AnonymityPolicy`] from textual input (accepts stage aliases).
+    /// Parses an [`AnonymityPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
-        let token = label.trim().to_ascii_lowercase();
-        match token.as_str() {
-            "anon_guard_pq" | "anon-guard-pq" | "stage_a" | "stage-a" | "stagea" => {
-                Some(Self::GuardPq)
-            }
-            "anon_majority_pq" | "anon-majority-pq" | "stage_b" | "stage-b" | "stageb" => {
-                Some(Self::MajorityPq)
-            }
-            "anon_strict_pq" | "anon-strict-pq" | "stage_c" | "stage-c" | "stagec" => {
-                Some(Self::StrictPq)
-            }
+        match label {
+            "anon-guard-pq" => Some(Self::GuardPq),
+            "anon-majority-pq" => Some(Self::MajorityPq),
+            "anon-strict-pq" => Some(Self::StrictPq),
             _ => None,
         }
     }
@@ -143,37 +133,82 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transport_policy_parse_accepts_aliases() {
+    fn transport_policy_parse_accepts_only_exact_v1_labels() {
         assert_eq!(
             TransportPolicy::parse("soranet-first"),
             Some(TransportPolicy::SoranetPreferred)
         );
         assert_eq!(
-            TransportPolicy::parse("Soranet_Strict"),
+            TransportPolicy::parse("soranet-strict"),
             Some(TransportPolicy::SoranetStrict)
         );
         assert_eq!(
-            TransportPolicy::parse("DIRECT_ONLY"),
+            TransportPolicy::parse("direct-only"),
             Some(TransportPolicy::DirectOnly)
         );
-        assert_eq!(TransportPolicy::parse("unknown"), None);
+        for alias in [
+            "soranet_first",
+            "soranet_strict",
+            "soranet_only",
+            "soranet-only",
+            "direct_only",
+            "SORANET-FIRST",
+            "Soranet-Strict",
+            "DIRECT-ONLY",
+            " soranet-first",
+            "soranet-first ",
+            "",
+            "unknown",
+        ] {
+            assert_eq!(
+                TransportPolicy::parse(alias),
+                None,
+                "accepted transport alias {alias:?}"
+            );
+        }
     }
 
     #[test]
-    fn anonymity_policy_parse_accepts_aliases() {
+    fn anonymity_policy_parse_accepts_only_exact_v1_labels() {
         assert_eq!(
-            AnonymityPolicy::parse("stage-a"),
+            AnonymityPolicy::parse("anon-guard-pq"),
             Some(AnonymityPolicy::GuardPq)
         );
         assert_eq!(
-            AnonymityPolicy::parse("stage_b"),
+            AnonymityPolicy::parse("anon-majority-pq"),
             Some(AnonymityPolicy::MajorityPq)
         );
         assert_eq!(
-            AnonymityPolicy::parse("ANON-STRICT-PQ"),
+            AnonymityPolicy::parse("anon-strict-pq"),
             Some(AnonymityPolicy::StrictPq)
         );
-        assert_eq!(AnonymityPolicy::parse("nope"), None);
+        for alias in [
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+            "ANON-GUARD-PQ",
+            "Anon-Majority-Pq",
+            "ANON-STRICT-PQ",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "",
+            "nope",
+        ] {
+            assert_eq!(
+                AnonymityPolicy::parse(alias),
+                None,
+                "accepted anonymity alias {alias:?}"
+            );
+        }
     }
 
     #[test]

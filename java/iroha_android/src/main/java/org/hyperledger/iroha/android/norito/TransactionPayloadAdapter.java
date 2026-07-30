@@ -25,6 +25,8 @@ import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
+import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -58,6 +60,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<byte[]> FIXED_HASH_ADAPTER = NoritoAdapters.fixedBytes(32);
+  private static final TypeAdapter<byte[]> HASH_ARRAY_ADAPTER = new FixedHashArrayAdapter();
+  private static final TypeAdapter<Optional<byte[]>> OPTIONAL_HASH_ADAPTER =
+      NoritoAdapters.option(HASH_ARRAY_ADAPTER);
   private static final TypeAdapter<byte[]> CONTRACT_ARGUMENT_RECORD_ADAPTER =
       new ContractArgumentRecordAdapter();
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER =
@@ -112,6 +117,17 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       new FeePaymentIntentAdapter();
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, JsonValue>> METADATA_ADAPTER = new MetadataAdapter();
+  private static final TypeAdapter<ProofBoxValue> PROOF_BOX_ADAPTER = new ProofBoxAdapter();
+  private static final TypeAdapter<ProofVerifierKeyRef> PROOF_VERIFIER_KEY_REF_ADAPTER =
+      new ProofVerifierKeyRefAdapter();
+  private static final TypeAdapter<ProofAttachment> PROOF_ATTACHMENT_ADAPTER =
+      new ProofAttachmentAdapter();
+  private static final TypeAdapter<List<ProofAttachment>> PROOF_ATTACHMENT_SEQUENCE_ADAPTER =
+      NoritoAdapters.sequence(PROOF_ATTACHMENT_ADAPTER);
+  private static final TypeAdapter<List<ProofAttachment>> PROOF_ATTACHMENT_LIST_ADAPTER =
+      new ProofAttachmentListAdapter();
+  private static final TypeAdapter<Optional<List<ProofAttachment>>> ATTACHMENTS_OPTION_ADAPTER =
+      NoritoAdapters.option(PROOF_ATTACHMENT_LIST_ADAPTER);
   private static final String INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1";
   private static final String MULTISIG_PROPOSE_DTO_SCHEMA =
       "iroha_torii::routing::MultisigProposeDto";
@@ -160,6 +176,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           encodeSizedField(encoder, NONCE_ADAPTER, value.nonce());
           encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
           encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
+          encodeSizedField(encoder, ATTACHMENTS_OPTION_ADAPTER, value.attachments());
           return null;
         });
   }
@@ -178,6 +195,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           final FeePaymentIntent feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER);
           final Map<String, JsonValue> metadata =
               new LinkedHashMap<>(decodeSizedField(decoder, METADATA_ADAPTER));
+          final Optional<List<ProofAttachment>> attachments =
+              decodeSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER);
 
           final TransactionPayload.Builder builder =
               TransactionPayload.builder()
@@ -186,11 +205,143 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
                   .setCreationTimeMs(creationTimeMs)
                   .setExecutable(executable)
                   .setFeePayment(feePayment)
-                  .setMetadata(metadata);
+                  .setMetadata(metadata)
+                  .setAttachments(attachments.orElse(null));
           ttl.ifPresent(builder::setTimeToLiveMs);
           nonceRaw.ifPresent(builder::setNonce);
           return builder.buildDecodedForCodec();
         });
+  }
+
+  private static final class ProofBoxValue {
+    private final String backend;
+    private final byte[] bytes;
+
+    private ProofBoxValue(final String backend, final byte[] bytes) {
+      this.backend = backend;
+      this.bytes = bytes.clone();
+    }
+
+    private String backend() {
+      return backend;
+    }
+
+    private byte[] bytes() {
+      return bytes.clone();
+    }
+  }
+
+  private static final class ProofBoxAdapter implements TypeAdapter<ProofBoxValue> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final ProofBoxValue value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value.backend());
+      encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, value.bytes());
+    }
+
+    @Override
+    public ProofBoxValue decode(final NoritoDecoder decoder) {
+      return new ProofBoxValue(
+          decodeSizedField(decoder, STRING_ADAPTER),
+          decodeSizedField(decoder, RAW_BYTE_VEC_ADAPTER));
+    }
+  }
+
+  private static final class ProofVerifierKeyRefAdapter
+      implements TypeAdapter<ProofVerifierKeyRef> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final ProofVerifierKeyRef value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value.backend());
+      encodeSizedField(encoder, STRING_ADAPTER, value.name());
+    }
+
+    @Override
+    public ProofVerifierKeyRef decode(final NoritoDecoder decoder) {
+      return new ProofVerifierKeyRef(
+          decodeSizedField(decoder, STRING_ADAPTER),
+          decodeSizedField(decoder, STRING_ADAPTER));
+    }
+  }
+
+  private static final class ProofAttachmentAdapter implements TypeAdapter<ProofAttachment> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final ProofAttachment value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value.backend());
+      encodeSizedField(
+          encoder,
+          PROOF_BOX_ADAPTER,
+          new ProofBoxValue(value.backend(), value.proofBytes()));
+      encodeSizedField(encoder, PROOF_VERIFIER_KEY_REF_ADAPTER, value.verifyingKeyRef());
+
+      final byte[] commitment = value.verifyingKeyCommitment();
+      final byte[] envelopeHash = value.envelopeHash();
+      if (commitment != null || envelopeHash != null) {
+        encodeSizedField(
+            encoder, OPTIONAL_HASH_ADAPTER, Optional.ofNullable(commitment));
+      }
+      if (envelopeHash != null) {
+        encodeSizedField(encoder, OPTIONAL_HASH_ADAPTER, Optional.of(envelopeHash));
+      }
+    }
+
+    @Override
+    public ProofAttachment decode(final NoritoDecoder decoder) {
+      final String backend = decodeSizedField(decoder, STRING_ADAPTER);
+      final ProofBoxValue proof = decodeSizedField(decoder, PROOF_BOX_ADAPTER);
+      if (!proof.backend().equals(backend)) {
+        throw new IllegalArgumentException(
+            "proof.backend must match attachment backend");
+      }
+      final ProofVerifierKeyRef verifyingKeyRef =
+          decodeSizedField(decoder, PROOF_VERIFIER_KEY_REF_ADAPTER);
+      if (!verifyingKeyRef.backend().equals(backend)) {
+        throw new IllegalArgumentException(
+            "vk_ref.backend must match attachment backend");
+      }
+
+      final byte[] commitment =
+          decoder.remaining() == 0
+              ? null
+              : decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null);
+      final byte[] envelopeHash =
+          decoder.remaining() == 0
+              ? null
+              : decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null);
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException(
+            "lane privacy proof attachments are not supported by this SDK");
+      }
+
+      return new ProofAttachment(
+          backend, proof.bytes(), verifyingKeyRef, commitment, envelopeHash);
+    }
+  }
+
+  private static final class ProofAttachmentListAdapter
+      implements TypeAdapter<List<ProofAttachment>> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final List<ProofAttachment> value) {
+      encodeSizedField(encoder, PROOF_ATTACHMENT_SEQUENCE_ADAPTER, value);
+    }
+
+    @Override
+    public List<ProofAttachment> decode(final NoritoDecoder decoder) {
+      return decodeSizedField(decoder, PROOF_ATTACHMENT_SEQUENCE_ADAPTER);
+    }
+  }
+
+  private static final class FixedHashArrayAdapter implements TypeAdapter<byte[]> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      if (value.length != 32) {
+        throw new IllegalArgumentException("expected 32-byte hash");
+      }
+      encodeFixedByteArray(encoder, value);
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      return decodeFixedByteArray(decoder, 32, "proof attachment hash");
+    }
   }
 
   static byte[] encodeInstructionBox(final InstructionBox instruction) {

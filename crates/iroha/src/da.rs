@@ -11,12 +11,11 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
-use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
         commitment::{DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle},
-        ingest::{DaIngestReceipt, DaIngestRequest},
-        manifest::{ChunkRole, DaManifestV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1},
+        manifest::DaManifestV1,
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentLedgerProjection, ErasureProfile,
             ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
@@ -84,30 +83,6 @@ pub fn receipt_pdp_commitment(receipt: &DaIngestReceipt) -> Result<Option<PdpCom
     )
 }
 
-/// Chunk selected for DA sampling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DaSampledChunk {
-    /// Manifest chunk index selected for sampling.
-    pub index: u32,
-    /// Role of the sampled chunk within the erasure layout.
-    pub role: ChunkRole,
-    /// Group identifier (stripe/column) for the sampled chunk.
-    pub group: u32,
-}
-
-/// Deterministic sampling plan derived from a manifest and block hash.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaSamplingPlan {
-    /// Assignment hash covering the manifest and block seed.
-    pub assignment_hash: BlobDigest,
-    /// Requested sampling window used to draw the chunk indices.
-    pub sample_window: u16,
-    /// Optional seed used to derive the deterministic sample set.
-    pub sample_seed: Option<[u8; 32]>,
-    /// Sampled chunks (deduplicated, order preserved after sorting).
-    pub samples: Vec<DaSampledChunk>,
-}
-
 /// Canonical manifest + chunk-plan artefacts returned by Torii.
 #[derive(Debug, Clone)]
 pub struct DaManifestBundle {
@@ -133,8 +108,6 @@ pub struct DaManifestBundle {
     pub manifest_json: Value,
     /// Chunk plan JSON emitted by Torii.
     pub chunk_plan: Value,
-    /// Optional deterministic sampling plan bound to the manifest.
-    pub sampling_plan: Option<DaSamplingPlan>,
 }
 
 /// Paths produced when a manifest bundle is written to disk.
@@ -263,10 +236,6 @@ impl DaManifestBundle {
                 "DA manifest response contained invalid chunk_plan: payload digest does not match blob_hash"
             ));
         }
-        let sampling_plan = object
-            .get("sampling_plan")
-            .map(parse_sampling_plan)
-            .transpose()?;
         Ok(Self {
             storage_ticket_hex,
             client_blob_id_hex,
@@ -279,7 +248,6 @@ impl DaManifestBundle {
             manifest_bytes,
             manifest_json,
             chunk_plan,
-            sampling_plan,
         })
     }
 
@@ -623,10 +591,7 @@ pub fn build_da_request(
         hasher.update(&payload_bytes);
         BlobDigest::from_hash(hasher.finalize())
     });
-    let submitter = key_pair.public_key().clone();
-    let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)
-        .wrap_err("failed to sign DA ingest request payload")?;
-    Ok(DaIngestRequest {
+    DaIngestRequestIntentV1 {
         client_blob_id,
         lane_id: params.lane_id,
         epoch: params.epoch,
@@ -641,9 +606,9 @@ pub fn build_da_request(
         norito_manifest: manifest_bytes,
         payload: payload_bytes,
         metadata,
-        submitter,
-        signature,
-    })
+    }
+    .try_sign(key_pair)
+    .wrap_err("failed to sign canonical DA ingest request intent")
 }
 
 /// Sampling and verification controls for `PoR` proof generation.
@@ -1132,97 +1097,6 @@ fn value_from_u32(value: u32) -> Value {
     Value::from(u64::from(value))
 }
 
-fn parse_hex_digest(label: &str, hex_string: &str) -> Result<BlobDigest> {
-    let trimmed = hex_string.trim();
-    let bytes = hex::decode(trimmed).map_err(|err| eyre!("invalid {label} hex encoding: {err}"))?;
-    let array: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| eyre!("{label} must decode to 32 bytes"))?;
-    Ok(BlobDigest::new(array))
-}
-
-fn parse_sample_seed(label: &str, hex_string: &str) -> Result<[u8; 32]> {
-    let digest = parse_hex_digest(label, hex_string)?;
-    Ok(*digest.as_bytes())
-}
-
-fn parse_chunk_role(label: &str, value: &str) -> Result<ChunkRole> {
-    match value {
-        "data" => Ok(ChunkRole::Data),
-        "local_parity" => Ok(ChunkRole::LocalParity),
-        "global_parity" => Ok(ChunkRole::GlobalParity),
-        "stripe_parity" => Ok(ChunkRole::StripeParity),
-        other => Err(eyre!("{label} has unsupported role `{other}`")),
-    }
-}
-
-fn parse_sampling_plan(value: &Value) -> Result<DaSamplingPlan> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| eyre!("sampling_plan must be a JSON object"))?;
-    let assignment_hex = object
-        .get("assignment_hash")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("sampling_plan.assignment_hash missing"))?;
-    let assignment_hash = parse_hex_digest("sampling_plan.assignment_hash", assignment_hex)?;
-    let sample_window = object
-        .get("sample_window")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("sampling_plan.sample_window missing or invalid"))?;
-    let sample_seed = match object.get("sample_seed") {
-        Some(Value::String(seed_hex)) => {
-            Some(parse_sample_seed("sampling_plan.sample_seed", seed_hex)?)
-        }
-        Some(_) => {
-            return Err(eyre!(
-                "sampling_plan.sample_seed must be a hex string when present"
-            ));
-        }
-        None => None,
-    };
-    let samples_array = object
-        .get("samples")
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("sampling_plan.samples must be an array"))?;
-
-    let mut samples = Vec::with_capacity(samples_array.len());
-    for (idx, sample) in samples_array.iter().enumerate() {
-        let sample_obj = sample
-            .as_object()
-            .ok_or_else(|| eyre!("sampling_plan.samples[{idx}] must be an object"))?;
-        let index = sample_obj
-            .get("index")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| eyre!("sampling_plan.samples[{idx}].index missing"))?;
-        let role_label = sample_obj
-            .get("role")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre!("sampling_plan.samples[{idx}].role missing"))?;
-        let group = match sample_obj.get("group") {
-            Some(value) => value.as_u64().ok_or_else(|| {
-                eyre!("sampling_plan.samples[{idx}].group must be an unsigned integer")
-            })?,
-            None => 0,
-        };
-
-        samples.push(DaSampledChunk {
-            index: u32::try_from(index)
-                .map_err(|err| eyre!("sampling_plan.samples[{idx}].index out of range: {err}"))?,
-            role: parse_chunk_role("sampling_plan.samples role", role_label)?,
-            group: u32::try_from(group)
-                .map_err(|err| eyre!("sampling_plan.samples[{idx}].group out of range: {err}"))?,
-        });
-    }
-
-    Ok(DaSamplingPlan {
-        assignment_hash,
-        sample_window: u16::try_from(sample_window)
-            .map_err(|err| eyre!("sampling_plan.sample_window out of range for u16: {err}"))?,
-        sample_seed,
-        samples,
-    })
-}
-
 fn require_hex_field(object: &Map, keys: &[&str]) -> Result<String> {
     for key in keys {
         if let Some(Value::String(value)) = object.get(*key) {
@@ -1309,26 +1183,6 @@ mod tests {
             ),
             ("chunk_fetch_specs".into(), Value::Array(Vec::new())),
         ]))
-    }
-
-    fn sampling_plan_json(sample_seed: Option<Value>, group: Option<Value>) -> Value {
-        let mut sample = Map::from_iter([
-            ("index".into(), Value::from(1)),
-            ("role".into(), Value::from("data")),
-        ]);
-        if let Some(group) = group {
-            sample.insert("group".into(), group);
-        }
-
-        let mut plan = Map::from_iter([
-            ("assignment_hash".into(), Value::from("aa".repeat(32))),
-            ("sample_window".into(), Value::from(4)),
-            ("samples".into(), Value::Array(vec![Value::Object(sample)])),
-        ]);
-        if let Some(sample_seed) = sample_seed {
-            plan.insert("sample_seed".into(), sample_seed);
-        }
-        Value::Object(plan)
     }
 
     #[test]
@@ -1525,7 +1379,6 @@ mod tests {
         assert_eq!(bundle.manifest_hash_hex, "55".repeat(32));
         assert_eq!(bundle.lane_id, 0);
         assert_eq!(bundle.epoch, 1);
-        assert!(bundle.sampling_plan.is_none());
     }
 
     #[test]
@@ -1567,79 +1420,6 @@ mod tests {
                 "unexpected error: {err:?}"
             );
         }
-    }
-
-    #[test]
-    fn manifest_bundle_parses_sampling_plan() {
-        let mut object = Map::new();
-        object.insert("storage_ticket".into(), Value::from("11".repeat(32)));
-        object.insert("client_blob_id".into(), Value::from("22".repeat(32)));
-        object.insert("blob_hash".into(), Value::from("33".repeat(32)));
-        object.insert("chunk_root".into(), Value::from("44".repeat(32)));
-        object.insert("lane_id".into(), Value::from(0));
-        object.insert("epoch".into(), Value::from(1));
-        object.insert("manifest_len".into(), Value::from(16));
-        object.insert(
-            "manifest_norito".into(),
-            Value::from(BASE64.encode([0u8; 4])),
-        );
-        object.insert("chunk_plan".into(), empty_chunk_fetch_plan(0x33));
-        object.insert("manifest_hash".into(), Value::from("66".repeat(32)));
-        object.insert(
-            "sampling_plan".into(),
-            Value::Object(Map::from_iter([
-                ("assignment_hash".into(), Value::from("aa".repeat(32))),
-                ("sample_window".into(), Value::from(4)),
-                ("sample_seed".into(), Value::from("bb".repeat(32))),
-                (
-                    "samples".into(),
-                    Value::Array(vec![Value::Object(Map::from_iter([
-                        ("index".into(), Value::from(1)),
-                        ("role".into(), Value::from("data")),
-                        ("group".into(), Value::from(0)),
-                    ]))]),
-                ),
-            ])),
-        );
-
-        let json = Value::Object(object);
-        let bundle = DaManifestBundle::from_json(&json).expect("bundle");
-        let plan = bundle.sampling_plan.expect("sampling plan");
-        assert_eq!(plan.sample_window, 4);
-        assert_eq!(plan.assignment_hash, BlobDigest::new([0xaa; 32]));
-        assert_eq!(plan.sample_seed, Some([0xbb; 32]));
-        assert_eq!(plan.samples.len(), 1);
-        assert_eq!(plan.samples[0].index, 1);
-        assert_eq!(plan.samples[0].role, ChunkRole::Data);
-        assert_eq!(plan.samples[0].group, 0);
-    }
-
-    #[test]
-    fn sampling_plan_defaults_only_absent_optional_fields() {
-        let plan = parse_sampling_plan(&sampling_plan_json(None, None))
-            .expect("absent optional sampling fields should use defaults");
-
-        assert_eq!(plan.sample_seed, None);
-        assert_eq!(plan.samples[0].group, 0);
-    }
-
-    #[test]
-    fn sampling_plan_rejects_non_string_sample_seed() {
-        let err = parse_sampling_plan(&sampling_plan_json(Some(Value::from(7)), None))
-            .expect_err("present non-string sample seed must be rejected");
-
-        assert!(err.to_string().contains("sample_seed must be a hex string"));
-    }
-
-    #[test]
-    fn sampling_plan_rejects_non_integer_group() {
-        let err = parse_sampling_plan(&sampling_plan_json(None, Some(Value::from("9"))))
-            .expect_err("present non-integer group must be rejected");
-
-        assert!(
-            err.to_string()
-                .contains("group must be an unsigned integer")
-        );
     }
 
     #[test]
@@ -1793,7 +1573,6 @@ mod tests {
                 &build_car_plan_from_manifest(&manifest).expect("build manifest CAR plan"),
             )
             .expect("render canonical chunk fetch plan"),
-            sampling_plan: None,
         };
         let dir = tempdir().expect("tempdir");
         let paths = bundle

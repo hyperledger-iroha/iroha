@@ -204,7 +204,7 @@ const _: () = {
 };
 
 /// Stable proof-facing compact accumulator identity.
-pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max984216:inner-deep52768:subproof-max1038294:single-log7-trace128:dedicated-lde-log14:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask306-coefficients:min-fri-rate1over32:fri58-distinct-post-grinding20:binary-fri5-rounds-terminal512-degree15:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:fp4-composition-lanes1:composition-degree-chunks3:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding24:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=28+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-six-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-prefix64-health-check-exact-replay:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
+pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max984216:inner-deep52768:subproof-max1038294:single-log7-trace128:dedicated-lde-log14:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask306-coefficients:min-fri-rate1over32:fri58-distinct-post-grinding20:binary-fri5-rounds-terminal512-degree15:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree1425:composition-degree-chunks3:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding24:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=28+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-six-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-prefix64-health-check-exact-replay:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
 
 const CA_PROOF_MAGIC_V1: [u8; 4] = *b"X5C1";
 const CA_INNER_PROOF_MAGIC_V1: [u8; 4] = *b"X5C2";
@@ -375,7 +375,8 @@ pub(crate) struct ZkX509CaAccumulatorResourceEnvelopeV1 {
     pub(crate) maximum_masked_trace_degree: usize,
     /// FRI degree cap implied by the local domain and governed rate.
     pub(crate) fri_degree_cap: usize,
-    /// Maximum degree-three quotient before coefficient chunking.
+    /// Maximum fixed-selector-aware cubic quotient before coefficient
+    /// chunking.
     pub(crate) maximum_quotient_degree: usize,
     /// Minimum safe local LDE rows before power-of-two rounding.
     pub(crate) minimum_safe_lde_rows: usize,
@@ -745,8 +746,21 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
         .checked_div(request.fri_rate_denominator)
         .and_then(|capacity| capacity.checked_sub(1))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
+    // The two dynamic SHA source factors are affine in masked trace values,
+    // but each is selected by one verifier-fixed polynomial of degree at most
+    // `trace_rows - 1`. Account for both selectors explicitly: treating fixed
+    // columns as degree-zero symbols is valid for the symbolic AIR inventory,
+    // not for the actual univariate quotient committed by FRI.
+    let fixed_selector_degree = trace_rows
+        .checked_sub(1)
+        .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let maximum_quotient_degree = usize::from(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1)
         .checked_mul(maximum_masked_trace_degree)
+        .and_then(|degree| {
+            fixed_selector_degree
+                .checked_mul(2)
+                .and_then(|selectors| degree.checked_add(selectors))
+        })
         .and_then(|degree| degree.checked_sub(trace_rows))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let quotient_chunk_capacity = fri_degree_cap
@@ -1415,17 +1429,16 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1(
     for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
         residues.push(aux[source_aux_cell_v1(0, lane)].sub(active));
     }
+    // State zero is already constrained to `active`. Ungated recurrences
+    // therefore force every later state to zero on inactive rows while
+    // avoiding a redundant selector factor in the committed quotient.
     for step in 0..SOURCE_PAIR_STEPS_V1 {
         for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
             let first = source_factor_v1(base, fixed, 2 * step, lane, sha_challenges)?;
             let second = source_factor_v1(base, fixed, 2 * step + 1, lane, sha_challenges)?;
             residues.push(
-                aux[source_aux_cell_v1(step + 1, lane)].sub(
-                    active
-                        .mul(aux[source_aux_cell_v1(step, lane)])
-                        .mul(first)
-                        .mul(second),
-                ),
+                aux[source_aux_cell_v1(step + 1, lane)]
+                    .sub(aux[source_aux_cell_v1(step, lane)].mul(first).mul(second)),
             );
         }
     }
@@ -1437,12 +1450,8 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1(
             let first = digest_factor_v1(base, fixed, 2 * step, lane, sha_challenges)?;
             let second = digest_factor_v1(base, fixed, 2 * step + 1, lane, sha_challenges)?;
             residues.push(
-                aux[digest_aux_cell_v1(step + 1, lane)].sub(
-                    active
-                        .mul(aux[digest_aux_cell_v1(step, lane)])
-                        .mul(first)
-                        .mul(second),
-                ),
+                aux[digest_aux_cell_v1(step + 1, lane)]
+                    .sub(aux[digest_aux_cell_v1(step, lane)].mul(first).mul(second)),
             );
         }
     }
@@ -1753,16 +1762,22 @@ fn source_word_v1(
     }
     let mut value = fixed[FIX_SOURCE_CONSTANTS_START + word];
     for byte in 0..32 {
-        value = value.add(fixed[FIX_NODE].mul(dynamic_byte_contribution_v1(
+        // `source_factor_v1` already selects this complete word with
+        // `FIX_NODE`. Multiplying every dynamic byte by the same selector here
+        // would rely on `node^2 = node` only on the native domain and raise
+        // the actual univariate quotient above the three-chunk FRI capacity.
+        // The unselected leaf/I/O/padding value is immaterial because the
+        // outer selector and zero-initialized product recurrence reject it.
+        value = value.add(dynamic_byte_contribution_v1(
             word,
             NODE_LEFT_DYNAMIC_OFFSET_V1 + byte,
             base[CA_LEFT_START + byte],
-        )));
-        value = value.add(fixed[FIX_NODE].mul(dynamic_byte_contribution_v1(
+        ));
+        value = value.add(dynamic_byte_contribution_v1(
             word,
             NODE_RIGHT_DYNAMIC_OFFSET_V1 + byte,
             base[CA_RIGHT_START + byte],
-        )));
+        ));
     }
     Ok(value)
 }
@@ -3369,13 +3384,13 @@ mod tests {
     }
 
     fn credential_main_pre_aux_v1() -> ZkX509CredentialMainPreAuxV1 {
-        ZkX509CredentialMainPreAuxV1 {
-            consensus_context_digest: [0x91; 32],
-            main_profile_digest: [0x92; 32],
-            main_base_roots: core::array::from_fn(|index| {
+        ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [0x91; 32],
+            [0x92; 32],
+            core::array::from_fn(|index| {
                 [u8::try_from(0xa0 + index).expect("fixture root byte"); 32]
             }),
-        }
+        )
     }
 
     fn row(columns: &[Vec<F>], index: usize) -> Vec<F> {
@@ -3536,12 +3551,9 @@ mod tests {
 
     #[test]
     fn halkindi_parameterized_resource_envelope_is_exact_and_common_lifting_fails() {
-        for (reduced_air_degree, deep_queries, fri_queries, expected_mask_coefficients) in [
-            (2, 0, 60, 300),
-            (2, 1, 60, 316),
-            (2, 2, 60, 332),
-            (2, 1, 108, 556),
-        ] {
+        for (reduced_air_degree, deep_queries, fri_queries, expected_mask_coefficients) in
+            [(2, 0, 60, 300), (2, 1, 60, 316), (2, 2, 60, 332)]
+        {
             let request =
                 ca_accumulator_resource_request_v1(reduced_air_degree, deep_queries, fri_queries)
                     .expect("bounded cubic-AIR resource request");
@@ -3564,6 +3576,7 @@ mod tests {
             assert_eq!(
                 envelope.maximum_quotient_degree,
                 usize::from(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1) * expected_masked_degree
+                    + 2 * (ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1 - 1)
                     - ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1
             );
             assert!(
@@ -3588,6 +3601,15 @@ mod tests {
                     * FIELD_BYTES_V1
             );
         }
+        let oversized_query_request =
+            ca_accumulator_resource_request_v1(2, 1, 108).expect("arithmetic high-query request");
+        assert_eq!(oversized_query_request.mask_degree + 1, 556);
+        assert_eq!(oversized_query_request.lde_log2, 15);
+        assert_eq!(
+            checked_ca_accumulator_resource_envelope_v1(oversized_query_request),
+            Err(ZkX509AccumulatorStarkErrorV1::Resource),
+            "the materialized log15 LDE must not bypass the 128 MiB adapter cap"
+        );
 
         // The compiled AIR is cubic, hence Haböck--Al Kindi uses d=d_AIR-1=2.
         // The outer theorem still chooses the exact DEEP and FRI counts.
@@ -3601,7 +3623,7 @@ mod tests {
         assert_eq!(envelope.mask_coefficients, 306);
         assert_eq!(envelope.maximum_masked_trace_degree, 433);
         assert_eq!(envelope.fri_degree_cap, 511);
-        assert_eq!(envelope.maximum_quotient_degree, 1_171);
+        assert_eq!(envelope.maximum_quotient_degree, 1_425);
         assert_eq!(envelope.minimum_safe_lde_rows, 13_888);
         assert_eq!(envelope.total_local_lde_bytes, 118_358_016);
         assert_eq!(envelope.encrypted_scratch_bytes, 120_207_360);
@@ -3878,6 +3900,31 @@ mod tests {
         changed[FIX_CALL] = changed[FIX_CALL].add(F::ONE);
         assert!(rejects(&base, &next, &aux, &next_aux, &changed, public));
 
+        let padding_index = ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1;
+        let padding_base = row(&material.base_columns, padding_index);
+        let padding_next = row(&material.base_columns, padding_index + 1);
+        let mut padding_aux = row(&material.aux_columns, padding_index);
+        let padding_next_aux = row(&material.aux_columns, padding_index + 1);
+        let padding_fixed = row(&material.fixed_columns, padding_index);
+        padding_aux[source_aux_cell_v1(1, 0)] = F::ONE;
+        assert!(
+            evaluate_ca_accumulator_stark_residues_v1(
+                public,
+                &padding_base,
+                &padding_next,
+                &padding_aux,
+                &padding_next_aux,
+                &padding_fixed,
+                sha_challenges,
+                io_challenges,
+                terminal_claims,
+            )
+            .expect("padding mutation residues")
+            .iter()
+            .any(|residue| *residue != F::ZERO),
+            "ungated product recurrences must still force every inactive state to zero"
+        );
+
         let mut changed = public;
         changed.governed_root[0] = changed.governed_root[0].add(F::ONE);
         let last = 12;
@@ -4093,7 +4140,14 @@ mod tests {
         assert_eq!(first_io[FIX_IO_OFFSET], F::ZERO);
         assert_eq!(last_io[FIX_IO_LAST], F::ONE);
         assert_eq!(last_io[FIX_IO_OFFSET], F(90));
-        assert!(padding.iter().all(|value| *value == F::ZERO));
+        assert_eq!(padding[FIX_PADDING], F::ONE);
+        assert!(
+            padding
+                .iter()
+                .enumerate()
+                .all(|(column, value)| column == FIX_PADDING || *value == F::ZERO),
+            "the sole padding selector must remain one while every other fixed cell is zero"
+        );
         assert_eq!(LEAF_DYNAMIC_OFFSET_V1, 65);
         assert_eq!(NODE_LEFT_DYNAMIC_OFFSET_V1, 75);
         assert_eq!(NODE_RIGHT_DYNAMIC_OFFSET_V1, 115);
@@ -4309,21 +4363,21 @@ mod tests {
         let canonical = credential_main_pre_aux_v1();
 
         let mut wrong_consensus = canonical;
-        wrong_consensus.consensus_context_digest[0] ^= 1;
+        wrong_consensus.consensus_context_digest_mut_for_test_v1()[0] ^= 1;
         assert!(
             verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, wrong_consensus, proof,)
                 .is_err()
         );
 
         let mut wrong_profile = canonical;
-        wrong_profile.main_profile_digest[31] ^= 1;
+        wrong_profile.main_profile_digest_mut_for_test_v1()[31] ^= 1;
         assert!(
             verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, wrong_profile, proof,)
                 .is_err()
         );
 
         let mut wrong_roots = canonical;
-        wrong_roots.main_base_roots.swap(1, 4);
+        wrong_roots.main_base_roots_mut_for_test_v1().swap(1, 4);
         assert!(
             verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, wrong_roots, proof,).is_err()
         );

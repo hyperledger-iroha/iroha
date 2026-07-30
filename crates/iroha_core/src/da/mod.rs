@@ -39,6 +39,7 @@ use iroha_data_model::{
 pub use proofs::{DaProofVerificationError, build_da_commitment_proof, verify_da_commitment_proof};
 pub use replay_cache::{
     LaneEpoch, ReplayCache, ReplayCacheConfig, ReplayFingerprint, ReplayInsertOutcome, ReplayKey,
+    ReplayPrimeError,
 };
 pub use shard_cursor::{
     DaShardCursor, DaShardCursorError, DaShardCursorIndex, DaShardCursorJournal, LaneShardCursor,

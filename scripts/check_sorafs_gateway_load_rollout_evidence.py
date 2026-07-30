@@ -79,16 +79,23 @@ from sorafs_response_args import (  # noqa: E402
 )
 
 
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    bind_lane_summary_to_topology,
+)
+
 SUMMARY_SCHEMA = "sorafs.gateway_load.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
-DEFAULT_MIN_STAGING_DURATION_SECS = 3_600
+DEFAULT_MIN_STAGING_DURATION_SECS = 86_400
 DEFAULT_MIN_STREAMS = 1_000
+DEFAULT_MIN_PROVIDER_COUNT = 2
 DEFAULT_MIN_SUCCESS_RATE_BPS = 9_900
 MAX_BASIS_POINTS = 10_000
 MAX_SUCCESS_RATE_BPS = MAX_BASIS_POINTS
 MAX_ERROR_RATE_BPS = MAX_BASIS_POINTS
 DEFAULT_MAX_ERROR_RATE_BPS = 100
+REQUIRED_CORRUPTION_INJECTION_BPS = 100
 DEFAULT_MAX_P95_LATENCY_MS = 1_500
 DEFAULT_MAX_P99_LATENCY_MS = 3_000
 HEX64_LEN = 64
@@ -132,11 +139,39 @@ STREAM_NAME_ERROR = (
 PROVIDER_NAME_ERROR = (
     "providers[].name must match reviewed `gateway-load-provider-*` label"
 )
-CACHE_STATE_ERROR = "cache_state.mode must be a reviewed cache-state value"
-REQUIRED_CACHE_STATES = (
-    "cold-cache",
-    "warm-cache",
-    "mixed-cache",
+REQUIRED_CACHE_COVERAGE_FIELDS = frozenset(
+    (
+        "cold_cache_exercised",
+        "warm_cache_exercised",
+        "mixed_cache_exercised",
+    )
+)
+REQUIRED_LOAD_CONDITION_FIELDS = frozenset(
+    (
+        "corruption_injection_bps",
+        "revocation_exercised",
+        "malformed_flood_exercised",
+        "denylist_pressure_exercised",
+        "rate_limit_pressure_exercised",
+        "failover_exercised",
+    )
+)
+REMOVED_STAGING_LOAD_FIELDS = frozenset(
+    (
+        "cache_state",
+        "cache_states",
+        "cache_mode",
+        "cache_modes",
+        "concurrent_streams",
+        "peak_streams",
+        "corruption_bps",
+        "corruption_rate_bps",
+        "revocation",
+        "malformed_flood",
+        "denylist_pressure",
+        "rate_limit_pressure",
+        "failover",
+    )
 )
 FORBIDDEN_STAGING_METADATA_MARKERS = frozenset(
     (
@@ -261,12 +296,14 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "policy_digest_hex",
         "gateway_version",
         "hardware_profile",
-        "cache_state",
+        "cache_coverage",
         "duration_seconds",
         "stream_count",
         "streams",
+        "peak_concurrent_range_streams",
         "provider_count",
         "providers",
+        "load_conditions",
         "success_rate_bps",
         "error_rate_bps",
         "p95_latency_ms",
@@ -332,11 +369,55 @@ def validate_threshold_options(args: argparse.Namespace) -> list[str]:
     """Validate checker threshold options before evidence evaluation."""
 
     errors: list[str] = []
+    if args.min_staging_duration_secs < DEFAULT_MIN_STAGING_DURATION_SECS:
+        errors.append(
+            "--min-staging-duration-secs must be >= "
+            f"{DEFAULT_MIN_STAGING_DURATION_SECS}"
+        )
+    if args.min_streams < DEFAULT_MIN_STREAMS:
+        errors.append(f"--min-streams must be >= {DEFAULT_MIN_STREAMS}")
     if args.min_success_rate_bps > MAX_SUCCESS_RATE_BPS:
         errors.append(f"--min-success-rate-bps must be <= {MAX_SUCCESS_RATE_BPS}")
     if args.max_error_rate_bps > MAX_ERROR_RATE_BPS:
         errors.append(f"--max-error-rate-bps must be <= {MAX_ERROR_RATE_BPS}")
     return errors
+
+
+def require_exact_fields(
+    payload: dict[str, Any],
+    expected: tuple[str, ...] | frozenset[str],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Reject missing and unknown fields in a schema-closed object."""
+
+    expected_set = frozenset(expected)
+    actual = frozenset(payload)
+    missing = sorted(expected_set - actual)
+    unknown = sorted(actual - expected_set)
+    if missing:
+        errors.append(f"{path} is missing required fields: {', '.join(missing)}")
+    if unknown:
+        errors.append(f"{path} contains unknown fields: {', '.join(unknown)}")
+
+
+def reject_removed_staging_load_fields(
+    value: Any,
+    errors: list[str],
+    path: str = "",
+) -> None:
+    """Reject retired staging-load aliases at every nesting depth."""
+
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_path = key if not path else f"{path}.{key}"
+            if key in REMOVED_STAGING_LOAD_FIELDS:
+                errors.append(f"{key_path} is a removed staging-load V1 field")
+            reject_removed_staging_load_fields(nested, errors, key_path)
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            reject_removed_staging_load_fields(nested, errors, f"{path}[{index}]")
 
 
 def require_only_required_values(
@@ -372,7 +453,22 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "suite_report_digest_hex",
     "staging_report_digest_hex",
+    "fixture_bundle_digest_hex",
     "policy_digest_hex",
+    "gateway_version",
+    "hardware_profile",
+    "cache_coverage",
+    "duration_seconds",
+    "stream_count",
+    "streams",
+    "peak_concurrent_range_streams",
+    "provider_count",
+    "providers",
+    "load_conditions",
+    "success_rate_bps",
+    "error_rate_bps",
+    "p95_latency_ms",
+    "p99_latency_ms",
     "metric_count",
     "metrics",
 )
@@ -420,6 +516,12 @@ def require_hardware_profile(payload: dict[str, Any], errors: list[str]) -> str:
         require_object(raw_record, "hardware_profile", errors)
         return ""
     record = require_object(raw_record, "hardware_profile", errors)
+    require_exact_fields(
+        record,
+        frozenset(("name",)),
+        errors,
+        path="hardware_profile",
+    )
     return require_staging_metadata_label(
         record,
         "name",
@@ -430,19 +532,52 @@ def require_hardware_profile(payload: dict[str, Any], errors: list[str]) -> str:
     )
 
 
-def require_cache_state(payload: dict[str, Any], errors: list[str]) -> str:
-    """Require a reviewed cache-state mode for live staging load evidence."""
+def require_cache_coverage(payload: dict[str, Any], errors: list[str]) -> None:
+    """Require cold, warm, and mixed cache coverage in one staging context."""
 
-    raw_record = payload.get("cache_state")
+    raw_record = payload.get("cache_coverage")
     if not isinstance(raw_record, dict):
-        require_object(raw_record, "cache_state", errors)
-        return ""
-    record = require_object(raw_record, "cache_state", errors)
-    mode = require_string(record, "mode", errors)
-    if mode and mode not in REQUIRED_CACHE_STATES:
-        errors.append(CACHE_STATE_ERROR)
-        return ""
-    return mode
+        require_object(raw_record, "cache_coverage", errors)
+        return
+    record = require_object(raw_record, "cache_coverage", errors)
+    require_exact_fields(
+        record,
+        REQUIRED_CACHE_COVERAGE_FIELDS,
+        errors,
+        path="cache_coverage",
+    )
+    for field in sorted(REQUIRED_CACHE_COVERAGE_FIELDS):
+        require_bool_true(record, field, errors)
+
+
+def require_load_conditions(payload: dict[str, Any], errors: list[str]) -> None:
+    """Require the exact V1 corruption and pressure/failover load conditions."""
+
+    raw_record = payload.get("load_conditions")
+    if not isinstance(raw_record, dict):
+        require_object(raw_record, "load_conditions", errors)
+        return
+    record = require_object(raw_record, "load_conditions", errors)
+    require_exact_fields(
+        record,
+        REQUIRED_LOAD_CONDITION_FIELDS,
+        errors,
+        path="load_conditions",
+    )
+    corruption_bps = record.get("corruption_injection_bps")
+    if (
+        not isinstance(corruption_bps, int)
+        or isinstance(corruption_bps, bool)
+        or corruption_bps != REQUIRED_CORRUPTION_INJECTION_BPS
+    ):
+        errors.append(
+            "corruption_injection_bps must be exactly "
+            f"{REQUIRED_CORRUPTION_INJECTION_BPS}"
+        )
+    for field in sorted(
+        REQUIRED_LOAD_CONDITION_FIELDS - frozenset(("corruption_injection_bps",))
+    ):
+        require_bool_true(record, field, errors)
 
 
 def validate_local_conformance(payload: dict[str, Any], errors: list[str]) -> None:
@@ -483,9 +618,14 @@ def validate_staging_load(
     require_policy_digest(payload, errors)
     require_gateway_version(payload, errors)
     require_hardware_profile(payload, errors)
-    require_cache_state(payload, errors)
-    require_minimum_int(payload, "duration_seconds", options.min_staging_duration_secs, errors)
-    require_minimum_int(payload, "stream_count", options.min_streams, errors)
+    require_cache_coverage(payload, errors)
+    require_minimum_int(
+        payload,
+        "duration_seconds",
+        max(options.min_staging_duration_secs, DEFAULT_MIN_STAGING_DURATION_SECS),
+        errors,
+    )
+    require_positive_int(payload, "stream_count", errors)
     require_string_inventory_count_match(
         payload,
         "streams",
@@ -495,6 +635,12 @@ def validate_staging_load(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "streams", errors):
+        require_exact_fields(
+            record,
+            frozenset(("name",)),
+            errors,
+            path="streams[]",
+        )
         require_staging_metadata_label(
             record,
             "name",
@@ -503,7 +649,30 @@ def validate_staging_load(
             pattern=STREAM_NAME_PATTERN,
             pattern_error=STREAM_NAME_ERROR,
         )
-    require_positive_int(payload, "provider_count", errors)
+    require_minimum_int(
+        payload,
+        "peak_concurrent_range_streams",
+        max(options.min_streams, DEFAULT_MIN_STREAMS),
+        errors,
+    )
+    stream_count = payload.get("stream_count")
+    peak_concurrent_range_streams = payload.get("peak_concurrent_range_streams")
+    if (
+        isinstance(stream_count, int)
+        and not isinstance(stream_count, bool)
+        and isinstance(peak_concurrent_range_streams, int)
+        and not isinstance(peak_concurrent_range_streams, bool)
+        and peak_concurrent_range_streams > stream_count
+    ):
+        errors.append(
+            "peak_concurrent_range_streams must be <= unique streams count"
+        )
+    require_minimum_int(
+        payload,
+        "provider_count",
+        DEFAULT_MIN_PROVIDER_COUNT,
+        errors,
+    )
     require_string_inventory_count_match(
         payload,
         "providers",
@@ -513,6 +682,12 @@ def validate_staging_load(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "providers", errors):
+        require_exact_fields(
+            record,
+            frozenset(("name",)),
+            errors,
+            path="providers[]",
+        )
         require_staging_metadata_label(
             record,
             "name",
@@ -520,7 +695,8 @@ def validate_staging_load(
             path="providers[].name",
             pattern=PROVIDER_NAME_PATTERN,
             pattern_error=PROVIDER_NAME_ERROR,
-    )
+        )
+    require_load_conditions(payload, errors)
     require_minimum_int(payload, "success_rate_bps", options.min_success_rate_bps, errors)
     require_maximum_int(payload, "success_rate_bps", MAX_SUCCESS_RATE_BPS, errors)
     require_maximum_int(payload, "error_rate_bps", MAX_ERROR_RATE_BPS, errors)
@@ -549,17 +725,10 @@ def validate_telemetry_slo(payload: dict[str, Any], errors: list[str]) -> None:
 def validate_transport_scope(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "staging_report_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "transport_scope_reviewed", errors)
-    committed = payload.get("http3_endpoint_committed")
-    if committed is True:
-        require_bool_true(payload, "http3_config_surface_documented", errors)
-        require_bool_true(payload, "http3_scenarios_passed", errors)
-        require_false(payload, "http3_scenarios_deferred", errors)
-    elif committed is False:
-        require_bool_true(payload, "http3_scenarios_deferred", errors)
-        require_false(payload, "http3_config_surface_documented", errors)
-        require_false(payload, "http3_scenarios_passed", errors)
-    else:
-        errors.append("http3_endpoint_committed must be a boolean")
+    require_false(payload, "http3_endpoint_committed", errors)
+    require_bool_true(payload, "http3_scenarios_deferred", errors)
+    require_false(payload, "http3_config_surface_documented", errors)
+    require_false(payload, "http3_scenarios_passed", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -581,7 +750,16 @@ def validate_kind_specific(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
+    require_exact_fields(
+        payload,
+        EVIDENCE_REQUIRED_FIELDS[kind.name],
+        errors,
+        path=f"{kind.name} payload",
+    )
+    if kind.name == "staging_load":
+        reject_removed_staging_load_fields(payload, errors)
     require_passed_status(payload, errors)
+    require_string_equal(payload, "environment", "production", errors)
     require_recent_timestamp(
         payload,
         "generated_at_unix",
@@ -807,6 +985,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = EvidenceArgumentParser(
         description="Validate SoraFS SF-5a gateway load rollout evidence artifacts."
     )
+    add_topology_qualification_argument(parser)
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -909,6 +1088,12 @@ def main(argv: list[str] | None = None) -> int:
     summary, errors = build_summary(
         args.evidence_dir, args.evidence, required_kinds, options, args.summary_out
     )
+    errors.extend(
+        bind_lane_summary_to_topology(
+            summary, args.topology_qualification_summary
+        )
+    )
+    summary["status"] = evidence_gate_status(errors)
     _rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary
     )

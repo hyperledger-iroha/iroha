@@ -423,7 +423,7 @@ fn provider_advert_cli_rejects_noncanonical_hex_before_outputs() {
             "lowercase even-length hex",
         ),
         (
-            "--endpoint-meta=tls:ABCDEF".to_string(),
+            "--endpoint-meta=tls_fingerprint:ABCDEF".to_string(),
             "lowercase even-length hex",
         ),
     ] {
@@ -432,6 +432,63 @@ fn provider_advert_cli_rejects_noncanonical_hex_before_outputs() {
         let (mut args, payload_path, report_path) =
             prepare_args(&temp, &fixture, "provider.signing-payload");
         args.push(bad_arg.clone());
+
+        let output = cargo_bin_cmd!("sorafs_provider_advert")
+            .args(args)
+            .output()
+            .expect("run provider advert builder");
+
+        assert!(
+            !output.status.success(),
+            "provider advert unexpectedly succeeded for {bad_arg}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected {expected:?} for {bad_arg}, got: {stderr}"
+        );
+        assert!(!payload_path.exists());
+        assert!(!report_path.exists());
+    }
+}
+
+#[test]
+fn provider_advert_cli_rejects_v1_selector_aliases_before_outputs() {
+    for (bad_arg, expected) in [
+        ("--profile-id=1", "unknown option"),
+        ("--availability=HOT", "unknown availability tier"),
+        ("--capability=torii-gateway", "unknown capability type"),
+        ("--capability=quic-noise", "unknown capability type"),
+        ("--capability=potr_mldsa:11", "unknown capability type"),
+        ("--capability=soranet:guard", "use --soranet-pq"),
+        ("--soranet-pq=stage-a", "expected exactly"),
+        (
+            "--range-capability=max_chunk_span=16,min_granularity=4",
+            "unknown range-capability field",
+        ),
+        (
+            "--stream-budget=max-in-flight=2,max_bytes_per_sec=1024",
+            "unknown stream-budget field",
+        ),
+        (
+            "--transport-hint=torii_http:0",
+            "unknown transport protocol",
+        ),
+        (
+            "--endpoint=noritorpc:storage.example",
+            "unknown endpoint kind",
+        ),
+        ("--endpoint-meta=tls:11", "unknown endpoint metadata key"),
+        (
+            "--allow-unknown-capabilities=yes",
+            "expected boolean true|false",
+        ),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let fixture = signing_fixture(&temp, 0x33, "provider");
+        let (mut args, payload_path, report_path) =
+            prepare_args(&temp, &fixture, "provider.signing-payload");
+        args.push(bad_arg.to_string());
 
         let output = cargo_bin_cmd!("sorafs_provider_advert")
             .args(args)

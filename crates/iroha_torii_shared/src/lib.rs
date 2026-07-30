@@ -19,6 +19,8 @@ pub mod offline_api;
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
+/// Canonical wire types for the authenticated SoraFS hedging and billing API.
+pub mod sorafs_hedging_billing_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 

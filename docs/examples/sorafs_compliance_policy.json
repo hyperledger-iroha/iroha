@@ -4,7 +4,7 @@
     "weight_scale": 10000,
     "telemetry_grace_secs": 900
   },
-  "transport_policy": "soranet_first",
+  "transport_policy": "soranet-first",
   "anonymity_policy": "anon-guard-pq",
   "compliance": {
     "operator_jurisdictions": ["US", "JP"],

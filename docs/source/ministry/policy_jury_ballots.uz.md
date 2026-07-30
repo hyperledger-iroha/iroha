@@ -27,8 +27,8 @@ butun ovoz berish jarayonini qamrab oladi:
 2. **`PolicyJuryBallotCommitV1`** – ovoz berishdan oldin yozilgan muhrlangan majburiyat
    oshkor qilinadi.  U davra/taklif/hakamlar identifikatorlarini saqlaydi
    Blake2b‑256 hakamlar a'zosi identifikatori dayjesti + ovoz berish tanlovi + noaniq kortej, suratga olish
-   vaqt tamg'asi va ovoz berish rejimi (`plaintext` yoki `zk-envelope`
-   `zk-ballot` xususiyati faol).  `PolicyJuryBallotCommitV1::verify_reveal`
+   vaqt tamg'asi va ovoz berish rejimi (`plaintext` yoki `zk-envelope`).
+   `PolicyJuryBallotCommitV1::verify_reveal`
    saqlangan dayjest ochilgan foydali yuk bilan mos kelishini ta'minlaydi.
 3. **`PolicyJuryBallotRevealV1`** – o'z ichiga olgan ommaviy oshkora ob'ekt
    ovoz berish tanlovi, bajarilish vaqtida foydalanilmagan vaqt va ixtiyoriy ZK isboti URI.
@@ -56,7 +56,7 @@ oshkor qilish.
 - Oshkora bosqichida hakamlar hay'ati `PolicyJuryBallotRevealV1` chiqaradi.  Operatorlar
   oldin foydali yukni `PolicyJuryBallotCommitV1::verify_reveal` ga boqing
   ovoz berishni qabul qilish, oshkor qilish almashtirilmasligi yoki o'zgartirilmasligini ta'minlash.
-- `zk-ballot` funksiyasi yoqilganda, hakamlar hay'ati deterministik ma'lumotlarni biriktirishi mumkin.
+- V1 `zk-envelope` byulletenlarida hakamlar hay'ati deterministik
   dalil URI'lar (masalan, `sorafs://proofs/pj-2026-02/juror-5`) shuning uchun quyi oqim
   auditorlar tomonidan havola qilingan nol ma'lumotli guvohlar to'plamini olishlari mumkin
   majburiyat.Barcha uchta tuzilma `Encode`, `Decode` va `IntoSchema` ni hosil qiladi, ya'ni ular

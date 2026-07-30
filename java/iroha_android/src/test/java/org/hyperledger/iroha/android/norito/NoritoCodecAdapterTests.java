@@ -570,9 +570,7 @@ public final class NoritoCodecAdapterTests {
     final NoritoDecoder decoder = canonicalDecoder(encodedSigned);
     readField(decoder, "signed.signature");
     readField(decoder, "signed.payload");
-    final byte[] attachmentsField = readField(decoder, "signed.attachments");
     final byte[] multisigField = readField(decoder, "signed.multisig_signatures");
-    assertOptionPayloadEmpty(attachmentsField, "signed.attachments");
     final byte[] multisigPayload =
         decodeOptionPayload(multisigField, "signed.multisig_signatures")
             .orElseThrow(() -> new IllegalStateException("multisig payload missing"));
@@ -867,6 +865,8 @@ public final class NoritoCodecAdapterTests {
     readField(decoder, "payload.nonce");
     readField(decoder, "payload.fee_payment");
     readField(decoder, "payload.metadata");
+    final byte[] attachmentsField = readField(decoder, "payload.attachments");
+    assertOptionPayloadEmpty(attachmentsField, "payload.attachments");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
 
     final NoritoDecoder execDecoder = canonicalDecoder(executableField);
@@ -909,6 +909,8 @@ public final class NoritoCodecAdapterTests {
     readField(decoder, "payload.nonce");
     readField(decoder, "payload.fee_payment");
     readField(decoder, "payload.metadata");
+    final byte[] attachmentsField = readField(decoder, "payload.attachments");
+    assertOptionPayloadEmpty(attachmentsField, "payload.attachments");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
 
     final NoritoDecoder execDecoder = canonicalDecoder(executableField);
@@ -993,6 +995,8 @@ public final class NoritoCodecAdapterTests {
     readField(payloadDecoder, "payload.nonce");
     readField(payloadDecoder, "payload.fee_payment");
     final byte[] metadataField = readField(payloadDecoder, "payload.metadata");
+    final byte[] attachmentsField = readField(payloadDecoder, "payload.attachments");
+    assertOptionPayloadEmpty(attachmentsField, "payload.attachments");
     assert payloadDecoder.remaining() == 0 : "Payload has trailing bytes";
 
     final NoritoDecoder metadataDecoder = canonicalDecoder(metadataField);

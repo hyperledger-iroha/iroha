@@ -4,6 +4,7 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 
 internal object ReplicationOrderInstructionValidation {
     private const val ORDER_ID_BYTES = 32
@@ -26,6 +27,17 @@ internal object ReplicationOrderInstructionValidation {
         require(value.any { it != '0' }) { "providerIdHex must not be the zero identifier" }
         return value
     }
+
+    fun requireDigest(value: String, fieldName: String): String {
+        require(canonicalOrderIdPattern.matches(value)) {
+            "$fieldName must contain exactly 64 lowercase hexadecimal characters"
+        }
+        require(value.any { it != '0' }) { "$fieldName must not be the zero digest" }
+        return value
+    }
+
+    fun requireProviderOwner(value: String): String =
+        requireCanonicalI105Address(value, "providerOwner")
 
     fun encodeOrderId(value: ByteArray): String {
         require(value.size == ORDER_ID_BYTES) {
@@ -58,6 +70,11 @@ internal object ReplicationOrderInstructionValidation {
 
     fun requireEpoch(value: Long, fieldName: String): Long {
         require(value >= 0) { "$fieldName must be non-negative" }
+        return value
+    }
+
+    fun requirePositiveRevision(value: Long, fieldName: String): Long {
+        require(value > 0) { "$fieldName must be greater than zero" }
         return value
     }
 

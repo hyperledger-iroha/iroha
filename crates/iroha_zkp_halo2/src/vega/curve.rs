@@ -1,6 +1,9 @@
 //! Canonical T256 group boundary for the pinned Vega profile.
 
-use core::{fmt, ops::Neg as _};
+use core::{
+    fmt,
+    ops::{Add, Neg as _, Sub},
+};
 
 use halo2curves::{
     Coordinates, CurveAffine, CurveExt,
@@ -196,18 +199,6 @@ impl VegaT256PointV1 {
         bool::from(self.0.is_identity())
     }
 
-    /// Add two T256 points.
-    #[must_use]
-    pub fn add(self, rhs: Self) -> Self {
-        Self(self.0 + rhs.0)
-    }
-
-    /// Subtract two T256 points.
-    #[must_use]
-    pub fn sub(self, rhs: Self) -> Self {
-        Self(self.0 - rhs.0)
-    }
-
     /// Negate a T256 point.
     #[must_use]
     pub fn negate(self) -> Self {
@@ -231,13 +222,29 @@ impl VegaT256PointV1 {
         let mut result = Self::identity();
         for byte in VEGA_T256_SCALAR_MODULUS_BE_V1 {
             for bit in (0..8).rev() {
-                result = result.add(result);
+                result = result + result;
                 if byte & (1 << bit) != 0 {
-                    result = result.add(self);
+                    result = result + self;
                 }
             }
         }
         result.is_identity()
+    }
+}
+
+impl Add for VegaT256PointV1 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub for VegaT256PointV1 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
     }
 }
 
@@ -340,12 +347,16 @@ mod tests {
                 .expect("non-identity"),
             decode_hex("00a37dc092877e239385cd8392ba2360ce1859a37f7a2b9c626b336608d2ce4cfe")
         );
-        assert!(generator.add(generator.negate()).is_identity());
+        assert!((generator + generator.negate()).is_identity());
+        assert_eq!(
+            generator.mul_scalar(VegaT256ScalarV1::from_u64(2)) - generator,
+            generator
+        );
 
         let mut q_minus_one = VEGA_T256_SCALAR_MODULUS_BE_V1;
         q_minus_one[31] -= 1;
         let minus_one = VegaT256ScalarV1::from_be_bytes_exact(q_minus_one).expect("q - 1 scalar");
-        assert!(generator.mul_scalar(minus_one).add(generator).is_identity());
+        assert!((generator.mul_scalar(minus_one) + generator).is_identity());
     }
 
     #[test]

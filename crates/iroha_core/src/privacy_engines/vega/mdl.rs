@@ -677,11 +677,13 @@ fn validate_signature(
 ) -> Result<VegaEcdsaWitnessV1, VegaMdlError> {
     let signature = Signature::from_slice(signature_bytes)
         .map_err(|_| VegaMdlError::InvalidSignatureEncoding { role })?;
-    let normalized = signature.normalize_s().unwrap_or(signature);
+    if signature.normalize_s().is_some() {
+        return Err(VegaMdlError::NonCanonicalHighSSignature { role });
+    }
     verifying_key
-        .verify_prehash(&message_digest, &normalized)
+        .verify_prehash(&message_digest, &signature)
         .map_err(|_| VegaMdlError::SignatureVerificationFailed { role })?;
-    let (r, s) = normalized.split_scalars();
+    let (r, s) = signature.split_scalars();
     let inverse = Option::<Scalar>::from(s.as_ref().invert())
         .ok_or(VegaMdlError::InvalidSignatureEncoding { role })?;
     Ok(VegaEcdsaWitnessV1 {
@@ -1105,9 +1107,11 @@ mod tests {
         let issuer_signature: Signature = issuer_signing_key
             .sign_prehash(&issuer_digest)
             .expect("issuer signature");
+        let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
         let device_signature: Signature = device_signing_key
             .sign_prehash(statement.device_authentication_digest.as_bytes())
             .expect("device signature");
+        let device_signature = device_signature.normalize_s().unwrap_or(device_signature);
         let witness = VegaMdlWitnessV1::new(
             sig_structure,
             mso_payload,
@@ -1357,6 +1361,38 @@ mod tests {
                 role: VegaSignatureRoleV1::Issuer
             })
         ));
+
+        for role in [VegaSignatureRoleV1::Issuer, VegaSignatureRoleV1::Device] {
+            let Fixture {
+                statement,
+                mut witness,
+            } = valid_fixture();
+            let signature_bytes = match role {
+                VegaSignatureRoleV1::Issuer => &mut witness.issuer_signature,
+                VegaSignatureRoleV1::Device => &mut witness.device_signature,
+            };
+            let low_s =
+                Signature::from_slice(&signature_bytes[..]).expect("canonical fixture signature");
+            assert!(
+                low_s.normalize_s().is_none(),
+                "fixture must use the sole canonical low-s representative"
+            );
+            let (r, s) = low_s.split_scalars();
+            let high_s = Signature::from_scalars(r.to_repr(), (-*s).to_repr())
+                .expect("high-s counterpart remains a valid scalar pair");
+            assert!(high_s.normalize_s().is_some());
+            **signature_bytes = high_s.to_bytes().into();
+            assert_eq!(
+                validate_mdl_witness(
+                    &statement,
+                    &binding(&statement),
+                    TRUSTED_TIMESTAMP_MS,
+                    witness,
+                )
+                .expect_err("malleable high-s representative"),
+                VegaMdlError::NonCanonicalHighSSignature { role }
+            );
+        }
 
         let Fixture {
             statement,

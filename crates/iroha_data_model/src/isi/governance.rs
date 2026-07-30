@@ -230,16 +230,14 @@ pub struct CastZkBallot {
 
 impl crate::seal::Instruction for CastZkBallot {}
 
-#[cfg(feature = "zk-ballot")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-/// Sketch of a ZK ballot proof envelope.
+/// Canonical V1 ZK ballot proof envelope.
 ///
 /// Opaque container for the ballot proof and minimal public context.
-/// Threaded under a feature for prototyping; not used by execution yet.
 pub struct BallotProof {
     /// Proof backend tag (e.g., "halo2/ipa" or "halo2/pasta/tiny-add").
     pub backend: iroha_schema::Ident,

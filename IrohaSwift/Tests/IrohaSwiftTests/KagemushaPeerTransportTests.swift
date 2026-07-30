@@ -187,13 +187,17 @@ final class KagemushaPeerTransportTests: XCTestCase {
         )
     }
 
-    func testTypedPaymentTextRoundTripIsCanonical() throws {
+    func testTypedAcknowledgementTextRoundTripIsCanonical() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
-        let payload = KagemushaPeerPayload.payment(payment)
+        let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
+            request: request,
+            payment: payment
+        )
+        let payload = KagemushaPeerPayload.acknowledgement(acknowledgement)
         let text = try KagemushaPeerTextCodec.encode(payload)
 
-        XCTAssertTrue(text.hasPrefix("PKK2P."))
+        XCTAssertTrue(text.hasPrefix("PKK2A."))
         XCTAssertFalse(text.contains("="))
         XCTAssertLessThanOrEqual(
             text.utf8.count,
@@ -203,7 +207,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
             try KagemushaPeerTextCodec.decode(
                 text,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
-                expectedKind: .payment
+                expectedKind: .acknowledgement
             ),
             payload
         )
@@ -218,6 +222,8 @@ final class KagemushaPeerTransportTests: XCTestCase {
     func testCanonicalPaymentFixtureUsesFirstReleaseABI21Envelope() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let verifiedRequest = try request.verified(atMilliseconds: 1_900_000_001_000)
+        let summary = try payment.recipientBundle.projectedSummary()
 
         let frame = try XCTUnwrap(noritoDecodeFrame(payment.recipientBundle.noritoArchive))
         XCTAssertEqual(
@@ -225,12 +231,60 @@ final class KagemushaPeerTransportTests: XCTestCase {
             noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.bundleWireNameV4)
         )
         XCTAssertEqual(KagemushaRecursiveSpend.wireVersionV4, 4)
+        XCTAssertEqual(payment.archive.count, 11_854)
+        XCTAssertEqual(
+            sha256Hex(payment.archive),
+            "22e6ecf3fb9260004d6e6776e7ecdda5b5188bc87ac4b1a55836d48a26476aba"
+        )
+        XCTAssertEqual(
+            verifiedRequest.digest.hexEncodedString(),
+            "e9aa5e352f5e14687adac62b40dbcfba2050463624ce3d21377e83fc3f34de08"
+        )
+        XCTAssertEqual(summary.assetDefinitionID, request.payload.assetDefinitionID)
+        XCTAssertEqual(summary.amount, request.payload.amount)
+        XCTAssertEqual(
+            summary.noteCommitment,
+            request.payload.recipientOutput.noteCommitment
+        )
+        XCTAssertEqual(summary.hopCount, 1)
+        XCTAssertEqual(summary.proofStepCount, 2)
+        XCTAssertEqual(summary.branchClaims.count, 1)
+        XCTAssertEqual(
+            summary.artifactBinding.generation,
+            "swift-kagemusha-abi21-fixture"
+        )
+        XCTAssertEqual(summary.artifactBinding.manifestSHA256, Data(repeating: 0x51, count: 32))
+        XCTAssertEqual(
+            summary.verifierKeyID,
+            try KagemushaRecursiveSpend.releaseQualifiedStepEqVerifierKeyIDV4(
+                manifestSHA256: Data(repeating: 0x51, count: 32)
+            )
+        )
+    }
+
+    func testGenuinePaymentExceedsDirectTextArchiveContract() throws {
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+
+        XCTAssertThrowsError(try KagemushaPeerTextCodec.encode(.payment(payment))) { error in
+            XCTAssertEqual(
+                error as? KagemushaPeerTransportError,
+                .archiveTooLarge(
+                    actual: 11_854,
+                    maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
+                )
+            )
+        }
     }
 
     func testUserPresentedBoundaryNormalizationIsNarrowAndExplicit() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
-        let payload = KagemushaPeerPayload.payment(
-            try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payload = KagemushaPeerPayload.acknowledgement(
+            try KagemushaPeerTransportTestFixtures.acknowledgement(
+                request: request,
+                payment: payment
+            )
         )
         let text = try KagemushaPeerTextCodec.encode(payload)
         let presented = " \t\r\n" + text + "\n\r\t "
@@ -263,8 +317,12 @@ final class KagemushaPeerTransportTests: XCTestCase {
 
     func testExpectedKindCannotBeSubstituted() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
-        let text = try KagemushaPeerTextCodec.encode(.payment(
-            KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let text = try KagemushaPeerTextCodec.encode(.acknowledgement(
+            KagemushaPeerTransportTestFixtures.acknowledgement(
+                request: request,
+                payment: payment
+            )
         ))
         XCTAssertThrowsError(
             try KagemushaPeerTextCodec.decode(
@@ -275,26 +333,30 @@ final class KagemushaPeerTransportTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaPeerTransportError,
-                .unexpectedKind(expected: .receiveRequest, actual: .payment)
+                .unexpectedKind(expected: .receiveRequest, actual: .acknowledgement)
             )
         }
     }
 
     func testTextDecoderRejectsAdversarialSyntaxAndArbitraryBytes() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
-        let text = try KagemushaPeerTextCodec.encode(.payment(
-            KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let text = try KagemushaPeerTextCodec.encode(.acknowledgement(
+            KagemushaPeerTransportTestFixtures.acknowledgement(
+                request: request,
+                payment: payment
+            )
         ))
-        let body = String(text.dropFirst("PKK2P.".count))
+        let body = String(text.dropFirst("PKK2A.".count))
         let cases = [
-            "", "PKK2P.", "pkk2p." + body, "PKK2P." + body + "=",
-            "PKK2P." + body + "+", "PKK2P." + body + "/",
-            "PKK2P." + body + ".", "PKK2P." + body + "~",
-            "PKK2P." + body + "?x=1", "PKK2P." + body + "#fragment",
+            "", "PKK2A.", "pkk2a." + body, "PKK2A." + body + "=",
+            "PKK2A." + body + "+", "PKK2A." + body + "/",
+            "PKK2A." + body + ".", "PKK2A." + body + "~",
+            "PKK2A." + body + "?x=1", "PKK2A." + body + "#fragment",
             "https://example.test/?payload=" + text,
             "prefix" + text,
-            "PKK2P.PKK2R." + body,
-            text + "\nPKK2A.AQ",
+            "PKK2A.PKK2R." + body,
+            text + "\nPKK2P.AQ",
             text + "\u{0000}", text + "\u{007F}", text + "\u{200D}",
             text + "😀",
         ]
@@ -306,7 +368,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         }
 
         for archive in [Data([0]), Data("not norito".utf8), Data(repeating: 0, count: 128)] {
-            let arbitrary = "PKK2P." + KagemushaPeerTextCodec.base64URLEncode(archive)
+            let arbitrary = "PKK2A." + KagemushaPeerTextCodec.base64URLEncode(archive)
             XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(
                 arbitrary,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
@@ -370,8 +432,12 @@ final class KagemushaPeerTransportTests: XCTestCase {
 
     func testUserPresentedInputIsBoundedBeforeBoundaryNormalization() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
-        let text = try KagemushaPeerTextCodec.encode(.payment(
-            KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let text = try KagemushaPeerTextCodec.encode(.acknowledgement(
+            KagemushaPeerTransportTestFixtures.acknowledgement(
+                request: request,
+                payment: payment
+            )
         ))
         let leadingBytes = KagemushaPeerTransportContract.maximumTextEnvelopeBytes
             - text.utf8.count + 1

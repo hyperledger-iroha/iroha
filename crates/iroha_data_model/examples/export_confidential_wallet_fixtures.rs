@@ -8,7 +8,7 @@
 
 use std::{error::Error, io, str::FromStr, time::Duration};
 
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     confidential::ConfidentialEncryptedPayload,
     isi::zk,
@@ -232,7 +232,10 @@ fn proof_attachment(backend: &str, vk_name: &str) -> Result<ProofAttachment, Box
     let ident = iroha_schema::Ident::from_str(backend)?;
     let proof = ProofBox::new(ident.clone(), vec![0xEE; 48]);
     let vk_ref = VerifyingKeyId::new(ident.clone(), vk_name.to_string());
-    Ok(ProofAttachment::new_ref(ident, proof, vk_ref))
+    let envelope_hash = Hash::new(&proof.bytes).into();
+    let mut attachment = ProofAttachment::new_ref(ident, proof, vk_ref);
+    attachment.envelope_hash = Some(envelope_hash);
+    Ok(attachment)
 }
 
 fn case_output(tx: &SignedTransaction) -> CaseOutput {
@@ -267,6 +270,17 @@ impl CaseOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proof_attachment_binds_the_exact_proof_bytes() {
+        let attachment =
+            proof_attachment("halo2/ipa", "vk_fixture").expect("build proof attachment");
+        assert_eq!(
+            attachment.envelope_hash,
+            Some(Hash::new(&attachment.proof.bytes).into())
+        );
+        assert_eq!(attachment.structural_error(), None);
+    }
 
     #[test]
     fn confidential_wallet_cases_use_checked_signing_and_verify() {

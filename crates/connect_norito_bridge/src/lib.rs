@@ -59,8 +59,11 @@ use iroha_data_model::{
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
-        PrivacyCapabilityArchiveValidationStatusV1, PrivacyCapabilitySnapshotV1,
-        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, validate_privacy_capability_archive_v1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
+        PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
+        PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
+        validate_privacy_exact12_fixture_bundle_v1,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -118,10 +121,19 @@ mod kagemusha_candidate_scenario;
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
+// Increment whenever any NativeSignerBridge JNI method descriptor changes.
+// The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
+// whose JVM calling conventions differ.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
-const KAGEMUSHA_CANONICAL_COMPLEX_STRUCTURAL_ALLOCATION_ALLOWANCE: usize = 1024 * 1024;
+/// Restores Norito's conservative 32-fold allocation ceiling for schemas with
+/// nested, semantically bounded collections.
+///
+/// Those cardinality checks run after reconstruction, so a flat allowance
+/// cannot safely replace the frame-scaled part of the generic decoder budget.
+const KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER: usize = 28;
 const KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH: usize = 64;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -416,6 +428,10 @@ pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
 }
 
+fn native_signer_jni_contract_revision() -> u32 {
+    NATIVE_SIGNER_JNI_CONTRACT_REVISION
+}
+
 fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     use AccountAddressError::*;
 
@@ -601,48 +617,68 @@ trait KagemushaSensitiveArchive {
     fn zeroize_sensitive(&mut self);
 }
 
-fn kagemusha_canonical_decode_limits_with_fixed_allowance(
+fn kagemusha_canonical_decode_limits_with_profile(
     encoded_len: usize,
+    extra_encoded_allocation_multiplier: usize,
     fixed_allocation_allowance: usize,
 ) -> norito::DecodeLimits {
     // Every variable-length member must be represented in the exact
     // uncompressed canonical frame. These limits therefore scale from the
-    // already capped archive instead of inheriting Norito's generic 32-fold
-    // allocation allowance. One fixed 64 KiB allowance covers decoded enum,
+    // already capped archive. One fixed 64 KiB allowance covers decoded enum,
     // collection, and string bookkeeping whose size does not shrink in direct
-    // proportion to a small payload. Proof-bearing schemas pass their
-    // protocol-derived fixed allowance instead of weakening this default for
-    // every native archive.
+    // proportion to a small payload. Fixed-depth proof schemas pass their
+    // protocol-derived allowance. Schemas with nested collections whose
+    // cardinality is validated after reconstruction restore Norito's generic
+    // 32-fold frame-scaled ceiling through their explicit profile.
     norito::DecodeLimits::new(
         encoded_len,
         encoded_len,
         encoded_len.saturating_mul(2),
         encoded_len
-            .saturating_mul(KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
+            .saturating_mul(
+                KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                    .saturating_add(extra_encoded_allocation_multiplier),
+            )
             .saturating_add(fixed_allocation_allowance),
         KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH,
     )
 }
 
 fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
-    kagemusha_canonical_decode_limits_with_fixed_allowance(
+    kagemusha_canonical_decode_limits_with_profile(
         encoded_len,
+        0,
         KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
     )
 }
 
 /// Exact allocation profile for one canonical mobile/native archive schema.
-///
 /// There is intentionally no blanket implementation: adding a decoded schema
 /// requires an explicit proof-depth or structural classification.
 trait KagemushaCanonicalDecodeSchema {
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize = 0;
     const FIXED_ALLOCATION_ALLOWANCE: usize;
+
+    fn preflight_canonical_archive(_bytes: &[u8]) -> Result<(), norito::Error> {
+        Ok(())
+    }
 }
 
 macro_rules! impl_kagemusha_canonical_decode_schema {
     ($allowance:expr; $($ty:ty),+ $(,)?) => {
         $(
             impl KagemushaCanonicalDecodeSchema for $ty {
+                const FIXED_ALLOCATION_ALLOWANCE: usize = $allowance;
+            }
+        )+
+    };
+}
+
+macro_rules! impl_kagemusha_canonical_decode_profile {
+    ($extra:expr, $allowance:expr; $($ty:ty),+ $(,)?) => {
+        $(
+            impl KagemushaCanonicalDecodeSchema for $ty {
+                const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize = $extra;
                 const FIXED_ALLOCATION_ALLOWANCE: usize = $allowance;
             }
         )+
@@ -663,6 +699,7 @@ impl_kagemusha_canonical_decode_schema!(
     KagemushaRequestAuthorizationPreparationV2,
     KagemushaRecursiveSpendRedemptionChangePrepareResultV4,
     KagemushaRecursiveSpendPeerSplitChangePrepareResultV4,
+    KagemushaTopUpShieldBuildRequestV4,
     iroha_data_model::offline::KagemushaRecipientOutputDerivationRequestV2,
     iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2,
     iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
@@ -676,16 +713,13 @@ impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
     iroha_torii_shared::offline_api::OfflineActiveTransferVerifier,
     iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet,
-    iroha_torii_shared::offline_api::OfflineOperationStatus,
     iroha_torii_shared::offline_api::OfflineReadiness,
-    iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
-    iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
 );
 
-impl_kagemusha_canonical_decode_schema!(
-    KAGEMUSHA_CANONICAL_COMPLEX_STRUCTURAL_ALLOCATION_ALLOWANCE;
+impl_kagemusha_canonical_decode_profile!(
+    KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
+    KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE;
     KagemushaRecursiveSpendInitLocalRequestV4,
-    KagemushaTopUpShieldBuildRequestV4,
     iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
     iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
     iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4,
@@ -695,6 +729,9 @@ impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
     iroha_data_model::offline::KagemushaTopUpFinalityProofV2,
     iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+    iroha_torii_shared::offline_api::OfflineOperationStatus,
+    iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
+    iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
 );
 
 impl_kagemusha_canonical_decode_schema!(
@@ -736,19 +773,48 @@ impl_kagemusha_canonical_decode_schema!(
     KagemushaRecursiveSpendVerifyLocalRequestV4,
 );
 
-impl_kagemusha_canonical_decode_schema!(
-    iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
-    iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
-    iroha_data_model::offline::KagemushaRecursiveSpendRedeemUnsignedV4,
-);
+impl KagemushaCanonicalDecodeSchema
+    for iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4
+{
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+    const FIXED_ALLOCATION_ALLOWANCE: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
 
-impl_kagemusha_canonical_decode_schema!(
-    iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
-    iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
-);
+    fn preflight_canonical_archive(bytes: &[u8]) -> Result<(), norito::Error> {
+        iroha_data_model::offline::preflight_kagemusha_redeem_request_archive_v4(bytes)
+    }
+}
 
-fn decode_canonical_kagemusha_archive_with_cleanup_and_fixed_allowance<T, F>(
+impl KagemushaCanonicalDecodeSchema
+    for iroha_data_model::offline::KagemushaRecursiveSpendRedeemUnsignedV4
+{
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+    const FIXED_ALLOCATION_ALLOWANCE: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+
+    fn preflight_canonical_archive(bytes: &[u8]) -> Result<(), norito::Error> {
+        iroha_data_model::offline::preflight_kagemusha_redeem_unsigned_archive_v4(bytes)
+    }
+}
+
+impl KagemushaCanonicalDecodeSchema
+    for iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4
+{
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+    const FIXED_ALLOCATION_ALLOWANCE: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+
+    fn preflight_canonical_archive(bytes: &[u8]) -> Result<(), norito::Error> {
+        iroha_data_model::offline::preflight_kagemusha_redeem_build_result_archive_v4(bytes)
+    }
+}
+
+fn decode_canonical_kagemusha_archive_with_cleanup_and_profile<T, F>(
     bytes: &[u8],
+    extra_encoded_allocation_multiplier: usize,
     fixed_allocation_allowance: usize,
     mut cleanup: F,
 ) -> BridgeResult<T>
@@ -760,6 +826,7 @@ where
     if kagemusha_archive_out_of_bounds(bytes.len()) {
         return Err(BridgeError::KagemushaProve);
     }
+    T::preflight_canonical_archive(bytes).map_err(|_| BridgeError::KagemushaProve)?;
     let header = norito::core::Header::read(std::io::Cursor::new(bytes))
         .map_err(|_| BridgeError::KagemushaProve)?;
     if header.compression != norito::Compression::None
@@ -773,8 +840,9 @@ where
     let _payload_context = norito::core::PayloadCtxGuard::enter(bytes);
     let mut value: T = norito::decode_from_bytes_with_limits(
         bytes,
-        kagemusha_canonical_decode_limits_with_fixed_allowance(
+        kagemusha_canonical_decode_limits_with_profile(
             bytes.len(),
+            extra_encoded_allocation_multiplier,
             fixed_allocation_allowance,
         ),
     )
@@ -805,8 +873,9 @@ where
     for<'de> T: NoritoDeserialize<'de>,
     F: FnMut(&mut T),
 {
-    decode_canonical_kagemusha_archive_with_cleanup_and_fixed_allowance(
+    decode_canonical_kagemusha_archive_with_cleanup_and_profile(
         bytes,
+        T::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
         T::FIXED_ALLOCATION_ALLOWANCE,
         cleanup,
     )
@@ -1448,6 +1517,12 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
+const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
+    if PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+    } else {
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+    };
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PrivacyBufferHeader {
@@ -1502,7 +1577,7 @@ unsafe fn write_privacy_bytes(
         }
         return Ok(());
     }
-    if len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+    if len > PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1 {
         return Err(ERR_CONNECT_ENCODE);
     }
     let total = PRIVACY_BUFFER_HEADER_BYTES
@@ -1544,7 +1619,7 @@ unsafe fn clear_privacy_allocated_buffer(ptr_: *mut c_uchar) -> *mut c_uchar {
     let valid = unsafe {
         (*header).magic == PRIVACY_BUFFER_HEADER_MAGIC
             && (*header).len > 0
-            && (*header).len <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+            && (*header).len <= PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1
     };
     if !valid {
         return ptr_;
@@ -1623,6 +1698,64 @@ pub unsafe extern "C" fn iroha_privacy_validate_capabilities_v1(
     }
     let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
     validate_privacy_capability_archive_v1(archive).code()
+}
+
+/// Return the complete Rust-derived exact-12 statement/envelope KAT bundle.
+///
+/// The output is canonical Norito and must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// `out_ptr` and `out_len` must be valid writable pointers for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_exact12_fixture_bundle_v1(
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if out_ptr.is_null() || out_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let Ok(mut bytes) = privacy_exact12_fixture_bundle_bytes_v1() else {
+        return ERR_CONNECT_ENCODE;
+    };
+    let result = if bytes.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+        || !validate_privacy_exact12_fixture_bundle_v1(&bytes).is_valid()
+    {
+        ERR_CONNECT_ENCODE
+    } else {
+        match unsafe { write_privacy_bytes(out_ptr, out_len, &bytes) } {
+            Ok(()) => 0,
+            Err(code) => code,
+        }
+    };
+    bytes.fill(0);
+    result
+}
+
+/// Validate one untrusted canonical exact-12 statement/envelope KAT bundle.
+///
+/// # Safety
+///
+/// For a non-zero `archive_len`, `archive_ptr` must reference at least that
+/// many readable bytes for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_validate_exact12_fixture_bundle_v1(
+    archive_ptr: *const c_uchar,
+    archive_len: c_ulong,
+) -> c_int {
+    if archive_ptr.is_null() {
+        return PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code();
+    }
+    let Ok(archive_len) = usize::try_from(archive_len) else {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    };
+    if archive_len > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    }
+    let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
+    validate_privacy_exact12_fixture_bundle_v1(archive).code()
 }
 
 fn parse_multisig_spec_bytes(ptr: *const c_char, len: c_ulong) -> BridgeResult<MultisigSpec> {
@@ -13082,9 +13215,7 @@ fn validate_kagemusha_candidate_evidence_lab_ordered_inventory_v4(
         || handles
             .iter()
             .any(|handle| !is_kagemusha_candidate_evidence_lab_artifact_handle_v4(*handle))
-        || expected_descriptor_sha256
-            .iter()
-            .any(|digest| *digest == [0; 32])
+        || expected_descriptor_sha256.contains(&[0; 32])
         || expected_descriptor_sha256
             .iter()
             .copied()
@@ -16613,12 +16744,29 @@ mod kagemusha_bridge_tests {
         worst_case
             .validate_structure()
             .expect("one-proof offer fits with a maximum-size publisher envelope");
+        let decoded_worst_case = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
+        >(&worst_case_bytes)
+        .expect("bounded specialized decoder accepts a maximum-envelope peer offer");
+        assert_eq!(decoded_worst_case, worst_case);
 
         let maximum = realistic_recipient_receive_offer_with_envelope_size_v2(64, 2 * 1_024);
         let maximum_bytes = norito::to_bytes(&maximum).expect("encode 64-proof offer");
         assert!(maximum_bytes.len() > OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert!(maximum_bytes.len() <= OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES);
         assert!(maximum.validate_structure().is_err());
+        let decoded_maximum = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
+        >(&maximum_bytes)
+        .expect("bounded specialized decoder accepts a canonical 64-proof offer");
+        assert_eq!(decoded_maximum, maximum);
+        let maximum_lineage_bytes =
+            norito::to_bytes(&maximum.lineage).expect("encode 64-proof lineage");
+        let decoded_maximum_lineage = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
+        >(&maximum_lineage_bytes)
+        .expect("bounded specialized decoder accepts a canonical 64-proof lineage");
+        assert_eq!(decoded_maximum_lineage, maximum.lineage);
         eprintln!(
             "receiver offer canonical sizes: one_proof={} one_wire={} max64={} max64_wire={}",
             one_bytes.len(),
@@ -18300,7 +18448,9 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     #[test]
     fn recursive_spend_v4_production_feature_opens_only_the_authenticated_release_gate() {
-        assert!(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        const {
+            assert!(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        }
         require_kagemusha_recursive_spend_production_promotion_v4()
             .expect("production feature promotes the compiled proof backend");
 
@@ -20598,13 +20748,10 @@ mod kagemusha_bridge_tests {
             Ok(names)
         }
 
-        fn expected_inventory<'a>(
-            expected: &'a [ProductionSbdAcceptanceExpectedFileV1],
+        fn expected_inventory(
+            expected: &[ProductionSbdAcceptanceExpectedFileV1],
         ) -> std::io::Result<(
-            std::collections::BTreeMap<
-                std::path::PathBuf,
-                &'a ProductionSbdAcceptanceExpectedFileV1,
-            >,
+            std::collections::BTreeMap<std::path::PathBuf, &ProductionSbdAcceptanceExpectedFileV1>,
             std::collections::BTreeSet<std::path::PathBuf>,
         )> {
             let mut files = std::collections::BTreeMap::new();
@@ -31586,6 +31733,50 @@ fn java_sorafs_reference_validate_hedging_payload_json(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    env: &mut jni::JNIEnv<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid appeal-finance CancelAssetLock payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid appeal-finance CancelAssetLock label bytes".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(
+                env,
+                buffer,
+                "SoraFS appeal-finance CancelAssetLock validation",
+            )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_validate_governance_log_node_json(
     env: &mut jni::JNIEnv<'_>,
     payload: jni::objects::JByteArray<'_>,
@@ -38846,6 +39037,46 @@ fn java_privacy_capabilities_archive() -> Result<Vec<u8>, String> {
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_privacy_exact12_fixture_bundle_archive() -> Result<Vec<u8>, String> {
+    let mut archive = privacy_exact12_fixture_bundle_bytes_v1()
+        .map_err(|err| format!("failed to encode exact-12 privacy fixture bundle: {err}"))?;
+    if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        archive.fill(0);
+        return Err("exact-12 privacy fixture bundle exceeds maximum length".to_owned());
+    }
+    let status = validate_privacy_exact12_fixture_bundle_v1(&archive);
+    if !status.is_valid() {
+        archive.fill(0);
+        return Err(format!(
+            "exact-12 privacy fixture bundle validation failed with status {}",
+            status.code()
+        ));
+    }
+    Ok(archive)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_validate_exact12_fixture_bundle_bytes(archive: Option<&[u8]>) -> jni::sys::jint {
+    let Some(archive) = archive else {
+        return PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code();
+    };
+    if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    }
+    validate_privacy_exact12_fixture_bundle_v1(archive).code()
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_privacy_validate_capabilities(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -38902,6 +39133,62 @@ fn java_native_privacy_capabilities(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyt
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_native_privacy_validate_exact12_fixture_bundle(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    if archive.is_null() {
+        return java_privacy_validate_exact12_fixture_bundle_bytes(None);
+    }
+    let archive_len = match env.get_array_length(&archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => {
+                return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+            }
+        },
+        Err(_) => return PrivacyExact12FixtureBundleValidationStatusV1::MalformedArchive.code(),
+    };
+    if archive_len > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    }
+    match env.convert_byte_array(&archive) {
+        Ok(bytes) => java_privacy_validate_exact12_fixture_bundle_bytes(Some(&bytes)),
+        Err(_) => PrivacyExact12FixtureBundleValidationStatusV1::MalformedArchive.code(),
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_exact12_fixture_bundle(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let mut archive = java_privacy_exact12_fixture_bundle_archive()?;
+        let array_result = env
+            .byte_array_from_slice(&archive)
+            .map_err(|err| err.to_string());
+        archive.fill(0);
+        let array = array_result?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_state(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
@@ -38926,6 +39213,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    native_signer_jni_contract_revision() as jni::sys::jint
 }
 
 #[cfg(any(
@@ -39165,6 +39467,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    native_signer_jni_contract_revision() as jni::sys::jint
 }
 
 #[cfg(any(
@@ -39420,6 +39737,39 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     java_native_privacy_validate_capabilities(&mut env, archive)
 }
 
+/// Return the canonical exact-12 privacy fixture bundle to the Kotlin/JVM SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_exact12_fixture_bundle(&mut env)
+}
+
+/// Validate an exact-12 privacy fixture bundle for the Kotlin/JVM SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
+}
+
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -39464,6 +39814,39 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     java_native_privacy_validate_capabilities(&mut env, archive)
+}
+
+/// Return the canonical exact-12 privacy fixture bundle to the Java Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_exact12_fixture_bundle(&mut env)
+}
+
+/// Validate an exact-12 privacy fixture bundle for the Java Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
 }
 
 #[cfg(any(
@@ -39520,6 +39903,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// Reports that the Kotlin/JVM ABI contains appeal-finance validator symbols.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols(
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
@@ -39589,6 +39990,32 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// JNI entrypoint for Kotlin/JVM appeal-finance `CancelAssetLock` validation.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+        &mut env,
         payload,
         label,
         generated_at,
@@ -40021,6 +40448,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     target_os = "macos",
     target_os = "windows"
 ))]
+/// Reports that the Java Android ABI contains appeal-finance validator symbols.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
@@ -40078,6 +40523,32 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// JNI entrypoint for Java Android appeal-finance `CancelAssetLock` validation.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+        &mut env,
         payload,
         label,
         generated_at,
@@ -44715,6 +45186,36 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_hedging_json(
     unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
 }
 
+/// Validate one canonical appeal-finance `CancelAssetLock` V1 payload.
+///
+/// The returned `ValidationOutcomeV1` JSON allocation must be released with
+/// [`connect_norito_free`].
+///
+/// # Safety
+/// Every non-null input pointer must remain valid for its corresponding length
+/// until this function returns. Output pointers must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+            bytes_ptr,
+            bytes_len as usize,
+            label_ptr,
+            label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
 /// Validate a bounded heterogeneous SoraFS fixture bundle and all supported
 /// manifest, provider, challenge, proof, repair, and orderbook cross-links.
 ///
@@ -46040,6 +46541,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_signer_jni_contract_revision_is_the_v1_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 1);
+    }
+
+    #[test]
     fn disabled_local_fetch_integrity_maps_to_options_error() {
         for field in ["verify_digests", "verify_lengths"] {
             assert_eq!(
@@ -46465,6 +46971,107 @@ mod tests {
         let snapshot = take_privacy_snapshot_output(out_ptr, out_len);
         snapshot.validate().expect("FFI capability snapshot");
         assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    }
+
+    #[test]
+    fn privacy_exact12_fixture_ffi_returns_and_validates_complete_canonical_bytes() {
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe { iroha_privacy_exact12_fixture_bundle_v1(&mut out_ptr, &mut out_len) };
+        assert_eq!(status, 0);
+        assert!(!out_ptr.is_null());
+        assert!(out_len > 0);
+        assert_eq!(
+            unsafe { iroha_privacy_validate_exact12_fixture_bundle_v1(out_ptr, out_len) },
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        assert_eq!(
+            unsafe { iroha_privacy_validate_exact12_fixture_bundle_v1(ptr::null(), out_len) },
+            PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code()
+        );
+        assert_eq!(
+            unsafe { iroha_privacy_validate_exact12_fixture_bundle_v1(out_ptr, 0) },
+            PrivacyExact12FixtureBundleValidationStatusV1::Empty.code()
+        );
+
+        let archive = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        assert_eq!(
+            archive,
+            privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture")
+        );
+        let mut truncated = archive;
+        truncated.pop();
+        assert_ne!(
+            unsafe {
+                iroha_privacy_validate_exact12_fixture_bundle_v1(
+                    truncated.as_ptr(),
+                    c_ulong::try_from(truncated.len()).expect("truncated length"),
+                )
+            },
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        iroha_privacy_free_buffer(out_ptr);
+    }
+
+    #[test]
+    fn privacy_exact12_java_archive_is_bounded_deterministic_and_mutation_closed() {
+        let archive =
+            java_privacy_exact12_fixture_bundle_archive().expect("compiled Java fixture bundle");
+        assert_eq!(
+            archive,
+            privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture")
+        );
+        assert!(archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&archive)),
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(None),
+            PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code()
+        );
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&[])),
+            PrivacyExact12FixtureBundleValidationStatusV1::Empty.code()
+        );
+        let oversized = vec![0; PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 + 1];
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&oversized)),
+            PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code()
+        );
+
+        for truncated in [
+            &archive[..archive.len() - 1],
+            &archive[1..],
+            &archive[..archive.len() / 2],
+        ] {
+            assert_ne!(
+                java_privacy_validate_exact12_fixture_bundle_bytes(Some(truncated)),
+                PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+            );
+        }
+
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert_ne!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&trailing)),
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        for index in [0, archive.len() / 2, archive.len() - 1] {
+            let mut mutated = archive.clone();
+            mutated[index] ^= 0x80;
+            assert_ne!(
+                java_privacy_validate_exact12_fixture_bundle_bytes(Some(&mutated)),
+                PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+            );
+        }
+
+        let capability_archive =
+            norito::encode_canonical(&privacy_capabilities()).expect("capability archive");
+        assert_ne!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&capability_archive)),
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
     }
 
     fn canonical_bytes(address: &AccountAddress) -> Vec<u8> {
@@ -48461,8 +49068,9 @@ mod tests {
             KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH
         );
 
-        let topup_limits = kagemusha_canonical_decode_limits_with_fixed_allowance(
+        let topup_limits = kagemusha_canonical_decode_limits_with_profile(
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            0,
             iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
         );
         assert_eq!(
@@ -48470,14 +49078,51 @@ mod tests {
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
                 + iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
         );
-        let recursive_limits = kagemusha_canonical_decode_limits_with_fixed_allowance(
+        let recursive_limits = kagemusha_canonical_decode_limits_with_profile(
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
             iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
         );
         assert_eq!(
             recursive_limits.max_total_allocated_bytes(),
-            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+                * (KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                    + iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4)
                 + iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
+        );
+        let build_result_limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
+        );
+        assert_eq!(
+            build_result_limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+                * (KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                    + iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4)
+                + iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
+        );
+        assert_eq!(
+            <iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4 as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4
+        );
+        let structural_limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
+            KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
+        );
+        assert_eq!(
+            structural_limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * 32
+                + KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE
+        );
+        assert_eq!(
+            <iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER
+        );
+        assert_eq!(
+            <iroha_torii_shared::offline_api::OfflineOperationStatus as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER
         );
     }
 
@@ -49266,6 +49911,73 @@ mod sorafs_tests {
                 .and_then(JsonValue::as_str),
             Some("order_request_bad_signature_v1.to")
         );
+    }
+
+    #[test]
+    fn sorafs_reference_appeal_finance_cancel_asset_lock_profiles_via_bridge_ffi() {
+        for (relative_path, status, code, category) in [
+            (
+                "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+                "Ok",
+                "SFS-OK-000",
+                "validation",
+            ),
+            (
+                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+                "Error",
+                "SFS-NORITO-001",
+                "norito",
+            ),
+            (
+                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+                "Error",
+                "SFS-VAL-001",
+                "validation",
+            ),
+        ] {
+            let payload = repo_fixture(relative_path);
+            let label = relative_path
+                .rsplit('/')
+                .next()
+                .expect("fixture path contains a file name")
+                .as_bytes();
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let rc = unsafe {
+                connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+                    payload.as_ptr(),
+                    payload.len() as c_ulong,
+                    label.as_ptr(),
+                    label.len() as c_ulong,
+                    123,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(rc, 0, "{relative_path}: bridge validator call");
+            let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+            assert_eq!(
+                outcome.get("status").and_then(JsonValue::as_str),
+                Some(status),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("code").and_then(JsonValue::as_str),
+                Some(code),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("category").and_then(JsonValue::as_str),
+                Some(category),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("generated_at").and_then(JsonValue::as_u64),
+                Some(123),
+                "{relative_path}"
+            );
+        }
     }
 
     #[test]

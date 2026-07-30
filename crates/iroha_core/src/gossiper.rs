@@ -289,8 +289,8 @@ pub struct TransactionGossiper {
     /// The time between gossip messages. More frequent gossiping shortens
     /// the time to sync, but can overload the network.
     gossip_period: Duration,
-    /// Maximum size of a batch that is being gossiped. Smaller size leads
-    /// to longer time to synchronise, useful if you have high packet loss.
+    /// Maximum transaction count for both outgoing and accepted gossip batches. Smaller values
+    /// reduce synchronization throughput and bound per-message verification work.
     gossip_size: NonZeroU32,
     /// Number of gossip periods to wait before re-sending the same transactions.
     gossip_resend_ticks: NonZeroU32,
@@ -1428,6 +1428,35 @@ impl TransactionGossiper {
         }
     }
 
+    fn reject_oversized_incoming_batch(
+        &self,
+        plane: GossipPlane,
+        transaction_count: usize,
+    ) -> bool {
+        let max_transactions = self.gossip_size.get() as usize;
+        if transaction_count <= max_transactions {
+            return false;
+        }
+        iroha_logger::warn!(
+            transaction_count,
+            max_transactions,
+            "dropping transaction gossip batch above the configured transaction-count limit"
+        );
+        self.record_drop_metric(
+            plane,
+            DataSpaceId::UNIVERSAL,
+            &[],
+            "transaction_count_limit",
+            false,
+            None,
+            &[],
+            self.target_cap_for_plane(plane),
+            transaction_count,
+            0,
+        );
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     fn handle_transaction_gossip_owned(
         &self,
@@ -1440,6 +1469,9 @@ impl TransactionGossiper {
     ) {
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
+        if self.reject_oversized_incoming_batch(plane, batch_txs) {
+            return;
+        }
 
         if routes.is_empty() {
             iroha_logger::warn!("dropping transaction gossip without routing metadata");
@@ -2090,6 +2122,9 @@ impl TransactionGossiper {
 
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
+        if self.reject_oversized_incoming_batch(plane, batch_txs) {
+            return;
+        }
 
         if routes.is_empty() {
             iroha_logger::warn!("dropping transaction gossip without routing metadata");
@@ -3090,9 +3125,7 @@ impl GossipTransaction {
         encoded: Arc<Vec<u8>>,
     ) -> Self {
         let entrypoint = entrypoint.into();
-        let tx_hash = crate::tx::entrypoint_hash_from_framed_bytes(encoded.as_slice())
-            .map(signed_hash_from_entrypoint_hash)
-            .unwrap_or_else(|_| signed_hash_from_entrypoint_hash(entrypoint.hash()));
+        let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
         let entrypoint_cache = OnceLock::new();
         let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
@@ -3603,6 +3636,24 @@ mod tests {
         assert_eq!(gossip_tx.hash_as_entrypoint(), hash);
     }
 
+    #[test]
+    fn gossip_transaction_hash_rejects_zero_filled_logical_frame_tail() {
+        let (signed, _accepted) = build_transaction("framed-entrypoint-zero-tail");
+        let canonical = encode_transaction_entrypoint(&TransactionEntrypoint::External(signed));
+        let view = ncore::from_bytes_view(&canonical).expect("canonical entrypoint frame");
+        let flags = view.flags();
+        let mut tailed_payload = view.as_bytes().to_vec();
+        tailed_payload.push(0);
+        let reframed =
+            ncore::frame_bare_with_header_flags::<TransactionEntrypoint>(&tailed_payload, flags)
+                .expect("reframe checksummed tailed payload");
+
+        assert!(matches!(
+            crate::tx::entrypoint_hash_from_framed_bytes(&reframed),
+            Err(ncore::Error::LengthMismatch)
+        ));
+    }
+
     fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = (*ALICE_ID).clone();
@@ -3963,7 +4014,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: defaults::network::TRANSACTION_GOSSIP_SIZE,
             gossip_resend_ticks: resend_ticks,
             gossip_tick: 0,
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
@@ -5717,6 +5768,64 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossiper.queue.queued_len(),
             0,
             "unpaired extra plan metadata must reject the whole gossip frame"
+        );
+    }
+
+    #[test]
+    fn gossip_drops_owned_batch_above_transaction_count_limit() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        gossiper.gossip_size = NonZeroU32::new(1).expect("nonzero batch limit");
+        let (first, _) = build_transaction("owned-count-limit-first");
+        let (second, _) = build_transaction("owned-count-limit-second");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(gossiper.queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn gossip_drops_shared_batch_above_transaction_count_limit_before_materialization() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        gossiper.gossip_size = NonZeroU32::new(1).expect("nonzero batch limit");
+        let (first, _) = build_transaction("shared-count-limit-first");
+        let (second, _) = build_transaction("shared-count-limit-second");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(
+            decoded
+                .txs
+                .iter()
+                .all(|transaction| !transaction.is_entrypoint_materialized())
+        );
+        let message = Arc::new(decoded);
+        let retained = Arc::clone(&message);
+
+        gossiper.handle_transaction_gossip(message);
+
+        assert_eq!(gossiper.queue.queued_len(), 0);
+        assert!(
+            retained
+                .txs
+                .iter()
+                .all(|transaction| !transaction.is_entrypoint_materialized()),
+            "count rejection must happen before entrypoint decoding"
         );
     }
 

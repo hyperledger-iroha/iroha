@@ -7,7 +7,12 @@
 //! domains as verification. A cache may retain tree material for speed, but
 //! consensus verification depends only on the pinned profile and proof.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::Path,
+};
 
 use rayon::prelude::*;
 use sha2::{
@@ -16,6 +21,13 @@ use sha2::{
 use thiserror::Error;
 
 use super::{
+    p256_aggregate_adapter::{
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+        P256_X5S1_SIGNATURES_V1, P256MainAdapterV1, P256MainRegistrationV1,
+        P256MainVerifierFixedSourceV1,
+    },
+    p256_ecdsa_air::P256EcdsaRoleV1,
+    p256_value_bus::P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
     profile::{
         ZK_X509_FRI_QUERY_COUNT_V1, ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
@@ -48,7 +60,7 @@ use crate::privacy_engines::{
 
 /// Stable preprocessing protocol description committed by the compiled
 /// zk-X509 profile.
-pub(crate) const ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1: &[u8] = b"zk-x509-preprocessed-fixed-v1-incompatible:wire=X5F1+u16be-version1+u16be-oracle-count+per-oracle-u16be-id+u16be-opening-count+repeated-u32be-index-and-width-u64be-fields+minimal-frontier-hashes32:verifier-pinned-roots-only:profile-derived-independent-columns-only:six-sha-word-columns-reconstructed-by-fixed-linear-identities:no-statement-state-time-or-witness-values:goldilocks-modulus=0xffffffff00000001:generator=7:canonical-u64be-fields:column-order-profile-bound:geometry=oracle-nonzero+native-log2-4through19+lde-log2-nativeplus1through25+width-u16-nonzero:native-power-of-two-subgroup:ifft-then-generator-coset-lde:release-root=row-major-batch8-ifft-and-generator-coset-fft+compact-sha256-midstates+bounded-finalization-chunks+ordered-logarithmic-merkle-frontier:frame-domain=iroha:privacy:transparent-stark:frame:v1:leaf-domain=iroha:privacy:zk-x509:preprocessed-fixed:leaf:v1:leaf-fields=oracle-u16be+native-log2-u8+lde-log2-u8+width-u16be+ordered-u64be-fields:node-domain=iroha:privacy:zk-x509:preprocessed-fixed:node:v1:binary-sha256-merkle:canonical-sorted-unique-indices:max-openings116:minimal-multiproof-frontier:max-wire524288:no-prover-root-on-wire:cache-root-verified-and-optional:activation=false";
+pub(crate) const ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1: &[u8] = b"zk-x509-preprocessed-fixed-v1-incompatible:wire=X5F1+u16be-version1+u16be-oracle-count+per-oracle-u16be-id+u16be-opening-count+repeated-u32be-index-and-width-u64be-fields+minimal-frontier-hashes32:exact-release-oracles2-ordered-sha1-then-p256-log19-2:verifier-pinned-roots-only:profile-derived-independent-columns-only:six-sha-word-columns-reconstructed-by-fixed-linear-identities:p256-four-certificate-signatures-share-only-identical-role-schedules+wallet-distinct:no-statement-state-time-or-witness-values:goldilocks-modulus=0xffffffff00000001:generator=7:canonical-u64be-fields:column-order-profile-bound:geometry=oracle-nonzero+native-log2-4through19+lde-log2-nativeplus1through25+width-u16-nonzero:native-power-of-two-subgroup:ifft-then-generator-coset-lde:release-root=row-major-batch8-final-partial-lanes-only-no-hash-padding-fields+ifft-and-generator-coset-fft+compact-sha256-midstates+bounded-finalization-chunks+ordered-logarithmic-merkle-frontier:frame-domain=iroha:privacy:transparent-stark:frame:v1:leaf-domain=iroha:privacy:zk-x509:preprocessed-fixed:leaf:v1:leaf-fields=oracle-u16be+native-log2-u8+lde-log2-u8+width-u16be+ordered-u64be-fields:node-domain=iroha:privacy:zk-x509:preprocessed-fixed:node:v1:binary-sha256-merkle:canonical-sorted-unique-indices:max-openings116:minimal-multiproof-frontier:exact-max-wire825776:no-prover-root-on-wire:cache-root-verified-and-optional:first-release";
 
 /// Canonical sidecar magic.
 pub(crate) const ZK_X509_PREPROCESSED_FIXED_MAGIC_V1: [u8; 4] = *b"X5F1";
@@ -57,10 +69,12 @@ pub(crate) const ZK_X509_PREPROCESSED_FIXED_VERSION_V1: u16 = 1;
 /// Maximum fixed openings per oracle: current and next rows for all 58 MAIN
 /// query positions.
 pub(crate) const ZK_X509_PREPROCESSED_FIXED_MAX_OPENINGS_V1: usize = 116;
+/// Exact number of independently pinned fixed oracles in MAIN.
+pub(crate) const ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1: usize = 2;
 /// Fixed-column LDE batch required by the release resource profile.
 pub(crate) const ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1: usize = 8;
 /// Hard cap for the complete fixed-oracle sidecar.
-pub(crate) const ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1: usize = 512 * 1024;
+pub(crate) const ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1: usize = 825_776;
 /// Exact maximum minimal-frontier hashes for the 116 leaves obtainable from
 /// 58 distinct `query, query + 64 mod 2^25` pairs in the SHA fixed-oracle
 /// tree. The constrained witness is certified in
@@ -72,6 +86,12 @@ pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_FRONTIER_HASHES_V1: usiz
 /// wire accounting must use this exact value rather than adding the generic
 /// cap to its already bounded aggregate.
 pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1: usize = 383_196;
+/// Exact maximum encoded one-oracle P-256 log19 X5F1 proof under the release
+/// geometry, including the common eight-byte X5F1 header.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1: usize = 442_588;
+/// Exact maximum complete two-oracle MAIN X5F1 sidecar. The common eight-byte
+/// header occurs once, not once per independently pinned oracle.
+pub(crate) const ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1: usize = 825_776;
 /// Conservative allocator/capacity overhead retained beneath the hard prover
 /// peak in addition to all explicitly sized vectors.
 const ZK_X509_PREPROCESSED_FIXED_ALLOCATION_RESERVE_BYTES_V1: usize = 256 * 1024 * 1024;
@@ -93,9 +113,13 @@ const FIXED_LEAF_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:preprocessed-fixed:l
 const FIXED_NODE_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:preprocessed-fixed:node:v1";
 const SHA_FIXED_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:preprocessed-fixed:sha-descriptor:v1";
+const P256_LOG19_FIXED_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-x509:preprocessed-fixed:p256-log19-descriptor:v1";
 
-/// Stable oracle identifier for the sole first-release SHA fixed oracle.
+/// Stable oracle identifier for the first-release SHA fixed oracle.
 pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_ORACLE_V1: u16 = 1;
+/// Stable oracle identifier for the first-release P-256 log19 fixed oracle.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_ORACLE_V1: u16 = 2;
 /// Exact physical SHA-segment order in every fixed-oracle vector row.
 pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_SEGMENT_ORDER_V1: [u8;
     ZK_X509_SHA_SEGMENT_COUNT_V1] = [0, 1, 2, 3];
@@ -139,10 +163,61 @@ pub(crate) const ZK_X509_SHA_PREPROCESSED_ROOT_SCHEDULED_FIELD_OPS_MAX_V1: u64 =
             * (1_u64 << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
             * 8
             * 2;
-/// Exact aligned SHA-256 compression blocks for every vector-row leaf,
-/// excluding the two common prefix blocks computed once.
-pub(crate) const ZK_X509_SHA_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1: u64 =
-    (1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1) * (ZK_X509_SHA_PREPROCESSED_ROOT_BATCH_COUNT_V1 + 1);
+/// Exact SHA-256 compression blocks for every vector-row leaf after the two
+/// common prefix blocks computed once.
+///
+/// The 340-column release row contains 42 complete eight-field blocks and one
+/// four-field suffix.  That suffix shares its only compression block with
+/// SHA-256 padding, so counting `ceil(width / 8) + 1` would overstate the
+/// ceremony work and, more importantly, would describe a different byte
+/// stream from the canonical 340-field leaf.
+pub(crate) const ZK_X509_SHA_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1: u64 = (1_u64
+    << ZK_X509_MAIN_COMMON_LDE_LOG2_V1)
+    * ((ZK_X509_SHA_PREPROCESSED_FIXED_WIDTH_V1 / ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+        + ((2
+            + (ZK_X509_SHA_PREPROCESSED_FIXED_WIDTH_V1
+                % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+                * core::mem::size_of::<u64>()
+            + 1
+            + core::mem::size_of::<u64>()
+            + 63)
+            / 64)) as u64;
+/// Exact row-major eight-lane transforms in the P-256 log19 release root
+/// ceremony.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_COUNT_V1: u64 =
+    ((ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 + ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1
+        - 1)
+        / ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1) as u64;
+/// Exact batch-butterfly count for the P-256 log19 release root.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_BUTTERFLIES_V1: u64 =
+    ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_COUNT_V1
+        * (((1_u64 << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1) * ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 as u64)
+            / 2
+            + ((1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1)
+                * ZK_X509_MAIN_COMMON_LDE_LOG2_V1 as u64)
+                / 2);
+/// Conservative dominant scalar field-operation ceiling for the P-256
+/// log19 release root.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_ROOT_SCHEDULED_FIELD_OPS_MAX_V1: u64 =
+    ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_BUTTERFLIES_V1 * (8 * 3 + 1)
+        + ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_COUNT_V1
+            * (1_u64 << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
+            * 8
+            * 2;
+/// Exact SHA-256 compression blocks for the P-256 vector-row leaves after
+/// the two common prefix blocks computed once.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1: u64 = (1_u64
+    << ZK_X509_MAIN_COMMON_LDE_LOG2_V1)
+    * ((ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1
+        / ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+        + ((2
+            + (ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1
+                % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+                * core::mem::size_of::<u64>()
+            + 1
+            + core::mem::size_of::<u64>()
+            + 63)
+            / 64)) as u64;
 /// Exact internal binary-Merkle node count.
 pub(crate) const ZK_X509_SHA_PREPROCESSED_ROOT_MERKLE_NODES_V1: u64 =
     (1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1) - 1;
@@ -154,16 +229,54 @@ pub(crate) const ZK_X509_SHA_PREPROCESSED_ROOT_MERKLE_SHA_BLOCKS_V1: u64 =
 pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1: &[u8] =
     b"zk-x509-sha-preprocessed-fixed-columns-v1-incompatible:oracle1:four-segments-ordered0,1,2,3:per-segment85=66-independent-sha-word-fixed-columns-in-source-order+call+role+slot+segment-first+segment-last+physical-padding+thirteen-one-hot-compact-ca-call-selectors16through28:reconstruct-sha-word-fixed-padding=0+local-continue=sum-local-operations-minus-local-first-minus-local-last+memory-continue=memory-same-next-plus-memory-new-next+last-aggregate-row=0+physical-boundary=0+boolean-continue=choose-plus-majority-minus-boolean-last:combined-column-order=segment-major-then-listed-source-column:excluded=rfc-length-pair+rfc-length-pair-index+rfc-length-prefix+four-rfc-event-descriptors:shape-independent-for-disclosed-attributes0through4:native-log19:generator-coset-lde-log25:root-must-be-release-pinned:activation=false";
 
+/// Exact unique schedule order in every P-256 log19 fixed-oracle vector row.
+///
+/// Four certificate/CRL signatures demonstrably share one verifier topology
+/// per adapter. The wallet role is distinct. No value from a statement,
+/// witness, proof, optional-selection flag, or challenge selects a schedule.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_SCHEDULE_ORDER_V1: [u8; 6] =
+    [0, 1, 2, 3, 4, 5];
+const P256_LOG19_CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
+const P256_LOG19_WALLET_ARITHMETIC_START_V1: usize =
+    P256_LOG19_CERTIFICATE_ARITHMETIC_START_V1 + P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1;
+const P256_LOG19_CERTIFICATE_EXECUTION_START_V1: usize =
+    P256_LOG19_WALLET_ARITHMETIC_START_V1 + P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1;
+const P256_LOG19_WALLET_EXECUTION_START_V1: usize =
+    P256_LOG19_CERTIFICATE_EXECUTION_START_V1 + P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1;
+const P256_LOG19_CERTIFICATE_SORTED_START_V1: usize =
+    P256_LOG19_WALLET_EXECUTION_START_V1 + P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1;
+const P256_LOG19_WALLET_SORTED_START_V1: usize =
+    P256_LOG19_CERTIFICATE_SORTED_START_V1 + P256_VALUE_BUS_STARK_FIXED_WIDTH_V1;
+/// Exact width of the six unique P-256 log19 verifier schedules.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1: usize =
+    P256_LOG19_WALLET_SORTED_START_V1 + P256_VALUE_BUS_STARK_FIXED_WIDTH_V1;
+/// Exact first-release P-256 log19 fixed-column manifest.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1: &[u8] =
+    b"zk-x509-p256-log19-preprocessed-fixed-columns-v1-incompatible:oracle2:six-unique-verifier-schedules-ordered-certificate-arithmetic134+wallet-arithmetic134+certificate-value-execution46+wallet-value-execution46+certificate-value-sorted22+wallet-value-sorted22:width404:alias-map=arithmetic-signatures0,1,2,3-to-certificate+signature4-to-wallet;value-execution-and-sorted-signatures0,1,2,3-to-certificate+signature4-to-wallet:aliases-permitted-only-for-byte-identical-role-derived-verifier-topology:no-binding-sink-optional-selection:no-window-reduction-low-s-or-scalar-schedules:no-statement-state-time-witness-proof-or-challenge-values:native-log19:generator-coset-lde-log25:root-must-be-release-pinned:first-release";
+
 const _: () = {
     assert!(ZK_X509_SHA_SEGMENT_COUNT_V1 == 4);
     assert!(SHA_WORD_CAPACITY_FIXED_WIDTH_V1 == 72);
     assert!(ZK_X509_SHA_WORD_PREPROCESSED_FIXED_WIDTH_V1 == 66);
     assert!(ZK_X509_SHA_PREPROCESSED_FIXED_COLUMNS_PER_SEGMENT_V1 == 85);
     assert!(ZK_X509_SHA_PREPROCESSED_FIXED_WIDTH_V1 == 340);
+    assert!(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 == 134);
+    assert!(P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1 == 46);
+    assert!(P256_VALUE_BUS_STARK_FIXED_WIDTH_V1 == 22);
+    assert!(P256_LOG19_WALLET_ARITHMETIC_START_V1 == 134);
+    assert!(P256_LOG19_CERTIFICATE_EXECUTION_START_V1 == 268);
+    assert!(P256_LOG19_WALLET_EXECUTION_START_V1 == 314);
+    assert!(P256_LOG19_CERTIFICATE_SORTED_START_V1 == 360);
+    assert!(P256_LOG19_WALLET_SORTED_START_V1 == 382);
+    assert!(ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 == 404);
     assert!(ZK_X509_SHA_PREPROCESSED_ROOT_BATCH_COUNT_V1 == 43);
     assert!(ZK_X509_SHA_PREPROCESSED_ROOT_BATCH_BUTTERFLIES_V1 == 18_249_678_848);
     assert!(ZK_X509_SHA_PREPROCESSED_ROOT_SCHEDULED_FIELD_OPS_MAX_V1 == 456_602_681_344);
-    assert!(ZK_X509_SHA_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1 == 1_476_395_008);
+    assert!(ZK_X509_SHA_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1 == 1_442_840_576);
+    assert!(ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_COUNT_V1 == 51);
+    assert!(ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_BUTTERFLIES_V1 == 21_644_967_936);
+    assert!(ZK_X509_P256_LOG19_PREPROCESSED_ROOT_SCHEDULED_FIELD_OPS_MAX_V1 == 541_552_017_408);
+    assert!(ZK_X509_P256_LOG19_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1 == 1_711_276_032);
     assert!(ZK_X509_SHA_PREPROCESSED_ROOT_MERKLE_NODES_V1 == 33_554_431);
     assert!(ZK_X509_SHA_PREPROCESSED_ROOT_MERKLE_SHA_BLOCKS_V1 == 100_663_293);
     assert!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 == 19);
@@ -178,7 +291,24 @@ const _: () = {
     );
     assert!(
         ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
-            <= ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1
+            < ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1
+    );
+    assert!(
+        ZK_X509_P256_LOG19_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+            == 8 + 4
+                + ZK_X509_PREPROCESSED_FIXED_MAX_OPENINGS_V1
+                    * (4 + ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 * 8)
+                + ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_FRONTIER_HASHES_V1 * 32
+    );
+    assert!(
+        ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+            == ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+                + ZK_X509_P256_LOG19_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+                - 8
+    );
+    assert!(
+        ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+            == ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1
     );
 };
 
@@ -203,6 +333,14 @@ pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1: ZkX509PreprocessedF
         lde_log2: ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
         width: ZK_X509_SHA_PREPROCESSED_FIXED_WIDTH_V1 as u16,
     };
+/// Exact geometry of the combined P-256 log19 fixed oracle.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1:
+    ZkX509PreprocessedFixedGeometryV1 = ZkX509PreprocessedFixedGeometryV1 {
+    oracle: ZK_X509_P256_LOG19_PREPROCESSED_FIXED_ORACLE_V1,
+    native_log2: ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
+    lde_log2: ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+    width: ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 as u16,
+};
 
 impl ZkX509PreprocessedFixedGeometryV1 {
     fn validate(self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
@@ -257,6 +395,18 @@ pub(crate) struct ZkX509ShaPreprocessedFixedCertificateV1 {
     pub(crate) descriptor_digest: [u8; 32],
 }
 
+/// Complete verifier-owned certificate for the P-256 log19 fixed oracle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ZkX509P256Log19PreprocessedFixedCertificateV1 {
+    /// Exact geometry and authenticated LDE root.
+    pub(crate) profile: ZkX509PreprocessedFixedProfileV1,
+    /// Explicit unique schedule order, independently checked against the
+    /// column manifest and registration alias map.
+    pub(crate) schedule_order: [u8; 6],
+    /// Digest of both protocol and P-256 log19 column-manifest descriptors.
+    pub(crate) descriptor_digest: [u8; 32],
+}
+
 impl ZkX509PreprocessedFixedProfileV1 {
     fn validate(self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
         self.geometry.validate()?;
@@ -275,12 +425,12 @@ impl ZkX509PreprocessedFixedProfileV1 {
 /// assembly exists, this module can validate and expand those coordinates but
 /// cannot prove that a caller sampled them from the canonical transcript.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509ShaPreprocessedFixedOpeningIndicesV1 {
+pub(crate) struct ZkX509Log19PreprocessedFixedOpeningIndicesV1 {
     indices: Vec<usize>,
 }
 
-impl ZkX509ShaPreprocessedFixedOpeningIndicesV1 {
-    fn as_slice_v1(&self) -> &[usize] {
+impl ZkX509Log19PreprocessedFixedOpeningIndicesV1 {
+    pub(crate) fn as_slice_v1(&self) -> &[usize] {
         &self.indices
     }
 }
@@ -330,19 +480,1695 @@ pub(crate) enum ZkX509PreprocessedFixedErrorV1 {
     #[error("zk-X509 preprocessed fixed root mismatch")]
     RootMismatch,
     /// No independently checked release root has been compiled yet.
-    #[error("zk-X509 SHA preprocessed fixed root is not release-pinned")]
+    #[error("zk-X509 preprocessed fixed root is not release-pinned")]
     Unpinned,
+    /// An immutable preprocessing artifact is absent, malformed, stale, or
+    /// cannot be read exactly.
+    #[error("zk-X509 preprocessed fixed artifact is invalid")]
+    Artifact,
+}
+
+/// Root-authenticated opening service for the release-preprocessed MAIN
+/// oracles.
+///
+/// A production implementation may be backed by an offline LDE/Merkle
+/// artifact or a bounded local service. The service is untrusted: the caller
+/// verifies every returned row and frontier against both compiled roots before
+/// the bytes can enter a proof envelope.
+pub(crate) trait ZkX509MainPreprocessedFixedOpeningServiceV1 {
+    fn open_main_v1(
+        &mut self,
+        profiles: &[ZkX509PreprocessedFixedProfileV1; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+        indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+    ) -> Result<Vec<u8>, ZkX509PreprocessedFixedErrorV1>;
+}
+
+/// Exact package-manifest filename. Oracle filenames are derived from their
+/// verifier-owned identifiers and never accepted from artifact bytes.
+pub(crate) const ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1: &str = "main.x5a1";
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_MAGIC_V1: [u8; 4] = *b"X5A1";
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_MAGIC_V1: [u8; 4] = *b"X5O1";
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_DESCRIPTOR_V1: &[u8] =
+    b"zk-x509-preprocessed-fixed-artifact-v1-incompatible:X5A1=exact512+version1+layout1+oracles2+batch8+u64be+compiled-profile-digest+two-exact208-byte-entries+zero-suffix:entry=kind+order+oracle+certificate-length+native-log2+lde-log2+width+batch+codec+file-length+root+descriptor-digest+artifact-profile-digest+certificate84-zero-padded:X5O1=exact288-byte-header+batch-major-row-fields+level-major-full-binary-merkle-tree:header=version1+layout1+kind+order+oracle+geometry+batch8+u64be+certificate-length+compiled-profile-digest+artifact-profile-digest+root+descriptor-digest+row-bytes+tree-bytes+file-bytes+certificate84-zero-padded:rows=ordered-column-batches+ordered-lde-rows+ordered-canonical-u64be-fields:no-row-padding:tree=leaves-first+parents-through-root:exact-length-no-prefix-no-suffix:first-release";
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_VERSION_V1: u16 = 1;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_LAYOUT_BATCH8_V1: u16 = 1;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_FIELD_CODEC_U64BE_V1: u16 = 1;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1: usize = 512;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1: usize = 48;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1: usize = 208;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_CERTIFICATE_SLOT_BYTES_V1: usize = 84;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1: usize = 288;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_VALIDATION_CHUNK_ROWS_V1: usize = 4 * 1024;
+const ZK_X509_PREPROCESSED_FIXED_ARTIFACT_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-x509:preprocessed-fixed:artifact-profile:v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u16)]
+enum ZkX509PreprocessedFixedArtifactKindV1 {
+    Sha = 1,
+    P256Log19 = 2,
+}
+
+impl ZkX509PreprocessedFixedArtifactKindV1 {
+    fn for_order_v1(order: usize) -> Result<Self, ZkX509PreprocessedFixedErrorV1> {
+        match order {
+            0 => Ok(Self::Sha),
+            1 => Ok(Self::P256Log19),
+            _ => Err(ZkX509PreprocessedFixedErrorV1::Artifact),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ZkX509PreprocessedFixedArtifactBindingV1 {
+    profile: ZkX509PreprocessedFixedProfileV1,
+    descriptor_digest: [u8; 32],
+    certificate: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct ZkX509PreprocessedFixedOracleArtifactV1<R> {
+    source: R,
+    kind: ZkX509PreprocessedFixedArtifactKindV1,
+    order: u16,
+    profile: ZkX509PreprocessedFixedProfileV1,
+    profile_digest: [u8; 32],
+    header: [u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1],
+    rows_offset: u64,
+    tree_offset: u64,
+    file_bytes: u64,
+}
+
+/// Concrete immutable random-access backend for the two release-preprocessed
+/// MAIN fixed oracles.
+///
+/// Each `X5O1` file stores batch-major LDE rows followed by a level-major full
+/// binary Merkle tree. The `X5A1` manifest binds their exact order,
+/// certificates, roots, descriptor digests, file lengths, and the compiled
+/// profile digest. Offsets and lengths are derived exclusively from the
+/// verifier-owned geometry. Runtime reads remain untrusted: every emitted
+/// sidecar is independently reverified against both pinned roots by
+/// [`request_zk_x509_main_preprocessed_fixed_openings_v1`].
+#[derive(Debug)]
+pub(crate) struct ZkX509MainPreprocessedFixedArtifactV1 {
+    compiled_profile_digest: [u8; 32],
+    profiles: [ZkX509PreprocessedFixedProfileV1; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+    oracles:
+        [ZkX509PreprocessedFixedOracleArtifactV1<File>; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+}
+
+fn artifact_u16_v1(bytes: &[u8], offset: usize) -> Result<u16, ZkX509PreprocessedFixedErrorV1> {
+    let end = offset
+        .checked_add(2)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    Ok(u16::from_be_bytes(
+        bytes
+            .get(offset..end)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?
+            .try_into()
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?,
+    ))
+}
+
+fn artifact_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, ZkX509PreprocessedFixedErrorV1> {
+    let end = offset
+        .checked_add(8)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    Ok(u64::from_be_bytes(
+        bytes
+            .get(offset..end)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?
+            .try_into()
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?,
+    ))
+}
+
+fn artifact_array32_v1(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<[u8; 32], ZkX509PreprocessedFixedErrorV1> {
+    let end = offset
+        .checked_add(32)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    bytes
+        .get(offset..end)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?
+        .try_into()
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)
+}
+
+fn artifact_oracle_filename_v1(oracle: u16) -> String {
+    format!("oracle-{oracle:04}.x5o1")
+}
+
+fn artifact_geometry_lengths_v1(
+    geometry: ZkX509PreprocessedFixedGeometryV1,
+) -> Result<(u64, u64, u64), ZkX509PreprocessedFixedErrorV1> {
+    geometry.validate()?;
+    let rows = u64::try_from(geometry.lde_rows()?)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let row_bytes = rows
+        .checked_mul(u64::from(geometry.width))
+        .and_then(|fields| fields.checked_mul(8))
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let tree_nodes = rows
+        .checked_mul(2)
+        .and_then(|nodes| nodes.checked_sub(1))
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let tree_bytes = tree_nodes
+        .checked_mul(32)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let file_bytes = u64::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+        .checked_add(row_bytes)
+        .and_then(|bytes| bytes.checked_add(tree_bytes))
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    Ok((row_bytes, tree_bytes, file_bytes))
+}
+
+fn artifact_tree_level_offset_v1(
+    tree_offset: u64,
+    geometry: ZkX509PreprocessedFixedGeometryV1,
+    level: usize,
+) -> Result<u64, ZkX509PreprocessedFixedErrorV1> {
+    let height = usize::from(geometry.lde_log2);
+    if level > height {
+        return Err(ZkX509PreprocessedFixedErrorV1::Index);
+    }
+    let mut nodes_before = 0_u64;
+    let mut level_nodes = u64::try_from(geometry.lde_rows()?)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+    for _ in 0..level {
+        nodes_before = nodes_before
+            .checked_add(level_nodes)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        level_nodes >>= 1;
+    }
+    tree_offset
+        .checked_add(
+            nodes_before
+                .checked_mul(32)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+        )
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)
+}
+
+fn artifact_stream_length_v1<S: Seek>(
+    source: &mut S,
+) -> Result<u64, ZkX509PreprocessedFixedErrorV1> {
+    let position = source
+        .stream_position()
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    let length = source
+        .seek(SeekFrom::End(0))
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    source
+        .seek(SeekFrom::Start(position))
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    Ok(length)
+}
+
+fn read_exact_artifact_at_v1<R: Read + Seek>(
+    source: &mut R,
+    offset: u64,
+    output: &mut [u8],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    source
+        .seek(SeekFrom::Start(offset))
+        .and_then(|_| source.read_exact(output))
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)
+}
+
+fn write_exact_artifact_at_v1<W: Write + Seek>(
+    output: &mut W,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    output
+        .seek(SeekFrom::Start(offset))
+        .and_then(|_| output.write_all(bytes))
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)
+}
+
+fn open_exact_artifact_file_v1(
+    path: &Path,
+    expected_bytes: u64,
+) -> Result<File, ZkX509PreprocessedFixedErrorV1> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(false)
+        .open(path)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    if !metadata.is_file() || metadata.len() != expected_bytes {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    if artifact_stream_length_v1(&mut file)? != expected_bytes {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    Ok(file)
+}
+
+fn artifact_profile_digest_v1(
+    order: usize,
+    binding: &ZkX509PreprocessedFixedArtifactBindingV1,
+) -> Result<[u8; 32], ZkX509PreprocessedFixedErrorV1> {
+    binding.profile.validate()?;
+    if binding.descriptor_digest == [0; 32]
+        || binding.certificate.is_empty()
+        || binding.certificate.len() > ZK_X509_PREPROCESSED_FIXED_ARTIFACT_CERTIFICATE_SLOT_BYTES_V1
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    let kind = ZkX509PreprocessedFixedArtifactKindV1::for_order_v1(order)?;
+    let order = u16::try_from(order).map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let geometry = binding.profile.geometry;
+    let (row_bytes, tree_bytes, file_bytes) = artifact_geometry_lengths_v1(geometry)?;
+    let mut identity = [0_u8; 10];
+    identity[..2].copy_from_slice(&(kind as u16).to_be_bytes());
+    identity[2..4].copy_from_slice(&order.to_be_bytes());
+    identity[4..6].copy_from_slice(&geometry.oracle.to_be_bytes());
+    identity[6] = geometry.native_log2;
+    identity[7] = geometry.lde_log2;
+    identity[8..10].copy_from_slice(&geometry.width.to_be_bytes());
+    let mut framing = [0_u8; 30];
+    framing[..2]
+        .copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_LAYOUT_BATCH8_V1.to_be_bytes());
+    framing[2..4].copy_from_slice(
+        &u16::try_from(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    framing[4..6]
+        .copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_FIELD_CODEC_U64BE_V1.to_be_bytes());
+    framing[6..14].copy_from_slice(&row_bytes.to_be_bytes());
+    framing[14..22].copy_from_slice(&tree_bytes.to_be_bytes());
+    framing[22..30].copy_from_slice(&file_bytes.to_be_bytes());
+    sha256_frame_v1(
+        ZK_X509_PREPROCESSED_FIXED_ARTIFACT_PROFILE_DIGEST_DOMAIN_V1,
+        &[
+            ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1,
+            ZK_X509_PREPROCESSED_FIXED_ARTIFACT_DESCRIPTOR_V1,
+            &identity,
+            &framing,
+            &binding.profile.root,
+            &binding.descriptor_digest,
+            &binding.certificate,
+        ],
+    )
+    .map_err(map_transparent_error_v1)
+}
+
+fn validate_artifact_bindings_v1(
+    bindings: &[ZkX509PreprocessedFixedArtifactBindingV1;
+         ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let profiles = [bindings[0].profile, bindings[1].profile];
+    validate_profiles_v1(&profiles)?;
+    for (order, binding) in bindings.iter().enumerate() {
+        let _ = artifact_profile_digest_v1(order, binding)?;
+    }
+    Ok(())
+}
+
+fn encode_artifact_manifest_v1(
+    compiled_profile_digest: [u8; 32],
+    bindings: &[ZkX509PreprocessedFixedArtifactBindingV1;
+         ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+) -> Result<
+    [u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1],
+    ZkX509PreprocessedFixedErrorV1,
+> {
+    if compiled_profile_digest == [0; 32] {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    validate_artifact_bindings_v1(bindings)?;
+    let mut manifest = [0_u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1];
+    manifest[..4].copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_MAGIC_V1);
+    manifest[4..6].copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_VERSION_V1.to_be_bytes());
+    manifest[6..8].copy_from_slice(
+        &u16::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    manifest[8..10]
+        .copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_LAYOUT_BATCH8_V1.to_be_bytes());
+    manifest[10..12].copy_from_slice(
+        &u16::try_from(ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    manifest[12..14].copy_from_slice(
+        &u16::try_from(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    manifest[14..16]
+        .copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_FIELD_CODEC_U64BE_V1.to_be_bytes());
+    manifest[16..48].copy_from_slice(&compiled_profile_digest);
+    for (order, binding) in bindings.iter().enumerate() {
+        let start = artifact_manifest_entry_offset_v1(order)?;
+        let end = start
+            .checked_add(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let entry = manifest
+            .get_mut(start..end)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let geometry = binding.profile.geometry;
+        let kind = ZkX509PreprocessedFixedArtifactKindV1::for_order_v1(order)?;
+        let (_, _, file_bytes) = artifact_geometry_lengths_v1(geometry)?;
+        entry[..2].copy_from_slice(&(kind as u16).to_be_bytes());
+        entry[2..4].copy_from_slice(
+            &u16::try_from(order)
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                .to_be_bytes(),
+        );
+        entry[4..6].copy_from_slice(&geometry.oracle.to_be_bytes());
+        entry[6..8].copy_from_slice(
+            &u16::try_from(binding.certificate.len())
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                .to_be_bytes(),
+        );
+        entry[8] = geometry.native_log2;
+        entry[9] = geometry.lde_log2;
+        entry[10..12].copy_from_slice(&geometry.width.to_be_bytes());
+        entry[12..14].copy_from_slice(
+            &u16::try_from(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                .to_be_bytes(),
+        );
+        entry[14..16].copy_from_slice(
+            &ZK_X509_PREPROCESSED_FIXED_ARTIFACT_FIELD_CODEC_U64BE_V1.to_be_bytes(),
+        );
+        entry[16..24].copy_from_slice(&file_bytes.to_be_bytes());
+        entry[24..56].copy_from_slice(&binding.profile.root);
+        entry[56..88].copy_from_slice(&binding.descriptor_digest);
+        entry[88..120].copy_from_slice(&artifact_profile_digest_v1(order, binding)?);
+        entry[120..120 + binding.certificate.len()].copy_from_slice(&binding.certificate);
+    }
+    Ok(manifest)
+}
+
+fn artifact_manifest_entry_offset_v1(
+    index: usize,
+) -> Result<usize, ZkX509PreprocessedFixedErrorV1> {
+    index
+        .checked_mul(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1)
+        .and_then(|bytes| {
+            ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1.checked_add(bytes)
+        })
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)
+}
+
+fn read_exact_artifact_manifest_from_v1<R: Read + Seek>(
+    source: &mut R,
+) -> Result<
+    [u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1],
+    ZkX509PreprocessedFixedErrorV1,
+> {
+    let expected = u64::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+    if artifact_stream_length_v1(source)? != expected {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    let mut manifest = [0_u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1];
+    read_exact_artifact_at_v1(source, 0, &mut manifest)?;
+    Ok(manifest)
+}
+
+fn read_exact_artifact_manifest_v1(
+    package: &Path,
+) -> Result<
+    [u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1],
+    ZkX509PreprocessedFixedErrorV1,
+> {
+    let path = package.join(ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1);
+    let mut file = open_exact_artifact_file_v1(
+        &path,
+        u64::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?,
+    )?;
+    read_exact_artifact_manifest_from_v1(&mut file)
+}
+
+fn validate_artifact_manifest_entry_v1(
+    manifest: &[u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1],
+    index: usize,
+    binding: &ZkX509PreprocessedFixedArtifactBindingV1,
+) -> Result<u64, ZkX509PreprocessedFixedErrorV1> {
+    let start = artifact_manifest_entry_offset_v1(index)?;
+    let end = start
+        .checked_add(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let entry = manifest
+        .get(start..end)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    let kind = ZkX509PreprocessedFixedArtifactKindV1::for_order_v1(index)?;
+    let certificate_len = usize::from(artifact_u16_v1(entry, 6)?);
+    let (_, _, expected_file_bytes) = artifact_geometry_lengths_v1(binding.profile.geometry)?;
+    if artifact_u16_v1(entry, 0)? != kind as u16
+        || artifact_u16_v1(entry, 2)?
+            != u16::try_from(index).map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+        || artifact_u16_v1(entry, 4)? != binding.profile.geometry.oracle
+        || certificate_len != binding.certificate.len()
+        || certificate_len > ZK_X509_PREPROCESSED_FIXED_ARTIFACT_CERTIFICATE_SLOT_BYTES_V1
+        || entry[8] != binding.profile.geometry.native_log2
+        || entry[9] != binding.profile.geometry.lde_log2
+        || artifact_u16_v1(entry, 10)? != binding.profile.geometry.width
+        || artifact_u16_v1(entry, 12)?
+            != u16::try_from(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+        || artifact_u16_v1(entry, 14)? != ZK_X509_PREPROCESSED_FIXED_ARTIFACT_FIELD_CODEC_U64BE_V1
+        || artifact_u64_v1(entry, 16)? != expected_file_bytes
+        || artifact_array32_v1(entry, 24)? != binding.profile.root
+        || artifact_array32_v1(entry, 56)? != binding.descriptor_digest
+        || artifact_array32_v1(entry, 88)? != artifact_profile_digest_v1(index, binding)?
+        || entry.get(120..120 + certificate_len) != Some(binding.certificate.as_slice())
+        || entry
+            .get(120 + certificate_len..)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Artifact)?
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    Ok(expected_file_bytes)
+}
+
+fn encode_artifact_oracle_header_v1(
+    compiled_profile_digest: [u8; 32],
+    order: usize,
+    binding: &ZkX509PreprocessedFixedArtifactBindingV1,
+) -> Result<
+    [u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1],
+    ZkX509PreprocessedFixedErrorV1,
+> {
+    if compiled_profile_digest == [0; 32] {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    let geometry = binding.profile.geometry;
+    let mut header = [0_u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1];
+    let kind = ZkX509PreprocessedFixedArtifactKindV1::for_order_v1(order)?;
+    let profile_digest = artifact_profile_digest_v1(order, binding)?;
+    let (row_bytes, tree_bytes, file_bytes) = artifact_geometry_lengths_v1(geometry)?;
+    header[..4].copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_MAGIC_V1);
+    header[4..6].copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_VERSION_V1.to_be_bytes());
+    header[6..8].copy_from_slice(
+        &u16::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    header[8..10]
+        .copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_LAYOUT_BATCH8_V1.to_be_bytes());
+    header[10..12].copy_from_slice(&(kind as u16).to_be_bytes());
+    header[12..14].copy_from_slice(
+        &u16::try_from(order)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    header[14..16].copy_from_slice(&geometry.oracle.to_be_bytes());
+    header[16] = geometry.native_log2;
+    header[17] = geometry.lde_log2;
+    header[18..20].copy_from_slice(&geometry.width.to_be_bytes());
+    header[20..22].copy_from_slice(
+        &u16::try_from(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    header[22..24]
+        .copy_from_slice(&ZK_X509_PREPROCESSED_FIXED_ARTIFACT_FIELD_CODEC_U64BE_V1.to_be_bytes());
+    header[24..26].copy_from_slice(
+        &u16::try_from(binding.certificate.len())
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+            .to_be_bytes(),
+    );
+    header[32..64].copy_from_slice(&compiled_profile_digest);
+    header[64..96].copy_from_slice(&profile_digest);
+    header[96..128].copy_from_slice(&binding.profile.root);
+    header[128..160].copy_from_slice(&binding.descriptor_digest);
+    header[160..168].copy_from_slice(&row_bytes.to_be_bytes());
+    header[168..176].copy_from_slice(&tree_bytes.to_be_bytes());
+    header[176..184].copy_from_slice(&file_bytes.to_be_bytes());
+    header[184..184 + binding.certificate.len()].copy_from_slice(&binding.certificate);
+    Ok(header)
+}
+
+fn open_artifact_oracle_source_v1<R: Read + Seek>(
+    mut source: R,
+    compiled_profile_digest: [u8; 32],
+    order: usize,
+    binding: &ZkX509PreprocessedFixedArtifactBindingV1,
+    expected_file_bytes: u64,
+) -> Result<ZkX509PreprocessedFixedOracleArtifactV1<R>, ZkX509PreprocessedFixedErrorV1> {
+    let geometry = binding.profile.geometry;
+    let expected_header =
+        encode_artifact_oracle_header_v1(compiled_profile_digest, order, binding)?;
+    if artifact_stream_length_v1(&mut source)? != expected_file_bytes {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    let mut header = [0_u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1];
+    read_exact_artifact_at_v1(&mut source, 0, &mut header)?;
+    if header != expected_header {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    let (row_bytes, tree_bytes, derived_file_bytes) = artifact_geometry_lengths_v1(geometry)?;
+    if derived_file_bytes != expected_file_bytes {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    let rows_offset = u64::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let tree_offset = rows_offset
+        .checked_add(row_bytes)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let root_offset = tree_offset
+        .checked_add(
+            tree_bytes
+                .checked_sub(32)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+        )
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    let mut stored_root = [0_u8; 32];
+    read_exact_artifact_at_v1(&mut source, root_offset, &mut stored_root)?;
+    if stored_root != binding.profile.root {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    Ok(ZkX509PreprocessedFixedOracleArtifactV1 {
+        source,
+        kind: ZkX509PreprocessedFixedArtifactKindV1::for_order_v1(order)?,
+        order: u16::try_from(order).map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?,
+        profile: binding.profile,
+        profile_digest: artifact_profile_digest_v1(order, binding)?,
+        header,
+        rows_offset,
+        tree_offset,
+        file_bytes: expected_file_bytes,
+    })
+}
+
+fn open_artifact_oracle_v1(
+    package: &Path,
+    compiled_profile_digest: [u8; 32],
+    order: usize,
+    binding: &ZkX509PreprocessedFixedArtifactBindingV1,
+    expected_file_bytes: u64,
+) -> Result<ZkX509PreprocessedFixedOracleArtifactV1<File>, ZkX509PreprocessedFixedErrorV1> {
+    let path = package.join(artifact_oracle_filename_v1(binding.profile.geometry.oracle));
+    let file = open_exact_artifact_file_v1(&path, expected_file_bytes)?;
+    open_artifact_oracle_source_v1(
+        file,
+        compiled_profile_digest,
+        order,
+        binding,
+        expected_file_bytes,
+    )
+}
+
+struct ZkX509PreprocessedFixedOracleArtifactWriterV1<'a, RW> {
+    output: &'a mut RW,
+    compiled_profile_digest: [u8; 32],
+    order: usize,
+    binding: ZkX509PreprocessedFixedArtifactBindingV1,
+    rows_offset: u64,
+    tree_offset: u64,
+    file_bytes: u64,
+    next_column: usize,
+}
+
+impl<'a, RW: Read + Write + Seek> ZkX509PreprocessedFixedOracleArtifactWriterV1<'a, RW> {
+    fn begin_bound_v1(
+        output: &'a mut RW,
+        compiled_profile_digest: [u8; 32],
+        order: usize,
+        binding: ZkX509PreprocessedFixedArtifactBindingV1,
+    ) -> Result<Self, ZkX509PreprocessedFixedErrorV1> {
+        let header = encode_artifact_oracle_header_v1(compiled_profile_digest, order, &binding)?;
+        if artifact_stream_length_v1(output)? != 0 {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        write_exact_artifact_at_v1(output, 0, &header)?;
+        let rows_offset = u64::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        if artifact_stream_length_v1(output)? != rows_offset {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        let (row_bytes, _, file_bytes) = artifact_geometry_lengths_v1(binding.profile.geometry)?;
+        let tree_offset = rows_offset
+            .checked_add(row_bytes)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        Ok(Self {
+            output,
+            compiled_profile_digest,
+            order,
+            binding,
+            rows_offset,
+            tree_offset,
+            file_bytes,
+            next_column: 0,
+        })
+    }
+
+    fn write_lde_batch_v1<I, Row>(
+        &mut self,
+        column_start: usize,
+        rows: I,
+    ) -> Result<(), ZkX509PreprocessedFixedErrorV1>
+    where
+        I: IntoIterator<Item = Row>,
+        Row: AsRef<[F]>,
+    {
+        let geometry = self.binding.profile.geometry;
+        if column_start != self.next_column || column_start >= usize::from(geometry.width) {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        let batch_width = usize::from(geometry.width)
+            .checked_sub(column_start)
+            .map(|remaining| remaining.min(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let lde_rows = geometry.lde_rows()?;
+        let batch_offset = u64::try_from(column_start)
+            .ok()
+            .and_then(|column| {
+                u64::try_from(lde_rows)
+                    .ok()
+                    .and_then(|rows| column.checked_mul(rows))
+            })
+            .and_then(|fields| fields.checked_mul(8))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let write_offset = self
+            .rows_offset
+            .checked_add(batch_offset)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        if artifact_stream_length_v1(self.output)? != write_offset {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        self.output
+            .seek(SeekFrom::Start(write_offset))
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+        let mut row_count = 0_usize;
+        for row in rows {
+            if row_count >= lde_rows {
+                return Err(ZkX509PreprocessedFixedErrorV1::Column);
+            }
+            let row = row.as_ref();
+            if row.len() != batch_width || row.iter().any(|value| F::canonical(value.0).is_none()) {
+                return Err(ZkX509PreprocessedFixedErrorV1::Column);
+            }
+            let mut encoded = [0_u8; ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 * 8];
+            for (target, value) in encoded[..batch_width * 8]
+                .chunks_exact_mut(8)
+                .zip(row.iter().copied())
+            {
+                target.copy_from_slice(&value.0.to_be_bytes());
+            }
+            self.output
+                .write_all(&encoded[..batch_width * 8])
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+            row_count = row_count
+                .checked_add(1)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        }
+        if row_count != lde_rows {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        let expected_end = write_offset
+            .checked_add(
+                u64::try_from(lde_rows)
+                    .ok()
+                    .and_then(|rows| {
+                        u64::try_from(batch_width)
+                            .ok()
+                            .and_then(|width| rows.checked_mul(width))
+                    })
+                    .and_then(|fields| fields.checked_mul(8))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        if artifact_stream_length_v1(self.output)? != expected_end {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        self.next_column = self
+            .next_column
+            .checked_add(batch_width)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        Ok(())
+    }
+
+    fn write_tree_v1(&mut self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        let geometry = self.binding.profile.geometry;
+        let lde_rows = geometry.lde_rows()?;
+        if self.next_column != usize::from(geometry.width)
+            || artifact_stream_length_v1(self.output)? != self.tree_offset
+        {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        let chunk_rows = ZK_X509_PREPROCESSED_FIXED_ARTIFACT_VALIDATION_CHUNK_ROWS_V1
+            .min(lde_rows)
+            .max(1);
+        let maximum_batch_bytes = chunk_rows
+            .checked_mul(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            .and_then(|fields| fields.checked_mul(8))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let maximum_node_bytes = chunk_rows
+            .checked_mul(2 * 32)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let mut batch_bytes = Vec::new();
+        batch_bytes
+            .try_reserve_exact(maximum_batch_bytes)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        batch_bytes.resize(maximum_batch_bytes, 0);
+        let mut node_bytes = Vec::new();
+        node_bytes
+            .try_reserve_exact(maximum_node_bytes)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        node_bytes.resize(maximum_node_bytes, 0);
+        let leaf_prefix = fixed_leaf_prefix_hasher_v1(geometry)?;
+
+        for row_start in (0..lde_rows).step_by(chunk_rows) {
+            let row_count = lde_rows
+                .checked_sub(row_start)
+                .map(|remaining| remaining.min(chunk_rows))
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let mut hashers = Vec::new();
+            hashers
+                .try_reserve_exact(row_count)
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+            hashers.resize(row_count, leaf_prefix.clone());
+            for column_start in
+                (0..usize::from(geometry.width)).step_by(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            {
+                let batch_width = usize::from(geometry.width)
+                    .checked_sub(column_start)
+                    .map(|remaining| remaining.min(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let byte_count = row_count
+                    .checked_mul(batch_width)
+                    .and_then(|fields| fields.checked_mul(8))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let batch_offset = u64::try_from(column_start)
+                    .ok()
+                    .and_then(|column| {
+                        u64::try_from(lde_rows)
+                            .ok()
+                            .and_then(|rows| column.checked_mul(rows))
+                    })
+                    .and_then(|fields| fields.checked_mul(8))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let row_offset = u64::try_from(row_start)
+                    .ok()
+                    .and_then(|row| {
+                        u64::try_from(batch_width)
+                            .ok()
+                            .and_then(|width| row.checked_mul(width))
+                    })
+                    .and_then(|fields| fields.checked_mul(8))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let offset = self
+                    .rows_offset
+                    .checked_add(batch_offset)
+                    .and_then(|offset| offset.checked_add(row_offset))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                read_exact_artifact_at_v1(
+                    self.output,
+                    offset,
+                    batch_bytes
+                        .get_mut(..byte_count)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )?;
+                let encoded_row_bytes = batch_width
+                    .checked_mul(8)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                for (hasher, encoded_row) in hashers
+                    .iter_mut()
+                    .zip(batch_bytes[..byte_count].chunks_exact(encoded_row_bytes))
+                {
+                    if encoded_row.chunks_exact(8).any(|field| {
+                        <[u8; 8]>::try_from(field)
+                            .ok()
+                            .and_then(|field| F::canonical(u64::from_be_bytes(field)))
+                            .is_none()
+                    }) {
+                        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+                    }
+                    hasher.update(encoded_row);
+                }
+            }
+            let leaf_bytes = row_count
+                .checked_mul(32)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            for (target, hasher) in node_bytes[..leaf_bytes].chunks_exact_mut(32).zip(hashers) {
+                target.copy_from_slice(&<[u8; 32]>::from(hasher.finalize()));
+            }
+            let leaf_offset = self
+                .tree_offset
+                .checked_add(
+                    u64::try_from(row_start)
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                        .checked_mul(32)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            if artifact_stream_length_v1(self.output)? != leaf_offset {
+                return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+            }
+            write_exact_artifact_at_v1(
+                self.output,
+                leaf_offset,
+                node_bytes
+                    .get(..leaf_bytes)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )?;
+        }
+
+        let mut parent_bytes = Vec::new();
+        parent_bytes
+            .try_reserve_exact(
+                chunk_rows
+                    .checked_mul(32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        parent_bytes.resize(
+            chunk_rows
+                .checked_mul(32)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            0,
+        );
+        for level in 0..usize::from(geometry.lde_log2) {
+            let child_count = lde_rows
+                .checked_shr(
+                    u32::try_from(level).map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let parent_count = child_count / 2;
+            let child_level_offset =
+                artifact_tree_level_offset_v1(self.tree_offset, geometry, level)?;
+            let parent_level_offset =
+                artifact_tree_level_offset_v1(self.tree_offset, geometry, level + 1)?;
+            if artifact_stream_length_v1(self.output)? != parent_level_offset {
+                return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+            }
+            for parent_start in (0..parent_count).step_by(chunk_rows) {
+                let count = parent_count
+                    .checked_sub(parent_start)
+                    .map(|remaining| remaining.min(chunk_rows))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let child_bytes = count
+                    .checked_mul(2 * 32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let encoded_parent_bytes = count
+                    .checked_mul(32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let child_offset = child_level_offset
+                    .checked_add(
+                        u64::try_from(parent_start)
+                            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                            .checked_mul(2 * 32)
+                            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                    )
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                read_exact_artifact_at_v1(
+                    self.output,
+                    child_offset,
+                    node_bytes
+                        .get_mut(..child_bytes)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )?;
+                for (target, children) in parent_bytes[..encoded_parent_bytes]
+                    .chunks_exact_mut(32)
+                    .zip(node_bytes[..child_bytes].chunks_exact(64))
+                {
+                    let left: [u8; 32] = children[..32]
+                        .try_into()
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+                    let right: [u8; 32] = children[32..]
+                        .try_into()
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+                    target.copy_from_slice(&sha256_merkle_node_v1(
+                        FIXED_NODE_DOMAIN_V1,
+                        &left,
+                        &right,
+                    ));
+                }
+                let parent_offset = parent_level_offset
+                    .checked_add(
+                        u64::try_from(parent_start)
+                            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                            .checked_mul(32)
+                            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                    )
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                if artifact_stream_length_v1(self.output)? != parent_offset {
+                    return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+                }
+                write_exact_artifact_at_v1(
+                    self.output,
+                    parent_offset,
+                    parent_bytes
+                        .get(..encoded_parent_bytes)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )?;
+            }
+        }
+        if artifact_stream_length_v1(self.output)? != self.file_bytes {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        let mut root = [0_u8; 32];
+        let root_offset = self
+            .file_bytes
+            .checked_sub(32)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        read_exact_artifact_at_v1(self.output, root_offset, &mut root)?;
+        if root != self.binding.profile.root {
+            return Err(ZkX509PreprocessedFixedErrorV1::RootMismatch);
+        }
+        Ok(())
+    }
+
+    fn finish_v1(mut self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        self.write_tree_v1()?;
+        self.output
+            .flush()
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+        {
+            let mut reader = open_artifact_oracle_source_v1(
+                &mut *self.output,
+                self.compiled_profile_digest,
+                self.order,
+                &self.binding,
+                self.file_bytes,
+            )?;
+            reader.validate_complete_v1()?;
+        }
+        Ok(())
+    }
+}
+
+fn write_artifact_oracle_bound_v1<RW: Read + Write + Seek>(
+    output: &mut RW,
+    compiled_profile_digest: [u8; 32],
+    order: usize,
+    binding: ZkX509PreprocessedFixedArtifactBindingV1,
+    mut native_column: impl FnMut(usize) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1>,
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let geometry = binding.profile.geometry;
+    checked_release_root_memory_v1(geometry)?;
+    let mut writer = ZkX509PreprocessedFixedOracleArtifactWriterV1::begin_bound_v1(
+        output,
+        compiled_profile_digest,
+        order,
+        binding,
+    )?;
+    for column_start in
+        (0..usize::from(geometry.width)).step_by(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+    {
+        let batch_width = usize::from(geometry.width)
+            .checked_sub(column_start)
+            .map(|remaining| remaining.min(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let native = materialize_native_batch8_v1(geometry, column_start, &mut native_column)?;
+        let evaluations = checked_goldilocks_evaluate_coset_batch8_v1(native, geometry)?;
+        writer.write_lde_batch_v1(
+            column_start,
+            evaluations.iter().map(|row| &row[..batch_width]),
+        )?;
+    }
+    writer.finish_v1()
+}
+
+fn write_artifact_manifest_bound_v1<RW: Read + Write + Seek>(
+    output: &mut RW,
+    compiled_profile_digest: [u8; 32],
+    bindings: &[ZkX509PreprocessedFixedArtifactBindingV1;
+         ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    if artifact_stream_length_v1(output)? != 0 {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    let manifest = encode_artifact_manifest_v1(compiled_profile_digest, bindings)?;
+    write_exact_artifact_at_v1(output, 0, &manifest)?;
+    output
+        .flush()
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+    if artifact_stream_length_v1(output)?
+        != u64::try_from(ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_BYTES_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+        || read_exact_artifact_manifest_from_v1(output)? != manifest
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    Ok(())
+}
+
+fn release_artifact_bindings_v1() -> Result<
+    [ZkX509PreprocessedFixedArtifactBindingV1; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+    ZkX509PreprocessedFixedErrorV1,
+> {
+    let sha = pinned_zk_x509_sha_preprocessed_fixed_certificate_v1()?;
+    let p256 = pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1()?;
+    let bindings = [
+        ZkX509PreprocessedFixedArtifactBindingV1 {
+            profile: sha.profile,
+            descriptor_digest: sha.descriptor_digest,
+            certificate: sha.encode_v1()?.to_vec(),
+        },
+        ZkX509PreprocessedFixedArtifactBindingV1 {
+            profile: p256.profile,
+            descriptor_digest: p256.descriptor_digest,
+            certificate: p256.encode_v1()?.to_vec(),
+        },
+    ];
+    validate_artifact_bindings_v1(&bindings)?;
+    Ok(bindings)
+}
+
+/// Write the complete pinned SHA X5O1 artifact without materializing the
+/// artifact or full Merkle tree in memory.
+pub(crate) fn write_zk_x509_sha_preprocessed_fixed_artifact_v1<RW: Read + Write + Seek>(
+    output: &mut RW,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let bindings = release_artifact_bindings_v1()?;
+    let mut provider = ZkX509ShaPreprocessedNativeColumnProviderV1::new_v1()?;
+    write_artifact_oracle_bound_v1(
+        output,
+        compiled_profile_digest,
+        0,
+        bindings[0].clone(),
+        |column| provider.native_column_v1(column),
+    )
+}
+
+/// Write the complete pinned P-256 log19 X5O1 artifact without materializing
+/// the artifact or full Merkle tree in memory.
+pub(crate) fn write_zk_x509_p256_log19_preprocessed_fixed_artifact_v1<RW: Read + Write + Seek>(
+    output: &mut RW,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let bindings = release_artifact_bindings_v1()?;
+    let mut provider = ZkX509P256Log19PreprocessedNativeColumnProviderV1::new_v1()?;
+    write_artifact_oracle_bound_v1(
+        output,
+        compiled_profile_digest,
+        1,
+        bindings[1].clone(),
+        |column| provider.native_column_v1(column),
+    )
+}
+
+/// Write the canonical X5A1 manifest after both pinned X5O1 streams have been
+/// completed and independently validated.
+pub(crate) fn write_zk_x509_main_preprocessed_fixed_artifact_manifest_v1<
+    RW: Read + Write + Seek,
+>(
+    output: &mut RW,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let bindings = release_artifact_bindings_v1()?;
+    write_artifact_manifest_bound_v1(output, compiled_profile_digest, &bindings)
+}
+
+/// Validate the canonical pinned X5A1 manifest from an injectable stream.
+pub(crate) fn validate_zk_x509_main_preprocessed_fixed_artifact_manifest_v1<R: Read + Seek>(
+    source: &mut R,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let bindings = release_artifact_bindings_v1()?;
+    let actual = read_exact_artifact_manifest_from_v1(source)?;
+    if actual != encode_artifact_manifest_v1(compiled_profile_digest, &bindings)? {
+        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+    }
+    Ok(())
+}
+
+/// Stream the complete two-oracle release package into three empty,
+/// independently staged outputs.
+///
+/// The manifest is written last. Callers must publish the staged outputs
+/// atomically only after this function succeeds.
+pub(crate) fn write_zk_x509_main_preprocessed_fixed_artifact_package_v1<
+    Sha: Read + Write + Seek,
+    P256: Read + Write + Seek,
+    Manifest: Read + Write + Seek,
+>(
+    sha_output: &mut Sha,
+    p256_output: &mut P256,
+    manifest_output: &mut Manifest,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    write_zk_x509_sha_preprocessed_fixed_artifact_v1(sha_output, compiled_profile_digest)?;
+    write_zk_x509_p256_log19_preprocessed_fixed_artifact_v1(p256_output, compiled_profile_digest)?;
+    write_zk_x509_main_preprocessed_fixed_artifact_manifest_v1(
+        manifest_output,
+        compiled_profile_digest,
+    )
+}
+
+/// Explicitly validate a complete pinned SHA X5O1 stream.
+pub(crate) fn validate_zk_x509_sha_preprocessed_fixed_artifact_v1<R: Read + Seek>(
+    source: R,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let bindings = release_artifact_bindings_v1()?;
+    let (_, _, file_bytes) = artifact_geometry_lengths_v1(bindings[0].profile.geometry)?;
+    let mut reader = open_artifact_oracle_source_v1(
+        source,
+        compiled_profile_digest,
+        0,
+        &bindings[0],
+        file_bytes,
+    )?;
+    reader.validate_complete_v1()
+}
+
+/// Explicitly validate a complete pinned P-256 log19 X5O1 stream.
+pub(crate) fn validate_zk_x509_p256_log19_preprocessed_fixed_artifact_v1<R: Read + Seek>(
+    source: R,
+    compiled_profile_digest: [u8; 32],
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    let bindings = release_artifact_bindings_v1()?;
+    let (_, _, file_bytes) = artifact_geometry_lengths_v1(bindings[1].profile.geometry)?;
+    let mut reader = open_artifact_oracle_source_v1(
+        source,
+        compiled_profile_digest,
+        1,
+        &bindings[1],
+        file_bytes,
+    )?;
+    reader.validate_complete_v1()
+}
+
+impl ZkX509MainPreprocessedFixedArtifactV1 {
+    /// Open the sole release package against independently pinned
+    /// certificates and an externally supplied compiled-profile digest.
+    ///
+    /// The digest must come from the verifier-owned compiled profile. It is
+    /// an input instead of being recomputed here to avoid a profile/artifact
+    /// construction cycle.
+    pub(crate) fn open_release_v1(
+        package: &Path,
+        compiled_profile_digest: [u8; 32],
+    ) -> Result<Self, ZkX509PreprocessedFixedErrorV1> {
+        Self::open_bound_v1(
+            package,
+            compiled_profile_digest,
+            release_artifact_bindings_v1()?,
+        )
+    }
+
+    fn open_bound_v1(
+        package: &Path,
+        compiled_profile_digest: [u8; 32],
+        bindings: [ZkX509PreprocessedFixedArtifactBindingV1;
+            ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+    ) -> Result<Self, ZkX509PreprocessedFixedErrorV1> {
+        if compiled_profile_digest == [0; 32]
+            || !package
+                .metadata()
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?
+                .is_dir()
+        {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        let profiles = [bindings[0].profile, bindings[1].profile];
+        validate_artifact_bindings_v1(&bindings)?;
+        let manifest = read_exact_artifact_manifest_v1(package)?;
+        if manifest != encode_artifact_manifest_v1(compiled_profile_digest, &bindings)? {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        let mut oracles = Vec::new();
+        oracles
+            .try_reserve_exact(ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        for (index, binding) in bindings.iter().enumerate() {
+            let expected_file_bytes =
+                validate_artifact_manifest_entry_v1(&manifest, index, binding)?;
+            let oracle = open_artifact_oracle_v1(
+                package,
+                compiled_profile_digest,
+                index,
+                binding,
+                expected_file_bytes,
+            )?;
+            oracles.push(oracle);
+        }
+        let oracles = oracles
+            .try_into()
+            .map_err(|_: Vec<_>| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+        Ok(Self {
+            compiled_profile_digest,
+            profiles,
+            oracles,
+        })
+    }
+
+    /// Explicitly stream and validate every row and every internal Merkle
+    /// node in a release package.
+    ///
+    /// Ordinary runtime opening intentionally does not perform this
+    /// ceremony-scale scan: each requested multiproof is authenticated to the
+    /// pinned roots before use. Release preparation and artifact installation
+    /// should call this method once before making a package available.
+    pub(crate) fn validate_release_package_v1(
+        package: &Path,
+        compiled_profile_digest: [u8; 32],
+    ) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        let mut artifact = Self::open_release_v1(package, compiled_profile_digest)?;
+        artifact.validate_complete_v1()
+    }
+
+    fn validate_complete_v1(&mut self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        for oracle in &mut self.oracles {
+            oracle.validate_complete_v1()?;
+        }
+        Ok(())
+    }
+}
+
+impl<R: Read + Seek> ZkX509PreprocessedFixedOracleArtifactV1<R> {
+    fn validate_open_source_v1(&mut self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        if artifact_stream_length_v1(&mut self.source)? != self.file_bytes {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        let mut header = [0_u8; ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1];
+        read_exact_artifact_at_v1(&mut self.source, 0, &mut header)?;
+        let (_, tree_bytes, _) = artifact_geometry_lengths_v1(self.profile.geometry)?;
+        let root_offset = self
+            .tree_offset
+            .checked_add(
+                tree_bytes
+                    .checked_sub(32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let mut root = [0_u8; 32];
+        read_exact_artifact_at_v1(&mut self.source, root_offset, &mut root)?;
+        if header != self.header
+            || artifact_u16_v1(&header, 10)? != self.kind as u16
+            || artifact_u16_v1(&header, 12)? != self.order
+            || artifact_array32_v1(&header, 64)? != self.profile_digest
+            || root != self.profile.root
+        {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        Ok(())
+    }
+
+    fn validate_complete_v1(&mut self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        self.validate_open_source_v1()?;
+        let geometry = self.profile.geometry;
+        let lde_rows = geometry.lde_rows()?;
+        let validation_rows = ZK_X509_PREPROCESSED_FIXED_ARTIFACT_VALIDATION_CHUNK_ROWS_V1
+            .min(lde_rows)
+            .max(1);
+        let maximum_batch_bytes = validation_rows
+            .checked_mul(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            .and_then(|fields| fields.checked_mul(core::mem::size_of::<u64>()))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let maximum_leaf_bytes = validation_rows
+            .checked_mul(32)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let mut batch_bytes = Vec::new();
+        batch_bytes
+            .try_reserve_exact(maximum_batch_bytes)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        batch_bytes.resize(maximum_batch_bytes, 0);
+        let mut stored_nodes = Vec::new();
+        stored_nodes
+            .try_reserve_exact(maximum_leaf_bytes)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        stored_nodes.resize(maximum_leaf_bytes, 0);
+        let leaf_prefix = fixed_leaf_prefix_hasher_v1(geometry)?;
+
+        for row_start in (0..lde_rows).step_by(validation_rows) {
+            let row_count = lde_rows
+                .checked_sub(row_start)
+                .map(|remaining| remaining.min(validation_rows))
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let mut hashers = Vec::new();
+            hashers
+                .try_reserve_exact(row_count)
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+            hashers.resize(row_count, leaf_prefix.clone());
+            for column_start in
+                (0..usize::from(geometry.width)).step_by(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            {
+                let batch_width = usize::from(geometry.width)
+                    .checked_sub(column_start)
+                    .map(|remaining| remaining.min(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let byte_count = row_count
+                    .checked_mul(batch_width)
+                    .and_then(|fields| fields.checked_mul(core::mem::size_of::<u64>()))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let batch_offset = u64::try_from(column_start)
+                    .ok()
+                    .and_then(|column| {
+                        u64::try_from(lde_rows)
+                            .ok()
+                            .and_then(|rows| column.checked_mul(rows))
+                    })
+                    .and_then(|fields| fields.checked_mul(8))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let row_offset = u64::try_from(row_start)
+                    .ok()
+                    .and_then(|row| {
+                        u64::try_from(batch_width)
+                            .ok()
+                            .and_then(|width| row.checked_mul(width))
+                    })
+                    .and_then(|fields| fields.checked_mul(8))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let offset = self
+                    .rows_offset
+                    .checked_add(batch_offset)
+                    .and_then(|offset| offset.checked_add(row_offset))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                read_exact_artifact_at_v1(
+                    &mut self.source,
+                    offset,
+                    batch_bytes
+                        .get_mut(..byte_count)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )?;
+                let encoded_row_bytes = batch_width
+                    .checked_mul(core::mem::size_of::<u64>())
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                for (hasher, encoded_row) in hashers
+                    .iter_mut()
+                    .zip(batch_bytes[..byte_count].chunks_exact(encoded_row_bytes))
+                {
+                    if encoded_row.chunks_exact(8).any(|field| {
+                        let Ok(field) = <[u8; 8]>::try_from(field) else {
+                            return true;
+                        };
+                        F::canonical(u64::from_be_bytes(field)).is_none()
+                    }) {
+                        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+                    }
+                    hasher.update(encoded_row);
+                }
+            }
+            let leaf_bytes = row_count
+                .checked_mul(32)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let stored_offset = self
+                .tree_offset
+                .checked_add(
+                    u64::try_from(row_start)
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                        .checked_mul(32)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            read_exact_artifact_at_v1(
+                &mut self.source,
+                stored_offset,
+                stored_nodes
+                    .get_mut(..leaf_bytes)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )?;
+            for (hasher, stored) in hashers
+                .into_iter()
+                .zip(stored_nodes[..leaf_bytes].chunks_exact(32))
+            {
+                let actual: [u8; 32] = hasher.finalize().into();
+                if actual.as_slice() != stored {
+                    return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+                }
+            }
+        }
+
+        let maximum_child_bytes = validation_rows
+            .checked_mul(2 * 32)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let mut child_nodes = Vec::new();
+        child_nodes
+            .try_reserve_exact(maximum_child_bytes)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        child_nodes.resize(maximum_child_bytes, 0);
+        for level in 0..usize::from(geometry.lde_log2) {
+            let child_count = lde_rows
+                .checked_shr(
+                    u32::try_from(level).map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let parent_count = child_count
+                .checked_div(2)
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let child_level_offset = self.tree_level_offset_v1(level)?;
+            let parent_level_offset = self.tree_level_offset_v1(level + 1)?;
+            for parent_start in (0..parent_count).step_by(validation_rows) {
+                let count = parent_count
+                    .checked_sub(parent_start)
+                    .map(|remaining| remaining.min(validation_rows))
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let child_bytes = count
+                    .checked_mul(2 * 32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let parent_bytes = count
+                    .checked_mul(32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                let child_offset = child_level_offset
+                    .checked_add(
+                        u64::try_from(parent_start)
+                            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                            .checked_mul(2 * 32)
+                            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                    )
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                read_exact_artifact_at_v1(
+                    &mut self.source,
+                    child_offset,
+                    child_nodes
+                        .get_mut(..child_bytes)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )?;
+                let parent_offset = parent_level_offset
+                    .checked_add(
+                        u64::try_from(parent_start)
+                            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                            .checked_mul(32)
+                            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                    )
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+                read_exact_artifact_at_v1(
+                    &mut self.source,
+                    parent_offset,
+                    stored_nodes
+                        .get_mut(..parent_bytes)
+                        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+                )?;
+                for (children, stored) in child_nodes[..child_bytes]
+                    .chunks_exact(64)
+                    .zip(stored_nodes[..parent_bytes].chunks_exact(32))
+                {
+                    let left: [u8; 32] = children[..32]
+                        .try_into()
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+                    let right: [u8; 32] = children[32..]
+                        .try_into()
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?;
+                    let expected = sha256_merkle_node_v1(FIXED_NODE_DOMAIN_V1, &left, &right);
+                    if expected.as_slice() != stored {
+                        return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn read_row_v1(&mut self, index: usize) -> Result<Vec<u64>, ZkX509PreprocessedFixedErrorV1> {
+        let geometry = self.profile.geometry;
+        let lde_rows = geometry.lde_rows()?;
+        if index >= lde_rows {
+            return Err(ZkX509PreprocessedFixedErrorV1::Index);
+        }
+        let mut row = Vec::new();
+        row.try_reserve_exact(usize::from(geometry.width))
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        for column_start in
+            (0..usize::from(geometry.width)).step_by(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+        {
+            let batch_width = usize::from(geometry.width)
+                .checked_sub(column_start)
+                .map(|remaining| remaining.min(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1))
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let batch_offset = u64::try_from(column_start)
+                .ok()
+                .and_then(|column| {
+                    u64::try_from(lde_rows)
+                        .ok()
+                        .and_then(|rows| column.checked_mul(rows))
+                })
+                .and_then(|fields| fields.checked_mul(8))
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let row_offset = u64::try_from(index)
+                .ok()
+                .and_then(|row| {
+                    u64::try_from(batch_width)
+                        .ok()
+                        .and_then(|width| row.checked_mul(width))
+                })
+                .and_then(|fields| fields.checked_mul(8))
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let offset = self
+                .rows_offset
+                .checked_add(batch_offset)
+                .and_then(|offset| offset.checked_add(row_offset))
+                .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+            let mut encoded = [0_u8; ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 * 8];
+            read_exact_artifact_at_v1(&mut self.source, offset, &mut encoded[..batch_width * 8])?;
+            for field in encoded[..batch_width * 8].chunks_exact(8) {
+                let value = u64::from_be_bytes(
+                    field
+                        .try_into()
+                        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Artifact)?,
+                );
+                if F::canonical(value).is_none() {
+                    row.fill(0);
+                    return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+                }
+                row.push(value);
+            }
+        }
+        if row.len() != usize::from(geometry.width) {
+            row.fill(0);
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        Ok(row)
+    }
+
+    fn tree_level_offset_v1(&self, level: usize) -> Result<u64, ZkX509PreprocessedFixedErrorV1> {
+        artifact_tree_level_offset_v1(self.tree_offset, self.profile.geometry, level)
+    }
+
+    fn read_tree_node_v1(
+        &mut self,
+        level: usize,
+        index: usize,
+    ) -> Result<[u8; 32], ZkX509PreprocessedFixedErrorV1> {
+        let level_nodes = self
+            .profile
+            .geometry
+            .lde_rows()?
+            .checked_shr(
+                u32::try_from(level).map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        if index >= level_nodes {
+            return Err(ZkX509PreprocessedFixedErrorV1::Index);
+        }
+        let offset = self
+            .tree_level_offset_v1(level)?
+            .checked_add(
+                u64::try_from(index)
+                    .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?
+                    .checked_mul(32)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?,
+            )
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let mut node = [0_u8; 32];
+        read_exact_artifact_at_v1(&mut self.source, offset, &mut node)?;
+        Ok(node)
+    }
+
+    fn read_multiproof_v1(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<ZkX509PreprocessedFixedMultiproofV1, ZkX509PreprocessedFixedErrorV1> {
+        self.validate_open_source_v1()?;
+        canonical_indices_v1(self.profile.geometry, indices)?;
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(indices.len())
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        for index in indices.iter().copied() {
+            rows.push(self.read_row_v1(index)?);
+        }
+        let mut selected = indices.iter().copied().collect::<BTreeSet<_>>();
+        let expected_frontier =
+            multiproof_frontier_len_v1(self.profile.geometry.lde_rows()?, indices)
+                .map_err(map_aggregate_error_v1)?;
+        let mut frontier = Vec::new();
+        frontier
+            .try_reserve_exact(expected_frontier)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        for level in 0..usize::from(self.profile.geometry.lde_log2) {
+            for index in selected.iter().copied() {
+                let sibling = index ^ 1;
+                if !selected.contains(&sibling) {
+                    frontier.push(self.read_tree_node_v1(level, sibling)?);
+                }
+            }
+            selected = selected.into_iter().map(|index| index >> 1).collect();
+        }
+        if selected.len() != 1 || !selected.contains(&0) || frontier.len() != expected_frontier {
+            return Err(ZkX509PreprocessedFixedErrorV1::Artifact);
+        }
+        Ok(ZkX509PreprocessedFixedMultiproofV1 {
+            oracle: self.profile.geometry.oracle,
+            indices: indices
+                .iter()
+                .copied()
+                .map(|index| {
+                    u32::try_from(index).map_err(|_| ZkX509PreprocessedFixedErrorV1::Index)
+                })
+                .collect::<Result<_, _>>()?,
+            rows,
+            frontier,
+        })
+    }
+}
+
+impl ZkX509MainPreprocessedFixedOpeningServiceV1 for ZkX509MainPreprocessedFixedArtifactV1 {
+    fn open_main_v1(
+        &mut self,
+        profiles: &[ZkX509PreprocessedFixedProfileV1; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+        indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+    ) -> Result<Vec<u8>, ZkX509PreprocessedFixedErrorV1> {
+        if self.compiled_profile_digest == [0; 32] || profiles != &self.profiles {
+            return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+        }
+        let mut multiproofs = Vec::new();
+        multiproofs
+            .try_reserve_exact(ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        for oracle in &mut self.oracles {
+            let proof = oracle.read_multiproof_v1(indices.as_slice_v1())?;
+            verify_zk_x509_preprocessed_fixed_multiproof_v1(
+                oracle.profile,
+                indices.as_slice_v1(),
+                &proof,
+            )?;
+            multiproofs.push(proof);
+        }
+        encode_zk_x509_preprocessed_fixed_proof_v1(
+            profiles,
+            &ZkX509PreprocessedFixedProofV1 {
+                oracles: multiproofs,
+            },
+        )
+    }
 }
 
 /// Exact encoded length of the compiled SHA fixed-oracle certificate.
 pub(crate) const ZK_X509_SHA_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1: usize = 81;
+/// Exact encoded length of the compiled P-256 log19 fixed-oracle certificate.
+pub(crate) const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1: usize = 83;
 const SHA_FIXED_CERTIFICATE_MAGIC_V1: [u8; 4] = *b"X5FC";
 const SHA_FIXED_CERTIFICATE_VERSION_V1: u16 = 1;
+const P256_LOG19_FIXED_CERTIFICATE_MAGIC_V1: [u8; 4] = *b"X5PC";
+const P256_LOG19_FIXED_CERTIFICATE_VERSION_V1: u16 = 1;
 
 // This is intentionally absent until the serialized diagnostic root
 // derivation and an independent recomputation agree. No placeholder root is
 // accepted or committed by the provisional profile.
 const ZK_X509_SHA_PREPROCESSED_FIXED_PINNED_ROOT_V1: Option<[u8; 32]> = None;
+// Populated only from the deterministic release-root ceremony after the
+// complete P-256 log19 manifest is frozen and independently reproduced.
+const ZK_X509_P256_LOG19_PREPROCESSED_FIXED_PINNED_ROOT_V1: Option<[u8; 32]> = None;
 
 /// Hash the complete generic protocol and exact SHA column-manifest
 /// descriptors.
@@ -355,6 +2181,18 @@ pub(crate) fn zk_x509_sha_preprocessed_fixed_descriptor_digest_v1() -> [u8; 32] 
         ],
     )
     .expect("static zk-X509 fixed preprocessing descriptors are representable")
+}
+
+/// Hash the generic protocol and exact P-256 log19 column manifest.
+pub(crate) fn zk_x509_p256_log19_preprocessed_fixed_descriptor_digest_v1() -> [u8; 32] {
+    sha256_frame_v1(
+        P256_LOG19_FIXED_DESCRIPTOR_DIGEST_DOMAIN_V1,
+        &[
+            ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1,
+            ZK_X509_P256_LOG19_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1,
+        ],
+    )
+    .expect("static zk-X509 P-256 fixed preprocessing descriptors are representable")
 }
 
 impl ZkX509ShaPreprocessedFixedCertificateV1 {
@@ -409,6 +2247,59 @@ impl ZkX509ShaPreprocessedFixedCertificateV1 {
     }
 }
 
+impl ZkX509P256Log19PreprocessedFixedCertificateV1 {
+    /// Construct a candidate certificate from a genuinely derived root.
+    pub(crate) fn from_derived_root_v1(
+        root: [u8; 32],
+    ) -> Result<Self, ZkX509PreprocessedFixedErrorV1> {
+        let certificate = Self {
+            profile: ZkX509PreprocessedFixedProfileV1 {
+                geometry: ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1,
+                root,
+            },
+            schedule_order: ZK_X509_P256_LOG19_PREPROCESSED_FIXED_SCHEDULE_ORDER_V1,
+            descriptor_digest: zk_x509_p256_log19_preprocessed_fixed_descriptor_digest_v1(),
+        };
+        certificate.validate_v1()?;
+        Ok(certificate)
+    }
+
+    fn validate_v1(self) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        self.profile.validate()?;
+        if self.profile.geometry != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1
+            || self.schedule_order != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_SCHEDULE_ORDER_V1
+            || self.descriptor_digest
+                != zk_x509_p256_log19_preprocessed_fixed_descriptor_digest_v1()
+        {
+            return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+        }
+        Ok(())
+    }
+
+    /// Encode every certificate field committed by the compiled profile.
+    pub(crate) fn encode_v1(
+        self,
+    ) -> Result<
+        [u8; ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1],
+        ZkX509PreprocessedFixedErrorV1,
+    > {
+        self.validate_v1()?;
+        let mut encoded = [0_u8; ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1];
+        encoded[..4].copy_from_slice(&P256_LOG19_FIXED_CERTIFICATE_MAGIC_V1);
+        encoded[4..6].copy_from_slice(&P256_LOG19_FIXED_CERTIFICATE_VERSION_V1.to_be_bytes());
+        encoded[6..8].copy_from_slice(&self.profile.geometry.oracle.to_be_bytes());
+        encoded[8] = self.profile.geometry.native_log2;
+        encoded[9] = self.profile.geometry.lde_log2;
+        encoded[10..12].copy_from_slice(&self.profile.geometry.width.to_be_bytes());
+        encoded[12] = u8::try_from(self.schedule_order.len())
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Profile)?;
+        encoded[13..19].copy_from_slice(&self.schedule_order);
+        encoded[19..51].copy_from_slice(&self.descriptor_digest);
+        encoded[51..83].copy_from_slice(&self.profile.root);
+        Ok(encoded)
+    }
+}
+
 /// Return the sole independently checked release certificate.
 ///
 /// Until the real derived root has been independently reproduced and pinned,
@@ -418,6 +2309,14 @@ pub(crate) fn pinned_zk_x509_sha_preprocessed_fixed_certificate_v1()
     let root = ZK_X509_SHA_PREPROCESSED_FIXED_PINNED_ROOT_V1
         .ok_or(ZkX509PreprocessedFixedErrorV1::Unpinned)?;
     ZkX509ShaPreprocessedFixedCertificateV1::from_derived_root_v1(root)
+}
+
+/// Return the independently checked P-256 log19 release certificate.
+pub(crate) fn pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1()
+-> Result<ZkX509P256Log19PreprocessedFixedCertificateV1, ZkX509PreprocessedFixedErrorV1> {
+    let root = ZK_X509_P256_LOG19_PREPROCESSED_FIXED_PINNED_ROOT_V1
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Unpinned)?;
+    ZkX509P256Log19PreprocessedFixedCertificateV1::from_derived_root_v1(root)
 }
 
 /// Require an exact match with a verifier-owned certificate.
@@ -439,6 +2338,40 @@ pub(crate) fn validate_zk_x509_sha_preprocessed_fixed_certificate_v1(
     Ok(())
 }
 
+/// Require an exact match with the verifier-owned P-256 log19 certificate.
+pub(crate) fn validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(
+    supplied: ZkX509P256Log19PreprocessedFixedCertificateV1,
+    expected: ZkX509P256Log19PreprocessedFixedCertificateV1,
+) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+    supplied.validate_v1()?;
+    expected.validate_v1()?;
+    if supplied.profile.geometry != expected.profile.geometry
+        || supplied.schedule_order != expected.schedule_order
+        || supplied.descriptor_digest != expected.descriptor_digest
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    if supplied.profile.root != expected.profile.root {
+        return Err(ZkX509PreprocessedFixedErrorV1::RootMismatch);
+    }
+    Ok(())
+}
+
+/// Return the exact oracle profile order committed by MAIN and X5F1.
+pub(crate) fn zk_x509_main_preprocessed_fixed_profiles_v1(
+    sha: ZkX509ShaPreprocessedFixedCertificateV1,
+    p256: ZkX509P256Log19PreprocessedFixedCertificateV1,
+) -> Result<
+    [ZkX509PreprocessedFixedProfileV1; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+    ZkX509PreprocessedFixedErrorV1,
+> {
+    sha.validate_v1()?;
+    p256.validate_v1()?;
+    let profiles = [sha.profile, p256.profile];
+    validate_profiles_v1(&profiles)?;
+    Ok(profiles)
+}
+
 fn map_transparent_error_v1(_: TransparentStarkErrorV1) -> ZkX509PreprocessedFixedErrorV1 {
     ZkX509PreprocessedFixedErrorV1::Resource
 }
@@ -446,6 +2379,17 @@ fn map_transparent_error_v1(_: TransparentStarkErrorV1) -> ZkX509PreprocessedFix
 fn map_sha_error_v1(error: ZkX509ShaCallBusStarkErrorV1) -> ZkX509PreprocessedFixedErrorV1 {
     match error {
         ZkX509ShaCallBusStarkErrorV1::Resource => ZkX509PreprocessedFixedErrorV1::Resource,
+        _ => ZkX509PreprocessedFixedErrorV1::Column,
+    }
+}
+
+fn map_p256_error_v1(
+    error: super::p256_aggregate_adapter::P256AggregateAdapterErrorV1,
+) -> ZkX509PreprocessedFixedErrorV1 {
+    match error {
+        super::p256_aggregate_adapter::P256AggregateAdapterErrorV1::Resource => {
+            ZkX509PreprocessedFixedErrorV1::Resource
+        }
         _ => ZkX509PreprocessedFixedErrorV1::Column,
     }
 }
@@ -464,7 +2408,7 @@ fn map_aggregate_error_v1(error: AggregateStarkErrorV1) -> ZkX509PreprocessedFix
 fn validate_profiles_v1(
     profiles: &[ZkX509PreprocessedFixedProfileV1],
 ) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
-    if profiles.is_empty() || profiles.len() > usize::from(u16::MAX) {
+    if profiles.is_empty() || profiles.len() > ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1 {
         return Err(ZkX509PreprocessedFixedErrorV1::Profile);
     }
     let mut previous = None;
@@ -494,17 +2438,22 @@ fn canonical_indices_v1(
 }
 
 /// Validate the 58 distinct canonical MAIN query coordinates and derive the
-/// sole sorted current/next opening set for the log19 SHA oracle on the log25
-/// common LDE domain.
+/// sole sorted current/next opening set shared by both native-log19 fixed
+/// oracles on the log25 common LDE domain.
 ///
 /// The query order is transcript order and is therefore not required to be
 /// sorted. Query sampling/authentication remains the responsibility of MAIN
 /// transcript assembly; no proof-controlled stride or expanded index list
 /// crosses this API.
-pub(crate) fn derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(
+pub(crate) fn derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(
     query_coordinates: &[usize],
-) -> Result<ZkX509ShaPreprocessedFixedOpeningIndicesV1, ZkX509PreprocessedFixedErrorV1> {
+) -> Result<ZkX509Log19PreprocessedFixedOpeningIndicesV1, ZkX509PreprocessedFixedErrorV1> {
     let geometry = ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1;
+    if geometry.native_log2 != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1.native_log2
+        || geometry.lde_log2 != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1.lde_log2
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
     let lde_rows = geometry.lde_rows()?;
     if query_coordinates.len() != usize::from(ZK_X509_FRI_QUERY_COUNT_V1) {
         return Err(ZkX509PreprocessedFixedErrorV1::Index);
@@ -532,14 +2481,12 @@ pub(crate) fn derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(
     }
     let indices = indices.into_iter().collect::<Vec<_>>();
     canonical_indices_v1(geometry, &indices)?;
-    Ok(ZkX509ShaPreprocessedFixedOpeningIndicesV1 { indices })
+    Ok(ZkX509Log19PreprocessedFixedOpeningIndicesV1 { indices })
 }
 
-/// Recompute the exact worst-case one-oracle X5F1 byte bound from the shared
-/// canonical minimal-frontier arithmetic.
-pub(crate) fn zk_x509_sha_preprocessed_fixed_maximum_encoded_bytes_v1()
--> Result<usize, ZkX509PreprocessedFixedErrorV1> {
-    let geometry = ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1;
+fn one_oracle_maximum_encoded_bytes_v1(
+    geometry: ZkX509PreprocessedFixedGeometryV1,
+) -> Result<usize, ZkX509PreprocessedFixedErrorV1> {
     let frontier_hashes = maximum_multiproof_frontier_len_v1(
         geometry.lde_rows()?,
         ZK_X509_PREPROCESSED_FIXED_MAX_OPENINGS_V1,
@@ -555,13 +2502,46 @@ pub(crate) fn zk_x509_sha_preprocessed_fixed_maximum_encoded_bytes_v1()
         .and_then(|bytes| bytes.checked_add(opening_bytes))
         .and_then(|bytes| bytes.checked_add(8 + 4))
         .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
-    if frontier_hashes != ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_FRONTIER_HASHES_V1
-        || encoded_bytes != ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
-        || encoded_bytes > ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1
-    {
+    if frontier_hashes != ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_FRONTIER_HASHES_V1 {
         return Err(ZkX509PreprocessedFixedErrorV1::Profile);
     }
     Ok(encoded_bytes)
+}
+
+/// Recompute the exact worst-case SHA one-oracle X5F1 byte bound.
+pub(crate) fn zk_x509_sha_preprocessed_fixed_maximum_encoded_bytes_v1()
+-> Result<usize, ZkX509PreprocessedFixedErrorV1> {
+    let encoded = one_oracle_maximum_encoded_bytes_v1(ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1)?;
+    if encoded != ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1 {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    Ok(encoded)
+}
+
+/// Recompute the exact worst-case P-256 log19 one-oracle X5F1 byte bound.
+pub(crate) fn zk_x509_p256_log19_preprocessed_fixed_maximum_encoded_bytes_v1()
+-> Result<usize, ZkX509PreprocessedFixedErrorV1> {
+    let encoded =
+        one_oracle_maximum_encoded_bytes_v1(ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1)?;
+    if encoded != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1 {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    Ok(encoded)
+}
+
+/// Recompute the exact complete two-oracle MAIN X5F1 maximum.
+pub(crate) fn zk_x509_main_preprocessed_fixed_maximum_encoded_bytes_v1()
+-> Result<usize, ZkX509PreprocessedFixedErrorV1> {
+    let encoded = zk_x509_sha_preprocessed_fixed_maximum_encoded_bytes_v1()?
+        .checked_add(zk_x509_p256_log19_preprocessed_fixed_maximum_encoded_bytes_v1()?)
+        .and_then(|bytes| bytes.checked_sub(8))
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+    if encoded != ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+        || encoded != ZK_X509_PREPROCESSED_FIXED_MAX_WIRE_BYTES_V1
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    Ok(encoded)
 }
 
 fn reduce_sha_preprocessed_fixed_segment_row_v1(
@@ -599,8 +2579,12 @@ fn reduce_sha_preprocessed_fixed_segment_row_v1(
     Ok(reduced)
 }
 
-/// Expand one authenticated reduced fixed-oracle row into the four complete
-/// SHA fixed rows consumed by the MAIN AIR.
+/// Expand one authenticated reduced fixed-oracle row into four SHA fixed rows.
+///
+/// The profile-independent word, call, role, boundary, and compact-CA columns
+/// are reconstructed exactly. Statement-derived RFC length/event columns are
+/// deliberately left at canonical zero; the MAIN verifier must overlay those
+/// columns from its own public schedule before evaluating the AIR.
 pub(crate) fn expand_zk_x509_sha_preprocessed_fixed_row_v1(
     reduced: &[F],
 ) -> Result<
@@ -756,6 +2740,231 @@ impl ZkX509ShaPreprocessedNativeColumnProviderV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum P256Log19FixedScheduleV1 {
+    CertificateArithmetic,
+    WalletArithmetic,
+    CertificateExecution,
+    WalletExecution,
+    CertificateSorted,
+    WalletSorted,
+}
+
+impl P256Log19FixedScheduleV1 {
+    const fn start_width_v1(self) -> (usize, usize) {
+        match self {
+            Self::CertificateArithmetic => (
+                P256_LOG19_CERTIFICATE_ARITHMETIC_START_V1,
+                P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
+            ),
+            Self::WalletArithmetic => (
+                P256_LOG19_WALLET_ARITHMETIC_START_V1,
+                P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
+            ),
+            Self::CertificateExecution => (
+                P256_LOG19_CERTIFICATE_EXECUTION_START_V1,
+                P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+            ),
+            Self::WalletExecution => (
+                P256_LOG19_WALLET_EXECUTION_START_V1,
+                P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+            ),
+            Self::CertificateSorted => (
+                P256_LOG19_CERTIFICATE_SORTED_START_V1,
+                P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+            ),
+            Self::WalletSorted => (
+                P256_LOG19_WALLET_SORTED_START_V1,
+                P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+            ),
+        }
+    }
+
+    fn representative_registration_v1(
+        self,
+    ) -> Result<P256MainRegistrationV1, ZkX509PreprocessedFixedErrorV1> {
+        let certificate = 0;
+        let wallet = P256_X5S1_SIGNATURES_V1 - 1;
+        let (signature, adapter, local) = match self {
+            Self::CertificateArithmetic => (certificate, P256MainAdapterV1::Arithmetic, 0),
+            Self::WalletArithmetic => (wallet, P256MainAdapterV1::Arithmetic, 0),
+            Self::CertificateExecution => (certificate, P256MainAdapterV1::ValueBus, 0),
+            Self::WalletExecution => (wallet, P256MainAdapterV1::ValueBus, 0),
+            Self::CertificateSorted => (certificate, P256MainAdapterV1::ValueBus, 1),
+            Self::WalletSorted => (wallet, P256MainAdapterV1::ValueBus, 1),
+        };
+        P256MainRegistrationV1::new_v1(signature, adapter, local).map_err(map_p256_error_v1)
+    }
+}
+
+fn p256_log19_fixed_schedule_for_registration_v1(
+    registration: P256MainRegistrationV1,
+) -> Result<P256Log19FixedScheduleV1, ZkX509PreprocessedFixedErrorV1> {
+    let certificate = registration.role_v1() == P256EcdsaRoleV1::CertificateOrCrl;
+    match (
+        registration.adapter_v1(),
+        registration.local_instance_v1(),
+        certificate,
+    ) {
+        (P256MainAdapterV1::Arithmetic, 0, true) => {
+            Ok(P256Log19FixedScheduleV1::CertificateArithmetic)
+        }
+        (P256MainAdapterV1::Arithmetic, 0, false) => Ok(P256Log19FixedScheduleV1::WalletArithmetic),
+        (P256MainAdapterV1::ValueBus, 0, true) => {
+            Ok(P256Log19FixedScheduleV1::CertificateExecution)
+        }
+        (P256MainAdapterV1::ValueBus, 0, false) => Ok(P256Log19FixedScheduleV1::WalletExecution),
+        (P256MainAdapterV1::ValueBus, 1, true) => Ok(P256Log19FixedScheduleV1::CertificateSorted),
+        (P256MainAdapterV1::ValueBus, 1, false) => Ok(P256Log19FixedScheduleV1::WalletSorted),
+        _ => Err(ZkX509PreprocessedFixedErrorV1::Profile),
+    }
+}
+
+fn p256_log19_fixed_schedule_for_column_v1(
+    column: usize,
+) -> Result<(P256Log19FixedScheduleV1, usize), ZkX509PreprocessedFixedErrorV1> {
+    for schedule in [
+        P256Log19FixedScheduleV1::CertificateArithmetic,
+        P256Log19FixedScheduleV1::WalletArithmetic,
+        P256Log19FixedScheduleV1::CertificateExecution,
+        P256Log19FixedScheduleV1::WalletExecution,
+        P256Log19FixedScheduleV1::CertificateSorted,
+        P256Log19FixedScheduleV1::WalletSorted,
+    ] {
+        let (start, width) = schedule.start_width_v1();
+        if (start..start + width).contains(&column) {
+            return Ok((schedule, column - start));
+        }
+    }
+    Err(ZkX509PreprocessedFixedErrorV1::Column)
+}
+
+/// Select one registration's exact fixed row from an authenticated oracle
+/// opening. Only the six manifest schedules are accepted.
+pub(crate) fn zk_x509_p256_log19_preprocessed_fixed_row_for_registration_v1<'a>(
+    authenticated: &'a [F],
+    registration: P256MainRegistrationV1,
+) -> Result<&'a [F], ZkX509PreprocessedFixedErrorV1> {
+    if authenticated.len() != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 {
+        return Err(ZkX509PreprocessedFixedErrorV1::Opening);
+    }
+    let schedule = p256_log19_fixed_schedule_for_registration_v1(registration)?;
+    let (start, width) = schedule.start_width_v1();
+    let shape = registration.shape_v1().map_err(map_p256_error_v1)?;
+    if shape.trace_size != 1_usize << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 || shape.fixed_width != width
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+    }
+    authenticated
+        .get(start..start + width)
+        .ok_or(ZkX509PreprocessedFixedErrorV1::Opening)
+}
+
+#[cfg(test)]
+fn p256_log19_native_fixed_row_v1(
+    fixed: &P256MainVerifierFixedSourceV1,
+    row: usize,
+) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1> {
+    let mut combined = Vec::new();
+    combined
+        .try_reserve_exact(ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1)
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+    for schedule in [
+        P256Log19FixedScheduleV1::CertificateArithmetic,
+        P256Log19FixedScheduleV1::WalletArithmetic,
+        P256Log19FixedScheduleV1::CertificateExecution,
+        P256Log19FixedScheduleV1::WalletExecution,
+        P256Log19FixedScheduleV1::CertificateSorted,
+        P256Log19FixedScheduleV1::WalletSorted,
+    ] {
+        let registration = schedule.representative_registration_v1()?;
+        let expected_width = schedule.start_width_v1().1;
+        let schedule_row = fixed
+            .fixed_row_v1(registration, row)
+            .map_err(map_p256_error_v1)?;
+        if schedule_row.len() != expected_width {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        combined.extend_from_slice(&schedule_row);
+    }
+    if combined.len() != ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 {
+        return Err(ZkX509PreprocessedFixedErrorV1::Column);
+    }
+    Ok(combined)
+}
+
+/// Sequential batch-8 provider for the exact 404 P-256 log19 columns.
+struct ZkX509P256Log19PreprocessedNativeColumnProviderV1 {
+    fixed: P256MainVerifierFixedSourceV1,
+    next_column: usize,
+    batch: Vec<Vec<F>>,
+}
+
+impl ZkX509P256Log19PreprocessedNativeColumnProviderV1 {
+    fn new_v1() -> Result<Self, ZkX509PreprocessedFixedErrorV1> {
+        Ok(Self {
+            fixed: P256MainVerifierFixedSourceV1::new_v1().map_err(map_p256_error_v1)?,
+            next_column: 0,
+            batch: Vec::new(),
+        })
+    }
+
+    fn refill_v1(&mut self, column_start: usize) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
+        if !self.batch.is_empty()
+            || column_start != self.next_column
+            || column_start >= ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1
+        {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        let column_end = column_start
+            .checked_add(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+            .map(|end| end.min(ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        self.batch
+            .try_reserve_exact(column_end - column_start)
+            .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+        let native_rows = 1_usize << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1;
+        for global_column in column_start..column_end {
+            let (schedule, local_column) = p256_log19_fixed_schedule_for_column_v1(global_column)?;
+            let mut column = Vec::new();
+            column
+                .try_reserve_exact(native_rows)
+                .map_err(|_| ZkX509PreprocessedFixedErrorV1::Resource)?;
+            column.resize(native_rows, F::ZERO);
+            self.fixed
+                .fill_fixed_column_v1(
+                    schedule.representative_registration_v1()?,
+                    local_column,
+                    &mut column,
+                )
+                .map_err(map_p256_error_v1)?;
+            self.batch.push(column);
+        }
+        if self.batch.iter().any(|column| column.len() != native_rows) {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        Ok(())
+    }
+
+    fn native_column_v1(
+        &mut self,
+        column: usize,
+    ) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1> {
+        if column != self.next_column || column >= ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        if self.batch.is_empty() {
+            self.refill_v1(column)?;
+        }
+        let native = self.batch.remove(0);
+        self.next_column = self
+            .next_column
+            .checked_add(1)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
+        Ok(native)
+    }
+}
+
 fn fixed_leaf_hash_v1(
     geometry: ZkX509PreprocessedFixedGeometryV1,
     row: &[u64],
@@ -840,8 +3049,9 @@ fn compress_sha256_block_v1(state: &mut [u32; 8], block: &[u8; 64]) {
 /// SHA-256 midstate specialized to the fixed leaf frame.
 ///
 /// The 130-byte common prefix leaves exactly two buffered bytes. Every
-/// row-major batch contributes 64 bytes, so no row needs the general-purpose
-/// `Sha256` buffer, length counter, or padding state.
+/// complete row-major batch contributes 64 bytes. A final partial batch is
+/// supplied only to `finalize_v1`, so the per-row state never grows a general
+/// purpose `Sha256` buffer, length counter, or padding state.
 #[derive(Clone, Copy)]
 struct CompactFixedLeafSha256V1 {
     state: [u32; 8],
@@ -901,6 +3111,7 @@ impl CompactFixedLeafSha256V1 {
     fn finalize_v1(
         mut self,
         geometry: ZkX509PreprocessedFixedGeometryV1,
+        partial: Option<([F; 8], usize)>,
     ) -> Result<[u8; 32], ZkX509PreprocessedFixedErrorV1> {
         let message_bytes = u64::try_from(ZK_X509_PREPROCESSED_FIXED_LEAF_PREFIX_BYTES_V1)
             .ok()
@@ -910,25 +3121,56 @@ impl CompactFixedLeafSha256V1 {
                     .and_then(|payload| prefix.checked_add(payload))
             })
             .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
-        if usize::from(geometry.width) % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 != 0 {
-            return Err(ZkX509PreprocessedFixedErrorV1::Profile);
-        }
-        let expected_batches = usize::from(geometry.width)
+        let width = usize::from(geometry.width);
+        let expected_batches = width
             .checked_div(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
             .ok_or(ZkX509PreprocessedFixedErrorV1::Profile)?;
-        if usize::from(self.absorbed_batches) != expected_batches || message_bytes % 64 != 2 {
+        let remainder = width % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1;
+        let partial_values = match (remainder, partial) {
+            (0, None) => [F::ZERO; 8],
+            (expected, Some((values, actual)))
+                if expected == actual
+                    && values[..actual]
+                        .iter()
+                        .all(|value| F::canonical(value.0).is_some())
+                    && values[actual..].iter().all(|value| *value == F::ZERO) =>
+            {
+                values
+            }
+            _ => return Err(ZkX509PreprocessedFixedErrorV1::Profile),
+        };
+        if usize::from(self.absorbed_batches) != expected_batches {
             return Err(ZkX509PreprocessedFixedErrorV1::Profile);
         }
-        let mut final_block = [0_u8; 64];
-        final_block[..2].copy_from_slice(&self.tail);
-        final_block[2] = 0x80;
-        final_block[56..].copy_from_slice(
+        let mut final_blocks = [0_u8; 128];
+        final_blocks[..2].copy_from_slice(&self.tail);
+        for (target, value) in final_blocks[2..2 + remainder * 8]
+            .chunks_exact_mut(8)
+            .zip(partial_values)
+        {
+            target.copy_from_slice(&value.0.to_be_bytes());
+        }
+        let used = 2 + remainder * 8;
+        final_blocks[used] = 0x80;
+        let final_len = if used + 1 + core::mem::size_of::<u64>() <= 64 {
+            64
+        } else {
+            128
+        };
+        final_blocks[final_len - 8..final_len].copy_from_slice(
             &message_bytes
                 .checked_mul(8)
                 .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?
                 .to_be_bytes(),
         );
-        compress_sha256_block_v1(&mut self.state, &final_block);
+        for block in final_blocks[..final_len].chunks_exact(64) {
+            compress_sha256_block_v1(
+                &mut self.state,
+                block
+                    .try_into()
+                    .map_err(|_| ZkX509PreprocessedFixedErrorV1::Profile)?,
+            );
+        }
         let mut digest = [0_u8; 32];
         for (target, word) in digest.chunks_exact_mut(4).zip(self.state) {
             target.copy_from_slice(&word.to_be_bytes());
@@ -1253,9 +3495,6 @@ fn checked_release_root_memory_v1(
 ) -> Result<(), ZkX509PreprocessedFixedErrorV1> {
     let native_rows = geometry.native_rows()?;
     let lde_rows = geometry.lde_rows()?;
-    if usize::from(geometry.width) % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 != 0 {
-        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
-    }
     let states = lde_rows
         .checked_mul(core::mem::size_of::<CompactFixedLeafSha256V1>())
         .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
@@ -1426,8 +3665,9 @@ fn materialize_native_batch8_v1(
     let native_rows = geometry.native_rows()?;
     let column_end = column_start
         .checked_add(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
+        .map(|end| end.min(usize::from(geometry.width)))
         .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
-    if column_end > usize::from(geometry.width) {
+    if column_start >= column_end {
         return Err(ZkX509PreprocessedFixedErrorV1::Column);
     }
     let mut columns = Vec::new();
@@ -1619,11 +3859,15 @@ fn compact_fixed_leaf_states_and_openings_batch8_v1(
     geometry: ZkX509PreprocessedFixedGeometryV1,
     indices: &[usize],
     mut native_column: impl FnMut(usize) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1>,
-) -> Result<(Vec<CompactFixedLeafSha256V1>, Vec<Vec<u64>>), ZkX509PreprocessedFixedErrorV1> {
+) -> Result<
+    (
+        Vec<CompactFixedLeafSha256V1>,
+        Option<(Vec<[F; 8]>, usize)>,
+        Vec<Vec<u64>>,
+    ),
+    ZkX509PreprocessedFixedErrorV1,
+> {
     geometry.validate()?;
-    if usize::from(geometry.width) % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 != 0 {
-        return Err(ZkX509PreprocessedFixedErrorV1::Profile);
-    }
     if !indices.is_empty() {
         canonical_indices_v1(geometry, indices)?;
     }
@@ -1646,9 +3890,14 @@ fn compact_fixed_leaf_states_and_openings_batch8_v1(
         opened_rows.push(row);
     }
 
+    let mut partial = None;
     for column_start in
         (0..usize::from(geometry.width)).step_by(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1)
     {
+        let batch_width = usize::from(geometry.width)
+            .checked_sub(column_start)
+            .map(|remaining| remaining.min(ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1))
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
         let native = materialize_native_batch8_v1(geometry, column_start, &mut native_column)?;
         let evaluations = checked_goldilocks_evaluate_coset_batch8_v1(native, geometry)?;
         if evaluations.len() != states.len() {
@@ -1659,14 +3908,20 @@ fn compact_fixed_leaf_states_and_openings_batch8_v1(
                 evaluations
                     .get(index)
                     .ok_or(ZkX509PreprocessedFixedErrorV1::Index)?
+                    .get(..batch_width)
+                    .ok_or(ZkX509PreprocessedFixedErrorV1::Column)?
                     .iter()
                     .map(|value| value.0),
             );
         }
-        states
-            .par_iter_mut()
-            .zip(evaluations.par_iter().copied())
-            .try_for_each(|(state, row)| state.absorb_batch8_v1(row))?;
+        if batch_width == ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 {
+            states
+                .par_iter_mut()
+                .zip(evaluations.par_iter().copied())
+                .try_for_each(|(state, row)| state.absorb_batch8_v1(row))?;
+        } else if partial.replace((evaluations, batch_width)).is_some() {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
     }
     if opened_rows
         .iter()
@@ -1674,7 +3929,12 @@ fn compact_fixed_leaf_states_and_openings_batch8_v1(
     {
         return Err(ZkX509PreprocessedFixedErrorV1::Column);
     }
-    Ok((states, opened_rows))
+    if partial.is_some()
+        != (usize::from(geometry.width) % ZK_X509_PREPROCESSED_FIXED_COLUMN_BATCH_V1 != 0)
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Column);
+    }
+    Ok((states, partial, opened_rows))
 }
 
 fn stream_fixed_oracle_root_batch8_v1(
@@ -1684,18 +3944,36 @@ fn stream_fixed_oracle_root_batch8_v1(
     geometry.validate()?;
     checked_release_root_memory_v1(geometry)?;
     let lde_rows = geometry.lde_rows()?;
-    let (states, opened_rows) =
+    let (states, partial, opened_rows) =
         compact_fixed_leaf_states_and_openings_batch8_v1(geometry, &[], native_column)?;
     if !opened_rows.is_empty() {
         return Err(ZkX509PreprocessedFixedErrorV1::Opening);
     }
 
     let mut frontier = OrderedMerkleFrontierV1::new_v1(geometry.lde_log2)?;
-    for chunk in states.chunks(ZK_X509_PREPROCESSED_FIXED_FINALIZE_CHUNK_ROWS_V1) {
+    for (chunk_index, chunk) in states
+        .chunks(ZK_X509_PREPROCESSED_FIXED_FINALIZE_CHUNK_ROWS_V1)
+        .enumerate()
+    {
+        let row_start = chunk_index
+            .checked_mul(ZK_X509_PREPROCESSED_FIXED_FINALIZE_CHUNK_ROWS_V1)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
         let leaves = chunk
             .par_iter()
             .copied()
-            .map(|state| state.finalize_v1(geometry))
+            .enumerate()
+            .map(|(offset, state)| {
+                let partial_row = partial
+                    .as_ref()
+                    .map(|(rows, width)| {
+                        rows.get(row_start + offset)
+                            .copied()
+                            .map(|row| (row, *width))
+                            .ok_or(ZkX509PreprocessedFixedErrorV1::Column)
+                    })
+                    .transpose()?;
+                state.finalize_v1(geometry, partial_row)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         for leaf in leaves {
             frontier.push_v1(leaf)?;
@@ -1714,14 +3992,32 @@ fn stream_fixed_oracle_multiproof_batch8_v1(
     // The selected rows and at most 2,100 retained hashes are covered by the
     // explicit 256 MiB allocator reserve in the release-root RSS certificate.
     checked_release_root_memory_v1(geometry)?;
-    let (states, opened_rows) =
+    let (states, partial, opened_rows) =
         compact_fixed_leaf_states_and_openings_batch8_v1(geometry, indices, native_column)?;
     let mut frontier = OrderedSelectedMerkleFrontierV1::new_v1(geometry, indices)?;
-    for chunk in states.chunks(ZK_X509_PREPROCESSED_FIXED_FINALIZE_CHUNK_ROWS_V1) {
+    for (chunk_index, chunk) in states
+        .chunks(ZK_X509_PREPROCESSED_FIXED_FINALIZE_CHUNK_ROWS_V1)
+        .enumerate()
+    {
+        let row_start = chunk_index
+            .checked_mul(ZK_X509_PREPROCESSED_FIXED_FINALIZE_CHUNK_ROWS_V1)
+            .ok_or(ZkX509PreprocessedFixedErrorV1::Resource)?;
         let leaves = chunk
             .par_iter()
             .copied()
-            .map(|state| state.finalize_v1(geometry))
+            .enumerate()
+            .map(|(offset, state)| {
+                let partial_row = partial
+                    .as_ref()
+                    .map(|(rows, width)| {
+                        rows.get(row_start + offset)
+                            .copied()
+                            .map(|row| (row, *width))
+                            .ok_or(ZkX509PreprocessedFixedErrorV1::Column)
+                    })
+                    .transpose()?;
+                state.finalize_v1(geometry, partial_row)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         for leaf in leaves {
             frontier.push_v1(leaf)?;
@@ -1747,6 +4043,17 @@ pub(crate) fn derive_zk_x509_sha_preprocessed_fixed_root_v1()
     stream_fixed_oracle_root_batch8_v1(ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1, |column| {
         provider.native_column_v1(column)
     })
+}
+
+/// Derive the actual P-256 log19 fixed-oracle root from the exact six-schedule
+/// production provider.
+pub(crate) fn derive_zk_x509_p256_log19_preprocessed_fixed_root_v1()
+-> Result<[u8; 32], ZkX509PreprocessedFixedErrorV1> {
+    let mut provider = ZkX509P256Log19PreprocessedNativeColumnProviderV1::new_v1()?;
+    stream_fixed_oracle_root_batch8_v1(
+        ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1,
+        |column| provider.native_column_v1(column),
+    )
 }
 
 /// Construct one canonical multiproof and verify regeneration against the
@@ -1802,12 +4109,29 @@ fn build_zk_x509_preprocessed_fixed_multiproof_batch8_v1(
 /// pinned release certificate and transcript-query-derived opening set.
 pub(crate) fn build_zk_x509_sha_preprocessed_fixed_multiproof_v1(
     supplied: ZkX509ShaPreprocessedFixedCertificateV1,
-    indices: &ZkX509ShaPreprocessedFixedOpeningIndicesV1,
+    indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
 ) -> Result<ZkX509PreprocessedFixedMultiproofV1, ZkX509PreprocessedFixedErrorV1> {
     let expected = pinned_zk_x509_sha_preprocessed_fixed_certificate_v1()?;
     validate_zk_x509_sha_preprocessed_fixed_certificate_v1(supplied, expected)?;
     zk_x509_sha_preprocessed_fixed_maximum_encoded_bytes_v1()?;
     let mut provider = ZkX509ShaPreprocessedNativeColumnProviderV1::new_v1()?;
+    build_zk_x509_preprocessed_fixed_multiproof_batch8_v1(
+        expected.profile,
+        indices.as_slice_v1(),
+        |column| provider.native_column_v1(column),
+    )
+}
+
+/// Construct the P-256 log19 fixed-oracle multiproof against the independently
+/// pinned release certificate and transcript-query-derived opening set.
+pub(crate) fn build_zk_x509_p256_log19_preprocessed_fixed_multiproof_v1(
+    supplied: ZkX509P256Log19PreprocessedFixedCertificateV1,
+    indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+) -> Result<ZkX509PreprocessedFixedMultiproofV1, ZkX509PreprocessedFixedErrorV1> {
+    let expected = pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1()?;
+    validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(supplied, expected)?;
+    zk_x509_p256_log19_preprocessed_fixed_maximum_encoded_bytes_v1()?;
+    let mut provider = ZkX509P256Log19PreprocessedNativeColumnProviderV1::new_v1()?;
     build_zk_x509_preprocessed_fixed_multiproof_batch8_v1(
         expected.profile,
         indices.as_slice_v1(),
@@ -1875,10 +4199,10 @@ pub(crate) fn verify_zk_x509_preprocessed_fixed_multiproof_v1(
 /// consumed by the compiled profile and prover. The expanded opening set can
 /// only be obtained by validating and expanding the canonical MAIN query
 /// coordinates through
-/// [`derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1`].
+/// [`derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1`].
 pub(crate) fn verify_zk_x509_sha_preprocessed_fixed_multiproof_v1(
     supplied: ZkX509ShaPreprocessedFixedCertificateV1,
-    expected_indices: &ZkX509ShaPreprocessedFixedOpeningIndicesV1,
+    expected_indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
     proof: &ZkX509PreprocessedFixedMultiproofV1,
 ) -> Result<BTreeMap<usize, Vec<F>>, ZkX509PreprocessedFixedErrorV1> {
     let expected = pinned_zk_x509_sha_preprocessed_fixed_certificate_v1()?;
@@ -1888,6 +4212,79 @@ pub(crate) fn verify_zk_x509_sha_preprocessed_fixed_multiproof_v1(
         expected_indices.as_slice_v1(),
         proof,
     )
+}
+
+/// Verify the P-256 log19 multiproof against its pinned certificate and the
+/// same typed opening set used by the SHA oracle.
+pub(crate) fn verify_zk_x509_p256_log19_preprocessed_fixed_multiproof_v1(
+    supplied: ZkX509P256Log19PreprocessedFixedCertificateV1,
+    expected_indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+    proof: &ZkX509PreprocessedFixedMultiproofV1,
+) -> Result<BTreeMap<usize, Vec<F>>, ZkX509PreprocessedFixedErrorV1> {
+    let expected = pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1()?;
+    validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(supplied, expected)?;
+    verify_zk_x509_preprocessed_fixed_multiproof_v1(
+        expected.profile,
+        expected_indices.as_slice_v1(),
+        proof,
+    )
+}
+
+fn request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+    profiles: &[ZkX509PreprocessedFixedProfileV1; ZK_X509_PREPROCESSED_FIXED_ORACLE_COUNT_V1],
+    indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+    service: &mut impl ZkX509MainPreprocessedFixedOpeningServiceV1,
+) -> Result<Vec<u8>, ZkX509PreprocessedFixedErrorV1> {
+    validate_profiles_v1(profiles)?;
+    zk_x509_main_preprocessed_fixed_maximum_encoded_bytes_v1()?;
+    let encoded = service.open_main_v1(profiles, indices)?;
+    if encoded.len() > ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1 {
+        return Err(ZkX509PreprocessedFixedErrorV1::Resource);
+    }
+    let proof = decode_zk_x509_preprocessed_fixed_proof_v1(profiles, &encoded)?;
+    let [sha, p256]: &[ZkX509PreprocessedFixedMultiproofV1; 2] = proof
+        .oracles
+        .as_slice()
+        .try_into()
+        .map_err(|_| ZkX509PreprocessedFixedErrorV1::MalformedProof)?;
+    let sha_rows =
+        verify_zk_x509_preprocessed_fixed_multiproof_v1(profiles[0], indices.as_slice_v1(), sha)?;
+    let p256_rows =
+        verify_zk_x509_preprocessed_fixed_multiproof_v1(profiles[1], indices.as_slice_v1(), p256)?;
+    if sha_rows.keys().ne(p256_rows.keys())
+        || sha_rows
+            .keys()
+            .copied()
+            .ne(indices.as_slice_v1().iter().copied())
+    {
+        return Err(ZkX509PreprocessedFixedErrorV1::Opening);
+    }
+    let canonical = encode_zk_x509_preprocessed_fixed_proof_v1(profiles, &proof)?;
+    if canonical != encoded {
+        return Err(ZkX509PreprocessedFixedErrorV1::MalformedProof);
+    }
+    Ok(canonical)
+}
+
+/// Obtain one canonical two-oracle X5F1 sidecar from an untrusted
+/// release-preprocessed opening service.
+///
+/// This is the operational prover path. It performs only bounded decoding and
+/// Merkle verification; the ceremony-scale log25 LDE is never recomputed per
+/// credential. Direct root/multiproof derivation routines above are retained
+/// solely for release generation and independent diagnostics.
+pub(crate) fn request_zk_x509_main_preprocessed_fixed_openings_v1(
+    sha: ZkX509ShaPreprocessedFixedCertificateV1,
+    p256: ZkX509P256Log19PreprocessedFixedCertificateV1,
+    indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+    service: &mut impl ZkX509MainPreprocessedFixedOpeningServiceV1,
+) -> Result<Vec<u8>, ZkX509PreprocessedFixedErrorV1> {
+    let expected_sha = pinned_zk_x509_sha_preprocessed_fixed_certificate_v1()?;
+    let expected_p256 = pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1()?;
+    validate_zk_x509_sha_preprocessed_fixed_certificate_v1(sha, expected_sha)?;
+    validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(p256, expected_p256)?;
+    let profiles = zk_x509_main_preprocessed_fixed_profiles_v1(expected_sha, expected_p256)?;
+    request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(&profiles, indices, service)
 }
 
 fn validate_proof_shape_v1(
@@ -2071,6 +4468,8 @@ pub(crate) fn decode_zk_x509_preprocessed_fixed_proof_v1(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
     use crate::privacy_engines::transparent_stark::{
         GOLDILOCKS_MODULUS_V1, Sha256MerkleTreeV1, goldilocks_evaluate_coset_v1,
@@ -2089,6 +4488,13 @@ mod tests {
             native_log2: 4,
             lde_log2: 7,
             width: 8,
+        };
+    const TEST_PARTIAL_BATCH_GEOMETRY: ZkX509PreprocessedFixedGeometryV1 =
+        ZkX509PreprocessedFixedGeometryV1 {
+            oracle: 9,
+            native_log2: 4,
+            lde_log2: 7,
+            width: 12,
         };
 
     fn test_native_column(column: usize) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1> {
@@ -2112,6 +4518,646 @@ mod tests {
                 )
             })
             .collect())
+    }
+
+    fn test_partial_batch_native_column(
+        column: usize,
+    ) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1> {
+        if column >= usize::from(TEST_PARTIAL_BATCH_GEOMETRY.width) {
+            return Err(ZkX509PreprocessedFixedErrorV1::Column);
+        }
+        Ok((0..1_usize << TEST_PARTIAL_BATCH_GEOMETRY.native_log2)
+            .map(|row| {
+                F(
+                    u64::try_from(3 + row * (column + 5) + row * row * (column + 1) + column * 19)
+                        .expect("small fixture"),
+                )
+            })
+            .collect())
+    }
+
+    fn materialized_artifact_oracle_v1(
+        geometry: ZkX509PreprocessedFixedGeometryV1,
+        mut native_column: impl FnMut(usize) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1>,
+    ) -> (
+        ZkX509PreprocessedFixedProfileV1,
+        Vec<Vec<u64>>,
+        Vec<Vec<[u8; 32]>>,
+    ) {
+        let trace_root = goldilocks_primitive_root_v1(geometry.native_log2).expect("trace root");
+        let lde_root = goldilocks_primitive_root_v1(geometry.lde_log2).expect("LDE root");
+        let mut columns = Vec::new();
+        for column in 0..usize::from(geometry.width) {
+            let mut coefficients = native_column(column).expect("native fixed column");
+            goldilocks_ifft_v1(&mut coefficients, trace_root).expect("native IFFT");
+            columns.push(
+                goldilocks_evaluate_coset_v1(
+                    &coefficients,
+                    geometry.lde_rows().expect("LDE rows"),
+                    lde_root,
+                    F(GOLDILOCKS_GENERATOR_V1),
+                )
+                .expect("generator-coset LDE"),
+            );
+        }
+        let mut rows: Vec<Vec<u64>> = Vec::new();
+        for row in 0..geometry.lde_rows().expect("LDE rows") {
+            rows.push(
+                columns
+                    .iter()
+                    .map(|column| column[row].0)
+                    .collect::<Vec<u64>>(),
+            );
+        }
+        let mut levels = vec![
+            rows.iter()
+                .map(|row| fixed_leaf_hash_v1(geometry, row).expect("fixed leaf"))
+                .collect::<Vec<_>>(),
+        ];
+        while levels.last().expect("leaf level").len() > 1 {
+            let parent = levels
+                .last()
+                .expect("child level")
+                .chunks_exact(2)
+                .map(|pair| sha256_merkle_node_v1(FIXED_NODE_DOMAIN_V1, &pair[0], &pair[1]))
+                .collect::<Vec<_>>();
+            levels.push(parent);
+        }
+        let root = levels.last().expect("root level")[0];
+        (
+            ZkX509PreprocessedFixedProfileV1 { geometry, root },
+            rows,
+            levels,
+        )
+    }
+
+    fn test_artifact_binding_v1(
+        profile: ZkX509PreprocessedFixedProfileV1,
+        marker: u8,
+    ) -> ZkX509PreprocessedFixedArtifactBindingV1 {
+        ZkX509PreprocessedFixedArtifactBindingV1 {
+            profile,
+            descriptor_digest: [marker; 32],
+            certificate: vec![marker; 17 + usize::from(marker & 1)],
+        }
+    }
+
+    struct TestArtifactPackageV1 {
+        directory: tempfile::TempDir,
+        compiled_profile_digest: [u8; 32],
+        bindings: [ZkX509PreprocessedFixedArtifactBindingV1; 2],
+        profiles: [ZkX509PreprocessedFixedProfileV1; 2],
+        rows: [Vec<Vec<u64>>; 2],
+        levels: [Vec<Vec<[u8; 32]>>; 2],
+    }
+
+    fn test_artifact_package_v1() -> TestArtifactPackageV1 {
+        let compiled_profile_digest = [0xA5; 32];
+        let (first_profile, first_rows, first_levels) =
+            materialized_artifact_oracle_v1(TEST_GEOMETRY, test_native_column);
+        let (second_profile, second_rows, second_levels) = materialized_artifact_oracle_v1(
+            TEST_PARTIAL_BATCH_GEOMETRY,
+            test_partial_batch_native_column,
+        );
+        let bindings = [
+            test_artifact_binding_v1(first_profile, 0x31),
+            test_artifact_binding_v1(second_profile, 0x52),
+        ];
+        let directory = tempfile::tempdir().expect("artifact temp dir");
+        let native_columns: [fn(usize) -> Result<Vec<F>, ZkX509PreprocessedFixedErrorV1>; 2] =
+            [test_native_column, test_partial_batch_native_column];
+        for (order, (binding, native_column)) in bindings.iter().zip(native_columns).enumerate() {
+            let path = directory
+                .path()
+                .join(artifact_oracle_filename_v1(binding.profile.geometry.oracle));
+            let mut output = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .expect("create oracle artifact");
+            write_artifact_oracle_bound_v1(
+                &mut output,
+                compiled_profile_digest,
+                order,
+                binding.clone(),
+                native_column,
+            )
+            .expect("write and validate oracle artifact");
+        }
+        let manifest_path = directory
+            .path()
+            .join(ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1);
+        let mut manifest = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(manifest_path)
+            .expect("create artifact manifest");
+        write_artifact_manifest_bound_v1(&mut manifest, compiled_profile_digest, &bindings)
+            .expect("write canonical artifact manifest");
+        TestArtifactPackageV1 {
+            directory,
+            compiled_profile_digest,
+            bindings,
+            profiles: [first_profile, second_profile],
+            rows: [first_rows, second_rows],
+            levels: [first_levels, second_levels],
+        }
+    }
+
+    fn expected_test_artifact_multiproof_v1(
+        profile: ZkX509PreprocessedFixedProfileV1,
+        rows: &[Vec<u64>],
+        levels: &[Vec<[u8; 32]>],
+        indices: &[usize],
+    ) -> ZkX509PreprocessedFixedMultiproofV1 {
+        let mut selected = indices.iter().copied().collect::<BTreeSet<_>>();
+        let mut frontier = Vec::new();
+        for level in 0..usize::from(profile.geometry.lde_log2) {
+            for index in selected.iter().copied() {
+                let sibling = index ^ 1;
+                if !selected.contains(&sibling) {
+                    frontier.push(levels[level][sibling]);
+                }
+            }
+            selected = selected.into_iter().map(|index| index >> 1).collect();
+        }
+        ZkX509PreprocessedFixedMultiproofV1 {
+            oracle: profile.geometry.oracle,
+            indices: indices
+                .iter()
+                .map(|index| u32::try_from(*index).expect("small index"))
+                .collect(),
+            rows: indices.iter().map(|index| rows[*index].clone()).collect(),
+            frontier,
+        }
+    }
+
+    fn open_test_artifact_backend_v1(
+        package: &TestArtifactPackageV1,
+    ) -> Result<ZkX509MainPreprocessedFixedArtifactV1, ZkX509PreprocessedFixedErrorV1> {
+        ZkX509MainPreprocessedFixedArtifactV1::open_bound_v1(
+            package.directory.path(),
+            package.compiled_profile_digest,
+            package.bindings.clone(),
+        )
+    }
+
+    #[test]
+    fn immutable_artifact_backend_is_byte_exact_and_root_authenticated() {
+        let package = test_artifact_package_v1();
+        let indices = ZkX509Log19PreprocessedFixedOpeningIndicesV1 {
+            indices: vec![1, 3, 7, 19, 63, 125],
+        };
+        let expected = ZkX509PreprocessedFixedProofV1 {
+            oracles: (0..2)
+                .map(|oracle| {
+                    expected_test_artifact_multiproof_v1(
+                        package.profiles[oracle],
+                        &package.rows[oracle],
+                        &package.levels[oracle],
+                        indices.as_slice_v1(),
+                    )
+                })
+                .collect(),
+        };
+        let expected_encoded =
+            encode_zk_x509_preprocessed_fixed_proof_v1(&package.profiles, &expected)
+                .expect("materialized proof");
+        let mut backend = open_test_artifact_backend_v1(&package).expect("immutable artifact");
+        backend
+            .validate_complete_v1()
+            .expect("explicit complete artifact validation");
+        let encoded = request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+            &package.profiles,
+            &indices,
+            &mut backend,
+        )
+        .expect("authenticated random-access proof");
+        assert_eq!(encoded, expected_encoded);
+        assert_eq!(
+            decode_zk_x509_preprocessed_fixed_proof_v1(&package.profiles, &encoded)
+                .expect("artifact proof"),
+            expected
+        );
+    }
+
+    #[test]
+    fn artifact_manifest_header_partial_install_and_length_mutations_fail_closed() {
+        let manifest_mutations = [
+            0_usize, 5, 9, 11, 12, 14, 16, 48, 50, 52, 54, 56, 57, 58, 60, 62, 64, 72, 104, 136,
+            168, 252, 256, 258, 260, 264, 312, 344, 376, 464, 511,
+        ];
+        for offset in manifest_mutations {
+            let package = test_artifact_package_v1();
+            let path = package
+                .directory
+                .path()
+                .join(ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1);
+            let mut encoded = std::fs::read(&path).expect("manifest");
+            encoded[offset] ^= 1;
+            std::fs::write(&path, encoded).expect("mutated manifest");
+            assert!(
+                open_test_artifact_backend_v1(&package).is_err(),
+                "manifest mutation at byte {offset} must reject"
+            );
+        }
+
+        let header_mutations = [
+            0_usize, 5, 9, 10, 12, 14, 16, 17, 19, 21, 23, 25, 26, 32, 64, 96, 128, 160, 168, 176,
+            184, 267, 287,
+        ];
+        for offset in header_mutations {
+            let package = test_artifact_package_v1();
+            let path = package.directory.path().join(artifact_oracle_filename_v1(
+                package.profiles[0].geometry.oracle,
+            ));
+            let mut encoded = std::fs::read(&path).expect("oracle");
+            encoded[offset] ^= 1;
+            std::fs::write(&path, encoded).expect("mutated oracle");
+            assert!(
+                open_test_artifact_backend_v1(&package).is_err(),
+                "oracle-header mutation at byte {offset} must reject"
+            );
+        }
+
+        for truncate in [true, false] {
+            let package = test_artifact_package_v1();
+            let path = package
+                .directory
+                .path()
+                .join(ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1);
+            let mut encoded = std::fs::read(&path).expect("manifest");
+            if truncate {
+                encoded.pop();
+            } else {
+                encoded.push(0);
+            }
+            std::fs::write(&path, encoded).expect("wrong-length manifest");
+            assert!(open_test_artifact_backend_v1(&package).is_err());
+        }
+        for truncate in [true, false] {
+            let package = test_artifact_package_v1();
+            let path = package.directory.path().join(artifact_oracle_filename_v1(
+                package.profiles[0].geometry.oracle,
+            ));
+            let mut encoded = std::fs::read(&path).expect("oracle");
+            if truncate {
+                encoded.pop();
+            } else {
+                encoded.push(0);
+            }
+            std::fs::write(&path, encoded).expect("wrong-length oracle");
+            assert!(open_test_artifact_backend_v1(&package).is_err());
+        }
+
+        let missing_manifest = test_artifact_package_v1();
+        std::fs::remove_file(
+            missing_manifest
+                .directory
+                .path()
+                .join(ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1),
+        )
+        .expect("remove manifest");
+        assert!(open_test_artifact_backend_v1(&missing_manifest).is_err());
+
+        let missing_oracle = test_artifact_package_v1();
+        std::fs::remove_file(
+            missing_oracle
+                .directory
+                .path()
+                .join(artifact_oracle_filename_v1(
+                    missing_oracle.profiles[1].geometry.oracle,
+                )),
+        )
+        .expect("remove oracle");
+        assert!(open_test_artifact_backend_v1(&missing_oracle).is_err());
+
+        let swapped_oracle = test_artifact_package_v1();
+        let first = swapped_oracle
+            .directory
+            .path()
+            .join(artifact_oracle_filename_v1(
+                swapped_oracle.profiles[0].geometry.oracle,
+            ));
+        let second = swapped_oracle
+            .directory
+            .path()
+            .join(artifact_oracle_filename_v1(
+                swapped_oracle.profiles[1].geometry.oracle,
+            ));
+        std::fs::write(&first, std::fs::read(&second).expect("second oracle"))
+            .expect("swap oracle bytes");
+        assert!(open_test_artifact_backend_v1(&swapped_oracle).is_err());
+
+        let reordered_manifest = test_artifact_package_v1();
+        let manifest_path = reordered_manifest
+            .directory
+            .path()
+            .join(ZK_X509_MAIN_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_FILE_V1);
+        let mut manifest = std::fs::read(&manifest_path).expect("manifest");
+        let first_entry = manifest[ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1
+            ..ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1
+                + ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1]
+            .to_vec();
+        let second_start = ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1
+            + ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1;
+        let second_entry = manifest[second_start
+            ..second_start + ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1]
+            .to_vec();
+        manifest[ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1
+            ..ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_PREFIX_BYTES_V1
+                + ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1]
+            .copy_from_slice(&second_entry);
+        manifest[second_start
+            ..second_start + ZK_X509_PREPROCESSED_FIXED_ARTIFACT_MANIFEST_ENTRY_BYTES_V1]
+            .copy_from_slice(&first_entry);
+        std::fs::write(&manifest_path, manifest).expect("reordered manifest");
+        assert!(open_test_artifact_backend_v1(&reordered_manifest).is_err());
+
+        for mutate in 0..4 {
+            let package = test_artifact_package_v1();
+            let mut bindings = package.bindings.clone();
+            match mutate {
+                0 => bindings[0].certificate[0] ^= 1,
+                1 => bindings[0].descriptor_digest[0] ^= 1,
+                2 => bindings[0].profile.root[0] ^= 1,
+                3 => bindings[0].profile.geometry.width += 1,
+                _ => unreachable!("bounded mutation selector"),
+            }
+            assert!(
+                ZkX509MainPreprocessedFixedArtifactV1::open_bound_v1(
+                    package.directory.path(),
+                    package.compiled_profile_digest,
+                    bindings,
+                )
+                .is_err(),
+                "wrong certificate, descriptor, root, or geometry must reject"
+            );
+        }
+        let package = test_artifact_package_v1();
+        let mut wrong_compiled_profile = package.compiled_profile_digest;
+        wrong_compiled_profile[0] ^= 1;
+        assert!(
+            ZkX509MainPreprocessedFixedArtifactV1::open_bound_v1(
+                package.directory.path(),
+                wrong_compiled_profile,
+                package.bindings.clone(),
+            )
+            .is_err(),
+            "wrong compiled profile digest must reject"
+        );
+    }
+
+    #[test]
+    fn opened_artifact_detects_concurrent_row_tree_header_root_and_truncation_corruption() {
+        let indices = ZkX509Log19PreprocessedFixedOpeningIndicesV1 {
+            indices: vec![1, 3, 7, 19, 63, 125],
+        };
+        let corrupt_and_reject = |oracle: usize, offset: usize, truncate: bool| {
+            let package = test_artifact_package_v1();
+            let mut backend = open_test_artifact_backend_v1(&package).expect("artifact");
+            let path = package.directory.path().join(artifact_oracle_filename_v1(
+                package.profiles[oracle].geometry.oracle,
+            ));
+            if truncate {
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .expect("writable test artifact");
+                let length = file.metadata().expect("metadata").len();
+                file.set_len(length - 1).expect("truncate test artifact");
+            } else {
+                let mut encoded = std::fs::read(&path).expect("oracle");
+                encoded[offset] ^= 1;
+                std::fs::write(&path, encoded).expect("corrupt oracle");
+            }
+            assert!(
+                request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+                    &package.profiles,
+                    &indices,
+                    &mut backend,
+                )
+                .is_err(),
+                "corrupted artifact must return no sidecar"
+            );
+        };
+
+        // Header mutation is detected against the immutable opened header.
+        corrupt_and_reject(0, 0, false);
+        // The first selected row is in the sole partial batch of oracle zero.
+        corrupt_and_reject(
+            0,
+            ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1 + 3 * 8,
+            false,
+        );
+        let (first_row_bytes, _, first_file_bytes) =
+            artifact_geometry_lengths_v1(TEST_GEOMETRY).expect("artifact lengths");
+        let first_tree = ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1
+            + usize::try_from(first_row_bytes).expect("small rows");
+        // Leaf zero is the canonical frontier sibling of selected leaf one.
+        corrupt_and_reject(0, first_tree, false);
+        // The stored root is checked on every request, even though it is not
+        // transmitted in a canonical multiproof frontier.
+        corrupt_and_reject(
+            0,
+            usize::try_from(first_file_bytes - 32).expect("small root offset"),
+            false,
+        );
+        corrupt_and_reject(1, 0, true);
+
+        let package = test_artifact_package_v1();
+        let mut backend = open_test_artifact_backend_v1(&package).expect("artifact");
+        let noncanonical = ZkX509Log19PreprocessedFixedOpeningIndicesV1 {
+            indices: vec![3, 1],
+        };
+        assert!(
+            backend
+                .open_main_v1(&package.profiles, &noncanonical)
+                .is_err(),
+            "unsorted or ambiguous artifact query keys must reject"
+        );
+    }
+
+    #[test]
+    fn explicit_artifact_validation_rejects_unselected_corruption_and_noncanonical_fields() {
+        let corrupt_and_reject = |oracle: usize, offset: usize, replacement: Option<&[u8]>| {
+            let package = test_artifact_package_v1();
+            let path = package.directory.path().join(artifact_oracle_filename_v1(
+                package.profiles[oracle].geometry.oracle,
+            ));
+            let mut encoded = std::fs::read(&path).expect("oracle artifact");
+            if let Some(replacement) = replacement {
+                encoded[offset..offset + replacement.len()].copy_from_slice(replacement);
+            } else {
+                encoded[offset] ^= 1;
+            }
+            std::fs::write(&path, encoded).expect("corrupted oracle artifact");
+            let mut backend = open_test_artifact_backend_v1(&package).expect("cheap runtime open");
+            assert!(
+                backend.validate_complete_v1().is_err(),
+                "explicit validation must reject corruption at byte {offset}"
+            );
+        };
+
+        let (row_bytes, _, _) =
+            artifact_geometry_lengths_v1(TEST_GEOMETRY).expect("artifact lengths");
+        let rows_offset = ZK_X509_PREPROCESSED_FIXED_ARTIFACT_ORACLE_HEADER_BYTES_V1;
+        let tree_offset =
+            rows_offset + usize::try_from(row_bytes).expect("small artifact row bytes");
+        corrupt_and_reject(0, rows_offset, None);
+        corrupt_and_reject(0, tree_offset + 11 * 32, None);
+        corrupt_and_reject(
+            0,
+            tree_offset + TEST_GEOMETRY.lde_rows().expect("LDE rows") * 32 + 3 * 32,
+            None,
+        );
+        corrupt_and_reject(0, rows_offset, Some(&u64::MAX.to_be_bytes()));
+    }
+
+    #[test]
+    fn canonical_artifact_writers_enforce_empty_sinks_order_counts_fields_and_root() {
+        let compiled_profile_digest = [0xA5; 32];
+        let (profile, rows, _) = materialized_artifact_oracle_v1(TEST_GEOMETRY, test_native_column);
+        let binding = test_artifact_binding_v1(profile, 0x31);
+
+        let mut nonempty = Cursor::new(vec![0_u8]);
+        assert_eq!(
+            ZkX509PreprocessedFixedOracleArtifactWriterV1::begin_bound_v1(
+                &mut nonempty,
+                compiled_profile_digest,
+                0,
+                binding.clone(),
+            )
+            .err(),
+            Some(ZkX509PreprocessedFixedErrorV1::Artifact)
+        );
+
+        let mut reordered = Cursor::new(Vec::new());
+        let mut writer = ZkX509PreprocessedFixedOracleArtifactWriterV1::begin_bound_v1(
+            &mut reordered,
+            compiled_profile_digest,
+            0,
+            binding.clone(),
+        )
+        .expect("artifact writer");
+        assert_eq!(
+            writer
+                .write_lde_batch_v1(
+                    1,
+                    rows.iter()
+                        .map(|row| row.iter().copied().map(F).collect::<Vec<_>>()),
+                )
+                .err(),
+            Some(ZkX509PreprocessedFixedErrorV1::Column)
+        );
+        drop(writer);
+
+        let mut truncated = Cursor::new(Vec::new());
+        let mut writer = ZkX509PreprocessedFixedOracleArtifactWriterV1::begin_bound_v1(
+            &mut truncated,
+            compiled_profile_digest,
+            0,
+            binding.clone(),
+        )
+        .expect("artifact writer");
+        assert_eq!(
+            writer
+                .write_lde_batch_v1(
+                    0,
+                    rows[..rows.len() - 1].iter().map(|row| row
+                        .iter()
+                        .copied()
+                        .map(F)
+                        .collect::<Vec<_>>()),
+                )
+                .err(),
+            Some(ZkX509PreprocessedFixedErrorV1::Column)
+        );
+        drop(writer);
+
+        let mut extra_rows = rows.clone();
+        extra_rows.push(rows[0].clone());
+        let mut oversized = Cursor::new(Vec::new());
+        let mut writer = ZkX509PreprocessedFixedOracleArtifactWriterV1::begin_bound_v1(
+            &mut oversized,
+            compiled_profile_digest,
+            0,
+            binding.clone(),
+        )
+        .expect("artifact writer");
+        assert_eq!(
+            writer
+                .write_lde_batch_v1(
+                    0,
+                    extra_rows
+                        .iter()
+                        .map(|row| row.iter().copied().map(F).collect::<Vec<_>>()),
+                )
+                .err(),
+            Some(ZkX509PreprocessedFixedErrorV1::Column)
+        );
+        drop(writer);
+
+        let mut noncanonical_rows = rows.clone();
+        noncanonical_rows[0][0] = u64::MAX;
+        let mut noncanonical = Cursor::new(Vec::new());
+        let mut writer = ZkX509PreprocessedFixedOracleArtifactWriterV1::begin_bound_v1(
+            &mut noncanonical,
+            compiled_profile_digest,
+            0,
+            binding.clone(),
+        )
+        .expect("artifact writer");
+        assert_eq!(
+            writer
+                .write_lde_batch_v1(
+                    0,
+                    noncanonical_rows.iter().map(|row| row
+                        .iter()
+                        .copied()
+                        .map(F)
+                        .collect::<Vec<_>>()),
+                )
+                .err(),
+            Some(ZkX509PreprocessedFixedErrorV1::Column)
+        );
+        drop(writer);
+
+        let mut wrong_root = binding;
+        wrong_root.profile.root[0] ^= 1;
+        let mut output = Cursor::new(Vec::new());
+        assert_eq!(
+            write_artifact_oracle_bound_v1(
+                &mut output,
+                compiled_profile_digest,
+                0,
+                wrong_root,
+                test_native_column,
+            ),
+            Err(ZkX509PreprocessedFixedErrorV1::RootMismatch)
+        );
+
+        let bindings = [
+            test_artifact_binding_v1(profile, 0x31),
+            test_artifact_binding_v1(
+                materialized_artifact_oracle_v1(
+                    TEST_PARTIAL_BATCH_GEOMETRY,
+                    test_partial_batch_native_column,
+                )
+                .0,
+                0x52,
+            ),
+        ];
+        let mut manifest = Cursor::new(Vec::new());
+        write_artifact_manifest_bound_v1(&mut manifest, compiled_profile_digest, &bindings)
+            .expect("canonical manifest");
+        manifest.get_mut().push(0);
+        assert_eq!(
+            read_exact_artifact_manifest_from_v1(&mut manifest).err(),
+            Some(ZkX509PreprocessedFixedErrorV1::Artifact)
+        );
     }
 
     fn lowercase_hex_v1(bytes: &[u8]) -> String {
@@ -2143,7 +5189,7 @@ mod tests {
         let mut compact = CompactFixedLeafSha256V1::from_geometry_v1(TEST_BATCH8_GEOMETRY)
             .expect("compact prefix");
         assert_eq!(
-            compact.finalize_v1(TEST_BATCH8_GEOMETRY),
+            compact.finalize_v1(TEST_BATCH8_GEOMETRY, None),
             Err(ZkX509PreprocessedFixedErrorV1::Profile),
             "omitting the sole batch must not produce a leaf"
         );
@@ -2151,12 +5197,37 @@ mod tests {
             .absorb_batch8_v1(row)
             .expect("sole complete field batch");
         let compact_digest = compact
-            .finalize_v1(TEST_BATCH8_GEOMETRY)
+            .finalize_v1(TEST_BATCH8_GEOMETRY, None)
             .expect("compact digest");
         let encoded = row.map(|value| value.0);
         assert_eq!(
             compact_digest,
             fixed_leaf_hash_v1(TEST_BATCH8_GEOMETRY, &encoded).expect("canonical leaf")
+        );
+
+        let fields: [F; 12] =
+            core::array::from_fn(|index| F(u64::try_from(index * 13 + 7).expect("small field")));
+        let mut complete = [F::ZERO; 8];
+        complete.copy_from_slice(&fields[..8]);
+        let mut partial = [F::ZERO; 8];
+        partial[..4].copy_from_slice(&fields[8..]);
+        let mut compact = CompactFixedLeafSha256V1::from_geometry_v1(TEST_PARTIAL_BATCH_GEOMETRY)
+            .expect("partial compact prefix");
+        compact
+            .absorb_batch8_v1(complete)
+            .expect("complete prefix batch");
+        assert_eq!(
+            compact
+                .finalize_v1(TEST_PARTIAL_BATCH_GEOMETRY, Some((partial, 4)))
+                .expect("partial compact digest"),
+            fixed_leaf_hash_v1(TEST_PARTIAL_BATCH_GEOMETRY, &fields.map(|value| value.0),)
+                .expect("canonical partial leaf")
+        );
+        partial[7] = F::ONE;
+        assert_eq!(
+            compact.finalize_v1(TEST_PARTIAL_BATCH_GEOMETRY, Some((partial, 4))),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile),
+            "ignored lanes in a partial transform must remain canonical zero"
         );
     }
 
@@ -2219,13 +5290,23 @@ mod tests {
         assert_eq!(streamed_reversed, expected_reversed);
         assert_ne!(streamed_reversed, streamed);
 
-        let mut partial_batch = TEST_BATCH8_GEOMETRY;
-        partial_batch.width = 9;
+        let expected_partial = recompute_zk_x509_preprocessed_fixed_root_v1(
+            TEST_PARTIAL_BATCH_GEOMETRY,
+            test_partial_batch_native_column,
+        )
+        .expect("materialized partial-batch root");
+        let mut requested = Vec::new();
+        let streamed_partial =
+            stream_fixed_oracle_root_batch8_v1(TEST_PARTIAL_BATCH_GEOMETRY, |column| {
+                requested.push(column);
+                test_partial_batch_native_column(column)
+            })
+            .expect("streamed partial-batch root");
+        assert_eq!(streamed_partial, expected_partial);
         assert_eq!(
-            stream_fixed_oracle_root_batch8_v1(partial_batch, |_| {
-                panic!("misaligned geometry must reject before requesting a column")
-            }),
-            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+            requested,
+            (0..usize::from(TEST_PARTIAL_BATCH_GEOMETRY.width)).collect::<Vec<_>>(),
+            "partial final batch requested a synthetic padding column",
         );
     }
 
@@ -2371,7 +5452,7 @@ mod tests {
     fn sha_query_coordinates_are_strictly_validated_before_openings_exist() {
         let lde_rows = 1_usize << ZK_X509_MAIN_COMMON_LDE_LOG2_V1;
         let queries = (0..usize::from(ZK_X509_FRI_QUERY_COUNT_V1)).collect::<Vec<_>>();
-        let derived = derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&queries)
+        let derived = derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(&queries)
             .expect("distinct in-range transcript coordinates");
         assert_eq!(
             derived.as_slice_v1().len(),
@@ -2387,15 +5468,16 @@ mod tests {
         let mut reordered = queries.clone();
         reordered.reverse();
         assert_eq!(
-            derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&reordered)
+            derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(&reordered)
                 .expect("transcript order is normalized"),
             derived
         );
 
         let mut boundary = queries.clone();
         boundary[0] = lde_rows - 1;
-        let boundary_openings = derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&boundary)
-            .expect("last valid query coordinate");
+        let boundary_openings =
+            derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(&boundary)
+                .expect("last valid query coordinate");
         assert!(boundary_openings.as_slice_v1().contains(&(lde_rows - 1)));
         assert!(
             boundary_openings.as_slice_v1().contains(&63),
@@ -2405,20 +5487,59 @@ mod tests {
         let mut duplicate = queries.clone();
         duplicate[1] = duplicate[0];
         assert_eq!(
-            derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&duplicate),
+            derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(&duplicate),
             Err(ZkX509PreprocessedFixedErrorV1::Index)
         );
 
         let mut out_of_range = queries.clone();
         out_of_range[0] = lde_rows;
         assert_eq!(
-            derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&out_of_range),
+            derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(&out_of_range),
             Err(ZkX509PreprocessedFixedErrorV1::Index)
         );
         assert_eq!(
-            derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&queries[..queries.len() - 1]),
+            derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(
+                &queries[..queries.len() - 1]
+            ),
             Err(ZkX509PreprocessedFixedErrorV1::Index)
         );
+    }
+
+    fn exact_maximum_paired_indices_v1() -> Vec<usize> {
+        // At level 18 the log25 tree has 128 subtrees. Leave the following
+        // twelve vertices unmatched, one in each of twelve distinct binary
+        // sibling pairs, and match every remaining adjacent pair. A query
+        // placed 64 leaves before each matched boundary opens exactly one leaf
+        // in each subtree because its verifier-derived next coordinate is
+        // query + 64.
+        let unmatched_level18 = [0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 110, 119];
+        let level18_subtree_rows = 1_usize << 18;
+        let mut maximum_queries = Vec::new();
+        let mut level18 = 0_usize;
+        while level18 < 128 {
+            if unmatched_level18.contains(&level18) {
+                level18 += 1;
+                continue;
+            }
+            assert!(
+                level18 + 1 < 128 && !unmatched_level18.contains(&(level18 + 1)),
+                "unmatched vertices must leave even adjacent paths"
+            );
+            maximum_queries.push(
+                level18 * level18_subtree_rows + level18_subtree_rows
+                    - (1_usize
+                        << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)),
+            );
+            level18 += 2;
+        }
+        assert_eq!(
+            maximum_queries.len(),
+            usize::from(ZK_X509_FRI_QUERY_COUNT_V1)
+        );
+        derive_zk_x509_log19_preprocessed_fixed_opening_indices_v1(&maximum_queries)
+            .expect("legal paired maximum witness")
+            .as_slice_v1()
+            .to_vec()
     }
 
     #[test]
@@ -2447,40 +5568,7 @@ mod tests {
             "the exact one-oracle maximum remains below the generic decoder cap"
         );
 
-        // Constrained attainability certificate. At level 18 the log25 tree
-        // has 128 subtrees. Leave the following 12 vertices unmatched, one in
-        // each of 12 distinct binary sibling pairs, and match every remaining
-        // adjacent pair. A query placed 64 leaves before the boundary between
-        // each matched pair opens exactly one leaf in each subtree because
-        // its verifier-derived next coordinate is query + 64.
-        let unmatched_level18 = [0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 110, 119];
-        let level18_subtree_rows = 1_usize << 18;
-        let mut maximum_queries = Vec::new();
-        let mut level18 = 0_usize;
-        while level18 < 128 {
-            if unmatched_level18.contains(&level18) {
-                level18 += 1;
-                continue;
-            }
-            assert!(
-                level18 + 1 < 128 && !unmatched_level18.contains(&(level18 + 1)),
-                "unmatched vertices must leave even adjacent paths"
-            );
-            maximum_queries.push(
-                level18 * level18_subtree_rows + level18_subtree_rows
-                    - (1_usize
-                        << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)),
-            );
-            level18 += 2;
-        }
-        assert_eq!(
-            maximum_queries.len(),
-            usize::from(ZK_X509_FRI_QUERY_COUNT_V1)
-        );
-        let maximum_openings =
-            derive_zk_x509_sha_preprocessed_fixed_opening_indices_v1(&maximum_queries)
-                .expect("legal paired maximum witness");
-        let maximum_indices = maximum_openings.as_slice_v1().to_vec();
+        let maximum_indices = exact_maximum_paired_indices_v1();
         assert_eq!(
             maximum_indices.len(),
             ZK_X509_PREPROCESSED_FIXED_MAX_OPENINGS_V1
@@ -2541,6 +5629,98 @@ mod tests {
     }
 
     #[test]
+    fn exact_two_oracle_main_x5f1_maximum_is_825776_bytes() {
+        let indices = exact_maximum_paired_indices_v1();
+        let frontier =
+            multiproof_frontier_len_v1(1_usize << ZK_X509_MAIN_COMMON_LDE_LOG2_V1, &indices)
+                .expect("paired maximum frontier");
+        assert_eq!(
+            frontier,
+            ZK_X509_SHA_PREPROCESSED_FIXED_MAXIMUM_FRONTIER_HASHES_V1
+        );
+        let profiles = [
+            ZkX509PreprocessedFixedProfileV1 {
+                geometry: ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1,
+                root: [1; 32],
+            },
+            ZkX509PreprocessedFixedProfileV1 {
+                geometry: ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1,
+                root: [2; 32],
+            },
+        ];
+        let encoded_indices = indices
+            .iter()
+            .copied()
+            .map(|index| u32::try_from(index).expect("log25 index"))
+            .collect::<Vec<_>>();
+        let proof = ZkX509PreprocessedFixedProofV1 {
+            oracles: vec![
+                ZkX509PreprocessedFixedMultiproofV1 {
+                    oracle: ZK_X509_SHA_PREPROCESSED_FIXED_ORACLE_V1,
+                    indices: encoded_indices.clone(),
+                    rows: vec![
+                        vec![0; ZK_X509_SHA_PREPROCESSED_FIXED_WIDTH_V1];
+                        ZK_X509_PREPROCESSED_FIXED_MAX_OPENINGS_V1
+                    ],
+                    frontier: vec![[0; 32]; frontier],
+                },
+                ZkX509PreprocessedFixedMultiproofV1 {
+                    oracle: ZK_X509_P256_LOG19_PREPROCESSED_FIXED_ORACLE_V1,
+                    indices: encoded_indices,
+                    rows: vec![
+                        vec![0; ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1];
+                        ZK_X509_PREPROCESSED_FIXED_MAX_OPENINGS_V1
+                    ],
+                    frontier: vec![[0; 32]; frontier],
+                },
+            ],
+        };
+        assert_eq!(
+            zk_x509_p256_log19_preprocessed_fixed_maximum_encoded_bytes_v1()
+                .expect("P-256 exact maximum"),
+            ZK_X509_P256_LOG19_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+        );
+        assert_eq!(
+            zk_x509_main_preprocessed_fixed_maximum_encoded_bytes_v1().expect("MAIN exact maximum"),
+            ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+        );
+        assert_eq!(
+            checked_wire_len_v1(&profiles, &proof).expect("combined checked wire length"),
+            ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+        );
+        let encoded =
+            encode_zk_x509_preprocessed_fixed_proof_v1(&profiles, &proof).expect("maximum encode");
+        assert_eq!(
+            encoded.len(),
+            ZK_X509_MAIN_PREPROCESSED_FIXED_MAXIMUM_ENCODED_BYTES_V1
+        );
+        assert_eq!(
+            decode_zk_x509_preprocessed_fixed_proof_v1(&profiles, &encoded)
+                .expect("maximum decode"),
+            proof
+        );
+
+        let mut changed = proof.clone();
+        changed.oracles.swap(0, 1);
+        assert!(
+            encode_zk_x509_preprocessed_fixed_proof_v1(&profiles, &changed).is_err(),
+            "cross-oracle substitution must reject"
+        );
+        changed = proof.clone();
+        changed.oracles.pop();
+        assert!(
+            encode_zk_x509_preprocessed_fixed_proof_v1(&profiles, &changed).is_err(),
+            "omitting oracle two must reject"
+        );
+        changed = proof;
+        changed.oracles[1].rows[0].pop();
+        assert!(
+            encode_zk_x509_preprocessed_fixed_proof_v1(&profiles, &changed).is_err(),
+            "a partial P-256 row must reject"
+        );
+    }
+
+    #[test]
     fn ordered_logarithmic_merkle_frontier_matches_full_tree() {
         let leaves = (0_u8..16)
             .map(|value| <[u8; 32]>::from(Sha256::digest([value])))
@@ -2588,7 +5768,24 @@ mod tests {
         );
         assert_eq!(
             ZK_X509_SHA_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1,
-            1_476_395_008
+            1_442_840_576
+        );
+        assert_eq!(ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_COUNT_V1, 51);
+        assert_eq!(
+            ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_BUTTERFLIES_V1,
+            21_644_967_936
+        );
+        assert_eq!(
+            ZK_X509_P256_LOG19_PREPROCESSED_ROOT_BATCH_BUTTERFLIES_V1 * 8,
+            173_159_743_488
+        );
+        assert_eq!(
+            ZK_X509_P256_LOG19_PREPROCESSED_ROOT_SCHEDULED_FIELD_OPS_MAX_V1,
+            541_552_017_408
+        );
+        assert_eq!(
+            ZK_X509_P256_LOG19_PREPROCESSED_ROOT_LEAF_SHA_BLOCKS_V1,
+            1_711_276_032
         );
         assert_eq!(ZK_X509_SHA_PREPROCESSED_ROOT_MERKLE_NODES_V1, 33_554_431);
         assert_eq!(
@@ -2598,6 +5795,8 @@ mod tests {
         assert_eq!(ZK_X509_SHA_PREPROCESSED_ROOT_MAX_SECONDS_V1, 3_600);
         checked_release_root_memory_v1(ZK_X509_SHA_PREPROCESSED_FIXED_GEOMETRY_V1)
             .expect("release root RSS certificate");
+        checked_release_root_memory_v1(ZK_X509_P256_LOG19_PREPROCESSED_FIXED_GEOMETRY_V1)
+            .expect("P-256 release root RSS certificate");
         let rows = 1_usize << ZK_X509_MAIN_COMMON_LDE_LOG2_V1;
         let calculated_peak = rows * core::mem::size_of::<CompactFixedLeafSha256V1>()
             + rows * core::mem::size_of::<[F; 8]>()
@@ -2665,6 +5864,66 @@ mod tests {
     }
 
     #[test]
+    fn p256_certificate_and_two_oracle_profile_order_fail_closed_on_mutation() {
+        let sha = ZkX509ShaPreprocessedFixedCertificateV1::from_derived_root_v1([1; 32])
+            .expect("SHA candidate certificate");
+        let expected = ZkX509P256Log19PreprocessedFixedCertificateV1::from_derived_root_v1([2; 32])
+            .expect("P-256 candidate certificate");
+        assert_eq!(
+            zk_x509_main_preprocessed_fixed_profiles_v1(sha, expected)
+                .expect("canonical MAIN profile order"),
+            [sha.profile, expected.profile]
+        );
+
+        let mut changed = expected;
+        changed.profile.root[0] ^= 1;
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::RootMismatch)
+        );
+        changed = expected;
+        changed.schedule_order.swap(0, 1);
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        changed = expected;
+        changed.profile.geometry.oracle = ZK_X509_SHA_PREPROCESSED_FIXED_ORACLE_V1;
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        changed = expected;
+        changed.profile.geometry.native_log2 -= 1;
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        changed = expected;
+        changed.profile.geometry.lde_log2 -= 1;
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        changed = expected;
+        changed.profile.geometry.width -= 1;
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        changed = expected;
+        changed.descriptor_digest[0] ^= 1;
+        assert_eq!(
+            validate_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(changed, expected),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        assert_eq!(
+            pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1(),
+            Err(ZkX509PreprocessedFixedErrorV1::Unpinned)
+        );
+    }
+
+    #[test]
     fn sha_preprocessed_column_subset_is_shape_independent_and_segment_major() {
         let baseline = ZkX509ShaBatchFixedProviderV1::new_v1(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes: 0,
@@ -2719,7 +5978,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_reduced_sha_rows_expand_to_the_exact_air_fixed_width() {
+    fn authenticated_reduced_sha_rows_expand_exactly_and_zero_statement_columns() {
         let provider = ZkX509ShaBatchFixedProviderV1::new_v1(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes: 0,
         })
@@ -2738,18 +5997,122 @@ mod tests {
                 );
                 expected.extend_from_slice(&full);
             }
+            let rfc_start = ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + ZK_X509_SHA_CA_CALL_COUNT_V1;
+            let mut authenticated_expected = expected.clone();
+            for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
+                let start = segment * ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 + rfc_start;
+                let end = (segment + 1) * ZK_X509_SHA_BATCH_FIXED_WIDTH_V1;
+                authenticated_expected[start..end].fill(F::ZERO);
+            }
+            if row != ZK_X509_SHA_SEGMENT_ROWS_V1 - 1 {
+                assert!(
+                    expected
+                        .chunks_exact(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1)
+                        .any(|segment| segment[rfc_start..].iter().any(|value| *value != F::ZERO)),
+                    "canonical active row must exercise verifier-generated RFC columns"
+                );
+            }
             assert_eq!(
                 expand_zk_x509_sha_preprocessed_fixed_row_v1(&reduced)
                     .expect("authenticated opening expansion")
                     .as_slice(),
-                expected,
+                authenticated_expected,
                 "physical row {row}"
             );
         }
     }
 
     #[test]
-    #[ignore = "serialized release diagnostic: 36 row-major batch8 log25 transforms"]
+    fn p256_log19_manifest_slices_and_role_aliases_match_native_fixed_rows() {
+        let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("P-256 fixed source");
+        let native_rows = 1_usize << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1;
+        let boundary_columns = [
+            0,
+            P256_LOG19_WALLET_ARITHMETIC_START_V1 - 1,
+            P256_LOG19_WALLET_ARITHMETIC_START_V1,
+            P256_LOG19_CERTIFICATE_EXECUTION_START_V1 - 1,
+            P256_LOG19_CERTIFICATE_EXECUTION_START_V1,
+            P256_LOG19_WALLET_EXECUTION_START_V1 - 1,
+            P256_LOG19_WALLET_EXECUTION_START_V1,
+            P256_LOG19_CERTIFICATE_SORTED_START_V1 - 1,
+            P256_LOG19_CERTIFICATE_SORTED_START_V1,
+            P256_LOG19_WALLET_SORTED_START_V1 - 1,
+            P256_LOG19_WALLET_SORTED_START_V1,
+            ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1 - 1,
+        ];
+        for row in [0, 1, native_rows / 2, native_rows - 1] {
+            let combined =
+                p256_log19_native_fixed_row_v1(&fixed, row).expect("combined native fixed row");
+            assert_eq!(
+                combined.len(),
+                ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1
+            );
+            for global_column in boundary_columns {
+                let (schedule, local_column) =
+                    p256_log19_fixed_schedule_for_column_v1(global_column)
+                        .expect("manifest boundary column");
+                let expected = fixed
+                    .fixed_row_v1(
+                        schedule
+                            .representative_registration_v1()
+                            .expect("representative registration"),
+                        row,
+                    )
+                    .expect("representative fixed row");
+                assert_eq!(
+                    combined[global_column], expected[local_column],
+                    "row {row}, global column {global_column}"
+                );
+            }
+            for signature in 0..P256_X5S1_SIGNATURES_V1 {
+                for (adapter, local_instance) in [
+                    (P256MainAdapterV1::Arithmetic, 0),
+                    (P256MainAdapterV1::ValueBus, 0),
+                    (P256MainAdapterV1::ValueBus, 1),
+                ] {
+                    let registration =
+                        P256MainRegistrationV1::new_v1(signature, adapter, local_instance)
+                            .expect("canonical log19 registration");
+                    let expected = fixed
+                        .fixed_row_v1(registration, row)
+                        .expect("registration fixed row");
+                    assert_eq!(
+                        zk_x509_p256_log19_preprocessed_fixed_row_for_registration_v1(
+                            &combined,
+                            registration,
+                        )
+                        .expect("authenticated manifest slice"),
+                        expected.as_slice(),
+                        "signature {signature}, adapter {adapter:?}, local {local_instance}, row {row}"
+                    );
+                }
+            }
+        }
+
+        assert_eq!(
+            p256_log19_fixed_schedule_for_column_v1(ZK_X509_P256_LOG19_PREPROCESSED_FIXED_WIDTH_V1),
+            Err(ZkX509PreprocessedFixedErrorV1::Column)
+        );
+        let combined =
+            p256_log19_native_fixed_row_v1(&fixed, 0).expect("combined native fixed row");
+        let unsupported = P256MainRegistrationV1::new_v1(0, P256MainAdapterV1::WindowBatch, 0)
+            .expect("valid non-log19 registration");
+        assert_eq!(
+            zk_x509_p256_log19_preprocessed_fixed_row_for_registration_v1(&combined, unsupported,),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile)
+        );
+        assert_eq!(
+            zk_x509_p256_log19_preprocessed_fixed_row_for_registration_v1(
+                &combined[..combined.len() - 1],
+                P256MainRegistrationV1::new_v1(0, P256MainAdapterV1::Arithmetic, 0)
+                    .expect("canonical registration"),
+            ),
+            Err(ZkX509PreprocessedFixedErrorV1::Opening)
+        );
+    }
+
+    #[test]
+    #[ignore = "serialized release diagnostic: 43 row-major batch8 log25 transforms"]
     fn emit_sha_preprocessed_fixed_release_candidate() {
         let started = std::time::Instant::now();
         let root = derive_zk_x509_sha_preprocessed_fixed_root_v1()
@@ -2764,6 +6127,24 @@ mod tests {
         let encoded = certificate.encode_v1().expect("certificate encoding");
         eprintln!(
             "zk-x509 SHA fixed candidate root={} descriptor_digest={} certificate={} elapsed={elapsed:?}",
+            lowercase_hex_v1(&root),
+            lowercase_hex_v1(&certificate.descriptor_digest),
+            lowercase_hex_v1(&encoded),
+        );
+    }
+
+    #[test]
+    #[ignore = "serialized release diagnostic: 51 row-major batch8 log25 transforms"]
+    fn emit_p256_log19_preprocessed_fixed_release_candidate() {
+        let started = std::time::Instant::now();
+        let root = derive_zk_x509_p256_log19_preprocessed_fixed_root_v1()
+            .expect("derive P-256 log19 fixed root");
+        let elapsed = started.elapsed();
+        let certificate = ZkX509P256Log19PreprocessedFixedCertificateV1::from_derived_root_v1(root)
+            .expect("candidate certificate");
+        let encoded = certificate.encode_v1().expect("certificate encoding");
+        eprintln!(
+            "zk-x509 P-256 log19 fixed candidate root={} descriptor_digest={} certificate={} elapsed={elapsed:?}",
             lowercase_hex_v1(&root),
             lowercase_hex_v1(&certificate.descriptor_digest),
             lowercase_hex_v1(&encoded),
@@ -2821,6 +6202,159 @@ mod tests {
             build_zk_x509_preprocessed_fixed_multiproof_v1(profile, &indices, test_native_column)
                 .expect("multiproof");
         (profile, indices, proof)
+    }
+
+    fn two_oracle_service_fixture_v1() -> (
+        [ZkX509PreprocessedFixedProfileV1; 2],
+        ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+        Vec<u8>,
+    ) {
+        let indices = vec![1, 3, 7, 19, 63, 126];
+        let first_root =
+            recompute_zk_x509_preprocessed_fixed_root_v1(TEST_GEOMETRY, test_native_column)
+                .expect("first root");
+        let second_root = recompute_zk_x509_preprocessed_fixed_root_v1(
+            TEST_PARTIAL_BATCH_GEOMETRY,
+            test_partial_batch_native_column,
+        )
+        .expect("second root");
+        let profiles = [
+            ZkX509PreprocessedFixedProfileV1 {
+                geometry: TEST_GEOMETRY,
+                root: first_root,
+            },
+            ZkX509PreprocessedFixedProfileV1 {
+                geometry: TEST_PARTIAL_BATCH_GEOMETRY,
+                root: second_root,
+            },
+        ];
+        let proof = ZkX509PreprocessedFixedProofV1 {
+            oracles: vec![
+                build_zk_x509_preprocessed_fixed_multiproof_v1(
+                    profiles[0],
+                    &indices,
+                    test_native_column,
+                )
+                .expect("first multiproof"),
+                build_zk_x509_preprocessed_fixed_multiproof_v1(
+                    profiles[1],
+                    &indices,
+                    test_partial_batch_native_column,
+                )
+                .expect("second multiproof"),
+            ],
+        };
+        let encoded = encode_zk_x509_preprocessed_fixed_proof_v1(&profiles, &proof)
+            .expect("service artifact");
+        (
+            profiles,
+            ZkX509Log19PreprocessedFixedOpeningIndicesV1 { indices },
+            encoded,
+        )
+    }
+
+    struct ExactArtifactServiceV1 {
+        expected_profiles: [ZkX509PreprocessedFixedProfileV1; 2],
+        expected_indices: Vec<usize>,
+        encoded: Vec<u8>,
+        calls: usize,
+    }
+
+    impl ZkX509MainPreprocessedFixedOpeningServiceV1 for ExactArtifactServiceV1 {
+        fn open_main_v1(
+            &mut self,
+            profiles: &[ZkX509PreprocessedFixedProfileV1; 2],
+            indices: &ZkX509Log19PreprocessedFixedOpeningIndicesV1,
+        ) -> Result<Vec<u8>, ZkX509PreprocessedFixedErrorV1> {
+            self.calls += 1;
+            if profiles != &self.expected_profiles || indices.as_slice_v1() != self.expected_indices
+            {
+                return Err(ZkX509PreprocessedFixedErrorV1::Profile);
+            }
+            Ok(self.encoded.clone())
+        }
+    }
+
+    #[test]
+    fn authenticated_opening_service_is_deterministic_and_fails_closed_on_stale_artifacts() {
+        let (profiles, indices, encoded) = two_oracle_service_fixture_v1();
+        let mut service = ExactArtifactServiceV1 {
+            expected_profiles: profiles,
+            expected_indices: indices.as_slice_v1().to_vec(),
+            encoded: encoded.clone(),
+            calls: 0,
+        };
+        let first = request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+            &profiles,
+            &indices,
+            &mut service,
+        )
+        .expect("authenticated artifact");
+        let second = request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+            &profiles,
+            &indices,
+            &mut service,
+        )
+        .expect("deterministic authenticated artifact");
+        assert_eq!(first, encoded);
+        assert_eq!(second, first);
+        assert_eq!(service.calls, 2);
+
+        let mut corrupted = service.encoded.clone();
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 1;
+        service.encoded = corrupted;
+        assert!(
+            request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+                &profiles,
+                &indices,
+                &mut service,
+            )
+            .is_err(),
+            "corrupted frontier material must reject"
+        );
+
+        service.encoded = encoded.clone();
+        let mut stale_profiles = profiles;
+        stale_profiles[1].root[0] ^= 1;
+        service.expected_profiles = stale_profiles;
+        assert_eq!(
+            request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+                &stale_profiles,
+                &indices,
+                &mut service,
+            ),
+            Err(ZkX509PreprocessedFixedErrorV1::Opening),
+            "a stale or wrong-root artifact must not authenticate"
+        );
+
+        service.expected_profiles = profiles;
+        let mut missing_oracle = encoded.clone();
+        missing_oracle[7] = 1;
+        service.encoded = missing_oracle;
+        assert!(
+            request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+                &profiles,
+                &indices,
+                &mut service,
+            )
+            .is_err(),
+            "a partial two-oracle artifact must reject"
+        );
+
+        service.encoded = encoded;
+        let mismatched_indices = ZkX509Log19PreprocessedFixedOpeningIndicesV1 {
+            indices: vec![1, 3, 7, 19, 63, 125],
+        };
+        assert_eq!(
+            request_zk_x509_main_preprocessed_fixed_openings_for_profiles_v1(
+                &profiles,
+                &mismatched_indices,
+                &mut service,
+            ),
+            Err(ZkX509PreprocessedFixedErrorV1::Profile),
+            "the cache key must include the exact query-derived opening set"
+        );
     }
 
     #[test]

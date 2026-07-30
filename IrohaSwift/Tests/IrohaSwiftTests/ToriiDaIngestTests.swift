@@ -29,6 +29,13 @@ final class ToriiDaIngestTests: XCTestCase {
         let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyBytes)
         let expectedSubmitter = encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
         XCTAssertEqual(artifacts.submitterPublicKeyHex, expectedSubmitter)
+        let signingDigest = try XCTUnwrap(Data(hexString: artifacts.signingDigestHex))
+        let signature = try XCTUnwrap(Data(hexString: artifacts.signatureHex))
+        XCTAssertTrue(privateKey.publicKey.isValidSignature(signature, for: signingDigest))
+        XCTAssertFalse(
+            privateKey.publicKey.isValidSignature(signature, for: payload),
+            "DA signatures must bind the complete request intent, not only payload bytes"
+        )
 
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["lane_id"] as? Int, 1)
@@ -39,10 +46,58 @@ final class ToriiDaIngestTests: XCTestCase {
 
         let codec = try XCTUnwrap(json["codec"] as? [String])
         XCTAssertEqual(codec, ["application/octet-stream"])
+        let erasure = try XCTUnwrap(json["erasure_profile"] as? [String: Any])
+        XCTAssertEqual(erasure["row_parity_stripes"] as? Int, 0)
 
         let digestTuple = try XCTUnwrap(json["client_blob_id"] as? [[NSNumber]])
         XCTAssertEqual(digestTuple.first?.count, 32)
         XCTAssertEqual(digestTuple.first?.first, NSNumber(value: 0xAB))
+    }
+
+    func testDaIntentDigestMatchesSharedRustProtocolVector() throws {
+        let clientBlobId = Data((0..<32).map { UInt8(0x11 + $0) })
+        let submission = ToriiDaBlobSubmission(
+            payload: Data("hello data availability".utf8),
+            chunkSize: 1 << 20,
+            laneId: 2,
+            epoch: 42,
+            sequence: 7,
+            blobClass: .taikaiSegment,
+            codec: "cmaf",
+            erasureProfile: ToriiDaErasureProfile(
+                dataShards: 8,
+                parityShards: 4,
+                rowParityStripes: 2,
+                chunkAlignment: 12,
+                fecScheme: .rs12_10
+            ),
+            retentionPolicy: ToriiDaRetentionPolicy(
+                hotRetentionSecs: 86_400,
+                coldRetentionSecs: 30 * 86_400,
+                requiredReplicas: 4,
+                storageClass: .hot,
+                governanceTag: "da.test"
+            ),
+            compression: .identity,
+            metadata: [
+                ToriiDaMetadataEntry(
+                    key: "content_type",
+                    value: Data("video/mp4".utf8)
+                )
+            ],
+            noritoManifest: Data([0xAA, 0xBB, 0xCC]),
+            clientBlobId: clientBlobId,
+            privateKey: Data(repeating: 0x19, count: 32)
+        )
+
+        let artifacts = try ToriiDaIngestRequestBuilder(submission: submission)
+            .makeRequestBody()
+            .artifacts
+
+        XCTAssertEqual(
+            artifacts.signingDigestHex,
+            "F73B79FFD1DB5BF28EE57E42AA42F10BA4AF865BA1E466471167818BBBC896E8"
+        )
     }
 
     func testReceiptDecoding() throws {

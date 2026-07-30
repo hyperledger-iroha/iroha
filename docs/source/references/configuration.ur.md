@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/references/configuration.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 184468d4322a52fbfd522000e1968f92549ed2c518de58e9074b3928c3b6f272
-source_last_modified: "2026-07-25T23:14:10.819349+00:00"
+source_hash: ddec1600bfeb368f0ec06ef24cf73263d8faf7c024f3f0667b107ea238fefc9c
+source_last_modified: "2026-07-28T08:48:36.565314+00:00"
 translation_last_reviewed: null
 ---
 

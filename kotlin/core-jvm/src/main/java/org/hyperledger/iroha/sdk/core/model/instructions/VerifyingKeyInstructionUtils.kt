@@ -37,6 +37,12 @@ internal object VerifyingKeyInstructionUtils {
     internal fun verifierRegistryBackend(value: String): String =
         VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(value)
 
+    internal fun Map<String, String>.productionBackend(key: String): String =
+        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(nonEmptyString(key), key)
+
+    internal fun productionBackend(value: String): String =
+        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(value)
+
     internal fun Map<String, String>.nonEmptyOrNull(key: String): String? {
         val value = this[key] ?: return null
         val trimmed = value.trim()

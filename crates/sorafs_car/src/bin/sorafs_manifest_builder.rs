@@ -17,8 +17,8 @@ use norito::{
 };
 use rand::rng;
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload, FilePayload,
-    FilePlan, InMemoryPayload, PorMerkleTree, compute_chunk_plan_digest_sha3,
+    CarBuildPlan, CarChunk, CarStreamingWriter, CarWriteStats, ChunkStore, DirectoryPayload,
+    FilePayload, FilePlan, InMemoryPayload, PorMerkleTree, compute_chunk_plan_digest_sha3,
     fetch_plan::{
         MANIFEST_BUILDER_REPORT_SCHEMA_V1, chunk_fetch_plan_from_json, chunk_fetch_plan_to_string,
         try_chunk_fetch_specs_to_json,
@@ -452,17 +452,7 @@ fn run() -> Result<(), String> {
     }
     let dag_codec = car_stats.dag_codec;
 
-    let mut computed_car_payload_digest = [0u8; 32];
-    computed_car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
-    let car_payload_digest = match opts.car_digest {
-        Some(provided) => {
-            if provided != computed_car_payload_digest {
-                return Err("provided --car-digest does not match CAR output".into());
-            }
-            provided
-        }
-        None => computed_car_payload_digest,
-    };
+    let car_archive_digest = resolve_manifest_car_digest(&car_stats, opts.car_digest)?;
 
     let car_size = match opts.car_size {
         Some(expected) => {
@@ -603,7 +593,7 @@ fn run() -> Result<(), String> {
         .chunk_digest_sha3_256(chunk_digest_sha3)
         .por_root(*chunk_store.por_tree().root())
         .content_length(car_plan.content_length)
-        .car_digest(car_payload_digest)
+        .car_digest(car_archive_digest)
         .car_size(car_size)
         .pin_policy(PinPolicy {
             min_replicas: opts.min_replicas.unwrap_or(3),
@@ -846,7 +836,7 @@ fn usage() -> &'static str {
     "usage: sorafs_manifest_builder <path|-> \
      [--root-cid=hex] (verifies computed root) \
      [--dag-codec=0x71] (verifies computed codec) \
-     [--car-digest=hex] (defaults to computed payload BLAKE3) \
+     [--car-digest=hex] (defaults to computed full CARv2 archive BLAKE3-256; supplied values are verified) \
      [--car-size=bytes] (defaults to computed CAR size) \
      [--car-cid=hex] (verifies computed raw-encoded CAR CID) \
     [--chunker-profile-id=1 | --chunker-profile=sorafs.sf1@1.0.0] (choose registered chunker profile) \
@@ -1217,6 +1207,22 @@ enum InputKind {
 }
 
 const HYBRID_MANIFEST_AAD_DOMAIN: &[u8] = b"sorafs.hybrid.manifest.v1";
+
+fn resolve_manifest_car_digest(
+    car_stats: &CarWriteStats,
+    provided: Option<[u8; 32]>,
+) -> Result<[u8; 32], String> {
+    let computed = *car_stats.car_archive_digest.as_bytes();
+    if let Some(provided) = provided {
+        if provided != computed {
+            return Err(
+                "provided --car-digest does not match the full canonical CARv2 archive".into(),
+            );
+        }
+        return Ok(provided);
+    }
+    Ok(computed)
+}
 
 struct HybridEnvelopeArtefact {
     envelope: HybridPayloadEnvelopeV1,
@@ -2182,10 +2188,53 @@ mod tests {
 
         assert!(text.contains("sorafs_manifest_builder <path|->"));
         assert!(text.contains("sorafs_manifest_builder --list-chunker-profiles"));
+        assert!(text.contains("full CARv2 archive BLAKE3-256"));
         assert!(text.contains("--council-signing-key-file=path"));
         assert!(text.contains("raw 32-byte Ed25519 seed"));
         assert!(!text.contains("--council-signing-key="));
         assert!(!text.contains("sorafs-manifest-builder"));
+    }
+
+    #[test]
+    fn manifest_car_digest_binds_full_archive_and_rejects_payload_section() {
+        let payload = b"archive-digest-hard-cut".to_vec();
+        let plan = CarBuildPlan::single_file_with_profile(
+            &payload,
+            chunker_registry::default_descriptor().profile,
+        )
+        .expect("plan");
+        let mut archive = Vec::new();
+        let mut reader = Cursor::new(&payload);
+        let stats = CarStreamingWriter::new(&plan)
+            .write_from_reader(&mut reader, &mut archive)
+            .expect("write canonical CARv2 archive");
+        let full_archive_digest = *blake3::hash(&archive).as_bytes();
+        let payload_section_digest = *stats.car_payload_digest.as_bytes();
+
+        assert_eq!(
+            *stats.car_archive_digest.as_bytes(),
+            full_archive_digest,
+            "writer archive digest must cover every CARv2 byte"
+        );
+        assert_ne!(
+            payload_section_digest, full_archive_digest,
+            "CARv1 payload-section and full CARv2 archive digests must remain distinct"
+        );
+        assert_eq!(
+            resolve_manifest_car_digest(&stats, None).expect("default manifest digest"),
+            full_archive_digest
+        );
+        assert_eq!(
+            resolve_manifest_car_digest(&stats, Some(full_archive_digest))
+                .expect("matching archive digest"),
+            full_archive_digest
+        );
+        let error = resolve_manifest_car_digest(&stats, Some(payload_section_digest))
+            .expect_err("payload-section digest must be rejected");
+        assert!(
+            error.contains("full canonical CARv2 archive"),
+            "unexpected digest mismatch error: {error}"
+        );
     }
 
     #[test]
@@ -2199,7 +2248,7 @@ mod tests {
         let error = validate_completed_manifest(&manifest)
             .expect_err("manifest mutation must invalidate the generated signature");
         assert!(
-            error.contains("signature verification failed"),
+            error.contains("failed verification"),
             "unexpected mutation error: {error}"
         );
     }

@@ -31,7 +31,7 @@ Lea la información de la unidad SoraFS y. Y توسع العملية عالية 
 | استيثاق نقطة النهاية | يجب أن تكون كل نقطة نهاية مُعلن عنها مدعومة بتقرير شهادة mTLS أو QUIC. | تعريف حمولة Norito `EndpointAttestationV1` وتخزينها لكل نقطة نهاية داخل حزمة القبول. |
 
 ## سير عمل القبول1. **إنشاء المقترح**
-   - CLI: Número `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: Número `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      لإنتاج `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - التحقق: ضمان الحقول المطلوبة, وstake > 0, ومقبض fragment قياسي في `profile_id`.
 2. **اعتماد الحوكمة**
@@ -54,7 +54,7 @@ Lea la información de la unidad SoraFS y. Y توسع العملية عالية 
 
 ### مرجع CLI
 
-نفّذ كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+نفّذ كل أمر عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Nombre del producto: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, y `--endpoint=<kind:host>` y.
@@ -90,7 +90,7 @@ Lea la información de la unidad SoraFS y. Y توسع العملية عالية 
 1. أنشئ زوج المقترح/anuncio اللاحق باستخدام `provider-admission proposal` و `provider-admission sign`, مع زيادة `--retention-epoch` وتحديث estaca/puntos finales حسب الحاجة.
 2. نفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -104,7 +104,7 @@ Lea la información de la unidad SoraFS y. Y توسع العملية عالية 
 5. أعد توليد وتثبيت accesorios القياسية عبر `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`؛ CI (`ci/check_sorafs_fixtures.sh`) está conectado a la interfaz Norito.#### إلغاء طارئ
 1. حدد الـ sobre المخترق واصدر إلغاء:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

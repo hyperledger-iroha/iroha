@@ -261,7 +261,7 @@ public sealed class TransactionBuilderTests
             constructorSignatureBytes,
             constructorPayloadBytes);
         var constructorNoritoBytes = constructorSignedTransactionBytes.ToArray();
-        var constructorTransactionHash = ComputeTransactionHash(constructorSignedTransactionBytes);
+        var constructorTransactionHash = ComputeTransactionHash(constructorPayloadBytes);
         var expectedConstructorSignedTransactionBytes = constructorSignedTransactionBytes.ToArray();
         var expectedConstructorPayloadBytes = constructorPayloadBytes.ToArray();
         var expectedConstructorTransactionHash = constructorTransactionHash.ToArray();
@@ -294,13 +294,38 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
+    public void TransactionIdentityExcludesAuthorizationProofBytes()
+    {
+        var payloadBytes = new byte[] { 0x07, 0x08, 0x09 };
+        var firstSignature = Enumerable.Repeat((byte)0x11, Ed25519Signer.SignatureLength).ToArray();
+        var secondSignature = Enumerable.Repeat((byte)0x22, Ed25519Signer.SignatureLength).ToArray();
+        var firstSigned = BuildSignedTransactionBytes(firstSignature, payloadBytes);
+        var secondSigned = BuildSignedTransactionBytes(secondSignature, payloadBytes);
+        var transactionHash = ComputeTransactionHash(payloadBytes);
+
+        var first = new SignedTransactionEnvelope(
+            firstSigned,
+            firstSigned,
+            payloadBytes,
+            transactionHash);
+        var second = new SignedTransactionEnvelope(
+            secondSigned,
+            secondSigned,
+            payloadBytes,
+            transactionHash);
+
+        Assert.False(first.SignedTransactionBytes.SequenceEqual(second.SignedTransactionBytes));
+        Assert.Equal(first.TransactionHash, second.TransactionHash);
+    }
+
+    [Fact]
     public void SignedTransactionEnvelopeRejectsMalformedConstructorBytes()
     {
         var signatureBytes = Enumerable.Repeat((byte)0x08, Ed25519Signer.SignatureLength).ToArray();
         var payloadBytes = new byte[] { 0x07 };
         var signedTransactionBytes = BuildSignedTransactionBytes(signatureBytes, payloadBytes);
         var noritoBytes = signedTransactionBytes.ToArray();
-        var transactionHash = ComputeTransactionHash(signedTransactionBytes);
+        var transactionHash = ComputeTransactionHash(payloadBytes);
         var malformedSignedTransactionBytes = new byte[] { 0x04, 0x05, 0x06 };
 
         AssertArgumentException(
@@ -324,7 +349,7 @@ public sealed class TransactionBuilderTests
                 malformedSignedTransactionBytes,
                 malformedSignedTransactionBytes,
                 payloadBytes,
-                ComputeTransactionHash(malformedSignedTransactionBytes)));
+                ComputeTransactionHash(payloadBytes)));
         AssertArgumentException(
             "payloadBytes",
             () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, [0x08], transactionHash));
@@ -332,12 +357,12 @@ public sealed class TransactionBuilderTests
             "signedTransactionBytes",
             () =>
             {
-                var withNonEmptyAttachments = BuildSignedTransactionBytes(signatureBytes, payloadBytes, attachments: [1]);
+                var withLegacyOuterAttachment = BuildLegacySignedTransactionBytes(signatureBytes, payloadBytes);
                 _ = new SignedTransactionEnvelope(
-                    withNonEmptyAttachments,
-                    withNonEmptyAttachments,
+                    withLegacyOuterAttachment,
+                    withLegacyOuterAttachment,
                     payloadBytes,
-                    ComputeTransactionHash(withNonEmptyAttachments));
+                    ComputeTransactionHash(payloadBytes));
             });
         AssertArgumentException(
             "signedTransactionBytes",
@@ -348,7 +373,7 @@ public sealed class TransactionBuilderTests
                     withTrailingField,
                     withTrailingField,
                     payloadBytes,
-                    ComputeTransactionHash(withTrailingField));
+                    ComputeTransactionHash(payloadBytes));
             });
         AssertArgumentException(
             "transactionHash",
@@ -1387,16 +1412,31 @@ public sealed class TransactionBuilderTests
     private static void AssertSignedEnvelopeStructure(SignedTransactionEnvelope envelope, byte[] privateKeySeed)
     {
         Assert.Equal(envelope.SignedTransactionBytes, envelope.NoritoBytes);
-        Assert.Equal(ComputeTransactionHash(envelope.SignedTransactionBytes), envelope.TransactionHash);
+        Assert.Equal(ComputeTransactionHash(envelope.PayloadBytes), envelope.TransactionHash);
 
         var signatureField = ReadField(envelope.SignedTransactionBytes, out var offsetAfterSignature);
         var payloadField = ReadField(envelope.SignedTransactionBytes[offsetAfterSignature..], out var offsetAfterPayload);
-        var attachmentsField = ReadField(envelope.SignedTransactionBytes[(offsetAfterSignature + offsetAfterPayload)..], out var offsetAfterAttachments);
-        var multisigField = ReadField(envelope.SignedTransactionBytes[(offsetAfterSignature + offsetAfterPayload + offsetAfterAttachments)..], out _);
+        var multisigField = ReadField(
+            envelope.SignedTransactionBytes[(offsetAfterSignature + offsetAfterPayload)..],
+            out var offsetAfterMultisig);
 
         Assert.Equal(envelope.PayloadBytes, payloadField);
-        Assert.Equal(new byte[] { 0 }, attachmentsField);
         Assert.Equal(new byte[] { 0 }, multisigField);
+        Assert.Equal(
+            envelope.SignedTransactionBytes.Length,
+            offsetAfterSignature + offsetAfterPayload + offsetAfterMultisig);
+
+        var payloadOffset = 0;
+        for (var fieldIndex = 0; fieldIndex < 8; fieldIndex++)
+        {
+            _ = ReadField(envelope.PayloadBytes.AsSpan(payloadOffset), out var consumed);
+            payloadOffset += consumed;
+        }
+        var proofAttachments = ReadField(
+            envelope.PayloadBytes.AsSpan(payloadOffset),
+            out var attachmentsConsumed);
+        Assert.Equal(new byte[] { 0 }, proofAttachments);
+        Assert.Equal(envelope.PayloadBytes.Length, payloadOffset + attachmentsConsumed);
 
         var signature = DecodeConstVec(signatureField);
         var payloadHash = IrohaHash.Hash(envelope.PayloadBytes);
@@ -1410,25 +1450,35 @@ public sealed class TransactionBuilderTests
         Assert.Equal(paramName, exception.ParamName);
     }
 
-    private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> signedTransactionBytes)
+    private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> payloadBytes)
     {
         var entrypoint = new OfflineNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
-        entrypoint.WriteField(signedTransactionBytes);
+        entrypoint.WriteField(payloadBytes);
         return IrohaHash.Hash(entrypoint.ToArray());
     }
 
     private static byte[] BuildSignedTransactionBytes(
         byte[] signatureBytes,
         byte[] payloadBytes,
-        byte[]? attachments = null,
         byte[]? multisig = null)
     {
         var signedTransaction = new OfflineNoritoWriter();
         signedTransaction.WriteField(EncodeConstVec(signatureBytes));
         signedTransaction.WriteField(payloadBytes);
-        signedTransaction.WriteField(attachments ?? [0]);
         signedTransaction.WriteField(multisig ?? [0]);
+        return signedTransaction.ToArray();
+    }
+
+    private static byte[] BuildLegacySignedTransactionBytes(
+        byte[] signatureBytes,
+        byte[] payloadBytes)
+    {
+        var signedTransaction = new OfflineNoritoWriter();
+        signedTransaction.WriteField(EncodeConstVec(signatureBytes));
+        signedTransaction.WriteField(payloadBytes);
+        signedTransaction.WriteField([0]);
+        signedTransaction.WriteField([0]);
         return signedTransaction.ToArray();
     }
 

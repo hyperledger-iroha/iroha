@@ -565,6 +565,7 @@ mod model {
         ///
         /// A block is created if this limit is reached or [`SumeragiParameters::block_cadence_ms`] has expired,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
+        /// The same value caps scheduled time-trigger entrypoints materialised in one block.
         pub max_transactions: NonZeroU64,
     }
 
@@ -657,7 +658,7 @@ mod model {
         pub fuel: NonZeroU64,
         /// Maximum amount of memory that a smart contract can use
         pub memory: NonZeroU64,
-        /// Maximum length of chained data trigger executions
+        /// Maximum depth of synchronous and chained trigger executions
         pub execution_depth: u8,
     }
 

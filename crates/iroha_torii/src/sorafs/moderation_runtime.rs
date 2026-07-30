@@ -22,8 +22,6 @@ use iroha_core::{
         State, StateQueryView, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
     },
 };
-#[cfg(test)]
-use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
@@ -45,18 +43,42 @@ use sorafs_node::moderation_orchestrator::{
     MODERATION_EXTERNAL_WORK_LEASE_MS_V1, MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
     MODERATION_TRANSACTION_TTL_MS_V1, ModerationFinalizedCursorV1,
     ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1,
-    ModerationOrchestratorDurableHealthV1, ModerationOrchestratorV1, ModerationSignedTransactionV1,
-    ModerationSnapshotReadErrorV1, ModerationSubmissionFailureV1, ModerationSubmissionLookupV1,
-    ModerationTerminalHandoffKindV1, ModerationTerminalHandoffSinkV1, ModerationTerminalHandoffV1,
-    ModerationTransactionReceiptV1, ModerationTransactionRequestV1,
-    ModerationTransactionSubmitterV1,
+    ModerationOrchestratorDurableHealthV1, ModerationOrchestratorV1,
+    ModerationPanelNotificationClaimV1, ModerationPanelNotificationDeliveryReceiptV1,
+    ModerationPanelNotificationFailureV1, ModerationPanelNotificationKindV1,
+    ModerationPanelNotificationSinkV1, ModerationPanelNotificationV1,
+    ModerationRuntimeProviderQualificationErrorV1, ModerationRuntimeProviderQualificationV1,
+    ModerationRuntimeProviderReadinessErrorV1, ModerationRuntimeProviderV1,
+    ModerationSignedTransactionV1, ModerationSnapshotReadErrorV1, ModerationSubmissionFailureV1,
+    ModerationSubmissionLookupV1, ModerationTerminalHandoffKindV1, ModerationTerminalHandoffSinkV1,
+    ModerationTerminalHandoffV1, ModerationTransactionReceiptV1, ModerationTransactionRequestV1,
+    ModerationTransactionSubmitterV1, qualify_moderation_runtime_provider_v1,
+    revalidate_moderation_runtime_provider_v1,
 };
 
 const MODERATION_HANDOFF_MAX_BYTES_V1: usize = 64 * 1024;
+const MODERATION_PANEL_NOTIFICATION_MAX_BYTES_V1: usize = 64 * 1024;
 const DEFAULT_MODERATION_EVENT_PAGE_SIZE_V1: u32 = 256;
 const MODERATION_TRANSACTION_TTL_V1: Duration =
     Duration::from_millis(MODERATION_TRANSACTION_TTL_MS_V1);
 const MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+/// Fixed identity of the in-process V1 Torii strict-durable ingress.
+pub(crate) const TORII_MODERATION_STRICT_INGRESS_HANDLE_V1: &str =
+    "torii.sorafs.moderation-strict-ingress.v1";
+/// Revision of the in-process V1 Torii strict-durable ingress policy.
+pub(crate) const TORII_MODERATION_STRICT_INGRESS_REVISION_V1: u64 = 1;
+/// BLAKE3 digest of `sorafs.moderation.strict-ingress.torii.v1\0`.
+pub(crate) const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
+    0xcc, 0x0c, 0xea, 0xc1, 0x8b, 0x93, 0xfa, 0x97, 0x05, 0xc0, 0xef, 0x86, 0xf6, 0x57, 0xa9, 0xed,
+    0x94, 0xc5, 0xdd, 0x65, 0x31, 0x57, 0x84, 0x96, 0xa2, 0xd6, 0x4e, 0x8e, 0xc5, 0x21, 0x6d, 0x2e,
+];
+
+fn torii_moderation_strict_ingress_qualification_v1() -> ModerationRuntimeProviderQualificationV1 {
+    ModerationRuntimeProviderQualificationV1::new(
+        TORII_MODERATION_STRICT_INGRESS_REVISION_V1,
+        TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
+    )
+}
 
 /// Fail-closed reason that prevents serving a cached moderation projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,7 +323,7 @@ pub enum ModerationSigningFailureV1 {
 /// Implementations may delegate to PKCS#11 or a remote HSM. A returned
 /// envelope is durably retained by the orchestrator before ingress; signing
 /// itself is never used as an idempotency or crash-recovery boundary.
-pub trait ModerationSignedTransactionSignerV1: Send + Sync {
+pub trait ModerationSignedTransactionSignerV1: ModerationRuntimeProviderV1 {
     /// Sign the exact fee-quoted payload supplied by Torii.
     ///
     /// # Errors
@@ -312,18 +334,6 @@ pub trait ModerationSignedTransactionSignerV1: Send + Sync {
         &self,
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, ModerationSigningFailureV1>;
-}
-
-#[cfg(test)]
-impl ModerationSignedTransactionSignerV1 for KeyPair {
-    fn sign(
-        &self,
-        payload: TransactionPayload,
-    ) -> Result<SignedTransaction, ModerationSigningFailureV1> {
-        TransactionBuilder::from_payload(payload)
-            .and_then(|builder| builder.try_sign(self.private_key()))
-            .map_err(|_| ModerationSigningFailureV1::Refused)
-    }
 }
 
 /// Fixed fee-quote failures safe to return across the signer boundary.
@@ -378,7 +388,7 @@ pub enum ModerationStrictIngressFailureV1 {
 /// replacing that transaction. Distinct envelopes signed by racing replicas
 /// are resolved by native ledger CAS semantics and finalized reconciliation;
 /// no process-local operation map is authoritative.
-pub trait ModerationStrictTransactionIngressV1: Send + Sync {
+pub trait ModerationStrictTransactionIngressV1: ModerationRuntimeProviderV1 {
     /// Durably admit or replay one exact signed transaction.
     ///
     /// # Errors
@@ -399,12 +409,58 @@ pub trait ModerationStrictTransactionIngressV1: Send + Sync {
     ) -> ModerationSubmissionLookupV1;
 }
 
+struct QualifiedModerationRuntimeProviderV1<P: ModerationRuntimeProviderV1 + ?Sized> {
+    handle: String,
+    qualification: ModerationRuntimeProviderQualificationV1,
+    provider: Arc<P>,
+}
+
+impl<P: ModerationRuntimeProviderV1 + ?Sized> QualifiedModerationRuntimeProviderV1<P> {
+    fn try_new(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        provider: Arc<P>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        qualify_moderation_runtime_provider_v1(
+            expected_handle,
+            expected_qualification,
+            provider.as_ref(),
+        )?;
+        Ok(Self {
+            handle: expected_handle.to_owned(),
+            qualification: expected_qualification,
+            provider,
+        })
+    }
+
+    fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+        revalidate_moderation_runtime_provider_v1(
+            &self.handle,
+            self.qualification,
+            self.provider.as_ref(),
+        )
+    }
+}
+
+impl<P: ModerationRuntimeProviderV1 + ?Sized> core::fmt::Debug
+    for QualifiedModerationRuntimeProviderV1<P>
+{
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("QualifiedModerationRuntimeProviderV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .field("provider", &"<runtime-only>")
+            .finish()
+    }
+}
+
 /// Fail-closed bridge from moderation operations to signed Torii ingress.
 pub struct ModerationTransactionSubmitterAdapterV1 {
     chain_id: ChainId,
-    signer: Arc<dyn ModerationSignedTransactionSignerV1>,
+    signer: QualifiedModerationRuntimeProviderV1<dyn ModerationSignedTransactionSignerV1>,
     fee_quoter: Arc<dyn ModerationFeeQuoterV1>,
-    ingress: Arc<dyn ModerationStrictTransactionIngressV1>,
+    ingress: QualifiedModerationRuntimeProviderV1<dyn ModerationStrictTransactionIngressV1>,
 }
 
 impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
@@ -420,24 +476,50 @@ impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
 }
 
 impl ModerationTransactionSubmitterAdapterV1 {
-    /// Construct a submitter for one exact chain.
-    #[must_use]
-    pub fn new(
+    /// Construct and qualify a submitter for one exact chain.
+    ///
+    /// # Errors
+    ///
+    /// Fails when either injected provider is unavailable, test-marked,
+    /// substituted, stale, or differs from its independent exact binding.
+    pub fn try_new(
         chain_id: ChainId,
+        transaction_signer_handle: &str,
+        expected_transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
         signer: Arc<dyn ModerationSignedTransactionSignerV1>,
         fee_quoter: Arc<dyn ModerationFeeQuoterV1>,
+        strict_ingress_handle: &str,
+        expected_strict_ingress_qualification: ModerationRuntimeProviderQualificationV1,
         ingress: Arc<dyn ModerationStrictTransactionIngressV1>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        let signer = QualifiedModerationRuntimeProviderV1::try_new(
+            transaction_signer_handle,
+            expected_transaction_signer_qualification,
+            signer,
+        )?;
+        let ingress = QualifiedModerationRuntimeProviderV1::try_new(
+            strict_ingress_handle,
+            expected_strict_ingress_qualification,
+            ingress,
+        )?;
+        Ok(Self {
             chain_id,
             signer,
             fee_quoter,
             ingress,
-        }
+        })
     }
 }
 
 impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV1 {
+    fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+        self.signer.provider.as_ref()
+    }
+
+    fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+        self.ingress.provider.as_ref()
+    }
+
     fn chain_id(&self) -> ChainId {
         self.chain_id.clone()
     }
@@ -471,7 +553,14 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
             })?;
         validate_unsigned_moderation_payload(&self.chain_id, request, &payload)?;
         let expected_payload = payload.clone();
-        let transaction = self.signer.sign(payload).map_err(map_signing_failure)?;
+        self.signer
+            .revalidate()
+            .map_err(|_| ModerationSubmissionFailureV1::RuntimeUnavailable)?;
+        let transaction = self.signer.provider.sign(payload);
+        self.signer
+            .revalidate()
+            .map_err(|_| ModerationSubmissionFailureV1::RuntimeUnavailable)?;
+        let transaction = transaction.map_err(map_signing_failure)?;
         if transaction.payload() != &expected_payload {
             return Err(ModerationSubmissionFailureV1::PermanentRejection);
         }
@@ -488,10 +577,14 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         let transaction = signed.decode_for_request(request)?;
         validate_signed_moderation_transaction(&self.chain_id, request, &transaction)?;
         let expected_transaction_id = signed.transaction_id;
-        let receipt = self
-            .ingress
-            .submit_exact(request, transaction)
-            .map_err(map_ingress_failure)?;
+        self.ingress
+            .revalidate()
+            .map_err(|_| ModerationSubmissionFailureV1::NotSubmittedUnavailable)?;
+        let receipt = self.ingress.provider.submit_exact(request, transaction);
+        self.ingress
+            .revalidate()
+            .map_err(|_| ModerationSubmissionFailureV1::Ambiguous)?;
+        let receipt = receipt.map_err(map_ingress_failure)?;
         if receipt.transaction_id != expected_transaction_id
             || receipt.observed_finalized_height < request.baseline_finalized_height
         {
@@ -513,10 +606,17 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         if operation_id == [0; 32] || transaction_id == Some([0; 32]) {
             return ModerationSubmissionLookupV1::Unknown;
         }
-        sanitize_submission_lookup(
-            self.ingress.lookup_exact(operation_id, transaction_id),
-            transaction_id,
-        )
+        if self.ingress.revalidate().is_err() {
+            return ModerationSubmissionLookupV1::Unknown;
+        }
+        let lookup = self
+            .ingress
+            .provider
+            .lookup_exact(operation_id, transaction_id);
+        if self.ingress.revalidate().is_err() {
+            return ModerationSubmissionLookupV1::Unknown;
+        }
+        sanitize_submission_lookup(lookup, transaction_id)
     }
 }
 
@@ -641,6 +741,14 @@ impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ToriiModerationStrictTransactionIngressV1")
+            .field(
+                "provider_handle",
+                &TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+            )
+            .field(
+                "provider_qualification",
+                &torii_moderation_strict_ingress_qualification_v1(),
+            )
             .field("chain_id", &self.chain_id)
             .field("queue", &"<strict-durable>")
             .field("state", &"<authoritative>")
@@ -705,6 +813,19 @@ impl ToriiModerationStrictTransactionIngressV1 {
                             | crate::PipelineStatusKind::Applied
                     )
                 })
+    }
+}
+
+impl ModerationRuntimeProviderV1 for ToriiModerationStrictTransactionIngressV1 {
+    fn handle(&self) -> &str {
+        TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
+    {
+        Ok(torii_moderation_strict_ingress_qualification_v1())
     }
 }
 
@@ -782,6 +903,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
+                | iroha_core::queue::Error::UnregisteredAuthority { .. }
                 | iroha_core::queue::Error::Governance(_)
                 | iroha_core::queue::Error::GovernanceNotPermitted { .. }
                 | iroha_core::queue::Error::LaneComplianceDenied { .. }
@@ -1241,7 +1363,7 @@ pub enum ModerationDurableHandoffFailureV1 {
 /// `canonical_handoff`, and their downstream outbox effect before returning
 /// [`ModerationDurableHandoffOutcomeV1::Delivered`]. A replay with different
 /// bytes must return [`ModerationDurableHandoffFailureV1::Permanent`].
-pub trait ModerationDurableHandoffBoundaryV1: Send + Sync {
+pub trait ModerationDurableHandoffBoundaryV1: ModerationRuntimeProviderV1 {
     /// Deliver or replay one exact terminal handoff.
     ///
     /// # Errors
@@ -1257,7 +1379,7 @@ pub trait ModerationDurableHandoffBoundaryV1: Send + Sync {
 /// Destination-bound terminal handoff adapter.
 pub struct ModerationTerminalHandoffSinkAdapterV1 {
     kind: ModerationTerminalHandoffKindV1,
-    boundary: Arc<dyn ModerationDurableHandoffBoundaryV1>,
+    boundary: QualifiedModerationRuntimeProviderV1<dyn ModerationDurableHandoffBoundaryV1>,
 }
 
 impl core::fmt::Debug for ModerationTerminalHandoffSinkAdapterV1 {
@@ -1271,22 +1393,59 @@ impl core::fmt::Debug for ModerationTerminalHandoffSinkAdapterV1 {
 }
 
 impl ModerationTerminalHandoffSinkAdapterV1 {
-    /// Construct the appeal-finance settlement sink.
-    #[must_use]
-    pub fn settlement(boundary: Arc<dyn ModerationDurableHandoffBoundaryV1>) -> Self {
-        Self {
+    /// Construct and qualify the appeal-finance settlement sink.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the boundary is unavailable, test-marked, substituted,
+    /// stale, or differs from its independent exact binding.
+    pub fn try_settlement(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        boundary: Arc<dyn ModerationDurableHandoffBoundaryV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        Ok(Self {
             kind: ModerationTerminalHandoffKindV1::Settlement,
-            boundary,
-        }
+            boundary: QualifiedModerationRuntimeProviderV1::try_new(
+                expected_handle,
+                expected_qualification,
+                boundary,
+            )?,
+        })
     }
 
-    /// Construct the governance/transparency publication sink.
-    #[must_use]
-    pub fn publication(boundary: Arc<dyn ModerationDurableHandoffBoundaryV1>) -> Self {
-        Self {
+    /// Construct and qualify the governance/transparency publication sink.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the boundary is unavailable, test-marked, substituted,
+    /// stale, or differs from its independent exact binding.
+    pub fn try_publication(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        boundary: Arc<dyn ModerationDurableHandoffBoundaryV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        Ok(Self {
             kind: ModerationTerminalHandoffKindV1::Publication,
-            boundary,
-        }
+            boundary: QualifiedModerationRuntimeProviderV1::try_new(
+                expected_handle,
+                expected_qualification,
+                boundary,
+            )?,
+        })
+    }
+}
+
+impl ModerationRuntimeProviderV1 for ModerationTerminalHandoffSinkAdapterV1 {
+    fn handle(&self) -> &str {
+        self.boundary.provider.handle()
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
+    {
+        self.boundary.provider.qualification()
     }
 }
 
@@ -1316,19 +1475,157 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
             canonical_handoff,
         };
         self.boundary
-            .deliver_once(&request)
-            .map(|_| ())
-            .map_err(|error| match error {
-                ModerationDurableHandoffFailureV1::NotDelivered => {
-                    ModerationHandoffFailureV1::NotDelivered
-                }
-                ModerationDurableHandoffFailureV1::Ambiguous => {
-                    ModerationHandoffFailureV1::Ambiguous
-                }
-                ModerationDurableHandoffFailureV1::Permanent => {
-                    ModerationHandoffFailureV1::Permanent
-                }
-            })
+            .revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::NotDelivered)?;
+        let result = self.boundary.provider.deliver_once(&request);
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
+        result.map(|_| ()).map_err(|error| match error {
+            ModerationDurableHandoffFailureV1::NotDelivered => {
+                ModerationHandoffFailureV1::NotDelivered
+            }
+            ModerationDurableHandoffFailureV1::Ambiguous => ModerationHandoffFailureV1::Ambiguous,
+            ModerationDurableHandoffFailureV1::Permanent => ModerationHandoffFailureV1::Permanent,
+        })
+    }
+}
+
+/// Canonical request supplied to a durable panel-notification boundary.
+#[derive(Debug, Clone)]
+pub struct ModerationDurablePanelNotificationRequestV1 {
+    /// Exact typed payload-free notification.
+    pub notification: sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1,
+    /// Canonical Norito encoding of `notification`.
+    pub canonical_notification: Vec<u8>,
+    /// Exclusive expiry of the durable orchestrator claim.
+    pub lease_expires_at_unix_ms: u64,
+    /// One-based delivery attempt.
+    pub attempt: u32,
+    /// Immutable bounded attempt ceiling.
+    pub attempt_limit: u32,
+}
+
+/// Durable, idempotent payload-free panel-notification boundary.
+///
+/// Implementations must atomically bind `notification.notification_id` to the
+/// digest of `canonical_notification` and the stable receipt before returning.
+/// Exact replays return the same receipt; a conflicting byte stream is
+/// permanently rejected. Credentials and recipient-facing message bodies stay
+/// behind this runtime-only boundary.
+pub trait ModerationDurablePanelNotificationBoundaryV1: ModerationRuntimeProviderV1 {
+    /// Deliver or replay one exact payload-free notification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed delivery class without provider diagnostics.
+    fn deliver_once(
+        &self,
+        request: &ModerationDurablePanelNotificationRequestV1,
+    ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>;
+}
+
+/// Adapter from the durable runtime boundary to the moderation orchestrator.
+pub struct ModerationPanelNotificationSinkAdapterV1 {
+    boundary:
+        QualifiedModerationRuntimeProviderV1<dyn ModerationDurablePanelNotificationBoundaryV1>,
+}
+
+impl core::fmt::Debug for ModerationPanelNotificationSinkAdapterV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ModerationPanelNotificationSinkAdapterV1")
+            .field("boundary", &"<durable-idempotent-boundary>")
+            .finish()
+    }
+}
+
+impl ModerationPanelNotificationSinkAdapterV1 {
+    /// Construct and qualify the payload-free notification boundary.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the boundary is unavailable, test-marked, substituted,
+    /// stale, or differs from its independent exact binding.
+    pub fn try_new(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        boundary: Arc<dyn ModerationDurablePanelNotificationBoundaryV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        Ok(Self {
+            boundary: QualifiedModerationRuntimeProviderV1::try_new(
+                expected_handle,
+                expected_qualification,
+                boundary,
+            )?,
+        })
+    }
+}
+
+impl ModerationRuntimeProviderV1 for ModerationPanelNotificationSinkAdapterV1 {
+    fn handle(&self) -> &str {
+        self.boundary.provider.handle()
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
+    {
+        self.boundary.provider.qualification()
+    }
+}
+
+impl ModerationPanelNotificationSinkV1 for ModerationPanelNotificationSinkAdapterV1 {
+    fn deliver(
+        &self,
+        claim: &ModerationPanelNotificationClaimV1,
+    ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>
+    {
+        if claim.notification.notification_id == [0; 32]
+            || claim.notification.source_operation_id == [0; 32]
+            || claim.notification.scope_digest == [0; 32]
+            || claim.notification.finalized_event_cursor.sequence == 0
+            || claim.notification.finalized_event_cursor.block_height == 0
+            || claim.notification.finalized_event_cursor.block_hash == [0; 32]
+            || claim.notification.source_occurred_at_unix_ms == 0
+            || claim.worker_id == [0; 32]
+            || claim.lease_token == [0; 32]
+            || claim.lease_expires_at_unix_ms <= claim.notification.source_occurred_at_unix_ms
+            || claim.attempt == 0
+            || claim.attempt > claim.attempt_limit
+        {
+            return Err(ModerationPanelNotificationFailureV1::Permanent);
+        }
+        let canonical_notification = norito::to_bytes(&claim.notification)
+            .map_err(|_| ModerationPanelNotificationFailureV1::Permanent)?;
+        if canonical_notification.is_empty()
+            || canonical_notification.len() > MODERATION_PANEL_NOTIFICATION_MAX_BYTES_V1
+        {
+            return Err(ModerationPanelNotificationFailureV1::Permanent);
+        }
+        let request = ModerationDurablePanelNotificationRequestV1 {
+            notification: claim.notification.clone(),
+            canonical_notification,
+            lease_expires_at_unix_ms: claim.lease_expires_at_unix_ms,
+            attempt: claim.attempt,
+            attempt_limit: claim.attempt_limit,
+        };
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationPanelNotificationFailureV1::NotDelivered)?;
+        let result = self.boundary.provider.deliver_once(&request);
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationPanelNotificationFailureV1::Ambiguous)?;
+        let receipt = result?;
+        if receipt.notification_id != request.notification.notification_id
+            || receipt.receipt_digest == [0; 32]
+            || receipt.delivered_at_unix_ms < request.notification.source_occurred_at_unix_ms
+            || receipt.delivered_at_unix_ms >= request.lease_expires_at_unix_ms
+        {
+            return Err(ModerationPanelNotificationFailureV1::Ambiguous);
+        }
+        Ok(receipt)
     }
 }
 
@@ -1355,6 +1652,42 @@ mod tests {
     use super::*;
 
     const TEST_CHAIN: &str = "moderation-runtime-test";
+    const TEST_SIGNER_HANDLE: &str = "moderation-hsm-primary";
+    const TEST_INGRESS_HANDLE: &str = "moderation-ingress-primary";
+    const TEST_HANDOFF_HANDLE: &str = "moderation-handoff-primary";
+    const TEST_NOTIFICATION_HANDLE: &str = "moderation-notification-primary";
+    const TEST_SIGNER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
+    const TEST_INGRESS_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
+    const TEST_HANDOFF_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
+    const TEST_NOTIFICATION_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+
+    #[test]
+    fn local_strict_ingress_identity_is_implementation_derived() {
+        assert_eq!(
+            TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
+            *blake3::hash(b"sorafs.moderation.strict-ingress.torii.v1\0").as_bytes()
+        );
+        let qualification = torii_moderation_strict_ingress_qualification_v1();
+        assert_eq!(
+            qualification.revision(),
+            TORII_MODERATION_STRICT_INGRESS_REVISION_V1
+        );
+        assert_eq!(
+            qualification.policy_digest(),
+            TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1
+        );
+        assert_eq!(
+            TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+            "torii.sorafs.moderation-strict-ingress.v1"
+        );
+        assert!(iroha_config::parameters::is_production_runtime_handle(
+            TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
+        ));
+    }
 
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 key")
@@ -1560,6 +1893,14 @@ mod tests {
         key_pair: KeyPair,
         behavior: FixedSignerBehavior,
         calls: AtomicUsize,
+        handle: String,
+        qualification: Mutex<
+            Result<
+                ModerationRuntimeProviderQualificationV1,
+                ModerationRuntimeProviderReadinessErrorV1,
+            >,
+        >,
+        qualification_after_sign: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
     }
 
     impl FixedSigner {
@@ -1568,6 +1909,9 @@ mod tests {
                 key_pair,
                 behavior: FixedSignerBehavior::Exact,
                 calls: AtomicUsize::new(0),
+                handle: TEST_SIGNER_HANDLE.to_owned(),
+                qualification: Mutex::new(Ok(TEST_SIGNER_QUALIFICATION)),
+                qualification_after_sign: Mutex::new(None),
             }
         }
 
@@ -1576,6 +1920,9 @@ mod tests {
                 key_pair,
                 behavior: FixedSignerBehavior::SubstituteChain,
                 calls: AtomicUsize::new(0),
+                handle: TEST_SIGNER_HANDLE.to_owned(),
+                qualification: Mutex::new(Ok(TEST_SIGNER_QUALIFICATION)),
+                qualification_after_sign: Mutex::new(None),
             }
         }
 
@@ -1584,11 +1931,39 @@ mod tests {
                 key_pair,
                 behavior: FixedSignerBehavior::Forged(forgery_key),
                 calls: AtomicUsize::new(0),
+                handle: TEST_SIGNER_HANDLE.to_owned(),
+                qualification: Mutex::new(Ok(TEST_SIGNER_QUALIFICATION)),
+                qualification_after_sign: Mutex::new(None),
             }
         }
 
         fn calls(&self) -> usize {
             self.calls.load(Ordering::Relaxed)
+        }
+
+        fn drift_after_sign(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification_after_sign
+                .lock()
+                .expect("signer qualification drift lock") = Some(qualification);
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for FixedSigner {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            *self
+                .qualification
+                .lock()
+                .expect("signer qualification lock")
         }
     }
 
@@ -1598,7 +1973,7 @@ mod tests {
             mut payload: TransactionPayload,
         ) -> Result<SignedTransaction, ModerationSigningFailureV1> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            match &self.behavior {
+            let result = match &self.behavior {
                 FixedSignerBehavior::Exact => TransactionBuilder::from_payload(payload)
                     .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
                     .map_err(|_| ModerationSigningFailureV1::Refused),
@@ -1616,7 +1991,19 @@ mod tests {
                             b"not-the-transaction-payload",
                         )))
                 }
+            };
+            if let Some(qualification) = self
+                .qualification_after_sign
+                .lock()
+                .expect("signer qualification drift lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("signer qualification lock") = Ok(qualification);
             }
+            result
         }
     }
 
@@ -1636,12 +2023,17 @@ mod tests {
         signer: Arc<dyn ModerationSignedTransactionSignerV1>,
         ingress: Arc<dyn ModerationStrictTransactionIngressV1>,
     ) -> ModerationTransactionSubmitterAdapterV1 {
-        ModerationTransactionSubmitterAdapterV1::new(
+        ModerationTransactionSubmitterAdapterV1::try_new(
             ChainId::from(TEST_CHAIN),
+            TEST_SIGNER_HANDLE,
+            TEST_SIGNER_QUALIFICATION,
             signer,
             Arc::new(TestFeeQuoter),
+            TEST_INGRESS_HANDLE,
+            TEST_INGRESS_QUALIFICATION,
             ingress,
         )
+        .expect("qualified moderation adapter")
     }
 
     #[derive(Debug, Default)]
@@ -1650,9 +2042,30 @@ mod tests {
         admissions: BTreeMap<[u8; 32], [u8; 32]>,
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct TestIngress {
         state: Mutex<TestIngressState>,
+        handle: String,
+        qualification: Mutex<
+            Result<
+                ModerationRuntimeProviderQualificationV1,
+                ModerationRuntimeProviderReadinessErrorV1,
+            >,
+        >,
+        qualification_after_submit: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
+        qualification_after_lookup: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
+    }
+
+    impl Default for TestIngress {
+        fn default() -> Self {
+            Self {
+                state: Mutex::new(TestIngressState::default()),
+                handle: TEST_INGRESS_HANDLE.to_owned(),
+                qualification: Mutex::new(Ok(TEST_INGRESS_QUALIFICATION)),
+                qualification_after_submit: Mutex::new(None),
+                qualification_after_lookup: Mutex::new(None),
+            }
+        }
     }
 
     impl TestIngress {
@@ -1662,6 +2075,45 @@ mod tests {
 
         fn unique_admissions(&self) -> usize {
             self.state.lock().expect("ingress lock").admissions.len()
+        }
+
+        fn drift_after_submit(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification_after_submit
+                .lock()
+                .expect("ingress submit drift lock") = Some(qualification);
+        }
+
+        fn drift_after_lookup(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification_after_lookup
+                .lock()
+                .expect("ingress lookup drift lock") = Some(qualification);
+        }
+
+        fn set_qualification(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification
+                .lock()
+                .expect("ingress qualification lock") = Ok(qualification);
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for TestIngress {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            *self
+                .qualification
+                .lock()
+                .expect("ingress qualification lock")
         }
     }
 
@@ -1684,11 +2136,23 @@ mod tests {
                     false
                 }
             };
-            Ok(ModerationStrictIngressReceiptV1 {
+            let result = Ok(ModerationStrictIngressReceiptV1 {
                 transaction_id,
                 observed_finalized_height: 7,
                 replay,
-            })
+            });
+            if let Some(qualification) = self
+                .qualification_after_submit
+                .lock()
+                .expect("ingress submit drift lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("ingress qualification lock") = Ok(qualification);
+            }
+            result
         }
 
         fn lookup_exact(
@@ -1696,7 +2160,8 @@ mod tests {
             operation_id: [u8; 32],
             _transaction_id: Option<[u8; 32]>,
         ) -> ModerationSubmissionLookupV1 {
-            self.state
+            let lookup = self
+                .state
                 .lock()
                 .expect("ingress lock")
                 .admissions
@@ -1707,8 +2172,86 @@ mod tests {
                         observed_finalized_height: 7,
                     },
                     |transaction_id| ModerationSubmissionLookupV1::Pending { transaction_id },
-                )
+                );
+            if let Some(qualification) = self
+                .qualification_after_lookup
+                .lock()
+                .expect("ingress lookup drift lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("ingress qualification lock") = Ok(qualification);
+            }
+            lookup
         }
+    }
+
+    #[test]
+    fn submitter_rejects_a_test_marked_signer_before_use() {
+        let signer_key = key(31);
+        let mut signer = FixedSigner::exact(signer_key);
+        signer.handle = "moderation-test-signer".to_owned();
+        let ingress = Arc::new(TestIngress::default());
+
+        let error = ModerationTransactionSubmitterAdapterV1::try_new(
+            ChainId::from(TEST_CHAIN),
+            TEST_SIGNER_HANDLE,
+            TEST_SIGNER_QUALIFICATION,
+            Arc::new(signer),
+            Arc::new(TestFeeQuoter),
+            TEST_INGRESS_HANDLE,
+            TEST_INGRESS_QUALIFICATION,
+            ingress,
+        )
+        .expect_err("test-marked signer must fail qualification");
+
+        assert_eq!(
+            error,
+            ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
+        );
+    }
+
+    #[test]
+    fn signer_policy_drift_discards_the_returned_envelope() {
+        let signer_key = key(32);
+        let request = transaction_request(account(&signer_key));
+        let signer = Arc::new(FixedSigner::exact(signer_key));
+        let ingress = Arc::new(TestIngress::default());
+        let adapter = adapter(signer.clone(), ingress);
+        signer.drift_after_sign(ModerationRuntimeProviderQualificationV1::new(2, [0xB1; 32]));
+
+        assert_eq!(
+            adapter.sign(&request),
+            Err(ModerationSubmissionFailureV1::RuntimeUnavailable)
+        );
+        assert_eq!(signer.calls(), 1);
+    }
+
+    #[test]
+    fn ingress_policy_drift_after_admission_is_ambiguous_and_lookup_is_discarded() {
+        let signer_key = key(33);
+        let request = transaction_request(account(&signer_key));
+        let signer = Arc::new(FixedSigner::exact(signer_key));
+        let ingress = Arc::new(TestIngress::default());
+        let adapter = adapter(signer, ingress.clone());
+        let signed = adapter.sign(&request).expect("qualified signer result");
+        ingress.drift_after_submit(ModerationRuntimeProviderQualificationV1::new(2, [0xB2; 32]));
+
+        assert_eq!(
+            adapter.submit_signed(&request, &signed),
+            Err(ModerationSubmissionFailureV1::Ambiguous)
+        );
+        assert_eq!(ingress.calls(), 1);
+        assert_eq!(ingress.unique_admissions(), 1);
+
+        ingress.set_qualification(TEST_INGRESS_QUALIFICATION);
+        ingress.drift_after_lookup(ModerationRuntimeProviderQualificationV1::new(3, [0xC2; 32]));
+        assert_eq!(
+            adapter.lookup(request.operation_id, Some(signed.transaction_id)),
+            ModerationSubmissionLookupV1::Unknown
+        );
     }
 
     #[test]
@@ -2082,9 +2625,28 @@ mod tests {
         delivered: BTreeMap<[u8; 32], Vec<u8>>,
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct TestHandoffBoundary {
         state: Mutex<TestHandoffBoundaryState>,
+        handle: String,
+        qualification: Mutex<
+            Result<
+                ModerationRuntimeProviderQualificationV1,
+                ModerationRuntimeProviderReadinessErrorV1,
+            >,
+        >,
+        qualification_after_delivery: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
+    }
+
+    impl Default for TestHandoffBoundary {
+        fn default() -> Self {
+            Self {
+                state: Mutex::new(TestHandoffBoundaryState::default()),
+                handle: TEST_HANDOFF_HANDLE.to_owned(),
+                qualification: Mutex::new(Ok(TEST_HANDOFF_QUALIFICATION)),
+                qualification_after_delivery: Mutex::new(None),
+            }
+        }
     }
 
     impl TestHandoffBoundary {
@@ -2099,6 +2661,31 @@ mod tests {
         fn deliveries(&self) -> usize {
             self.state.lock().expect("handoff lock").delivered.len()
         }
+
+        fn drift_after_delivery(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification_after_delivery
+                .lock()
+                .expect("handoff qualification drift lock") = Some(qualification);
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for TestHandoffBoundary {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            *self
+                .qualification
+                .lock()
+                .expect("handoff qualification lock")
+        }
     }
 
     impl ModerationDurableHandoffBoundaryV1 for TestHandoffBoundary {
@@ -2111,7 +2698,7 @@ mod tests {
             if let Some(error) = state.fail_next.take() {
                 return Err(error);
             }
-            match state.delivered.get(&request.handoff.handoff_id) {
+            let outcome = match state.delivered.get(&request.handoff.handoff_id) {
                 Some(existing) if existing == &request.canonical_handoff => {
                     Ok(ModerationDurableHandoffOutcomeV1::AlreadyDelivered)
                 }
@@ -2123,7 +2710,20 @@ mod tests {
                     );
                     Ok(ModerationDurableHandoffOutcomeV1::Delivered)
                 }
+            };
+            drop(state);
+            if let Some(qualification) = self
+                .qualification_after_delivery
+                .lock()
+                .expect("handoff qualification drift lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("handoff qualification lock") = Ok(qualification);
             }
+            outcome
         }
     }
 
@@ -2145,7 +2745,12 @@ mod tests {
     fn terminal_handoff_failure_retries_the_same_idempotency_identity() {
         let boundary = Arc::new(TestHandoffBoundary::default());
         boundary.fail_next(ModerationDurableHandoffFailureV1::NotDelivered);
-        let sink = ModerationTerminalHandoffSinkAdapterV1::settlement(boundary.clone());
+        let sink = ModerationTerminalHandoffSinkAdapterV1::try_settlement(
+            TEST_HANDOFF_HANDLE,
+            TEST_HANDOFF_QUALIFICATION,
+            boundary.clone(),
+        )
+        .expect("qualified settlement boundary");
         let handoff = terminal_handoff(ModerationTerminalHandoffKindV1::Settlement);
 
         assert_eq!(
@@ -2159,9 +2764,34 @@ mod tests {
     }
 
     #[test]
+    fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
+        let boundary = Arc::new(TestHandoffBoundary::default());
+        let sink = ModerationTerminalHandoffSinkAdapterV1::try_settlement(
+            TEST_HANDOFF_HANDLE,
+            TEST_HANDOFF_QUALIFICATION,
+            boundary.clone(),
+        )
+        .expect("qualified settlement boundary");
+        let handoff = terminal_handoff(ModerationTerminalHandoffKindV1::Settlement);
+        boundary.drift_after_delivery(ModerationRuntimeProviderQualificationV1::new(2, [0xB3; 32]));
+
+        assert_eq!(
+            sink.deliver(&handoff),
+            Err(ModerationHandoffFailureV1::Ambiguous)
+        );
+        assert_eq!(boundary.calls(), 1);
+        assert_eq!(boundary.deliveries(), 1);
+    }
+
+    #[test]
     fn terminal_handoff_cannot_cross_destination_boundaries() {
         let boundary = Arc::new(TestHandoffBoundary::default());
-        let sink = ModerationTerminalHandoffSinkAdapterV1::publication(boundary.clone());
+        let sink = ModerationTerminalHandoffSinkAdapterV1::try_publication(
+            TEST_HANDOFF_HANDLE,
+            TEST_HANDOFF_QUALIFICATION,
+            boundary.clone(),
+        )
+        .expect("qualified publication boundary");
         let settlement = terminal_handoff(ModerationTerminalHandoffKindV1::Settlement);
 
         assert_eq!(
@@ -2169,5 +2799,219 @@ mod tests {
             Err(ModerationHandoffFailureV1::Permanent)
         );
         assert_eq!(boundary.calls(), 0);
+    }
+
+    #[derive(Debug, Default)]
+    struct TestNotificationBoundaryState {
+        calls: usize,
+        fail_next: Option<ModerationPanelNotificationFailureV1>,
+        delivered: BTreeMap<[u8; 32], (Vec<u8>, ModerationPanelNotificationDeliveryReceiptV1)>,
+    }
+
+    #[derive(Debug)]
+    struct TestNotificationBoundary {
+        state: Mutex<TestNotificationBoundaryState>,
+        handle: String,
+        qualification: Mutex<
+            Result<
+                ModerationRuntimeProviderQualificationV1,
+                ModerationRuntimeProviderReadinessErrorV1,
+            >,
+        >,
+        qualification_after_delivery: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
+    }
+
+    impl Default for TestNotificationBoundary {
+        fn default() -> Self {
+            Self {
+                state: Mutex::new(TestNotificationBoundaryState::default()),
+                handle: TEST_NOTIFICATION_HANDLE.to_owned(),
+                qualification: Mutex::new(Ok(TEST_NOTIFICATION_QUALIFICATION)),
+                qualification_after_delivery: Mutex::new(None),
+            }
+        }
+    }
+
+    impl TestNotificationBoundary {
+        fn fail_next(&self, error: ModerationPanelNotificationFailureV1) {
+            self.state.lock().expect("notification lock").fail_next = Some(error);
+        }
+
+        fn calls(&self) -> usize {
+            self.state.lock().expect("notification lock").calls
+        }
+
+        fn deliveries(&self) -> usize {
+            self.state
+                .lock()
+                .expect("notification lock")
+                .delivered
+                .len()
+        }
+
+        fn drift_after_delivery(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification_after_delivery
+                .lock()
+                .expect("notification qualification drift lock") = Some(qualification);
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for TestNotificationBoundary {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            *self
+                .qualification
+                .lock()
+                .expect("notification qualification lock")
+        }
+    }
+
+    impl ModerationDurablePanelNotificationBoundaryV1 for TestNotificationBoundary {
+        fn deliver_once(
+            &self,
+            request: &ModerationDurablePanelNotificationRequestV1,
+        ) -> Result<
+            ModerationPanelNotificationDeliveryReceiptV1,
+            ModerationPanelNotificationFailureV1,
+        > {
+            let mut state = self.state.lock().expect("notification lock");
+            state.calls = state.calls.saturating_add(1);
+            if let Some(error) = state.fail_next.take() {
+                return Err(error);
+            }
+            let receipt = match state.delivered.get(&request.notification.notification_id) {
+                Some((canonical, receipt))
+                    if canonical.as_slice() == request.canonical_notification.as_slice() =>
+                {
+                    Ok(*receipt)
+                }
+                Some(_) => Err(ModerationPanelNotificationFailureV1::Permanent),
+                None => {
+                    let delivered_at_unix_ms = request
+                        .notification
+                        .source_occurred_at_unix_ms
+                        .checked_add(1)
+                        .filter(|delivered_at| *delivered_at < request.lease_expires_at_unix_ms)
+                        .ok_or(ModerationPanelNotificationFailureV1::Permanent)?;
+                    let receipt = ModerationPanelNotificationDeliveryReceiptV1 {
+                        notification_id: request.notification.notification_id,
+                        receipt_digest: [0x72; 32],
+                        delivered_at_unix_ms,
+                    };
+                    state.delivered.insert(
+                        request.notification.notification_id,
+                        (request.canonical_notification.clone(), receipt),
+                    );
+                    Ok(receipt)
+                }
+            };
+            drop(state);
+            if let Some(qualification) = self
+                .qualification_after_delivery
+                .lock()
+                .expect("notification qualification drift lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("notification qualification lock") = Ok(qualification);
+            }
+            receipt
+        }
+    }
+
+    fn panel_notification_claim() -> ModerationPanelNotificationClaimV1 {
+        ModerationPanelNotificationClaimV1 {
+            notification: ModerationPanelNotificationV1 {
+                notification_id: [0x71; 32],
+                source_operation_id: [0x72; 32],
+                scope_digest: [0x73; 32],
+                kind: ModerationPanelNotificationKindV1::PrimaryAssignment,
+                recipient: account(&key(7)),
+                finalized_event_cursor: ModerationFinalizedEventCursorV1 {
+                    sequence: 1,
+                    block_height: 11,
+                    block_hash: [0x74; 32],
+                    event_index: 0,
+                },
+                source_occurred_at_unix_ms: 100,
+            },
+            worker_id: [0x75; 32],
+            lease_token: [0x76; 32],
+            lease_expires_at_unix_ms: 1_000,
+            attempt: 1,
+            attempt_limit: 3,
+        }
+    }
+
+    #[test]
+    fn panel_notification_failure_retries_the_same_idempotency_identity() {
+        let boundary = Arc::new(TestNotificationBoundary::default());
+        boundary.fail_next(ModerationPanelNotificationFailureV1::NotDelivered);
+        let sink = ModerationPanelNotificationSinkAdapterV1::try_new(
+            TEST_NOTIFICATION_HANDLE,
+            TEST_NOTIFICATION_QUALIFICATION,
+            boundary.clone(),
+        )
+        .expect("qualified notification boundary");
+        let claim = panel_notification_claim();
+
+        assert_eq!(
+            sink.deliver(&claim),
+            Err(ModerationPanelNotificationFailureV1::NotDelivered)
+        );
+        let receipt = sink.deliver(&claim).expect("retry delivery");
+        assert_eq!(sink.deliver(&claim).expect("idempotent replay"), receipt);
+        assert_eq!(boundary.calls(), 3);
+        assert_eq!(boundary.deliveries(), 1);
+    }
+
+    #[test]
+    fn panel_notification_policy_drift_after_delivery_is_ambiguous() {
+        let boundary = Arc::new(TestNotificationBoundary::default());
+        let sink = ModerationPanelNotificationSinkAdapterV1::try_new(
+            TEST_NOTIFICATION_HANDLE,
+            TEST_NOTIFICATION_QUALIFICATION,
+            boundary.clone(),
+        )
+        .expect("qualified notification boundary");
+        boundary.drift_after_delivery(ModerationRuntimeProviderQualificationV1::new(2, [0xB4; 32]));
+
+        assert_eq!(
+            sink.deliver(&panel_notification_claim()),
+            Err(ModerationPanelNotificationFailureV1::Ambiguous)
+        );
+        assert_eq!(boundary.calls(), 1);
+        assert_eq!(boundary.deliveries(), 1);
+    }
+
+    #[test]
+    fn panel_notification_adapter_rejects_malformed_claim_before_delivery() {
+        let boundary = Arc::new(TestNotificationBoundary::default());
+        let sink = ModerationPanelNotificationSinkAdapterV1::try_new(
+            TEST_NOTIFICATION_HANDLE,
+            TEST_NOTIFICATION_QUALIFICATION,
+            boundary.clone(),
+        )
+        .expect("qualified notification boundary");
+        let mut claim = panel_notification_claim();
+        claim.notification.notification_id = [0; 32];
+
+        assert_eq!(
+            sink.deliver(&claim),
+            Err(ModerationPanelNotificationFailureV1::Permanent)
+        );
+        assert_eq!(boundary.calls(), 0);
+        assert_eq!(boundary.deliveries(), 0);
     }
 }

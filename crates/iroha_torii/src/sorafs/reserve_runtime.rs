@@ -150,19 +150,38 @@ impl SorafsReserveFinalizedTelemetryErrorV1 {
     }
 }
 
-/// Supervision is intentionally split: `enabled` permits generation of new
-/// reserve work, but durable drain/reconciliation is unconditional.
+/// Reserve supervision uses one role-activation predicate.
+///
+/// Provider storage keeps durable drain/reconciliation active even when new
+/// reserve generation is disabled. When both storage and generation are
+/// disabled, no worker is started and therefore no external progress occurs.
+/// Opening the local [`sorafs_node::NodeHandle`] may still normalize an
+/// interrupted signer-only claim from `Signing` to `Ready`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReserveWorkerSupervisionV1 {
     generation_enabled: bool,
-    drain_enabled: bool,
+    role_active: bool,
 }
 
-fn reserve_worker_supervision(policy: ReserveWorkerPolicy) -> ReserveWorkerSupervisionV1 {
+const fn reserve_worker_supervision(
+    storage_enabled: bool,
+    generation_enabled: bool,
+) -> ReserveWorkerSupervisionV1 {
     ReserveWorkerSupervisionV1 {
-        generation_enabled: policy.enabled(),
-        drain_enabled: true,
+        generation_enabled,
+        role_active: storage_enabled || generation_enabled,
     }
+}
+
+fn spawn_reserve_worker_when_active(
+    supervision: ReserveWorkerSupervisionV1,
+    spawn: impl FnOnce(),
+) -> bool {
+    if !supervision.role_active {
+        return false;
+    }
+    spawn();
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1102,69 +1121,78 @@ fn decode_exact_reserve_signed_transaction(
     }
 }
 
-/// Start unconditional durable drain/reconciliation.
+/// Start reserve generation and durable drain/reconciliation when the role is active.
 ///
-/// `reserve_worker.enabled` controls only generation of new worker-owned
-/// operations. It never suppresses restart recovery for entries already
-/// admitted to the durable outbox.
+/// Storage enablement keeps the role active for restart recovery even when
+/// `reserve_worker.enabled` suppresses generation of new worker-owned
+/// operations. When both controls are disabled, retained entries stay durable
+/// but make zero external progress because no task is spawned. Opening the
+/// local node may still release interrupted signer-only claims back to `Ready`.
 pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
 ) {
     let policy = state.sorafs_node.config().reserve_worker_policy();
-    let supervision = reserve_worker_supervision(policy);
-    debug_assert!(supervision.drain_enabled);
-    if !supervision.generation_enabled {
-        debug!(
-            "SoraFS reserve/rent generation is disabled; durable drain and finalized reconciliation remain active"
-        );
-    }
-    if state.sorafs_reserve_transaction_signer.is_none() {
-        warn!(
-            "SoraFS reserve/rent forwarder has no runtime signer; durable drain and finalized reconciliation remain active"
-        );
-    }
+    let supervision =
+        reserve_worker_supervision(state.sorafs_node.config().enabled(), policy.enabled());
+    let spawned = spawn_reserve_worker_when_active(supervision, move || {
+        if !supervision.generation_enabled {
+            debug!(
+                "SoraFS reserve/rent generation is disabled; storage-enabled durable drain and finalized reconciliation remain active"
+            );
+        }
+        if state.sorafs_reserve_transaction_signer.is_none() {
+            warn!(
+                "active SoraFS reserve/rent forwarder has no runtime signer; signing remains deferred"
+            );
+        }
 
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(policy.scan_interval());
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut cursor = SorafsReserveTransactionForwarderCursorV1::default();
-        loop {
-            tokio::select! {
-                () = shutdown_signal.receive() => break,
-                _ = interval.tick() => {
-                    let scan =
-                        run_sorafs_reserve_transaction_forwarder_scan(&state, &mut cursor).await;
-                    if scan.generated != 0
-                        || scan.generation_replayed != 0
-                        || scan.generation_deferred != 0
-                        || scan.scanned != 0
-                        || scan.telemetry_published != 0
-                        || scan.telemetry_catching_up != 0
-                        || scan.telemetry_failed != 0
-                    {
-                        debug!(
-                            generated = scan.generated,
-                            generation_replayed = scan.generation_replayed,
-                            generation_deferred = scan.generation_deferred,
-                            scanned = scan.scanned,
-                            finalized = scan.finalized,
-                            signed = scan.signed,
-                            submitted = scan.submitted,
-                            deferred = scan.deferred,
-                            conflicted = scan.conflicted,
-                            rejected = scan.rejected,
-                            telemetry_published = scan.telemetry_published,
-                            telemetry_catching_up = scan.telemetry_catching_up,
-                            telemetry_failed = scan.telemetry_failed,
-                            generation_enabled = supervision.generation_enabled,
-                            "processed durable native SoraFS reserve/rent transactions"
-                        );
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(policy.scan_interval());
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut cursor = SorafsReserveTransactionForwarderCursorV1::default();
+            loop {
+                tokio::select! {
+                    () = shutdown_signal.receive() => break,
+                    _ = interval.tick() => {
+                        let scan =
+                            run_sorafs_reserve_transaction_forwarder_scan(&state, &mut cursor).await;
+                        if scan.generated != 0
+                            || scan.generation_replayed != 0
+                            || scan.generation_deferred != 0
+                            || scan.scanned != 0
+                            || scan.telemetry_published != 0
+                            || scan.telemetry_catching_up != 0
+                            || scan.telemetry_failed != 0
+                        {
+                            debug!(
+                                generated = scan.generated,
+                                generation_replayed = scan.generation_replayed,
+                                generation_deferred = scan.generation_deferred,
+                                scanned = scan.scanned,
+                                finalized = scan.finalized,
+                                signed = scan.signed,
+                                submitted = scan.submitted,
+                                deferred = scan.deferred,
+                                conflicted = scan.conflicted,
+                                rejected = scan.rejected,
+                                telemetry_published = scan.telemetry_published,
+                                telemetry_catching_up = scan.telemetry_catching_up,
+                                telemetry_failed = scan.telemetry_failed,
+                                generation_enabled = supervision.generation_enabled,
+                                "processed durable native SoraFS reserve/rent transactions"
+                            );
+                        }
                     }
                 }
             }
-        }
+        });
     });
+    if !spawned {
+        debug!(
+            "SoraFS reserve/rent worker is paused because storage and generation are disabled; no external work was started"
+        );
+    }
 }
 
 pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
@@ -2394,16 +2422,37 @@ mod tests {
     }
 
     #[test]
-    fn disabled_generation_never_disables_durable_drain() {
-        let policy = ReserveWorkerPolicy::default();
-        assert!(!policy.enabled());
-        assert_eq!(
-            reserve_worker_supervision(policy),
-            ReserveWorkerSupervisionV1 {
-                generation_enabled: false,
-                drain_enabled: true,
-            }
-        );
+    fn reserve_supervision_uses_storage_or_generation_activation() {
+        for (storage_enabled, generation_enabled, role_active) in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ] {
+            assert_eq!(
+                reserve_worker_supervision(storage_enabled, generation_enabled),
+                ReserveWorkerSupervisionV1 {
+                    generation_enabled,
+                    role_active,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_reserve_supervision_does_not_invoke_spawn_adapter() {
+        let spawn_count = std::cell::Cell::new(0_u32);
+        assert!(!spawn_reserve_worker_when_active(
+            reserve_worker_supervision(false, false),
+            || spawn_count.set(spawn_count.get() + 1),
+        ));
+        assert_eq!(spawn_count.get(), 0);
+
+        assert!(spawn_reserve_worker_when_active(
+            reserve_worker_supervision(true, false),
+            || spawn_count.set(spawn_count.get() + 1),
+        ));
+        assert_eq!(spawn_count.get(), 1);
     }
 
     #[test]

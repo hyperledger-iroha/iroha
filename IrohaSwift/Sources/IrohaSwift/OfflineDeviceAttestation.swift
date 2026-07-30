@@ -1207,12 +1207,11 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         var signedReader = CanonicalNoritoReader(data: signedTransaction)
         let signatureField = try field(&signedReader, "transaction signature")
         let transactionPayload = try field(&signedReader, "transaction payload")
-        let feeAuthority = try field(&signedReader, "fee authority")
-        let reserved = try field(&signedReader, "reserved option")
+        let multisigSignatures = try field(&signedReader, "multisig signatures")
         try finish(signedReader, "signed transaction")
         try validateTransactionSignature(signatureField)
-        guard feeAuthority == Data([0]), reserved == Data([0]) else {
-            throw invalid("signed transaction options")
+        guard multisigSignatures == Data([0]) else {
+            throw invalid("multisig signatures")
         }
 
         var payloadReader = CanonicalNoritoReader(data: transactionPayload)
@@ -1224,6 +1223,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         let nonceField = try field(&payloadReader, "nonce")
         let feePaymentField = try field(&payloadReader, "fee payment")
         let metadataField = try field(&payloadReader, "metadata")
+        let attachmentsField = try field(&payloadReader, "attachments")
         try finish(payloadReader, "transaction payload")
 
         let chainId = try canonicalString(chainField, field: "chain id")
@@ -1235,6 +1235,9 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         try validateOption(nonceField, valueLength: 4, field: "nonce")
         try validateFeePayment(feePaymentField)
         try validateMetadata(metadataField)
+        guard attachmentsField == Data([0]) else {
+            throw invalid("proof attachments")
+        }
         let validated = try TransactionInputValidator.validate(
             chainId: chainId,
             authorityId: authority
@@ -1268,7 +1271,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
 
         let transactionHash = IrohaHash.hash(
             KagemushaDeviceAttestationTransactionEncoder.encodeTransactionEntrypoint(
-                signedTransaction
+                transactionPayload
             )
         )
         let envelope = SignedTransactionEnvelope(
@@ -1678,6 +1681,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         payload.writeField(try CanonicalNorito.encodeOption(nonce, encode: CanonicalNorito.encodeUInt32))
         payload.writeField(try feePayment.canonicalNorito())
         payload.writeField(try CanonicalNorito.encodeMetadata(metadata))
+        payload.writeField(Data([0]))
         return payload.data
     }
 
@@ -1702,7 +1706,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
             signature: signature,
             transactionPayload: transactionPayload
         )
-        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         var norito = Data([signedTransactionWireVersion])
         norito.append(signedTransaction)
         return SignedTransactionEnvelope(
@@ -1721,7 +1725,6 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         signed.writeField(CanonicalNorito.encodeConstVec(signature))
         signed.writeField(transactionPayload)
         signed.writeField(Data([0]))
-        signed.writeField(Data([0]))
         return signed.data
     }
 
@@ -1733,15 +1736,13 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         signed.writeField(signatureField)
         signed.writeField(transactionPayload)
         signed.writeField(Data([0]))
-        signed.writeField(Data([0]))
         return signed.data
     }
 
-    fileprivate static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+    fileprivate static func encodeTransactionEntrypoint(_ transactionPayload: Data) -> Data {
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
-        entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedTransaction)
+        entrypoint.writeField(transactionPayload)
         return entrypoint.data
     }
 }

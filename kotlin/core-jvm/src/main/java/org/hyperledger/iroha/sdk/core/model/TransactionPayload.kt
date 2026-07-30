@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.core.model
 
+import java.util.Collections
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
 
 private const val MAX_U32 = 0xffff_ffffL
 
@@ -10,7 +12,8 @@ private const val MAX_U32 = 0xffff_ffffL
  * The structure mirrors the Rust data model sufficiently for encoding and signing, including
  * instruction lists, by-reference contract calls, IVM bytecode, and flat mixed batches. `authority`
  * must use the canonical I105 account literal. `nonce` uses a [Long] carrier for the full nonzero
- * unsigned 32-bit wire range.
+ * unsigned 32-bit wire range. Proof attachments are part of the signed payload and therefore
+ * affect both authorization signatures and the canonical transaction identifier.
  */
 class TransactionPayload(
     val chainId: String,
@@ -21,10 +24,20 @@ class TransactionPayload(
     val nonce: Long? = null,
     val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
+    attachments: List<ProofAttachment>? = null,
 ) {
     private val _metadata: Map<String, JsonValue> = metadata.toMap()
+    private val _attachments: List<ProofAttachment>? =
+        attachments?.let { values ->
+            Collections.unmodifiableList(
+                values.map { requireNotNull(it) { "attachments must not contain null" } },
+            )
+        }
 
     val metadata: Map<String, JsonValue> get() = _metadata
+
+    /** Ordered execution proof attachments included in the signed transaction intent. */
+    val attachments: List<ProofAttachment>? get() = _attachments
 
     init {
         require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }
@@ -51,6 +64,7 @@ class TransactionPayload(
         nonce: Long? = this.nonce,
         feePayment: FeePaymentIntent = this.feePayment,
         metadata: Map<String, JsonValue> = this.metadata,
+        attachments: List<ProofAttachment>? = this.attachments,
     ): TransactionPayload = TransactionPayload(
         chainId = chainId,
         authority = authority,
@@ -60,6 +74,7 @@ class TransactionPayload(
         nonce = nonce,
         feePayment = feePayment,
         metadata = metadata,
+        attachments = attachments,
     )
 
     override fun equals(other: Any?): Boolean {
@@ -73,6 +88,7 @@ class TransactionPayload(
             && nonce == other.nonce
             && feePayment == other.feePayment
             && _metadata == other._metadata
+            && _attachments == other._attachments
     }
 
     override fun hashCode(): Int {
@@ -84,6 +100,7 @@ class TransactionPayload(
         result = 31 * result + (nonce?.hashCode() ?: 0)
         result = 31 * result + feePayment.hashCode()
         result = 31 * result + _metadata.hashCode()
+        result = 31 * result + (_attachments?.hashCode() ?: 0)
         return result
     }
 }

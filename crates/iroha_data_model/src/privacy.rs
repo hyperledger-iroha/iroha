@@ -23,8 +23,14 @@ pub use iroha_zkp_halo2::vega::{
 
 /// Domain separator used to hash canonical [`PrivacyStatementV1`] values.
 pub const PRIVACY_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:statement:v1";
+/// Domain separator used to hash canonical [`PrivacyNativeConsensusBindingV1`] values.
+pub const PRIVACY_NATIVE_CONSENSUS_BINDING_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:native-consensus-binding:v1";
 /// Permanent Norito schema identity for the top-level typed privacy statement.
 pub const PRIVACY_STATEMENT_SCHEMA_NAME_V1: &str = "iroha.privacy.statement.v1";
+/// Permanent Norito schema identity for the shared native consensus binding.
+pub const PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.native-consensus-binding.v1";
 /// Permanent Norito schema identity for the top-level typed privacy proof.
 pub const PRIVACY_PROOF_SCHEMA_NAME_V1: &str = "iroha.privacy.proof.v1";
 /// Permanent Norito schema identity for the cross-SDK privacy proof envelope.
@@ -167,7 +173,7 @@ pub enum PrivacyProtocolIdV1 {
     /// Anonymous PGC k-out-of-n payment protocol v1.
     #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
     AnonymousPgcKOutOfNV1,
-    /// VeRange transparent range-proof protocol v1.
+    /// `VeRange` transparent range-proof protocol v1.
     #[cfg_attr(feature = "json", norito(rename = "verange-transparent-range-v1"))]
     VeRangeTransparentRangeV1,
     /// Native Iroha ZK-AMS admission and anonymous-account provisioning suite v1.
@@ -360,10 +366,14 @@ impl PrivacyProtocolIdV1 {
     }
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
 pub use exact12_fixture::{
-    PrivacyExact12FixtureErrorV1, PrivacyExact12TypedEnvelopeRowV1,
-    privacy_exact12_typed_envelope_rows_v1,
+    PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyExact12FixtureBundleV1,
+    PrivacyExact12FixtureBundleValidationStatusV1, PrivacyExact12FixtureErrorV1,
+    PrivacyExact12TypedEnvelopeRowV1, PrivacyExact12TypedFixtureRowV1,
+    privacy_exact12_fixture_bundle_bytes_v1, privacy_exact12_fixture_bundle_v1,
+    privacy_exact12_matrix_bytes_v1, privacy_exact12_typed_envelope_rows_v1,
+    validate_privacy_exact12_fixture_bundle_v1,
 };
 
 /// Return whether `label` is reserved by the first-release privacy registry.
@@ -407,7 +417,7 @@ pub enum PrivacyProofSystemIdV1 {
     /// Anonymous PGC k-out-of-n proof system over P-256.
     #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-p256"))]
     AnonymousPgcP256,
-    /// Iroha Type-1 VeRange profile over P-256 with SHA-256.
+    /// Iroha Type-1 `VeRange` profile over P-256 with SHA-256.
     ///
     /// This profile is distinct from the upstream BN254-and-Keccak reference.
     #[cfg_attr(feature = "json", norito(rename = "iroha-verange-p256"))]
@@ -461,7 +471,7 @@ pub enum PrivacyEngineIdV1 {
     /// Native Anonymous PGC verifier over P-256.
     #[cfg_attr(feature = "json", norito(rename = "native-anonymous-pgc-p256"))]
     NativeAnonymousPgcP256,
-    /// Native VeRange verifier over P-256.
+    /// Native `VeRange` verifier over P-256.
     #[cfg_attr(feature = "json", norito(rename = "native-verange-p256"))]
     NativeVeRangeP256,
     /// Native Vega verifier.
@@ -578,6 +588,11 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Digest of the canonical transaction-intent projection bound by a privacy statement.
     PrivacyTransactionIntentDigestV1
+);
+define_privacy_digest!(
+    /// Digest of the canonical chain, genesis, action, and governed-artifact binding
+    /// consumed by a native privacy prover or verifier.
+    PrivacyNativeConsensusBindingDigestV1
 );
 define_privacy_digest!(
     /// Digest of a canonical governance root publication.
@@ -3366,9 +3381,7 @@ impl PrivacyProtocolLifecycleV1 {
 
         match (*self, *next) {
             (Self::Proposed(current), Self::Active(next))
-                if current.proposed_at_height == next.proposed_at_height
-                    && current.activate_at_height == next.activated_at_height
-                    && next.activated_at_height == next.state_since_height =>
+                if proposed_activation_history_matches(current, next) =>
             {
                 Ok(())
             }
@@ -3411,6 +3424,19 @@ impl PrivacyProtocolLifecycleV1 {
             _ => Err(PrivacyLifecycleTransitionError::InvalidTransition),
         }
     }
+}
+
+const fn proposed_activation_history_matches(
+    proposed: PrivacyProposedLifecycleV1,
+    active: PrivacyActiveLifecycleV1,
+) -> bool {
+    if proposed.proposed_at_height != active.proposed_at_height {
+        return false;
+    }
+    if proposed.activate_at_height != active.activated_at_height {
+        return false;
+    }
+    active.activated_at_height == active.state_since_height
 }
 
 fn validate_strictly_later(
@@ -3522,7 +3548,7 @@ pub struct AnonymousPgcActivationLimitsV1 {
     pub max_recipient_count: u32,
 }
 
-/// Activation-specific VeRange aggregation policy.
+/// Activation-specific `VeRange` aggregation policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3631,7 +3657,7 @@ pub enum PrivacyProtocolActivationLimitsV1 {
     /// Anonymous PGC receiver policy.
     #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
     AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1),
-    /// VeRange aggregation policy.
+    /// `VeRange` aggregation policy.
     #[cfg_attr(feature = "json", norito(rename = "verange-transparent-range-v1"))]
     VeRangeTransparentRangeV1(VeRangeActivationLimitsV1),
     /// ZK-AMS batch-admission and account-provisioning policy.
@@ -3949,7 +3975,7 @@ pub enum PrivacyActivationLimitFieldV1 {
     AnonymousPgcAnonymitySetSize,
     /// Anonymous PGC intended recipient count.
     AnonymousPgcRecipientCount,
-    /// VeRange aggregation count.
+    /// `VeRange` aggregation count.
     VeRangeAggregationCount,
     /// ZK-AMS batch size.
     ZkAmsBatchSize,
@@ -5008,9 +5034,9 @@ pub const ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1: [u32; 3] = [16, 32, 64];
 pub const ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1: u32 = 64;
 /// Maximum Anonymous PGC intended recipients in the first release.
 pub const ANONYMOUS_PGC_MAX_RECIPIENTS_V1: u32 = 8;
-/// Hard maximum VeRange aggregation count in the first release.
+/// Hard maximum `VeRange` aggregation count in the first release.
 pub const VERANGE_HARD_MAX_AGGREGATION_COUNT_V1: u32 = 64;
-/// Effective VeRange aggregation ceiling under the Taira global commitment cap.
+/// Effective `VeRange` aggregation ceiling under the Taira global commitment cap.
 pub const VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1: u32 =
     if VERANGE_HARD_MAX_AGGREGATION_COUNT_V1 < TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1 {
         VERANGE_HARD_MAX_AGGREGATION_COUNT_V1
@@ -5206,6 +5232,224 @@ impl PrivacyStatementContextV1 {
         }
         Ok(())
     }
+}
+
+/// Exact chain, genesis, action, and governed-artifact binding shared by native engines.
+///
+/// The binding owns every consensus-selected byte that a native proof
+/// transcript must commit. It is constructed from a validated
+/// [`PrivacyStatementContextV1`] plus the trusted chain genesis hash; there is
+/// no optional field, default, alias, or legacy wire shape.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyNativeConsensusBindingV1 {
+    /// Exact chain identifier.
+    pub chain_id: ChainId,
+    /// Trusted committed genesis-block hash for this chain.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub genesis_hash: [u8; 32],
+    /// Zero-based privacy action index within the transaction.
+    pub action_index: u32,
+    /// Digest of the canonical transaction projection selected by the action.
+    pub transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+    /// Exact governed parameter-set identifier.
+    pub parameter_id: PrivacyParameterIdV1,
+    /// Digest of the governed parameter set.
+    pub parameter_digest: PrivacyParameterDigestV1,
+    /// Digest of the exact verifier artifact.
+    pub verifier_digest: PrivacyVerifierDigestV1,
+    /// Digest of this protocol's public-statement schema.
+    pub statement_schema_digest: PrivacyStatementSchemaDigestV1,
+    /// Digest of the pinned native engine manifest.
+    pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
+}
+
+impl PrivacyNativeConsensusBindingV1 {
+    /// Construct the sole canonical native consensus binding for a statement context.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid consensus limits, an invalid statement context, or the
+    /// reserved all-zero genesis hash.
+    pub fn new(
+        context: &PrivacyStatementContextV1,
+        genesis_hash: [u8; 32],
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<Self, PrivacyNativeConsensusBindingValidationErrorV1> {
+        let binding = Self {
+            chain_id: context.chain_id.clone(),
+            genesis_hash,
+            action_index: context.action_index,
+            transaction_intent_digest: context.transaction_intent_digest,
+            parameter_id: context.parameter_id,
+            parameter_digest: context.parameter_digest,
+            verifier_digest: context.verifier_digest,
+            statement_schema_digest: context.statement_schema_digest,
+            engine_manifest_digest: context.engine_manifest_digest,
+        };
+        binding.validate(limits)?;
+        Ok(binding)
+    }
+
+    /// Validate every intrinsic field under the supplied consensus limits.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid consensus limits, an invalid context-shaped field, or
+    /// the reserved all-zero genesis hash.
+    pub fn validate(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyNativeConsensusBindingValidationErrorV1> {
+        limits
+            .validate()
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidLimits)?;
+        if self.genesis_hash.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash);
+        }
+        self.as_statement_context()
+            .validate(limits)
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
+    }
+
+    /// Validate this binding and require exact equality with a statement context.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an intrinsically invalid binding or context and reports the
+    /// first consensus-binding axis whose canonical value differs.
+    pub fn validate_against_context(
+        &self,
+        context: &PrivacyStatementContextV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyNativeConsensusBindingValidationErrorV1> {
+        limits
+            .validate()
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidLimits)?;
+        if self.genesis_hash.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash);
+        }
+        if self.chain_id != context.chain_id {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch);
+        }
+        if self.action_index != context.action_index {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch);
+        }
+        if self.transaction_intent_digest != context.transaction_intent_digest {
+            return Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
+            );
+        }
+        if self.parameter_id != context.parameter_id {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch);
+        }
+        if self.parameter_digest != context.parameter_digest {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch);
+        }
+        if self.verifier_digest != context.verifier_digest {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch);
+        }
+        if self.statement_schema_digest != context.statement_schema_digest {
+            return Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
+            );
+        }
+        if self.engine_manifest_digest != context.engine_manifest_digest {
+            return Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
+            );
+        }
+        self.validate(limits)?;
+        context
+            .validate(limits)
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
+    }
+
+    /// Hash the exact canonical binding in its dedicated transcript domain.
+    ///
+    /// Callers must validate the binding before treating the digest as a
+    /// consensus input. This method remains independently useful for prover
+    /// construction, where the validating constructor already established the
+    /// invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyNativeConsensusBindingDigestV1, norito::Error> {
+        let encoded = norito::encode_canonical(self)?;
+        let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
+            norito::Error::Io(std::io::Error::other(
+                "native privacy consensus-binding length exceeds u64",
+            ))
+        })?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_NATIVE_CONSENSUS_BINDING_DIGEST_DOMAIN_V1);
+        hasher.update(&encoded_len.to_le_bytes());
+        hasher.update(&encoded);
+        Ok(PrivacyNativeConsensusBindingDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+
+    fn as_statement_context(&self) -> PrivacyStatementContextV1 {
+        PrivacyStatementContextV1 {
+            chain_id: self.chain_id.clone(),
+            action_index: self.action_index,
+            transaction_intent_digest: self.transaction_intent_digest,
+            parameter_id: self.parameter_id,
+            parameter_digest: self.parameter_digest,
+            verifier_digest: self.verifier_digest,
+            statement_schema_digest: self.statement_schema_digest,
+            engine_manifest_digest: self.engine_manifest_digest,
+        }
+    }
+}
+
+/// Validation failure for [`PrivacyNativeConsensusBindingV1`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
+    /// Supplied consensus limits are invalid.
+    #[error("native privacy consensus-binding limits are invalid: {0}")]
+    InvalidLimits(PrivacyConsensusLimitsValidationError),
+    /// A field shared with the statement context is intrinsically invalid.
+    #[error("native privacy consensus-binding context is invalid: {0}")]
+    InvalidContext(PrivacyStatementValidationError),
+    /// The trusted committed genesis hash is the reserved all-zero value.
+    #[error("native privacy consensus-binding genesis hash must be non-zero")]
+    ZeroGenesisHash,
+    /// Chain identifiers differ.
+    #[error("native privacy consensus-binding chain id differs from statement context")]
+    ChainIdMismatch,
+    /// Privacy action indexes differ.
+    #[error("native privacy consensus-binding action index differs from statement context")]
+    ActionIndexMismatch,
+    /// Transaction-intent digests differ.
+    #[error(
+        "native privacy consensus-binding transaction-intent digest differs from statement context"
+    )]
+    TransactionIntentDigestMismatch,
+    /// Governed parameter-set identifiers differ.
+    #[error("native privacy consensus-binding parameter id differs from statement context")]
+    ParameterIdMismatch,
+    /// Governed parameter digests differ.
+    #[error("native privacy consensus-binding parameter digest differs from statement context")]
+    ParameterDigestMismatch,
+    /// Verifier-artifact digests differ.
+    #[error("native privacy consensus-binding verifier digest differs from statement context")]
+    VerifierDigestMismatch,
+    /// Statement-schema digests differ.
+    #[error("native privacy consensus-binding schema digest differs from statement context")]
+    StatementSchemaDigestMismatch,
+    /// Engine-manifest digests differ.
+    #[error(
+        "native privacy consensus-binding engine-manifest digest differs from statement context"
+    )]
+    EngineManifestDigestMismatch,
 }
 
 /// Typed encrypted output emitted by a private transfer.
@@ -5671,7 +5915,7 @@ pub struct AnonymousPgcKOutOfNStatementV1 {
     pub recipient_count: u32,
 }
 
-/// Bit width admitted by the Iroha VeRange Type-1 profile.
+/// Bit width admitted by the Iroha `VeRange` Type-1 profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -5781,6 +6025,12 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
     ///
     /// Core additionally parses `issuer_public_key` as a canonical,
     /// non-identity P-256 point before persistence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyZkAmsRegistryBootstrapValidationError`] when a
+    /// required identifier, digest, key, or root is zero, the origin epoch is
+    /// noncanonical, or the derived namespace is invalid.
     pub fn validate(&self) -> Result<(), PrivacyZkAmsRegistryBootstrapValidationError> {
         if self.issuer_id.is_zero() {
             return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroIssuerId);
@@ -6692,7 +6942,108 @@ pub struct VegaExistingCredentialStatementV1 {
     pub session_transcript_digest: PrivacySessionTranscriptDigestV1,
 }
 
-/// X.509 key-usage bits admitted by the first-release certificate profile.
+/// One required X.509 key-usage bit.
+///
+/// This is transparent in canonical Norito and JSON, so each use remains an
+/// exact boolean on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+#[repr(transparent)]
+pub struct PrivacyX509KeyUsageRequirementV1(bool);
+
+impl PrivacyX509KeyUsageRequirementV1 {
+    /// Construct a key-usage requirement from its canonical boolean value.
+    #[must_use]
+    pub const fn new(required: bool) -> Self {
+        Self(required)
+    }
+
+    /// Return whether this key usage is required.
+    #[must_use]
+    pub const fn is_required(self) -> bool {
+        self.0
+    }
+}
+
+impl From<bool> for PrivacyX509KeyUsageRequirementV1 {
+    fn from(required: bool) -> Self {
+        Self::new(required)
+    }
+}
+
+impl From<PrivacyX509KeyUsageRequirementV1> for bool {
+    fn from(requirement: PrivacyX509KeyUsageRequirementV1) -> Self {
+        requirement.is_required()
+    }
+}
+
+impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {
+    fn schema_hash() -> [u8; 16] {
+        <bool as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyX509KeyUsageRequirementV1 {
+    fn schema_hash() -> [u8; 16] {
+        <bool as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self(<bool as norito::core::NoritoDeserialize>::deserialize(
+            archived.cast(),
+        ))
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        <bool as norito::core::NoritoDeserialize>::try_deserialize(archived.cast()).map(Self)
+    }
+}
+
+impl<'de> norito::core::DecodeFromSlice<'de> for PrivacyX509KeyUsageRequirementV1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        <bool as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
+            .map(|(required, used)| (Self(required), used))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for PrivacyX509KeyUsageRequirementV1 {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(&self.0, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        <bool as norito::json::JsonDeserialize>::json_deserialize(parser).map(Self)
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        <bool as norito::json::JsonDeserialize>::json_from_value(value).map(Self)
+    }
+
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        <bool as norito::json::JsonDeserialize>::json_from_map_key(key).map(Self)
+    }
+}
+
+/// X.509 key-usage requirements admitted by the first-release certificate profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -6701,13 +7052,13 @@ pub struct VegaExistingCredentialStatementV1 {
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyX509KeyUsageV1 {
     /// RFC 5280 digital-signature bit.
-    pub digital_signature: bool,
+    pub digital_signature: PrivacyX509KeyUsageRequirementV1,
     /// RFC 5280 content-commitment bit.
-    pub content_commitment: bool,
+    pub content_commitment: PrivacyX509KeyUsageRequirementV1,
     /// RFC 5280 key-encipherment bit.
-    pub key_encipherment: bool,
+    pub key_encipherment: PrivacyX509KeyUsageRequirementV1,
     /// RFC 5280 key-agreement bit.
-    pub key_agreement: bool,
+    pub key_agreement: PrivacyX509KeyUsageRequirementV1,
 }
 
 /// Exact extended-key-usage purpose required from an admitted certificate.
@@ -7297,10 +7648,10 @@ const fn privacy_zk_x509_lifecycle_frame_v1(lifecycle: PrivacyZkX509RecordLifecy
 }
 
 fn privacy_zk_x509_key_usage_mask_v1(key_usage: PrivacyX509KeyUsageV1) -> u8 {
-    u8::from(key_usage.digital_signature)
-        | (u8::from(key_usage.content_commitment) << 1)
-        | (u8::from(key_usage.key_encipherment) << 2)
-        | (u8::from(key_usage.key_agreement) << 3)
+    u8::from(key_usage.digital_signature.is_required())
+        | (u8::from(key_usage.content_commitment.is_required()) << 1)
+        | (u8::from(key_usage.key_encipherment.is_required()) << 2)
+        | (u8::from(key_usage.key_agreement.is_required()) << 3)
 }
 
 const fn privacy_zk_x509_extended_key_usage_code_v1(usage: PrivacyX509ExtendedKeyUsageV1) -> u8 {
@@ -7390,7 +7741,7 @@ fn validate_zk_x509_initial_revision(
 fn validate_zk_x509_key_usage(
     key_usage: PrivacyX509KeyUsageV1,
 ) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
-    if !key_usage.digital_signature {
+    if !key_usage.digital_signature.is_required() {
         return Err(PrivacyZkX509RecordValidationErrorV1::InvalidKeyUsage);
     }
     Ok(())
@@ -8246,6 +8597,13 @@ impl BootleLanternIssuerPolicyV1 {
     ///
     /// Returns the first deterministic structural or digest failure.
     pub fn validate(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        self.validate_identity()?;
+        self.validate_issuer_public_matrix()?;
+        self.validate_allowed_values()?;
+        self.validate_record_digest()
+    }
+
+    fn validate_identity(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         if self.issuer_id.is_zero() {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroIssuerId);
         }
@@ -8261,7 +8619,12 @@ impl BootleLanternIssuerPolicyV1 {
         if self.issuer_parameter_digest.is_zero() {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroIssuerParameterDigest);
         }
+        Ok(())
+    }
 
+    fn validate_issuer_public_matrix(
+        &self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         let mut matrix_is_zero = true;
         let matrix_entries = self.issuer_public_matrix.entries.len();
         let expected_matrix_entries =
@@ -8325,7 +8688,10 @@ impl BootleLanternIssuerPolicyV1 {
         if self.issuer_parameter_digest != expected_issuer_parameter_digest {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch);
         }
+        Ok(())
+    }
 
+    fn validate_allowed_values(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         if self.allowed_values.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
             return Err(
                 BootleLanternIssuerPolicyValidationErrorV1::InvalidAllowedValueRuleCount {
@@ -8367,7 +8733,10 @@ impl BootleLanternIssuerPolicyV1 {
                 );
             }
         }
+        Ok(())
+    }
 
+    fn validate_record_digest(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         if self.record_digest.is_zero() {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroRecordDigest);
         }
@@ -8765,7 +9134,7 @@ pub struct PrivacyOrchardActionV1 {
     /// Canonical Pallas-base nullifier encoding.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: [u8; 32],
-    /// Canonical non-identity randomized RedPallas verification key.
+    /// Canonical non-identity randomized `RedPallas` verification key.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub randomized_key: [u8; 32],
     /// Canonical extracted note commitment.
@@ -8994,7 +9363,7 @@ pub enum PrivacyStatementV1 {
     ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1),
     /// Anonymous PGC k-out-of-n payment statement.
     AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1),
-    /// VeRange transparent range statement.
+    /// `VeRange` transparent range statement.
     VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1),
     /// Native Iroha ZK-AMS admission/provisioning statement.
     IrohaZkAmsV1(IrohaZkAmsStatementV1),
@@ -9301,89 +9670,97 @@ fn validate_zk_ams(
         PrivacyTypedFieldV1::PolicyDigest,
     )?;
     match &statement.action {
-        PrivacyZkAmsActionV1::BatchAdmission(batch) => {
-            require_nonzero_id(
-                batch.account_registry_root.is_zero(),
-                PrivacyTypedFieldV1::Root,
-            )?;
-            require_epoch(batch.account_registry_root_epoch, PrivacyEpochFieldV1::Root)?;
-            validate_next_root_transition(
-                batch.account_registry_root,
-                batch.account_registry_root_epoch,
-                batch.next_account_registry_root,
-                batch.next_account_registry_root_epoch,
-                PrivacyRootTransitionFieldV1::AccountRegistry,
-            )?;
-            let batch_size = u32_len(batch.anchors.len())?;
-            if batch_size == 0 || batch_size > ZK_AMS_MAX_BATCH_SIZE_V1 {
-                return Err(PrivacyStatementValidationError::InvalidBatchSize {
-                    count: batch_size,
-                    max: ZK_AMS_MAX_BATCH_SIZE_V1,
-                });
-            }
-            for (index, anchor) in batch.anchors.iter().enumerate() {
-                if anchor.phc_hash.is_zero() {
-                    return Err(PrivacyStatementValidationError::ZeroZkAmsPhcHash {
-                        index: u32_index(index)?,
-                    });
-                }
-                if anchor.seed_public_key.is_zero() {
-                    return Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey {
-                        index: u32_index(index)?,
-                    });
-                }
-            }
-            for later in 1..batch.anchors.len() {
-                if batch.anchors[..later]
-                    .iter()
-                    .any(|earlier| earlier.phc_hash == batch.anchors[later].phc_hash)
-                {
-                    return Err(PrivacyStatementValidationError::DuplicateZkAmsPhcHash);
-                }
-                if batch.anchors[..later]
-                    .iter()
-                    .any(|earlier| earlier.seed_public_key == batch.anchors[later].seed_public_key)
-                {
-                    return Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey);
-                }
-            }
-            Ok(())
-        }
+        PrivacyZkAmsActionV1::BatchAdmission(batch) => validate_zk_ams_batch_admission(batch),
         PrivacyZkAmsActionV1::ProvisionAccount(provision) => {
-            require_nonzero_id(
-                provision.account_registry_root.is_zero(),
-                PrivacyTypedFieldV1::Root,
-            )?;
-            require_epoch(
-                provision.account_registry_root_epoch,
-                PrivacyEpochFieldV1::Root,
-            )?;
-            let ring_size = u32_len(provision.admitted_seed_key_ring.len())?;
-            if !ZK_AMS_RING_SIZES_V1.contains(&ring_size) {
-                return Err(PrivacyStatementValidationError::InvalidZkAmsRingSize {
-                    size: ring_size,
-                });
-            }
-            for (index, key) in provision.admitted_seed_key_ring.iter().enumerate() {
-                if key.is_zero() {
-                    return Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey {
-                        index: u32_index(index)?,
-                    });
-                }
-            }
-            if provision
-                .admitted_seed_key_ring
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            {
-                return Err(PrivacyStatementValidationError::ZkAmsSeedKeyRingNotStrictlyIncreasing);
-            }
-            if provision.key_image.is_zero() {
-                return Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage);
-            }
-            Ok(())
+            validate_zk_ams_provision_account(provision)
         }
     }
+}
+
+fn validate_zk_ams_batch_admission(
+    batch: &PrivacyZkAmsBatchAdmissionV1,
+) -> Result<(), PrivacyStatementValidationError> {
+    require_nonzero_id(
+        batch.account_registry_root.is_zero(),
+        PrivacyTypedFieldV1::Root,
+    )?;
+    require_epoch(batch.account_registry_root_epoch, PrivacyEpochFieldV1::Root)?;
+    validate_next_root_transition(
+        batch.account_registry_root,
+        batch.account_registry_root_epoch,
+        batch.next_account_registry_root,
+        batch.next_account_registry_root_epoch,
+        PrivacyRootTransitionFieldV1::AccountRegistry,
+    )?;
+    let batch_size = u32_len(batch.anchors.len())?;
+    if batch_size == 0 || batch_size > ZK_AMS_MAX_BATCH_SIZE_V1 {
+        return Err(PrivacyStatementValidationError::InvalidBatchSize {
+            count: batch_size,
+            max: ZK_AMS_MAX_BATCH_SIZE_V1,
+        });
+    }
+    for (index, anchor) in batch.anchors.iter().enumerate() {
+        if anchor.phc_hash.is_zero() {
+            return Err(PrivacyStatementValidationError::ZeroZkAmsPhcHash {
+                index: u32_index(index)?,
+            });
+        }
+        if anchor.seed_public_key.is_zero() {
+            return Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey {
+                index: u32_index(index)?,
+            });
+        }
+    }
+    for later in 1..batch.anchors.len() {
+        if batch.anchors[..later]
+            .iter()
+            .any(|earlier| earlier.phc_hash == batch.anchors[later].phc_hash)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateZkAmsPhcHash);
+        }
+        if batch.anchors[..later]
+            .iter()
+            .any(|earlier| earlier.seed_public_key == batch.anchors[later].seed_public_key)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey);
+        }
+    }
+    Ok(())
+}
+
+fn validate_zk_ams_provision_account(
+    provision: &PrivacyZkAmsProvisionAccountV1,
+) -> Result<(), PrivacyStatementValidationError> {
+    require_nonzero_id(
+        provision.account_registry_root.is_zero(),
+        PrivacyTypedFieldV1::Root,
+    )?;
+    require_epoch(
+        provision.account_registry_root_epoch,
+        PrivacyEpochFieldV1::Root,
+    )?;
+    let ring_size = u32_len(provision.admitted_seed_key_ring.len())?;
+    if !ZK_AMS_RING_SIZES_V1.contains(&ring_size) {
+        return Err(PrivacyStatementValidationError::InvalidZkAmsRingSize { size: ring_size });
+    }
+    for (index, key) in provision.admitted_seed_key_ring.iter().enumerate() {
+        if key.is_zero() {
+            return Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey {
+                index: u32_index(index)?,
+            });
+        }
+    }
+    if provision
+        .admitted_seed_key_ring
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(PrivacyStatementValidationError::ZkAmsSeedKeyRingNotStrictlyIncreasing);
+    }
+    if provision.key_image.is_zero() {
+        return Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage);
+    }
+    Ok(())
 }
 
 fn validate_vega(
@@ -9472,7 +9849,7 @@ fn vega_is_gregorian_leap_year(year: u16) -> bool {
     year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
-fn validate_zk_x509(
+fn validate_zk_x509_governance_bindings(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     require_nonzero_id(
@@ -9519,7 +9896,13 @@ fn validate_zk_x509(
         statement.ca_membership_root_epoch,
         PrivacyEpochFieldV1::CertificateAuthorityMembership,
     )?;
-    if !statement.key_usage.digital_signature {
+    Ok(())
+}
+
+fn validate_zk_x509_usage_and_disclosures(
+    statement: &IrohaZkX509StarkP256StatementV1,
+) -> Result<(), PrivacyStatementValidationError> {
+    if !statement.key_usage.digital_signature.is_required() {
         return Err(PrivacyStatementValidationError::InvalidX509KeyUsage);
     }
     if statement.extended_key_usages.is_empty() {
@@ -9573,6 +9956,14 @@ fn validate_zk_x509(
         statement.presentation_not_before_unix_seconds,
         statement.presentation_not_after_unix_seconds,
     )?;
+    Ok(())
+}
+
+fn validate_zk_x509(
+    statement: &IrohaZkX509StarkP256StatementV1,
+) -> Result<(), PrivacyStatementValidationError> {
+    validate_zk_x509_governance_bindings(statement)?;
+    validate_zk_x509_usage_and_disclosures(statement)?;
     require_nonzero_id(
         statement.wallet_challenge.is_zero(),
         PrivacyTypedFieldV1::ReaderChallenge,
@@ -10256,18 +10647,7 @@ impl PrivacyProtocolActivationLimitsV1 {
             (
                 Self::AnonymousPgcKOutOfNV1(limits),
                 PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement),
-            ) => {
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
-                    statement.anonymity_set_public_keys.len(),
-                    limits.max_anonymity_set_size,
-                )?;
-                validate_activation_statement_count(
-                    PrivacyActivationLimitFieldV1::AnonymousPgcRecipientCount,
-                    statement.recipient_count,
-                    limits.max_recipient_count,
-                )
-            }
+            ) => validate_anonymous_pgc_activation_statement(*limits, statement),
             (
                 Self::VeRangeTransparentRangeV1(limits),
                 PrivacyStatementV1::VeRangeTransparentRangeV1(statement),
@@ -10277,22 +10657,7 @@ impl PrivacyProtocolActivationLimitsV1 {
                 limits.max_aggregation_count,
             ),
             (Self::IrohaZkAmsV1(limits), PrivacyStatementV1::IrohaZkAmsV1(statement)) => {
-                match &statement.action {
-                    PrivacyZkAmsActionV1::BatchAdmission(batch) => {
-                        validate_activation_statement_len(
-                            PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
-                            batch.anchors.len(),
-                            limits.max_batch_size,
-                        )
-                    }
-                    PrivacyZkAmsActionV1::ProvisionAccount(provision) => {
-                        validate_activation_statement_len(
-                            PrivacyActivationLimitFieldV1::ZkAmsRingSize,
-                            provision.admitted_seed_key_ring.len(),
-                            limits.max_ring_size,
-                        )
-                    }
-                }
+                validate_zk_ams_activation_statement(*limits, statement)
             }
             (
                 Self::IrohaJindoPolynomialCommitmentV0(limits),
@@ -10305,56 +10670,114 @@ impl PrivacyProtocolActivationLimitsV1 {
             (
                 Self::OrchardHalo2ActionsV1(limits),
                 PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
-            ) => validate_activation_statement_len(
-                PrivacyActivationLimitFieldV1::OrchardActionCount,
-                statement.actions.len(),
-                limits.max_action_count,
-            ),
+            ) => validate_orchard_activation_statement(*limits, statement),
             (
                 Self::MoneroFcmpPlusPlusV1(limits),
                 PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement),
-            ) => {
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::FcmpInputCount,
-                    statement.inputs.len(),
-                    limits.max_input_count,
-                )?;
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::FcmpOutputCount,
-                    statement.outputs.len(),
-                    limits.max_output_count,
-                )
-            }
+            ) => validate_fcmp_activation_statement(*limits, statement),
             (
                 Self::IrohaIvmPrivateNoteStarkV1(limits),
                 PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement),
-            ) => {
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::IvmPrivateNoteInputCount,
-                    statement.nullifiers.len(),
-                    limits.max_input_count,
-                )?;
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::IvmPrivateNoteOutputCount,
-                    statement.output_commitments.len(),
-                    limits.max_output_count,
-                )
-            }
+            ) => validate_ivm_private_note_activation_statement(*limits, statement),
             (Self::PqMaspStarkV0(limits), PrivacyStatementV1::PqMaspStarkV0(statement)) => {
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::PqMaspInputCount,
-                    statement.nullifiers.len(),
-                    limits.max_input_count,
-                )?;
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::PqMaspOutputCount,
-                    statement.output_commitments.len(),
-                    limits.max_output_count,
-                )
+                validate_pq_masp_activation_statement(*limits, statement)
             }
             _ => Ok(()),
         }
     }
+}
+
+fn validate_anonymous_pgc_activation_statement(
+    limits: AnonymousPgcActivationLimitsV1,
+    statement: &AnonymousPgcKOutOfNStatementV1,
+) -> Result<(), PrivacyActivationStatementLimitsError> {
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
+        statement.anonymity_set_public_keys.len(),
+        limits.max_anonymity_set_size,
+    )?;
+    validate_activation_statement_count(
+        PrivacyActivationLimitFieldV1::AnonymousPgcRecipientCount,
+        statement.recipient_count,
+        limits.max_recipient_count,
+    )
+}
+
+fn validate_zk_ams_activation_statement(
+    limits: ZkAmsActivationLimitsV1,
+    statement: &IrohaZkAmsStatementV1,
+) -> Result<(), PrivacyActivationStatementLimitsError> {
+    match &statement.action {
+        PrivacyZkAmsActionV1::BatchAdmission(batch) => validate_activation_statement_len(
+            PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
+            batch.anchors.len(),
+            limits.max_batch_size,
+        ),
+        PrivacyZkAmsActionV1::ProvisionAccount(provision) => validate_activation_statement_len(
+            PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+            provision.admitted_seed_key_ring.len(),
+            limits.max_ring_size,
+        ),
+    }
+}
+
+fn validate_orchard_activation_statement(
+    limits: OrchardActivationLimitsV1,
+    statement: &OrchardHalo2ActionsStatementV1,
+) -> Result<(), PrivacyActivationStatementLimitsError> {
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::OrchardActionCount,
+        statement.actions.len(),
+        limits.max_action_count,
+    )
+}
+
+fn validate_fcmp_activation_statement(
+    limits: FcmpActivationLimitsV1,
+    statement: &MoneroFcmpPlusPlusStatementV1,
+) -> Result<(), PrivacyActivationStatementLimitsError> {
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::FcmpInputCount,
+        statement.inputs.len(),
+        limits.max_input_count,
+    )?;
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::FcmpOutputCount,
+        statement.outputs.len(),
+        limits.max_output_count,
+    )
+}
+
+fn validate_ivm_private_note_activation_statement(
+    limits: IvmPrivateNoteActivationLimitsV1,
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+) -> Result<(), PrivacyActivationStatementLimitsError> {
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::IvmPrivateNoteInputCount,
+        statement.nullifiers.len(),
+        limits.max_input_count,
+    )?;
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::IvmPrivateNoteOutputCount,
+        statement.output_commitments.len(),
+        limits.max_output_count,
+    )
+}
+
+fn validate_pq_masp_activation_statement(
+    limits: PqMaspActivationLimitsV1,
+    statement: &PqMaspStarkStatementV1,
+) -> Result<(), PrivacyActivationStatementLimitsError> {
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::PqMaspInputCount,
+        statement.nullifiers.len(),
+        limits.max_input_count,
+    )?;
+    validate_activation_statement_len(
+        PrivacyActivationLimitFieldV1::PqMaspOutputCount,
+        statement.output_commitments.len(),
+        limits.max_output_count,
+    )
 }
 
 fn validate_activation_statement_count(
@@ -10534,7 +10957,7 @@ pub enum PrivacyProofV1 {
     ZkAcePqAuthorizationV0(PrivacyProofBytesV1),
     /// Anonymous PGC k-out-of-n payment proof.
     AnonymousPgcKOutOfNV1(PrivacyProofBytesV1),
-    /// VeRange transparent range proof.
+    /// `VeRange` transparent range proof.
     VeRangeTransparentRangeV1(PrivacyProofBytesV1),
     /// Native Iroha ZK-AMS admission or provisioning proof.
     IrohaZkAmsV1(IrohaZkAmsProofV1),
@@ -10731,7 +11154,7 @@ pub enum PrivacyP256CiphertextComponentV1 {
 /// Declared protocol count field used by validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyCountFieldV1 {
-    /// VeRange aggregated commitments.
+    /// `VeRange` aggregated commitments.
     AggregatedCommitments,
     /// Jindo claimed evaluations in polynomial-commitment order.
     JindoClaimedEvaluations,
@@ -10991,7 +11414,7 @@ pub enum PrivacyStatementValidationError {
         /// Maximum admitted recipient count.
         max: u32,
     },
-    /// VeRange aggregation count is outside the approved profile.
+    /// `VeRange` aggregation count is outside the approved profile.
     #[error("VeRange aggregation count {count} is outside 1..={max}")]
     InvalidAggregationCount {
         /// Observed aggregation count.
@@ -11404,6 +11827,14 @@ impl PrivacyProofEnvelopeV1 {
         limits
             .validate()
             .map_err(PrivacyProofEnvelopeValidationError::InvalidLimits)?;
+        self.validate_protocol_bindings()?;
+        self.validate_artifact_bindings()?;
+        self.validate_statement_and_proof(limits)?;
+        self.validate_statement_digest()?;
+        self.validate_encoded_size(limits)
+    }
+
+    fn validate_protocol_bindings(&self) -> Result<(), PrivacyProofEnvelopeValidationError> {
         let expected_proof_system = self.protocol_id.expected_proof_system();
         if self.proof_system_id != expected_proof_system {
             return Err(PrivacyProofEnvelopeValidationError::ProofSystemMismatch {
@@ -11440,6 +11871,10 @@ impl PrivacyProofEnvelopeV1 {
         {
             return Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch);
         }
+        Ok(())
+    }
+
+    fn validate_artifact_bindings(&self) -> Result<(), PrivacyProofEnvelopeValidationError> {
         if self.parameter_id.is_zero() {
             return Err(PrivacyProofEnvelopeValidationError::ZeroParameterId);
         }
@@ -11474,14 +11909,23 @@ impl PrivacyProofEnvelopeV1 {
         if context.engine_manifest_digest != self.engine_manifest_digest {
             return Err(PrivacyProofEnvelopeValidationError::StatementEngineManifestDigestMismatch);
         }
+        Ok(())
+    }
+
+    fn validate_statement_and_proof(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyProofEnvelopeValidationError> {
         self.statement
             .validate(limits)
             .map_err(PrivacyProofEnvelopeValidationError::Statement)?;
         self.proof
             .bytes()
             .validate(limits)
-            .map_err(PrivacyProofEnvelopeValidationError::Proof)?;
+            .map_err(PrivacyProofEnvelopeValidationError::Proof)
+    }
 
+    fn validate_statement_digest(&self) -> Result<(), PrivacyProofEnvelopeValidationError> {
         let computed_statement_digest = self
             .statement
             .digest()
@@ -11494,7 +11938,13 @@ impl PrivacyProofEnvelopeV1 {
                 },
             );
         }
+        Ok(())
+    }
 
+    fn validate_encoded_size(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyProofEnvelopeValidationError> {
         let encoded = norito::to_bytes(self)
             .map_err(|_| PrivacyProofEnvelopeValidationError::EncodingFailure)?;
         let encoded_len = u64::try_from(encoded.len())
@@ -11768,9 +12218,9 @@ pub enum PrivacyProofEnvelopeValidationError {
     ActivationStatementLimits(PrivacyActivationStatementLimitsError),
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
 mod exact12_fixture {
-    use std::str::FromStr as _;
+    use std::{fmt::Write as _, str::FromStr as _};
 
     use iroha_crypto::{Algorithm, KeyPair};
 
@@ -11778,9 +12228,56 @@ mod exact12_fixture {
     use crate::{domain::DomainId, name::Name};
 
     const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
+    const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
+        "# Iroha first-release privacy parity matrix v1.",
+        "# UTF-8, LF only, tab-separated, no aliases and no extension rows.",
+        "# registry-sha256 hashes the concatenation of every protocol label plus LF in index order.",
+        "# typed-envelope hashes bind the canonical sample statement digest and complete Norito envelope.",
+    ];
 
     pub(super) fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
+    }
+
+    #[cfg(test)]
+    pub(super) fn assert_fixed_width_norito<T, const N: usize>(value: &T, raw: &[u8; N])
+    where
+        T: norito::core::NoritoSerialize
+            + for<'de> norito::core::NoritoDeserialize<'de>
+            + PartialEq
+            + core::fmt::Debug,
+    {
+        let (encoded, flags) = norito::codec::encode_with_header_flags(value);
+        assert_eq!(
+            flags,
+            norito::core::header_flags::COMPACT_LEN,
+            "fixed-width wrappers use the canonical compact field-length frame"
+        );
+        assert_eq!(encoded.len(), N + 1);
+        assert_eq!(
+            encoded.first().copied(),
+            Some(u8::try_from(N).expect("test fixed width fits one compact-length byte"))
+        );
+        assert_eq!(&encoded[1..], raw);
+
+        let (decoded, used) = norito::core::decode_field_canonical::<T>(&encoded)
+            .expect("decode exact fixed-width value");
+        assert_eq!(&decoded, value);
+        assert_eq!(used, encoded.len());
+
+        let mut truncated = encoded.clone();
+        truncated.truncate(encoded.len() - 1);
+        assert!(
+            norito::core::decode_field_canonical::<T>(&truncated).is_err(),
+            "truncated fixed-width value must fail closed"
+        );
+
+        let mut tailed = encoded;
+        tailed.push(0);
+        assert!(
+            norito::core::decode_field_canonical::<T>(&tailed).is_err(),
+            "trailing fixed-width bytes must fail closed"
+        );
     }
 
     pub(super) fn p256_point(seed: u8) -> PrivacyP256PointV1 {
@@ -11826,12 +12323,14 @@ mod exact12_fixture {
         PrivacyCommitmentV1::new(raw(seed))
     }
 
+    #[cfg(test)]
     pub(super) fn zk_ace_allowlist() -> Vec<AccountId> {
         let mut allowlist = vec![account(13), account(14), account(15)];
         allowlist.sort_unstable();
         allowlist
     }
 
+    #[cfg(test)]
     pub(super) fn zk_ace_policy(
         epoch: u64,
         identity_seed: u8,
@@ -11849,6 +12348,7 @@ mod exact12_fixture {
         .expect("canonical ZK-ACE policy fixture")
     }
 
+    #[cfg(test)]
     pub(super) fn redigest_zk_ace_policy(record: &mut PrivacyZkAcePolicyRecordV1) {
         record.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
         record.record_digest = record
@@ -11856,6 +12356,7 @@ mod exact12_fixture {
             .expect("canonical ZK-ACE policy digest material");
     }
 
+    #[cfg(test)]
     pub(super) fn zk_x509_trust_anchor(
         epoch: u64,
         trust_store_seed: u8,
@@ -11878,6 +12379,7 @@ mod exact12_fixture {
         .expect("canonical X.509 trust-anchor fixture")
     }
 
+    #[cfg(test)]
     pub(super) fn zk_x509_certificate_policy(
         epoch: u64,
         policy_seed: u8,
@@ -11891,10 +12393,10 @@ mod exact12_fixture {
             epoch,
             PrivacyPolicyDigestV1::new(raw(policy_seed)),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -11907,6 +12409,7 @@ mod exact12_fixture {
         .expect("canonical X.509 certificate-policy fixture")
     }
 
+    #[cfg(test)]
     pub(super) fn zk_x509_crl(
         epoch: u64,
         crl_der_seed: u8,
@@ -11945,6 +12448,7 @@ mod exact12_fixture {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn zk_ams_provision_statement(ring_size: u8) -> PrivacyStatementV1 {
         PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
             context: context(),
@@ -12000,6 +12504,7 @@ mod exact12_fixture {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn sorted_fcmp_outputs(seeds: &[u8]) -> Vec<PrivacyFcmpOutputTupleV1> {
         let mut outputs = seeds.iter().copied().map(fcmp_output).collect::<Vec<_>>();
         outputs.sort_unstable_by_key(|output| output.output_id());
@@ -12043,6 +12548,7 @@ mod exact12_fixture {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
         let entries = (0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
             * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
@@ -12083,6 +12589,7 @@ mod exact12_fixture {
         record
     }
 
+    #[cfg(test)]
     pub(super) fn redigest_bootle_lantern_policy(record: &mut BootleLanternIssuerPolicyV1) {
         record.issuer_parameter_digest = record
             .computed_issuer_parameter_digest()
@@ -12093,9 +12600,8 @@ mod exact12_fixture {
             .expect("test issuer-policy digest");
     }
 
-    pub(super) fn sample_statements() -> Vec<PrivacyStatementV1> {
-        let asset = asset_definition_id();
-        vec![
+    fn sample_authorization_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 5] {
+        [
             PrivacyStatementV1::ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1 {
                 context: context(),
                 identity_commitment: commitment(10),
@@ -12166,6 +12672,11 @@ mod exact12_fixture {
                 reader_challenge: PrivacyChallengeV1::new(raw(58)),
                 session_transcript_digest: PrivacySessionTranscriptDigestV1::new(raw(59)),
             }),
+        ]
+    }
+
+    fn sample_identity_statements() -> [PrivacyStatementV1; 3] {
+        [
             PrivacyStatementV1::IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1 {
                 context: context(),
                 trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
@@ -12182,10 +12693,10 @@ mod exact12_fixture {
                 ca_membership_root: PrivacyRootV1::new(raw(64)),
                 ca_membership_root_epoch: 10,
                 key_usage: PrivacyX509KeyUsageV1 {
-                    digital_signature: true,
-                    content_commitment: false,
-                    key_encipherment: false,
-                    key_agreement: false,
+                    digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                    content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                    key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                    key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
                 },
                 extended_key_usages: vec![
                     PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -12238,6 +12749,11 @@ mod exact12_fixture {
                     ],
                 },
             ),
+        ]
+    }
+
+    fn sample_pool_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 4] {
+        [
             PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
@@ -12286,7 +12802,7 @@ mod exact12_fixture {
             }),
             PrivacyStatementV1::PqMaspStarkV0(PqMaspStarkStatementV1 {
                 context: context(),
-                asset_definition_id: asset,
+                asset_definition_id: asset.clone(),
                 pool_id: PrivacyPoolIdV1::new(raw(101)),
                 anchor: PrivacyRootV1::new(raw(102)),
                 anchor_epoch: 17,
@@ -12303,6 +12819,16 @@ mod exact12_fixture {
         ]
     }
 
+    pub(super) fn sample_statements() -> Vec<PrivacyStatementV1> {
+        let asset = asset_definition_id();
+        let mut statements = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
+        statements.extend(sample_authorization_statements(&asset));
+        statements.extend(sample_identity_statements());
+        statements.extend(sample_pool_statements(&asset));
+        statements
+    }
+
+    #[cfg(test)]
     pub(super) fn statement_for(protocol: PrivacyProtocolIdV1) -> PrivacyStatementV1 {
         sample_statements()
             .into_iter()
@@ -12420,15 +12946,16 @@ mod exact12_fixture {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn envelope(statement: PrivacyStatementV1) -> PrivacyProofEnvelopeV1 {
         try_envelope(statement).expect("fixture statement has a canonical digest")
     }
 
     /// One compiled semantic row of the canonical exact-12 cross-SDK fixture.
     ///
-    /// This test-fixture-only type is derived from actual typed statements,
-    /// proof variants, and canonical Norito envelope bytes. It never parses the
-    /// checked-in TSV and carries no embedded digest constants.
+    /// This conformance-only type is derived from actual typed statements,
+    /// proof variants, and canonical Norito envelope bytes. It never parses
+    /// the checked-in TSV and carries no embedded digest constants.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct PrivacyExact12TypedEnvelopeRowV1 {
         /// Closed protocol identity in canonical discriminant order.
@@ -12441,6 +12968,84 @@ mod exact12_fixture {
         pub statement_digest: [u8; 32],
         /// SHA-256 of the actual canonical Norito proof envelope.
         pub envelope_sha256: [u8; 32],
+    }
+
+    /// One complete byte-level KAT row derived from the canonical typed Rust
+    /// fixture.
+    ///
+    /// Both byte strings use canonical uncompressed Norito. Keeping the
+    /// protocol discriminant next to the bytes lets downstream SDKs reject
+    /// cross-protocol substitution before they attempt to decode a statement
+    /// or envelope.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-row.v1")]
+    pub struct PrivacyExact12TypedFixtureRowV1 {
+        /// Closed protocol identity in canonical discriminant order.
+        pub protocol_id: PrivacyProtocolIdV1,
+        /// Complete canonical [`PrivacyStatementV1`] bytes.
+        pub statement_norito: Vec<u8>,
+        /// Complete canonical [`PrivacyProofEnvelopeV1`] bytes.
+        pub envelope_norito: Vec<u8>,
+    }
+
+    /// Signed byte-level KAT material for all first-release privacy protocols.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-bundle.v1")]
+    pub struct PrivacyExact12FixtureBundleV1 {
+        /// Exact first-release bundle version.
+        pub version: u32,
+        /// Twelve rows in [`PrivacyProtocolIdV1::ALL`] order.
+        pub rows: Vec<PrivacyExact12TypedFixtureRowV1>,
+    }
+
+    /// Maximum accepted encoded size of the complete exact-12 fixture bundle.
+    pub const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1: usize = 64;
+
+    /// Stable result of validating one untrusted exact-12 fixture bundle.
+    #[repr(i32)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum PrivacyExact12FixtureBundleValidationStatusV1 {
+        /// The archive is byte-identical to the compiled canonical bundle.
+        Valid = 0,
+        /// A native ABI caller supplied a null pointer.
+        NullPointer = 1,
+        /// The archive contains no bytes.
+        Empty = 2,
+        /// The archive exceeds the fixed byte ceiling.
+        ArchiveTooLarge = 3,
+        /// Norito rejected a resource declaration before allocating it.
+        DecodeResourceLimit = 4,
+        /// The archive carries a different typed schema.
+        SchemaMismatch = 5,
+        /// The archive is a non-canonical representation of the typed value.
+        NonCanonical = 6,
+        /// The archive is malformed, truncated, or checksum-invalid.
+        MalformedArchive = 7,
+        /// The typed bundle differs from the one compiled Rust fixture.
+        InvalidBundle = 8,
+    }
+
+    impl PrivacyExact12FixtureBundleValidationStatusV1 {
+        /// Stable native ABI integer representation.
+        #[must_use]
+        pub const fn code(self) -> i32 {
+            self as i32
+        }
+
+        /// Return whether the archive was accepted.
+        #[must_use]
+        pub const fn is_valid(self) -> bool {
+            matches!(self, Self::Valid)
+        }
     }
 
     /// Failure to derive the fixed exact-12 semantic fixture from current
@@ -12462,8 +13067,9 @@ mod exact12_fixture {
     /// types and canonical Norito serialization.
     ///
     /// The helper is available only to tests and builds that explicitly enable
-    /// `iroha_data_model/test-fixtures`; ordinary validator builds do not
-    /// compile this fixture surface.
+    /// `iroha_data_model/privacy-exact12-conformance`; ordinary validator
+    /// builds do not compile this conformance surface. The feature does not
+    /// expose the general data-model test fixtures.
     ///
     /// # Errors
     ///
@@ -12492,11 +13098,169 @@ mod exact12_fixture {
                 PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() }
             })
     }
+
+    /// Build the complete exact-12 byte-level KAT bundle from typed Rust
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any statement or envelope cannot be encoded
+    /// canonically, or if the fixture no longer contains exactly twelve rows.
+    pub fn privacy_exact12_fixture_bundle_v1()
+    -> Result<PrivacyExact12FixtureBundleV1, PrivacyExact12FixtureErrorV1> {
+        let rows = sample_statements()
+            .into_iter()
+            .map(|statement| {
+                let protocol_id = statement.protocol_id();
+                let statement_norito = norito::encode_canonical(&statement)?;
+                let envelope = try_envelope(statement)?;
+                let envelope_norito = norito::encode_canonical(&envelope)?;
+                Ok(PrivacyExact12TypedFixtureRowV1 {
+                    protocol_id,
+                    statement_norito,
+                    envelope_norito,
+                })
+            })
+            .collect::<Result<Vec<_>, norito::Error>>()?;
+        if rows.len() != PrivacyProtocolIdV1::COUNT {
+            return Err(PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() });
+        }
+        Ok(PrivacyExact12FixtureBundleV1 { version: 1, rows })
+    }
+
+    /// Encode the complete exact-12 byte-level KAT bundle as canonical Norito.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fixture construction or canonical encoding fails.
+    pub fn privacy_exact12_fixture_bundle_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1>
+    {
+        let bundle = privacy_exact12_fixture_bundle_v1()?;
+        Ok(norito::encode_canonical(&bundle)?)
+    }
+
+    /// Validate an untrusted byte-level KAT bundle against the exact bundle
+    /// compiled from current typed Rust fixtures.
+    ///
+    /// The decoder is resource-bounded, requires canonical uncompressed
+    /// Norito, and finally requires byte-for-byte semantic equality with the
+    /// compiled bundle. It therefore rejects reordered rows, wrong variants,
+    /// cross-protocol substitution, stale statement/envelope bytes, and
+    /// unknown extensions.
+    #[must_use]
+    pub fn validate_privacy_exact12_fixture_bundle_v1(
+        archive: &[u8],
+    ) -> PrivacyExact12FixtureBundleValidationStatusV1 {
+        use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+
+        if archive.is_empty() {
+            return Status::Empty;
+        }
+        if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+            return Status::ArchiveTooLarge;
+        }
+        let limits = norito::DecodeLimits::new(
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1,
+        );
+        let decoded = match norito::decode_canonical_with_limits::<PrivacyExact12FixtureBundleV1>(
+            archive, limits,
+        ) {
+            Ok(decoded) => decoded,
+            Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
+            Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
+            Err(
+                norito::Error::NonCanonicalEncoding
+                | norito::Error::DecodeFlagsMismatch { .. }
+                | norito::Error::UnsupportedCompression { .. },
+            ) => return Status::NonCanonical,
+            Err(_) => return Status::MalformedArchive,
+        };
+        let Ok(expected) = privacy_exact12_fixture_bundle_v1() else {
+            return Status::InvalidBundle;
+        };
+        if decoded != expected {
+            return Status::InvalidBundle;
+        }
+        Status::Valid
+    }
+
+    fn canonical_sha256_hex_v1(digest: &[u8; 32]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(64);
+        for byte in digest {
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        output
+    }
+
+    /// Generate the complete canonical exact-12 cross-SDK matrix from the
+    /// current compiled protocol registry and typed Norito envelope fixtures.
+    ///
+    /// `fixtures/privacy/exact12_v1.tsv` is a derived cross-SDK artifact of
+    /// this function. Keeping construction here prevents a manually copied
+    /// digest row or whole-file hash from becoming a second semantic source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the typed statement/envelope rows cannot be
+    /// generated canonically or no longer have the exact closed registry size.
+    pub fn privacy_exact12_matrix_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1> {
+        let semantic_rows = privacy_exact12_typed_envelope_rows_v1()?;
+        let mut registry_preimage = Vec::new();
+        for protocol_id in PrivacyProtocolIdV1::ALL {
+            registry_preimage.extend_from_slice(protocol_id.canonical_label().as_bytes());
+            registry_preimage.push(b'\n');
+        }
+        let registry_sha256: [u8; 32] = Sha256::digest(&registry_preimage).into();
+
+        let mut output = String::new();
+        for header in EXACT12_CANONICAL_HEADER_V1 {
+            writeln!(&mut output, "{header}").expect("writing to String cannot fail");
+        }
+        writeln!(&mut output, "matrix-version\t1").expect("writing to String cannot fail");
+        writeln!(
+            &mut output,
+            "registry-sha256\t{}",
+            canonical_sha256_hex_v1(&registry_sha256)
+        )
+        .expect("writing to String cannot fail");
+        for (index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+            let variant = protocol_id.canonical_typed_variant_label();
+            writeln!(
+                &mut output,
+                "protocol\t{index}\t{}\t{variant}\t{variant}",
+                protocol_id.canonical_label()
+            )
+            .expect("writing to String cannot fail");
+        }
+        for semantic in semantic_rows {
+            writeln!(
+                &mut output,
+                "typed-envelope\t{}\t{}\t{}\t{}\t{}",
+                semantic.protocol_id.canonical_label(),
+                semantic.statement_variant,
+                semantic.proof_variant,
+                canonical_sha256_hex_v1(&semantic.statement_digest),
+                canonical_sha256_hex_v1(&semantic.envelope_sha256)
+            )
+            .expect("writing to String cannot fail");
+        }
+        for retired_label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            writeln!(&mut output, "retired\t{retired_label}")
+                .expect("writing to String cannot fail");
+        }
+        Ok(output.into_bytes())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::str::FromStr as _;
 
     use hex_literal::hex;
 
@@ -12504,13 +13268,14 @@ mod tests {
 
     use super::{
         exact12_fixture::{
-            account, asset_definition_id, bootle_lantern_policy, commitment, context,
-            encrypted_output, envelope, fcmp_input, fcmp_output, jindo_commitment, jindo_field,
-            nullifier, orchard_action, p256_ciphertext, p256_point, proof_for, proof_variant_name,
-            raw, redigest_bootle_lantern_policy, redigest_zk_ace_policy, sample_statements,
-            sorted_fcmp_outputs, statement_for, statement_variant_name, zk_ace_allowlist,
-            zk_ace_policy, zk_ams_anchor, zk_ams_provision_statement, zk_ams_seed_key,
-            zk_x509_certificate_policy, zk_x509_crl, zk_x509_trust_anchor,
+            account, assert_fixed_width_norito, asset_definition_id, bootle_lantern_policy,
+            commitment, context, encrypted_output, envelope, fcmp_input, fcmp_output,
+            jindo_commitment, jindo_field, nullifier, orchard_action, p256_ciphertext, p256_point,
+            proof_for, proof_variant_name, raw, redigest_bootle_lantern_policy,
+            redigest_zk_ace_policy, sample_statements, sorted_fcmp_outputs, statement_for,
+            statement_variant_name, zk_ace_allowlist, zk_ace_policy, zk_ams_anchor,
+            zk_ams_provision_statement, zk_ams_seed_key, zk_x509_certificate_policy, zk_x509_crl,
+            zk_x509_trust_anchor,
         },
         *,
     };
@@ -12861,7 +13626,9 @@ mod tests {
                 protocol
             );
         }
-        for unknown in [PrivacyProtocolIdV1::COUNT as u32, 99, u32::MAX] {
+        let protocol_count =
+            u32::try_from(PrivacyProtocolIdV1::COUNT).expect("protocol count fits u32");
+        for unknown in [protocol_count, 99, u32::MAX] {
             assert!(
                 PrivacyProtocolIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err(),
                 "unknown protocol discriminant {unknown} must fail"
@@ -13011,8 +13778,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn privacy_public_json_labels_are_exact_and_roundtrip() {
+    fn assert_protocol_json_labels_roundtrip() {
         for protocol in PrivacyProtocolIdV1::ALL {
             let expected = format!(
                 "{{\"protocol\":\"{}\",\"value\":null}}",
@@ -13043,7 +13809,9 @@ mod tests {
                 limits
             );
         }
+    }
 
+    fn assert_proof_system_json_labels_roundtrip() {
         let proof_systems = [
             (
                 PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
@@ -13091,7 +13859,9 @@ mod tests {
                 value
             );
         }
+    }
 
+    fn assert_engine_json_labels_roundtrip() {
         let engines = [
             (
                 PrivacyEngineIdV1::NativeGoldilocksStarkFri,
@@ -13133,7 +13903,9 @@ mod tests {
                 value
             );
         }
+    }
 
+    fn assert_unavailable_reason_json_labels_roundtrip() {
         let unavailable = [
             (
                 PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
@@ -13167,7 +13939,14 @@ mod tests {
                 value
             );
         }
+    }
 
+    #[test]
+    fn privacy_public_json_labels_are_exact_and_roundtrip() {
+        assert_protocol_json_labels_roundtrip();
+        assert_proof_system_json_labels_roundtrip();
+        assert_engine_json_labels_roundtrip();
+        assert_unavailable_reason_json_labels_roundtrip();
         assert_eq!(
             norito::json::to_json(&PrivacyAssuranceV1::Experimental).expect("serialize assurance"),
             "{\"assurance\":\"experimental\",\"value\":null}"
@@ -13227,23 +14006,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn capability_snapshot_roundtrips_and_rejects_structural_adversaries() {
-        let snapshot = capability_snapshot();
+    fn available_pgc_profile(
+        snapshot: &PrivacyCapabilitySnapshotV1,
+    ) -> PrivacyCompiledProfileSnapshotV1 {
+        match snapshot.protocols[1].compiled_profile {
+            PrivacyCompiledProfileResultV1::Available(profile) => profile,
+            PrivacyCompiledProfileResultV1::Unavailable(_) => unreachable!("PGC fixture available"),
+        }
+    }
+
+    fn assert_capability_snapshot_codecs(snapshot: &PrivacyCapabilitySnapshotV1) -> String {
         snapshot.validate().expect("valid capability snapshot");
 
-        let archive = norito::to_bytes(&snapshot).expect("encode snapshot");
+        let archive = norito::to_bytes(snapshot).expect("encode snapshot");
         let decoded: PrivacyCapabilitySnapshotV1 =
             norito::decode_from_bytes(&archive).expect("decode snapshot");
-        assert_eq!(decoded, snapshot);
+        assert_eq!(decoded, *snapshot);
         decoded.validate().expect("validate decoded snapshot");
 
-        let canonical = norito::json::to_json(&snapshot).expect("serialize snapshot JSON");
+        let canonical = norito::json::to_json(snapshot).expect("serialize snapshot JSON");
         let decoded_json: PrivacyCapabilitySnapshotV1 =
             norito::json::from_json(&canonical).expect("decode snapshot JSON");
-        assert_eq!(decoded_json, snapshot);
+        assert_eq!(decoded_json, *snapshot);
         decoded_json.validate().expect("validate JSON snapshot");
+        canonical
+    }
 
+    fn assert_capability_snapshot_json_adversaries(
+        snapshot: &PrivacyCapabilitySnapshotV1,
+        canonical: &str,
+    ) {
         let unknown = canonical.replacen('{', "{\"unknown\":true,", 1);
         assert!(
             norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&unknown).is_err(),
@@ -13265,10 +14057,7 @@ mod tests {
             "non-Experimental assurance must fail"
         );
 
-        let pgc_profile = match snapshot.protocols[1].compiled_profile {
-            PrivacyCompiledProfileResultV1::Available(profile) => profile,
-            PrivacyCompiledProfileResultV1::Unavailable(_) => unreachable!("PGC fixture available"),
-        };
+        let pgc_profile = available_pgc_profile(snapshot);
         let parameter_json =
             norito::json::to_json(&pgc_profile.parameter_id).expect("serialize fixed bytes");
         let malformed_fixed_bytes = canonical.replacen(
@@ -13290,7 +14079,9 @@ mod tests {
                 .is_err(),
             "out-of-range fixed byte must fail"
         );
+    }
 
+    fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapabilitySnapshotV1) {
         let mut missing = snapshot.clone();
         missing.protocols.pop();
         assert!(matches!(
@@ -13314,7 +14105,7 @@ mod tests {
 
         let mut embedded_id_mismatch = snapshot.clone();
         embedded_id_mismatch.protocols[2].compiled_profile =
-            PrivacyCompiledProfileResultV1::Available(pgc_profile);
+            PrivacyCompiledProfileResultV1::Available(available_pgc_profile(&snapshot));
         assert!(matches!(
             embedded_id_mismatch.validate(),
             Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolRow {
@@ -13350,6 +14141,14 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn capability_snapshot_roundtrips_and_rejects_structural_adversaries() {
+        let snapshot = capability_snapshot();
+        let canonical = assert_capability_snapshot_codecs(&snapshot);
+        assert_capability_snapshot_json_adversaries(&snapshot, &canonical);
+        assert_capability_snapshot_structural_adversaries(snapshot);
     }
 
     #[test]
@@ -13505,6 +14304,115 @@ mod tests {
     }
 
     #[test]
+    fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
+        use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+
+        let bundle = privacy_exact12_fixture_bundle_v1().expect("typed exact12 fixture bundle");
+        let archive =
+            privacy_exact12_fixture_bundle_bytes_v1().expect("canonical exact12 fixture archive");
+        assert_eq!(bundle.version, 1);
+        assert_eq!(bundle.rows.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&archive),
+            Status::Valid
+        );
+
+        for (row, expected_protocol) in bundle.rows.iter().zip(PrivacyProtocolIdV1::ALL) {
+            assert_eq!(row.protocol_id, expected_protocol);
+            let statement: PrivacyStatementV1 =
+                norito::decode_from_bytes(&row.statement_norito).expect("typed statement");
+            assert_eq!(statement.protocol_id(), expected_protocol);
+            assert_eq!(
+                norito::encode_canonical(&statement).expect("canonical statement"),
+                row.statement_norito
+            );
+
+            let envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_from_bytes(&row.envelope_norito).expect("typed envelope");
+            assert_eq!(envelope.protocol_id, expected_protocol);
+            assert_eq!(envelope.statement, statement);
+            envelope
+                .validate_with_limits(&PrivacyConsensusLimitsV1::default())
+                .expect("intrinsically valid sample envelope");
+            assert_eq!(
+                norito::encode_canonical(&envelope).expect("canonical envelope"),
+                row.envelope_norito
+            );
+        }
+
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&[]),
+            Status::Empty
+        );
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&vec![
+                0;
+                PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+                    + 1
+            ]),
+            Status::ArchiveTooLarge
+        );
+
+        let truncated = &archive[..archive.len() - 1];
+        assert!(
+            !validate_privacy_exact12_fixture_bundle_v1(truncated).is_valid(),
+            "truncated outer archive must reject"
+        );
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert!(
+            !validate_privacy_exact12_fixture_bundle_v1(&trailing).is_valid(),
+            "trailing outer bytes must reject"
+        );
+
+        let mut wrong_version = bundle.clone();
+        wrong_version.version = 2;
+        let wrong_version =
+            norito::encode_canonical(&wrong_version).expect("canonical wrong-version mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&wrong_version),
+            Status::InvalidBundle
+        );
+
+        let mut reordered = bundle.clone();
+        reordered.rows.swap(0, 1);
+        let reordered = norito::encode_canonical(&reordered).expect("canonical reordered mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&reordered),
+            Status::InvalidBundle
+        );
+
+        let mut cross_protocol = bundle.clone();
+        cross_protocol.rows[0].protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let cross_protocol =
+            norito::encode_canonical(&cross_protocol).expect("canonical cross-protocol mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&cross_protocol),
+            Status::InvalidBundle
+        );
+
+        let mut stale_statement = bundle.clone();
+        stale_statement.rows[0].statement_norito[0] ^= 1;
+        let stale_statement =
+            norito::encode_canonical(&stale_statement).expect("canonical stale-statement mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&stale_statement),
+            Status::InvalidBundle
+        );
+
+        let mut stale_envelope = bundle;
+        let final_byte = stale_envelope.rows[11].envelope_norito.len() - 1;
+        stale_envelope.rows[11].envelope_norito[final_byte] ^= 1;
+        let stale_envelope =
+            norito::encode_canonical(&stale_envelope).expect("canonical stale-envelope mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&stale_envelope),
+            Status::InvalidBundle
+        );
+    }
+
+    #[test]
     #[ignore = "explicit regeneration helper for fixtures/privacy/exact12_v1.tsv"]
     fn emit_exact12_typed_envelope_fixture_rows() {
         for row in privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics") {
@@ -13520,8 +14428,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "explicit complete regeneration helper for fixtures/privacy/exact12_v1.tsv"]
+    fn emit_exact12_matrix_fixture() {
+        let bytes = privacy_exact12_matrix_bytes_v1().expect("compiled exact12 matrix");
+        print!(
+            "{}",
+            std::str::from_utf8(&bytes).expect("exact12 generator emits UTF-8")
+        );
+    }
+
+    #[test]
     fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         let matrix = include_str!("../../../fixtures/privacy/exact12_v1.tsv");
+        let generated =
+            privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix");
+        assert_eq!(
+            matrix.as_bytes(),
+            generated,
+            "checked-in exact12 matrix must be regenerated from compiled typed semantics"
+        );
         assert!(matrix.ends_with('\n'), "matrix must end with one LF");
         assert!(!matrix.contains('\r'), "matrix must use canonical LF lines");
         assert!(
@@ -13719,6 +14644,7 @@ mod tests {
                 assert_eq!(value.into_bytes(), raw($seed));
                 assert!(!value.is_zero());
                 assert!($type::new([0; 32]).is_zero());
+                assert_fixed_width_norito(&value, &raw($seed));
                 let encoded = value.encode();
                 // Bare Norito encodes a fixed byte-array field as one
                 // canonical compact-width prefix followed by exactly 32
@@ -13854,6 +14780,8 @@ mod tests {
     #[test]
     fn p256_wire_types_are_exact_width_and_closed() {
         let point = p256_point(9);
+        assert_eq!(point.as_bytes().len(), 33);
+        assert_fixed_width_norito(&point, point.as_bytes());
         let encoded = point.encode();
         assert_eq!(encoded.len(), 34);
         assert_eq!(
@@ -13879,6 +14807,12 @@ mod tests {
     #[test]
     fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
         let seed_key = zk_ams_seed_key(9);
+        assert_eq!(seed_key.as_bytes().len(), 32);
+        assert_fixed_width_norito(&seed_key, seed_key.as_bytes());
+
+        let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
+        assert_eq!(key_image.as_bytes().len(), 32);
+        assert_fixed_width_norito(&key_image, key_image.as_bytes());
         let encoded = seed_key.encode();
         assert_eq!(encoded.len(), 33);
         assert_eq!(
@@ -13933,6 +14867,246 @@ mod tests {
         assert_eq!(
             value.validate(&limits),
             Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest)
+        );
+    }
+
+    #[test]
+    fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
+            .expect("construct canonical native consensus binding");
+        binding.validate(&limits).expect("validate binding");
+        binding
+            .validate_against_context(&context(), &limits)
+            .expect("binding matches its statement context");
+
+        let canonical = norito::encode_canonical(&binding).expect("encode canonical binding");
+        assert_eq!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&canonical)
+                .expect("decode canonical binding"),
+            binding
+        );
+
+        let mut truncated = canonical.clone();
+        truncated.pop();
+        assert!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&truncated).is_err(),
+            "truncated binding must fail closed"
+        );
+
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&trailing).is_err(),
+            "trailing binding bytes must fail closed"
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::core::to_bytes(&binding).expect("encode alternate-layout binding")
+        };
+        assert_ne!(
+            alternate,
+            norito::encode_canonical(&binding).expect("canonical")
+        );
+        assert!(matches!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+
+        let json = norito::json::to_json(&binding).expect("encode binding JSON");
+        assert_eq!(
+            norito::json::from_json::<PrivacyNativeConsensusBindingV1>(&json)
+                .expect("decode canonical binding JSON"),
+            binding
+        );
+        let prefix = json.strip_suffix('}').expect("binding JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyNativeConsensusBindingV1>(&format!(
+                "{prefix},\"legacy_genesis\":true}}"
+            ))
+            .is_err(),
+            "unknown legacy JSON fields must fail closed"
+        );
+    }
+
+    #[test]
+    fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
+            .expect("construct canonical native consensus binding");
+        let expected = binding.digest().expect("digest canonical binding");
+
+        let mut mutations = Vec::new();
+
+        let mut mutated = binding.clone();
+        mutated.chain_id = ChainId::from("another-privacy-chain");
+        mutations.push(("chain_id", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.genesis_hash = raw(201);
+        mutations.push(("genesis_hash", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.action_index = 1;
+        mutations.push(("action_index", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(202));
+        mutations.push(("transaction_intent_digest", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.parameter_id = PrivacyParameterIdV1::new(raw(203));
+        mutations.push(("parameter_id", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.parameter_digest = PrivacyParameterDigestV1::new(raw(204));
+        mutations.push(("parameter_digest", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.verifier_digest = PrivacyVerifierDigestV1::new(raw(205));
+        mutations.push(("verifier_digest", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(206));
+        mutations.push(("statement_schema_digest", mutated));
+
+        let mut mutated = binding;
+        mutated.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(207));
+        mutations.push(("engine_manifest_digest", mutated));
+
+        for (axis, mutation) in mutations {
+            assert_ne!(
+                mutation.digest().expect("digest binding mutation"),
+                expected,
+                "changing {axis} must change the native consensus-binding digest"
+            );
+        }
+    }
+
+    #[test]
+    fn native_consensus_binding_rejects_zero_genesis_and_unusable_chain_ids() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        assert_eq!(
+            PrivacyNativeConsensusBindingV1::new(&context(), [0; 32], &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
+        );
+
+        let mut invalid_context = context();
+        invalid_context.chain_id = ChainId::from("");
+        assert!(matches!(
+            PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits),
+            Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext(
+                    PrivacyStatementValidationError::InvalidChainIdLength { bytes: 0, .. }
+                )
+            )
+        ));
+
+        invalid_context = context();
+        invalid_context.chain_id = ChainId::from("x".repeat(256));
+        assert!(matches!(
+            PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits),
+            Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext(
+                    PrivacyStatementValidationError::InvalidChainIdLength { bytes: 256, .. }
+                )
+            )
+        ));
+
+        invalid_context.chain_id = ChainId::from("x".repeat(255));
+        PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits)
+            .expect("maximum-length chain id remains canonical");
+    }
+
+    #[test]
+    fn native_consensus_binding_rejects_every_statement_context_substitution() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let base_context = context();
+        let binding = PrivacyNativeConsensusBindingV1::new(&base_context, raw(200), &limits)
+            .expect("construct canonical native consensus binding");
+
+        let mut substitutions = Vec::new();
+
+        let mut substituted = base_context.clone();
+        substituted.chain_id = ChainId::from("substituted-chain");
+        substitutions.push((
+            "chain_id",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.action_index = 1;
+        substitutions.push((
+            "action_index",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(210));
+        substitutions.push((
+            "transaction_intent_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.parameter_id = PrivacyParameterIdV1::new(raw(211));
+        substitutions.push((
+            "parameter_id",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.parameter_digest = PrivacyParameterDigestV1::new(raw(212));
+        substitutions.push((
+            "parameter_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.verifier_digest = PrivacyVerifierDigestV1::new(raw(213));
+        substitutions.push((
+            "verifier_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(214));
+        substitutions.push((
+            "statement_schema_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
+        ));
+
+        let mut substituted = base_context;
+        substituted.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(215));
+        substitutions.push((
+            "engine_manifest_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
+        ));
+
+        for (axis, substituted, expected) in substitutions {
+            assert_eq!(
+                binding.validate_against_context(&substituted, &limits),
+                Err(expected),
+                "substituted {axis} must fail closed"
+            );
+        }
+
+        let mut zero_genesis = binding;
+        zero_genesis.genesis_hash = [0; 32];
+        assert_eq!(
+            zero_genesis.validate_against_context(&context(), &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
         );
     }
 
@@ -14235,6 +15409,8 @@ mod tests {
         );
     }
 
+    type ConsensusLimitMutationV1 = (PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLimitsV1));
+
     #[test]
     fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
         let current = PrivacyConsensusLimitsV1 {
@@ -14261,7 +15437,7 @@ mod tests {
             .validate_tightening_to(&strict)
             .expect("one component may be lowered");
 
-        let mutations: [(PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLimitsV1)); 10] = [
+        let mutations: [ConsensusLimitMutationV1; 10] = [
             (PrivacyLimitFieldV1::ActionsPerTransaction, |value| {
                 value.max_actions_per_transaction += 1
             }),
@@ -15289,26 +16465,30 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
-        let limits = PrivacyConsensusLimitsV1::taira_default();
-        let base = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
-        let mutate = |f: fn(&mut IrohaJindoPolynomialCommitmentStatementV1)| {
-            let mut value = base.clone();
-            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
-                unreachable!()
-            };
-            f(statement);
-            value.validate(&limits)
+    fn mutate_jindo_statement(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+        mutate: fn(&mut IrohaJindoPolynomialCommitmentStatementV1),
+    ) -> Result<(), PrivacyStatementValidationError> {
+        let mut value = base.clone();
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+            unreachable!()
         };
+        mutate(statement);
+        value.validate(limits)
+    }
 
-        mutate(|statement| {
+    fn assert_jindo_field_and_batch_validation(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) {
+        mutate_jindo_statement(base, limits, |statement| {
             statement.evaluation_point = PrivacyJindoFieldElementV1::new([0; 32]);
             statement.claimed_evaluations[0] = PrivacyJindoFieldElementV1::new([0; 32]);
         })
         .expect("zero is a canonical Jindo field element");
 
-        mutate(|statement| {
+        mutate_jindo_statement(base, limits, |statement| {
             let mut value = IROHA_JINDO_FIELD_MODULUS_LE_V1;
             value[0] -= 1;
             statement.evaluation_point = PrivacyJindoFieldElementV1::new(value);
@@ -15316,14 +16496,14 @@ mod tests {
         .expect("p - 1 is the largest canonical Jindo field element");
 
         assert!(matches!(
-            mutate(|statement| {
+            mutate_jindo_statement(base, limits, |statement| {
                 statement.evaluation_point =
                     PrivacyJindoFieldElementV1::new(IROHA_JINDO_FIELD_MODULUS_LE_V1);
             }),
             Err(PrivacyStatementValidationError::NonCanonicalJindoEvaluationPoint)
         ));
         assert!(matches!(
-            mutate(|statement| {
+            mutate_jindo_statement(base, limits, |statement| {
                 let mut modulus_plus_one = IROHA_JINDO_FIELD_MODULUS_LE_V1;
                 modulus_plus_one[0] += 1;
                 statement.claimed_evaluations[1] =
@@ -15333,7 +16513,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            mutate(|statement| {
+            mutate_jindo_statement(base, limits, |statement| {
                 statement.claimed_evaluations.pop();
             }),
             Err(PrivacyStatementValidationError::DeclaredCountMismatch {
@@ -15343,19 +16523,26 @@ mod tests {
             })
         ));
         assert!(matches!(
-            mutate(|statement| statement.polynomial_commitments.clear()),
+            mutate_jindo_statement(base, limits, |statement| {
+                statement.polynomial_commitments.clear()
+            }),
             Err(PrivacyStatementValidationError::InvalidBatchSize { count: 0, max: 4 })
         ));
         assert!(matches!(
-            mutate(|statement| {
+            mutate_jindo_statement(base, limits, |statement| {
                 statement.polynomial_commitments = (1..=5).map(jindo_commitment).collect();
                 statement.claimed_evaluations = (1..=5).map(jindo_field).collect();
             }),
             Err(PrivacyStatementValidationError::InvalidBatchSize { count: 5, max: 4 })
         ));
+    }
 
+    fn assert_jindo_commitment_encoding_validation(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) {
         assert!(matches!(
-            mutate(|statement| {
+            mutate_jindo_statement(base, limits, |statement| {
                 statement.polynomial_commitments[0].encoding.pop();
             }),
             Err(
@@ -15368,7 +16555,9 @@ mod tests {
                 && expected == u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1).unwrap()
         ));
         assert!(matches!(
-            mutate(|statement| statement.polynomial_commitments[0].encoding.push(0)),
+            mutate_jindo_statement(base, limits, |statement| {
+                statement.polynomial_commitments[0].encoding.push(0)
+            }),
             Err(
                 PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
                     index: 0,
@@ -15379,16 +16568,23 @@ mod tests {
                 && expected == u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1).unwrap()
         ));
         assert!(matches!(
-            mutate(|statement| statement.polynomial_commitments[0].encoding.fill(0)),
+            mutate_jindo_statement(base, limits, |statement| {
+                statement.polynomial_commitments[0].encoding.fill(0)
+            }),
             Err(PrivacyStatementValidationError::AllZeroJindoLatticeCommitment { index: 0 })
         ));
         assert!(matches!(
-            mutate(|statement| {
+            mutate_jindo_statement(base, limits, |statement| {
                 statement.polynomial_commitments[1] = statement.polynomial_commitments[0].clone();
             }),
             Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment)
         ));
+    }
 
+    fn assert_jindo_coefficient_boundaries(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) {
         for boundary in [
             IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
             IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
@@ -15400,7 +16596,7 @@ mod tests {
             statement.polynomial_commitments[0].encoding[..4]
                 .copy_from_slice(&boundary.to_le_bytes());
             value
-                .validate(&limits)
+                .validate(limits)
                 .expect("inclusive Jindo rounded-coefficient boundary");
         }
 
@@ -15418,7 +16614,7 @@ mod tests {
                     .to_le_bytes(),
             );
             assert!(matches!(
-                value.validate(&limits),
+                value.validate(limits),
                 Err(
                     PrivacyStatementValidationError::JindoCommitmentCoefficientOutOfRange {
                         commitment_index: 0,
@@ -15430,7 +16626,15 @@ mod tests {
                 ) if i64::from(observed) == outside
             ));
         }
+    }
 
+    #[test]
+    fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let base = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
+        assert_jindo_field_and_batch_validation(&base, &limits);
+        assert_jindo_commitment_encoding_validation(&base, &limits);
+        assert_jindo_coefficient_boundaries(&base, &limits);
         let governed = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
             JindoActivationLimitsV1 {
                 max_polynomial_count: 1,
@@ -15742,26 +16946,53 @@ mod tests {
     }
 
     #[test]
-    fn x509_rejects_stale_roots_invalid_usage_and_invalid_presentation_windows() {
-        let limits = PrivacyConsensusLimitsV1::taira_default();
-        let x509 = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
-        let mutate_x509 = |f: fn(&mut IrohaZkX509StarkP256StatementV1)| {
-            let mut value = x509.clone();
-            let PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) = &mut value else {
-                unreachable!()
-            };
-            f(statement);
-            value.validate(&limits)
+    fn x509_key_usage_requirement_is_wire_and_json_transparent() {
+        for required in [false, true] {
+            let requirement = PrivacyX509KeyUsageRequirementV1::new(required);
+            assert_eq!(Encode::encode(&requirement), Encode::encode(&required));
+
+            let json =
+                norito::json::to_json(&requirement).expect("encode key-usage requirement JSON");
+            assert_eq!(json, required.to_string());
+            let decoded: PrivacyX509KeyUsageRequirementV1 =
+                norito::json::from_json(&json).expect("decode key-usage requirement JSON");
+            assert_eq!(decoded, requirement);
+        }
+    }
+
+    fn validate_mutated_x509(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+        mutate: fn(&mut IrohaZkX509StarkP256StatementV1),
+    ) -> Result<(), PrivacyStatementValidationError> {
+        let mut value = base.clone();
+        let PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) = &mut value else {
+            unreachable!()
         };
-        assert!(mutate_x509(|statement| statement.ca_membership_root_epoch = 0).is_err());
+        mutate(statement);
+        value.validate(limits)
+    }
+
+    fn assert_x509_governance_and_usage_rejections(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) {
+        assert!(
+            validate_mutated_x509(base, limits, |statement| {
+                statement.ca_membership_root_epoch = 0;
+            })
+            .is_err()
+        );
         assert!(matches!(
-            mutate_x509(|statement| statement.trust_anchor_record_epoch = 0),
+            validate_mutated_x509(base, limits, |statement| {
+                statement.trust_anchor_record_epoch = 0;
+            }),
             Err(PrivacyStatementValidationError::ZeroEpoch {
                 field: PrivacyEpochFieldV1::X509TrustAnchorRecord
             })
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.trust_anchor_record_digest =
                     PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32])
             }),
@@ -15770,13 +17001,15 @@ mod tests {
             })
         ));
         assert!(matches!(
-            mutate_x509(|statement| statement.certificate_policy_record_epoch = 0),
+            validate_mutated_x509(base, limits, |statement| {
+                statement.certificate_policy_record_epoch = 0;
+            }),
             Err(PrivacyStatementValidationError::ZeroEpoch {
                 field: PrivacyEpochFieldV1::X509CertificatePolicyRecord
             })
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.certificate_policy_record_digest =
                     PrivacyZkX509CertificatePolicyRecordDigestV1::new([0; 32])
             }),
@@ -15785,13 +17018,15 @@ mod tests {
             })
         ));
         assert!(matches!(
-            mutate_x509(|statement| statement.crl_record_epoch = 0),
+            validate_mutated_x509(base, limits, |statement| {
+                statement.crl_record_epoch = 0;
+            }),
             Err(PrivacyStatementValidationError::ZeroEpoch {
                 field: PrivacyEpochFieldV1::X509CrlRecord
             })
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.crl_record_digest = PrivacyZkX509CrlRecordDigestV1::new([0; 32])
             }),
             Err(PrivacyStatementValidationError::ZeroTypedField {
@@ -15799,15 +17034,20 @@ mod tests {
             })
         ));
         assert!(matches!(
-            mutate_x509(|statement| statement.key_usage.digital_signature = false),
+            validate_mutated_x509(base, limits, |statement| {
+                statement.key_usage.digital_signature =
+                    PrivacyX509KeyUsageRequirementV1::new(false);
+            }),
             Err(PrivacyStatementValidationError::InvalidX509KeyUsage)
         ));
         assert!(matches!(
-            mutate_x509(|statement| statement.extended_key_usages.clear()),
+            validate_mutated_x509(base, limits, |statement| {
+                statement.extended_key_usages.clear();
+            }),
             Err(PrivacyStatementValidationError::MissingX509ExtendedKeyUsage)
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.extended_key_usages = vec![
                     PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
                     PrivacyX509ExtendedKeyUsageV1::DocumentSigning,
@@ -15823,7 +17063,7 @@ mod tests {
             )
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.extended_key_usages = vec![
                     PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
                     PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -15831,14 +17071,22 @@ mod tests {
             }),
             Err(PrivacyStatementValidationError::X509ExtendedKeyUsagesNotStrictlyIncreasing)
         ));
+    }
+
+    fn assert_x509_disclosure_and_presentation_rejections(
+        base: &PrivacyStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) {
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.disclosed_attributes[1].index = statement.disclosed_attributes[0].index
             }),
             Err(PrivacyStatementValidationError::X509DisclosedAttributesNotStrictlyIncreasing)
         ));
         assert!(matches!(
-            mutate_x509(|statement| statement.disclosed_attributes[1].index = 4),
+            validate_mutated_x509(base, limits, |statement| {
+                statement.disclosed_attributes[1].index = 4;
+            }),
             Err(
                 PrivacyStatementValidationError::UnsupportedX509DisclosedAttributeIndex {
                     index: 4
@@ -15846,14 +17094,14 @@ mod tests {
             )
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.disclosed_attributes[0].attribute_digest =
                     PrivacyAttributeDigestV1::new([0; 32])
             }),
             Err(PrivacyStatementValidationError::ZeroX509DisclosedAttributeDigest { index: 0 })
         ));
         assert!(matches!(
-            mutate_x509(|statement| {
+            validate_mutated_x509(base, limits, |statement| {
                 statement.disclosed_attributes = (0_u8..5)
                     .map(|index| PrivacyZkX509DisclosedAttributeV1 {
                         index,
@@ -15868,7 +17116,7 @@ mod tests {
                 }
             )
         ));
-        mutate_x509(|statement| {
+        validate_mutated_x509(base, limits, |statement| {
             statement.presentation_not_after_unix_seconds = statement
                 .presentation_not_before_unix_seconds
                 + ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1;
@@ -15892,7 +17140,7 @@ mod tests {
         ];
         for mutation in window_mutations {
             assert!(matches!(
-                mutate_x509(mutation),
+                validate_mutated_x509(base, limits, mutation),
                 Err(PrivacyStatementValidationError::InvalidX509PresentationWindow { .. })
             ));
         }
@@ -15969,10 +17217,10 @@ mod tests {
             1,
             PrivacyPolicyDigestV1::new([0x33; 32]),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -15990,13 +17238,16 @@ mod tests {
     }
 
     #[test]
-    fn zk_x509_governance_records_are_self_digested_strict_and_roundtrip() {
-        let trust_anchor = zk_x509_trust_anchor(
-            ZK_X509_INITIAL_RECORD_EPOCH_V1,
-            80,
-            None,
-            PrivacyZkX509RecordLifecycleV1::Active,
-        );
+    fn x509_rejects_stale_roots_invalid_usage_and_invalid_presentation_windows() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let x509 = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+        assert_x509_governance_and_usage_rejections(&x509, &limits);
+        assert_x509_disclosure_and_presentation_rejections(&x509, &limits);
+    }
+
+    fn assert_zk_x509_trust_anchor_record_roundtrip(
+        trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+    ) {
         trust_anchor
             .validate_initial()
             .expect("canonical trust-anchor origin");
@@ -16026,14 +17277,11 @@ mod tests {
             ))
             .is_err()
         );
+    }
 
-        let certificate_policy = zk_x509_certificate_policy(
-            ZK_X509_INITIAL_RECORD_EPOCH_V1,
-            81,
-            vec![0, 3],
-            None,
-            PrivacyZkX509RecordLifecycleV1::Active,
-        );
+    fn assert_zk_x509_certificate_policy_record_roundtrip(
+        certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
+    ) {
         certificate_policy
             .validate_initial()
             .expect("canonical certificate-policy origin");
@@ -16043,18 +17291,18 @@ mod tests {
                 .expect("recompute certificate-policy digest"),
             certificate_policy.record_digest
         );
-        let encoded = norito::to_bytes(&certificate_policy).expect("encode certificate policy");
+        let encoded = norito::to_bytes(certificate_policy).expect("encode certificate policy");
         let decoded: PrivacyZkX509CertificatePolicyRecordV1 =
             norito::decode_from_bytes(&encoded).expect("decode certificate policy");
-        assert_eq!(decoded, certificate_policy);
+        assert_eq!(&decoded, certificate_policy);
         decoded
             .validate_initial()
             .expect("decoded certificate policy validates");
         let json =
-            norito::json::to_json(&certificate_policy).expect("encode certificate-policy JSON");
+            norito::json::to_json(certificate_policy).expect("encode certificate-policy JSON");
         let decoded_json: PrivacyZkX509CertificatePolicyRecordV1 =
             norito::json::from_json(&json).expect("decode certificate-policy JSON");
-        assert_eq!(decoded_json, certificate_policy);
+        assert_eq!(&decoded_json, certificate_policy);
         let object_prefix = json
             .strip_suffix('}')
             .expect("certificate-policy JSON is an object");
@@ -16064,7 +17312,12 @@ mod tests {
             ))
             .is_err()
         );
+    }
 
+    fn assert_zk_x509_record_tampering_rejected(
+        trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+        certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
+    ) {
         let mut anchor_tamperings = Vec::new();
         let mut tampered = trust_anchor;
         tampered.trust_anchor_id = PrivacyIssuerIdV1::new(raw(82));
@@ -16173,12 +17426,12 @@ mod tests {
         tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(84));
         policy_tamperings.push(tampered);
         let mut tampered = certificate_policy.clone();
-        tampered.required_key_usage.key_agreement = true;
+        tampered.required_key_usage.key_agreement = PrivacyX509KeyUsageRequirementV1::new(true);
         policy_tamperings.push(tampered);
         let mut tampered = certificate_policy.clone();
         tampered.required_extended_key_usages.remove(0);
         policy_tamperings.push(tampered);
-        let mut tampered = certificate_policy;
+        let mut tampered = certificate_policy.clone();
         tampered.required_disclosed_attribute_indices = vec![0, 2];
         policy_tamperings.push(tampered);
         for tampered in policy_tamperings {
@@ -16187,6 +17440,26 @@ mod tests {
                 Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
             );
         }
+    }
+
+    #[test]
+    fn zk_x509_governance_records_are_self_digested_strict_and_roundtrip() {
+        let trust_anchor = zk_x509_trust_anchor(
+            ZK_X509_INITIAL_RECORD_EPOCH_V1,
+            80,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        let certificate_policy = zk_x509_certificate_policy(
+            ZK_X509_INITIAL_RECORD_EPOCH_V1,
+            81,
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_zk_x509_trust_anchor_record_roundtrip(trust_anchor);
+        assert_zk_x509_certificate_policy_record_roundtrip(&certificate_policy);
+        assert_zk_x509_record_tampering_rejected(trust_anchor, &certificate_policy);
     }
 
     #[test]
@@ -16420,13 +17693,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn zk_x509_policy_caps_ordering_and_transition_adversaries_fail_closed() {
+    fn assert_zk_x509_policy_caps_and_ordering() {
         let key_usage = PrivacyX509KeyUsageV1 {
-            digital_signature: true,
-            content_commitment: false,
-            key_encipherment: false,
-            key_agreement: false,
+            digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+            content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+            key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+            key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
         };
         let construct_policy = |extended_key_usages, disclosures| {
             PrivacyZkX509CertificatePolicyRecordV1::new(
@@ -16498,7 +17770,9 @@ mod tests {
                 PrivacyZkX509RecordValidationErrorV1::DisclosedAttributeIndicesNotStrictlyIncreasing
             )
         ));
+    }
 
+    fn assert_zk_x509_trust_anchor_transitions() {
         let anchor_origin =
             zk_x509_trust_anchor(1, 91, None, PrivacyZkX509RecordLifecycleV1::Active);
         let anchor_rotation = zk_x509_trust_anchor(
@@ -16595,7 +17869,9 @@ mod tests {
             validate_zk_x509_trust_anchor_rotation_v1(&anchor_revoked, &after_terminal),
             Err(PrivacyZkX509TransitionValidationErrorV1::CurrentNotActive)
         );
+    }
 
+    fn assert_zk_x509_certificate_policy_transitions() {
         let policy_origin = zk_x509_certificate_policy(
             1,
             94,
@@ -16632,6 +17908,13 @@ mod tests {
             validate_zk_x509_certificate_policy_revocation_v1(&policy_origin, &mutated_revocation),
             Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
         );
+    }
+
+    #[test]
+    fn zk_x509_policy_caps_ordering_and_transition_adversaries_fail_closed() {
+        assert_zk_x509_policy_caps_and_ordering();
+        assert_zk_x509_trust_anchor_transitions();
+        assert_zk_x509_certificate_policy_transitions();
     }
 
     #[test]
@@ -16794,76 +18077,77 @@ mod tests {
         }
     }
 
-    #[test]
-    fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
-        let policy_id = PrivacyPolicyIdV1::new(raw(10));
-        let identity = commitment(11);
-        let digest = PrivacyPolicyDigestV1::new(raw(12));
-        let asset = asset_definition_id();
-        let allowlist = zk_ace_allowlist();
-        let construct = |policy_id,
-                         identity_commitment,
-                         policy_digest,
-                         authorization_epoch,
-                         source_allowlist,
-                         lifecycle| {
-            PrivacyZkAcePolicyRecordV1::new(
-                policy_id,
-                identity_commitment,
-                policy_digest,
-                authorization_epoch,
-                asset.clone(),
-                source_allowlist,
-                lifecycle,
-            )
-        };
+    fn construct_zk_ace_policy_for_test(
+        policy_id: PrivacyPolicyIdV1,
+        identity_commitment: PrivacyCommitmentV1,
+        policy_digest: PrivacyPolicyDigestV1,
+        authorization_epoch: u64,
+        source_allowlist: Vec<AccountId>,
+        lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    ) -> Result<PrivacyZkAcePolicyRecordV1, PrivacyZkAcePolicyRecordValidationErrorV1> {
+        PrivacyZkAcePolicyRecordV1::new(
+            policy_id,
+            identity_commitment,
+            policy_digest,
+            authorization_epoch,
+            asset_definition_id(),
+            source_allowlist,
+            lifecycle,
+        )
+    }
 
+    fn assert_zk_ace_policy_scalar_boundaries(
+        policy_id: PrivacyPolicyIdV1,
+        identity: PrivacyCommitmentV1,
+        digest: PrivacyPolicyDigestV1,
+        allowlist: &[AccountId],
+    ) {
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 PrivacyPolicyIdV1::new([0; 32]),
                 identity,
                 digest,
                 1,
-                allowlist.clone(),
+                allowlist.to_vec(),
                 PrivacyZkAcePolicyLifecycleV1::Active,
             ),
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyId)
         );
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 PrivacyCommitmentV1::new([0; 32]),
                 digest,
                 1,
-                allowlist.clone(),
+                allowlist.to_vec(),
                 PrivacyZkAcePolicyLifecycleV1::Active,
             ),
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroIdentityCommitment)
         );
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 identity,
                 PrivacyPolicyDigestV1::new([0; 32]),
                 1,
-                allowlist.clone(),
+                allowlist.to_vec(),
                 PrivacyZkAcePolicyLifecycleV1::Active,
             ),
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyDigest)
         );
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 identity,
                 digest,
                 0,
-                allowlist.clone(),
+                allowlist.to_vec(),
                 PrivacyZkAcePolicyLifecycleV1::Active,
             ),
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroAuthorizationEpoch)
         );
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 identity,
                 digest,
@@ -16873,10 +18157,17 @@ mod tests {
             ),
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::EmptySourceAllowlist)
         );
+    }
 
+    fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
+        policy_id: PrivacyPolicyIdV1,
+        identity: PrivacyCommitmentV1,
+        digest: PrivacyPolicyDigestV1,
+        allowlist: &[AccountId],
+    ) {
         let over_limit = vec![account(20); PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1 + 1];
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 identity,
                 digest,
@@ -16892,10 +18183,10 @@ mod tests {
             )
         );
 
-        let mut reversed = allowlist.clone();
+        let mut reversed = allowlist.to_vec();
         reversed.reverse();
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 identity,
                 digest,
@@ -16907,7 +18198,7 @@ mod tests {
         );
         let duplicate = vec![allowlist[0].clone(), allowlist[0].clone()];
         assert_eq!(
-            construct(
+            construct_zk_ace_policy_for_test(
                 policy_id,
                 identity,
                 digest,
@@ -16931,6 +18222,18 @@ mod tests {
         assert_eq!(
             initially_revoked.validate_initial(),
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive)
+        );
+    }
+
+    #[test]
+    fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
+        let policy_id = PrivacyPolicyIdV1::new(raw(10));
+        let identity = commitment(11);
+        let digest = PrivacyPolicyDigestV1::new(raw(12));
+        let allowlist = zk_ace_allowlist();
+        assert_zk_ace_policy_scalar_boundaries(policy_id, identity, digest, &allowlist);
+        assert_zk_ace_policy_allowlist_and_origin_boundaries(
+            policy_id, identity, digest, &allowlist,
         );
     }
 
@@ -17080,9 +18383,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bootle_lantern_issuer_policy_is_canonical_bounded_and_forward_only() {
-        let record = bootle_lantern_policy();
+    fn assert_bootle_lantern_policy_roundtrip(record: &BootleLanternIssuerPolicyV1) {
         record.validate_initial().expect("canonical initial record");
         assert_eq!(
             record
@@ -17090,14 +18391,14 @@ mod tests {
                 .expect("canonical record digest"),
             record.record_digest
         );
-        let encoded = norito::to_bytes(&record).expect("encode policy");
+        let encoded = norito::to_bytes(record).expect("encode policy");
         let decoded: BootleLanternIssuerPolicyV1 =
             norito::decode_from_bytes(&encoded).expect("decode policy");
-        assert_eq!(decoded, record);
-        let json = norito::json::to_json(&record).expect("encode policy JSON");
+        assert_eq!(&decoded, record);
+        let json = norito::json::to_json(record).expect("encode policy JSON");
         let decoded_json: BootleLanternIssuerPolicyV1 =
             norito::json::from_json(&json).expect("decode policy JSON");
-        assert_eq!(decoded_json, record);
+        assert_eq!(&decoded_json, record);
         let object_prefix = json
             .strip_suffix('}')
             .expect("policy JSON is a top-level object");
@@ -17106,7 +18407,9 @@ mod tests {
             norito::json::from_json::<BootleLanternIssuerPolicyV1>(&unknown_field).is_err(),
             "unknown JSON fields must not create an alternate first-release policy encoding"
         );
+    }
 
+    fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1) {
         let mut invalid = record.clone();
         invalid.issuer_public_matrix.entries.pop();
         assert!(matches!(
@@ -17158,7 +18461,10 @@ mod tests {
             invalid.validate(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch)
         );
-        invalid = record.clone();
+    }
+
+    fn assert_bootle_lantern_allowed_value_boundaries(record: &BootleLanternIssuerPolicyV1) {
+        let mut invalid = record.clone();
         invalid.allowed_values.pop();
         assert!(matches!(
             invalid.validate(),
@@ -17223,20 +18529,22 @@ mod tests {
             invalid.validate(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::RecordDigestMismatch)
         );
+    }
 
+    fn assert_bootle_lantern_policy_rotation_boundaries(record: &BootleLanternIssuerPolicyV1) {
         let mut successor = record.clone();
         successor.epoch = 2;
         successor.required_disclosure_bitmap |= 1;
         redigest_bootle_lantern_policy(&mut successor);
         successor
-            .validate_successor(&record)
+            .validate_successor(record)
             .expect("strict policy rotation");
 
         let mut non_consecutive = successor.clone();
         non_consecutive.epoch = 3;
         redigest_bootle_lantern_policy(&mut non_consecutive);
         assert!(matches!(
-            non_consecutive.validate_successor(&record),
+            non_consecutive.validate_successor(record),
             Err(
                 BootleLanternIssuerPolicyValidationErrorV1::NonConsecutiveEpoch {
                     previous: 1,
@@ -17249,7 +18557,7 @@ mod tests {
         unchanged.epoch = 2;
         redigest_bootle_lantern_policy(&mut unchanged);
         assert_eq!(
-            unchanged.validate_successor(&record),
+            unchanged.validate_successor(record),
             Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation)
         );
         let mut revoked = record.clone();
@@ -17257,13 +18565,13 @@ mod tests {
         revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
         redigest_bootle_lantern_policy(&mut revoked);
         revoked
-            .validate_revocation_successor(&record)
+            .validate_revocation_successor(record)
             .expect("exact terminal revocation");
         let mut revocation_with_rotation = revoked.clone();
         revocation_with_rotation.required_disclosure_bitmap ^= 1;
         redigest_bootle_lantern_policy(&mut revocation_with_rotation);
         assert_eq!(
-            revocation_with_rotation.validate_revocation_successor(&record),
+            revocation_with_rotation.validate_revocation_successor(record),
             Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustPreservePolicy)
         );
         assert_eq!(
@@ -17278,7 +18586,7 @@ mod tests {
             wrong_initial_epoch.validate_initial(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::InvalidInitialEpoch { epoch: 2 })
         );
-        let mut revoked_initial = record;
+        let mut revoked_initial = record.clone();
         revoked_initial.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
         redigest_bootle_lantern_policy(&mut revoked_initial);
         assert_eq!(
@@ -17288,16 +18596,22 @@ mod tests {
     }
 
     #[test]
-    fn private_transfer_shapes_enforce_hard_caps_and_ordered_ciphertexts() {
-        let limits = PrivacyConsensusLimitsV1::taira_default();
+    fn bootle_lantern_issuer_policy_is_canonical_bounded_and_rotates_monotonically() {
+        let record = bootle_lantern_policy();
+        assert_bootle_lantern_policy_roundtrip(&record);
+        assert_bootle_lantern_matrix_boundaries(&record);
+        assert_bootle_lantern_allowed_value_boundaries(&record);
+        assert_bootle_lantern_policy_rotation_boundaries(&record);
+    }
 
+    fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimitsV1) {
         let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
         let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
             unreachable!()
         };
         statement.actions.clear();
         assert!(matches!(
-            orchard.validate(&limits),
+            orchard.validate(limits),
             Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 0, max: 2 })
         ));
 
@@ -17311,7 +18625,7 @@ mod tests {
             orchard_action(130),
         ];
         assert!(matches!(
-            orchard.validate(&limits),
+            orchard.validate(limits),
             Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 3, max: 2 })
         ));
 
@@ -17327,7 +18641,7 @@ mod tests {
                 .encrypted_note
                 .resize(malformed_len, 0xA5);
             assert!(matches!(
-                orchard.validate(&limits),
+                orchard.validate(limits),
                 Err(
                     PrivacyStatementValidationError::InvalidOrchardEncryptedNoteSize {
                         index: 0,
@@ -17348,7 +18662,7 @@ mod tests {
                 .outgoing_ciphertext
                 .resize(malformed_len, 0xA5);
             assert!(matches!(
-                orchard.validate(&limits),
+                orchard.validate(limits),
                 Err(
                     PrivacyStatementValidationError::InvalidOrchardOutgoingCiphertextSize {
                         index: 0,
@@ -17357,7 +18671,9 @@ mod tests {
                 )
             ));
         }
+    }
 
+    fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLimitsV1) {
         let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
         let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
             unreachable!()
@@ -17365,7 +18681,7 @@ mod tests {
         statement.actions.push(orchard_action(120));
         statement.actions[1].nullifier = statement.actions[0].nullifier;
         assert_eq!(
-            orchard.validate(&limits),
+            orchard.validate(limits),
             Err(PrivacyStatementValidationError::DuplicateOrchardNullifier { index: 1 })
         );
 
@@ -17376,7 +18692,7 @@ mod tests {
         statement.actions.push(orchard_action(120));
         statement.actions[1].note_commitment = statement.actions[0].note_commitment;
         assert_eq!(
-            orchard.validate(&limits),
+            orchard.validate(limits),
             Err(PrivacyStatementValidationError::DuplicateOrchardNoteCommitment { index: 1 })
         );
 
@@ -17389,7 +18705,7 @@ mod tests {
             amount: ORCHARD_MAX_VALUE_BALANCE_V1 + 1,
         };
         assert_eq!(
-            orchard.validate(&limits),
+            orchard.validate(limits),
             Err(
                 PrivacyStatementValidationError::OrchardValueBalanceOutOfRange {
                     amount: ORCHARD_MAX_VALUE_BALANCE_V1 + 1,
@@ -17406,16 +18722,18 @@ mod tests {
         statement.actions[0].nullifier = [0; 32];
         statement.actions[0].note_commitment = [0; 32];
         orchard
-            .validate(&limits)
+            .validate(limits)
             .expect("zero is a canonical Pallas field encoding, not a schema sentinel");
+    }
 
+    fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimitsV1) {
         let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
         let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
             unreachable!()
         };
         statement.inputs = vec![fcmp_input(121), fcmp_input(122), fcmp_input(123)];
         assert!(matches!(
-            fcmp.validate(&limits),
+            fcmp.validate(limits),
             Err(PrivacyStatementValidationError::InvalidFcmpInputCount {
                 count: 3,
                 max: FCMP_MAX_INPUTS_V1
@@ -17566,7 +18884,7 @@ mod tests {
             .computed_action_digest()
             .expect("recompute oversized-input action digest");
         assert!(matches!(
-            ivm.validate(&limits),
+            ivm.validate(limits),
             Err(PrivacyStatementValidationError::TooManyNullifiers {
                 count: 3,
                 max: IVM_PRIVATE_NOTE_MAX_INPUTS_V1
@@ -17579,7 +18897,7 @@ mod tests {
         };
         statement.output_commitments = vec![commitment(130), commitment(131), commitment(132)];
         assert!(matches!(
-            pq.validate(&limits),
+            pq.validate(limits),
             Err(PrivacyStatementValidationError::TooManyCommitments {
                 count: 3,
                 max: PQ_MASP_MAX_OUTPUTS_V1
@@ -17606,9 +18924,17 @@ mod tests {
         };
         statement.encrypted_outputs[0].recipient = PrivacyRecipientIdV1::new([0; 32]);
         assert!(matches!(
-            malformed.validate(&limits),
+            malformed.validate(limits),
             Err(PrivacyStatementValidationError::ZeroEncryptedOutputRecipient { index: 0 })
         ));
+    }
+
+    #[test]
+    fn private_transfer_shapes_enforce_hard_caps_and_ordered_ciphertexts() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        assert_orchard_count_and_ciphertext_boundaries(&limits);
+        assert_orchard_uniqueness_and_balance_boundaries(&limits);
+        assert_other_private_transfer_shape_boundaries(&limits);
     }
 
     #[test]
@@ -17696,6 +19022,28 @@ mod tests {
         proposed
             .validate_transition_to(&active)
             .expect("proposal activates");
+        for mismatched_active in [
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: 2,
+                activated_at_height: 3,
+                state_since_height: 3,
+            }),
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 2,
+                state_since_height: 2,
+            }),
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 3,
+                state_since_height: 4,
+            }),
+        ] {
+            assert_eq!(
+                proposed.validate_transition_to(&mismatched_active),
+                Err(PrivacyLifecycleTransitionError::InvalidTransition)
+            );
+        }
         active
             .validate_transition_to(&suspended)
             .expect("active suspends");

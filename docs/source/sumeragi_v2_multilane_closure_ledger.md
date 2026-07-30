@@ -81,6 +81,31 @@ invariants together.
    layout has an explicit version. Consensus never implicitly decodes a legacy
    shape or runs mixed old/new layouts.
 
+## In-flight first-release formal boundary
+
+**Implementation:** In flight; V3 payload/execution-input symbols are not yet
+total-source-projected into a formal semantics.
+**Closure:** Open.
+**Evidence:** Open.
+
+`SumeragiV2InFlightFirstRelease.tla` is a finite three-validator safety model
+for `LaneExecutablePayloadV3` carrying an exact
+`QueuePlanAdmissionBindingV2` preimage. Its fixed and mutation configurations
+cover producer-selected versus replicated-carrier ownership, QueuePlan V5
+`PutBatch` then V9 reservation fsync then Kura Active then execution-input
+durability then READY, missing/late bodies, producer death after fanout,
+crash-prefix durable recovery, exact Commit/Release scope, duplicate carrier
+application, conflicting/ABA bindings, and the 4096 entry limit.
+
+This row is deliberately **not** a production-refinement claim. TLC exhausts
+the stated finite model and Apalache typechecks/bounds its abstract actions;
+neither checker proves that Rust filesystem/restart traces refine those
+actions. The open theorem is a total Rust pre/post-state forward simulation
+and reverse terminal-owner projection over QueuePlan V5, reservation V9,
+Kura, recovery, Commit, and Release. Token-order/source-presence checks are
+insufficient and must not promote this row or a release status. See
+`docs/formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md`.
+
 ## Native AMX application closure
 
 ### ML-NAT-01 — shared participant-application predicate

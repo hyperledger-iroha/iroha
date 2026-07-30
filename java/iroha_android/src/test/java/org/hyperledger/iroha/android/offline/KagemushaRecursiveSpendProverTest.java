@@ -1164,9 +1164,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void canonicalPeerCodecsAreTypedAndDefensive() {
-    if (assertNativeArtifactStreamingUnavailableFailsClosed()) {
-      return;
-    }
+    requireNativeArtifactStreaming();
     final byte[] requestArchive = archive(
         "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2");
     final KagemushaRecursiveSpendProver.RecipientPaymentRequest request =
@@ -1256,9 +1254,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void peerTransportGoldenVectorsAreExact() {
-    if (assertNativeArtifactStreamingUnavailableFailsClosed()) {
-      return;
-    }
+    requireNativeArtifactStreaming();
     final byte[] offerArchive = portableOfferFixture(
         "offline_recipient_receive_offer_v2.hex");
     final KagemushaPeerTransport.Payload request =
@@ -1280,9 +1276,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void qrNfcAndNearbyGoldenVectorsAreExact() {
-    if (assertNativeArtifactStreamingUnavailableFailsClosed()) {
-      return;
-    }
+    requireNativeArtifactStreaming();
     final byte[] offerArchive = portableOfferFixture(
         "offline_recipient_receive_offer_v2.hex");
     final KagemushaPeerTransport.Payload request =
@@ -1330,23 +1324,11 @@ public final class KagemushaRecursiveSpendProverTest {
     Arrays.fill(nearby, (byte) 0);
   }
 
-  private static boolean assertNativeArtifactStreamingUnavailableFailsClosed() {
-    if (KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) {
-      return false;
-    }
-    if ("1".equals(System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE"))) {
+  private static void requireNativeArtifactStreaming() {
+    if (!KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) {
       throw new AssertionError(
-          "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library");
+          "A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required");
     }
-    try {
-      KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(
-          portableOfferFixture("offline_recipient_receive_offer_v2.hex"));
-      throw new AssertionError("native artifact streaming absence must fail closed");
-    } catch (final IllegalStateException expected) {
-      assert "connect_norito_bridge ABI 21 artifact streaming is unavailable"
-          .equals(expected.getMessage());
-    }
-    return true;
   }
 
   private static byte[] portableOfferFixture(final String name) {

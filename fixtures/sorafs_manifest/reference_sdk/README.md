@@ -1,9 +1,13 @@
-# Reference-SDK bundle outcome goldens
+# Reference-SDK validation outcome goldens
 
-These files are byte-exact `ValidationOutcomeV1` goldens for every SDK's
-heterogeneous fixture-bundle wrapper. Every outcome uses
-`generated_at=1700001234`.
+These files are byte-exact `ValidationOutcomeV1` goldens shared by every SDK.
+The two appeal-finance profiles use `generated_at=123`; heterogeneous
+fixture-bundle outcomes use `generated_at=1700001234`.
 
+- `appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json`
+  accepts the canonical 85-byte `CancelAssetLock` V1 payload.
+- `appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json`
+  rejects the canonical zero-quantity negative with `SFS-VAL-001`.
 - `bundle_heterogeneous_positive_validation_outcome_v1.json` validates the
   replication order, all five orderbook payloads, the PDP triplet, the PoR
   challenge/proof pair, the PoTR receipt, and the repair task at

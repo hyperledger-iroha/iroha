@@ -5,17 +5,17 @@ ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_PYTHON_ROOT:-$(cd "$(dirname "${BASH_SOURC
 PYTHON_BIN="${KAGEMUSHA_RECURSIVE_SPEND_PYTHON_BIN:-python3}"
 PACKAGE_DIR="${ROOT_DIR}/python/iroha_python"
 
-version="$(${PYTHON_BIN} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-if [[ "${version}" != "3.11" ]]; then
-  echo "error: Python SDK checks require Python 3.11; got ${version}" >&2
+version="$("${PYTHON_BIN}" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ "${version}" != "3.12" ]]; then
+  echo "error: Python SDK checks require Python 3.12; got ${version}" >&2
   exit 1
 fi
 
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="${PACKAGE_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
-"${PYTHON_BIN}" -m compileall -q "${PACKAGE_DIR}/src"
-"${PYTHON_BIN}" - "${PACKAGE_DIR}" <<'PY'
+"${PYTHON_BIN}" -I -S -m compileall -q "${PACKAGE_DIR}/src"
+"${PYTHON_BIN}" -I -S - "${PACKAGE_DIR}" <<'PY'
 from pathlib import Path
 import ast
 import sys

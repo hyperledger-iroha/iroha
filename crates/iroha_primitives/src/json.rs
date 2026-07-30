@@ -399,17 +399,14 @@ impl FromStr for Json {
     type Err = norito::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match json::parse_value(s) {
-            Ok(value) => {
+        json::parse_value(s).map_or_else(
+            |_| Json::from_norito_value_ref(&Value::String(s.to_owned())),
+            |value| {
                 let result = Json::from_norito_value_ref(&value);
                 Json::drop_json_value_iteratively(value);
                 result
-            }
-            Err(_) => {
-                let value = Value::String(s.to_owned());
-                Json::from_norito_value_ref(&value)
-            }
-        }
+            },
+        )
     }
 }
 
@@ -652,6 +649,17 @@ mod tests {
         let j2 = Json::from_str_norito("{\"k\":1}").expect("json object");
         let v: norito::json::Value = norito::json::from_str(j2.get()).expect("parse value");
         assert_eq!(v, norito::json!({"k": 1}));
+    }
+
+    #[test]
+    fn from_str_normalizes_structured_json_and_wraps_plain_text() {
+        let structured: Json = r#" { "items": [1, true, null] } "#
+            .parse()
+            .expect("parse structured JSON");
+        assert_eq!(structured.get(), r#"{"items":[1,true,null]}"#);
+
+        let plain_text: Json = "plain text".parse().expect("wrap plain text");
+        assert_eq!(plain_text.get(), r#""plain text""#);
     }
 
     #[test]

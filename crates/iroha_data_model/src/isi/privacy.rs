@@ -12,10 +12,10 @@ use crate::privacy::{
     PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
     PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1, PrivacyVegaIssuerRecordDigestV1,
     PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-    PrivacyZkAmsRegistryBootstrapV1,
-    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-    PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
-    PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
+    PrivacyZkAmsRegistryBootstrapV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
+    PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
+    PrivacyZkX509TrustAnchorRecordV1,
 };
 
 isi! {
@@ -1024,11 +1024,10 @@ mod tests {
             PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
             PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
             PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
-            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
-            PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
-            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
-            PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
-            PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
+            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
+            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1,
+            PrivacyX509TrustStoreDigestV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
             PrivacyZkX509RecordLifecycleV1,
         },
     };
@@ -1398,10 +1397,10 @@ mod tests {
             epoch,
             PrivacyPolicyDigestV1::new(digest(policy_seed)),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -1572,12 +1571,8 @@ mod tests {
                 ))
             });
             $check!(RotatePrivacyVegaIssuerV1::WIRE_ID, {
-                let current = vega_issuer_record(
-                    1,
-                    49,
-                    None,
-                    PrivacyVegaIssuerRecordLifecycleV1::Active,
-                );
+                let current =
+                    vega_issuer_record(1, 49, None, PrivacyVegaIssuerRecordLifecycleV1::Active);
                 let successor = vega_issuer_record(
                     2,
                     50,
@@ -1587,12 +1582,8 @@ mod tests {
                 RotatePrivacyVegaIssuerV1::new(current.record_digest, successor)
             });
             $check!(RevokePrivacyVegaIssuerV1::WIRE_ID, {
-                let current = vega_issuer_record(
-                    1,
-                    49,
-                    None,
-                    PrivacyVegaIssuerRecordLifecycleV1::Active,
-                );
+                let current =
+                    vega_issuer_record(1, 49, None, PrivacyVegaIssuerRecordLifecycleV1::Active);
                 let successor = vega_issuer_record(
                     2,
                     49,

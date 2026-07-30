@@ -134,6 +134,48 @@ impl Hash {
         }
         finalize_blake2b(hasher)
     }
+
+    /// Hash bytes from a reader without buffering the complete input.
+    ///
+    /// Reading stops with [`std::io::ErrorKind::InvalidData`] once the input
+    /// exceeds `max_bytes`, including when the byte counter would overflow.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reader's I/O error or an invalid-data error when the bound
+    /// is exceeded.
+    pub fn new_from_reader_bounded(
+        mut reader: impl std::io::Read,
+        max_bytes: u64,
+    ) -> std::io::Result<(Self, u64)> {
+        const BUFFER_BYTES: usize = 64 * 1024;
+
+        let mut writer = HashWriter::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; BUFFER_BYTES];
+        loop {
+            let read = std::io::Read::read(&mut reader, &mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            total = total
+                .checked_add(u64::try_from(read).expect("read length fits u64"))
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Blake2b-32 input size overflow",
+                    )
+                })?;
+            if total > max_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Blake2b-32 input exceeds {max_bytes} byte limit"),
+                ));
+            }
+            std::io::Write::write_all(&mut writer, &buffer[..read])?;
+        }
+        Ok((writer.finalize(), total))
+    }
 }
 
 type Blake2b256 = Blake2b<U32>;
@@ -569,6 +611,19 @@ mod tests {
         expected[Hash::LENGTH - 1] |= 1;
 
         assert_eq!(<[u8; Hash::LENGTH]>::from(Hash::new(bytes)), expected);
+    }
+
+    #[test]
+    fn bounded_streaming_hash_matches_contiguous_hash_and_rejects_oversize() {
+        let bytes = vec![0x5a; 3 * 64 * 1024 + 17];
+        let (digest, size) = Hash::new_from_reader_bounded(bytes.as_slice(), bytes.len() as u64)
+            .expect("bounded hash");
+
+        assert_eq!(digest, Hash::new(&bytes));
+        assert_eq!(size, bytes.len() as u64);
+        let error = Hash::new_from_reader_bounded(bytes.as_slice(), bytes.len() as u64 - 1)
+            .expect_err("input exceeds bound");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

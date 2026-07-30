@@ -349,18 +349,16 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some((sigs, pks, hrams, map)) = metal_inputs {
-        if !sigs.is_empty() {
-            if let Some(out) = crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
-                if out.len() == map.len() {
-                    let mut results = vec![false; items.len()];
-                    for (idx, ok) in map.into_iter().zip(out.into_iter()) {
-                        results[idx] = ok;
-                    }
-                    return results;
-                }
-            }
+    if let Some((sigs, pks, hrams, map)) = metal_inputs
+        && !sigs.is_empty()
+        && let Some(out) = crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams)
+        && out.len() == map.len()
+    {
+        let mut results = vec![false; items.len()];
+        for (idx, ok) in map.into_iter().zip(out.into_iter()) {
+            results[idx] = ok;
         }
+        return results;
     }
 
     #[cfg(feature = "cuda")]

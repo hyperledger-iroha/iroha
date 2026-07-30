@@ -18,9 +18,10 @@ use crate::{
     PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_PROOF_MAX_CANONICAL_BYTES_V1,
     PopValidationPayloadKindV1, ProofStreamTier, RepairValidationPayloadKindV1,
     ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
-    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
-    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
-    validate_hedging_payload_bytes, validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_appeal_finance_cancel_asset_lock_bytes, validate_fixture_bundle_payloads,
+    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
+    validate_governance_log_node_bytes, validate_hedging_payload_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
     validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
     validate_pdp_proof_bytes, validate_pop_payload_bytes, validate_por_challenge_proof_bytes,
@@ -149,7 +150,7 @@ const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES: usize =
 /// Maximum payload descriptor count accepted by one fixture-bundle call.
 pub const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1: u32 = 64;
 /// Maximum aggregate payload and label bytes accepted by one fixture-bundle call.
-pub const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1: u32 = 64 * 1024 * 1024;
+pub const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1: u32 = 67108864;
 const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS: usize =
     SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1 as usize;
 const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES: usize =
@@ -421,6 +422,44 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_revocation
             revocation,
             envelope_label,
             revocation_label,
+            generated_at,
+        ))
+    })
+}
+
+/// Validate a canonical appeal-finance `CancelAssetLock` V1 payload.
+///
+/// # Safety
+/// Non-null pointers must be valid for their corresponding lengths until the
+/// function returns. The returned buffer must be freed with
+/// [`sorafs_reference_free_buffer`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    label_ptr: *const u8,
+    label_len: usize,
+    generated_at: u64,
+) -> SorafsReferenceFfiBuffer {
+    run_ffi(generated_at, || {
+        let scope = FfiInputScope;
+        let input = read_input(
+            &scope,
+            bytes_ptr,
+            bytes_len,
+            "cancel_asset_lock",
+            generated_at,
+        )?;
+        let label = read_label(
+            &scope,
+            label_ptr,
+            label_len,
+            "cancel_asset_lock_v1.to",
+            generated_at,
+        )?;
+        Ok(validate_appeal_finance_cancel_asset_lock_bytes(
+            input,
+            label,
             generated_at,
         ))
     })
@@ -2422,6 +2461,32 @@ mod tests {
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_signed_replication_order_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_appeal_finance_cancel_asset_lock_validator_returns_json_outcome() {
+        let bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+        ))
+        .expect("read canonical CancelAssetLock fixture");
+        let label = b"cancel_asset_lock_v1.to";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
                 bytes.as_ptr(),
                 bytes.len(),
                 label.as_ptr(),

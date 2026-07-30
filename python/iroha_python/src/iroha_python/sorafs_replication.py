@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Union
+
+from .address import AccountAddress, AccountAddressError, i105_discriminant_from_sentinel
 
 SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024
 _MAX_PAYLOAD_BASE64_CHARS_V1 = (
@@ -200,6 +201,32 @@ def _epoch(value: Any, field: str) -> int:
     return value
 
 
+def _positive_u64(value: Any, field: str) -> int:
+    value = _epoch(value, field)
+    if value == 0:
+        raise ValueError(f"{field} must be greater than zero")
+    return value
+
+
+def _canonical_account_id(value: Any, field: str) -> str:
+    if not isinstance(value, str) or value != value.strip():
+        raise ValueError(f"{field} must be an exact canonical I105 account id")
+    if any(character.isspace() for character in value):
+        raise ValueError(f"{field} must be an exact canonical I105 account id")
+    try:
+        discriminant = i105_discriminant_from_sentinel(value)
+        if discriminant is None:
+            raise AccountAddressError("missing canonical I105 sentinel")
+        address = AccountAddress.parse_encoded(value, expected_discriminant=discriminant)
+        if address.to_i105(discriminant) != value:
+            raise AccountAddressError("noncanonical I105 spelling")
+    except AccountAddressError as error:
+        raise ValueError(
+            f"{field} must be an exact canonical I105 account id"
+        ) from error
+    return value
+
+
 def _canonical_order_payload(value: Any, expected_order_id: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("order_payload must be non-empty canonical standard base64")
@@ -278,10 +305,13 @@ class IssueReplicationOrderInstruction:
     def to_instruction(self) -> Any:
         """Create the SDK's native `Instruction` value."""
 
-        from .crypto import Instruction
+        from .crypto import _native_issue_replication_order
 
-        return Instruction.from_json(
-            json.dumps(self.to_payload(), sort_keys=True, separators=(",", ":"))
+        return _native_issue_replication_order(
+            self.order_id,
+            self.order_payload,
+            self.issued_epoch,
+            self.deadline_epoch,
         )
 
     @classmethod
@@ -309,12 +339,173 @@ class IssueReplicationOrderInstruction:
 
 
 @dataclass(frozen=True)
+class ProviderIngestCompletionSignerPolicyV1:
+    """Exact governed signer-policy identity expected at completion commit."""
+
+    policy_id: str
+    revision: int
+    predecessor_digest: str | None
+    policy_digest: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "policy_id",
+            _canonical_identifier(self.policy_id, "policy_id"),
+        )
+        revision = _positive_u64(self.revision, "revision")
+        object.__setattr__(self, "revision", revision)
+        if revision == 1:
+            if self.predecessor_digest is not None:
+                raise ValueError("predecessor_digest must be absent at revision one")
+        elif self.predecessor_digest is None:
+            raise ValueError("predecessor_digest is required after revision one")
+        else:
+            object.__setattr__(
+                self,
+                "predecessor_digest",
+                _canonical_identifier(
+                    self.predecessor_digest,
+                    "predecessor_digest",
+                ),
+            )
+        object.__setattr__(
+            self,
+            "policy_digest",
+            _canonical_identifier(self.policy_digest, "policy_digest"),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return the exact signer-policy mapping."""
+
+        return {
+            "policy_id": self.policy_id,
+            "revision": self.revision,
+            "predecessor_digest": self.predecessor_digest,
+            "policy_digest": self.policy_digest,
+        }
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> ProviderIngestCompletionSignerPolicyV1:
+        """Decode one schema-closed signer-policy mapping."""
+
+        body = _exact_mapping(
+            payload,
+            frozenset(
+                {
+                    "policy_id",
+                    "revision",
+                    "predecessor_digest",
+                    "policy_digest",
+                }
+            ),
+            "ProviderIngestCompletionSignerPolicyV1",
+        )
+        return cls(
+            policy_id=body["policy_id"],
+            revision=body["revision"],
+            predecessor_digest=body["predecessor_digest"],
+            policy_digest=body["policy_digest"],
+        )
+
+
+@dataclass(frozen=True)
+class ProviderIngestCompletionAuthorityV1:
+    """Exact provider owner and governed signer policy expected at commit."""
+
+    provider_owner: str
+    signer_policy: ProviderIngestCompletionSignerPolicyV1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "provider_owner",
+            _canonical_account_id(self.provider_owner, "provider_owner"),
+        )
+        if not isinstance(
+            self.signer_policy,
+            ProviderIngestCompletionSignerPolicyV1,
+        ):
+            raise TypeError(
+                "signer_policy must be ProviderIngestCompletionSignerPolicyV1"
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return the exact completion-authority mapping."""
+
+        return {
+            "provider_owner": self.provider_owner,
+            "signer_policy": self.signer_policy.to_payload(),
+        }
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> ProviderIngestCompletionAuthorityV1:
+        """Decode one schema-closed completion-authority mapping."""
+
+        body = _exact_mapping(
+            payload,
+            frozenset({"provider_owner", "signer_policy"}),
+            "ProviderIngestCompletionAuthorityV1",
+        )
+        return cls(
+            provider_owner=body["provider_owner"],
+            signer_policy=ProviderIngestCompletionSignerPolicyV1.from_payload(
+                body["signer_policy"]
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ProviderIngestFinalizedAnchorV1:
+    """One finalized block prefix used to prepare a completion."""
+
+    height: int
+    block_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "height", _positive_u64(self.height, "height"))
+        object.__setattr__(
+            self,
+            "block_hash",
+            _canonical_identifier(self.block_hash, "block_hash"),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return the exact finalized-anchor mapping."""
+
+        return {"height": self.height, "block_hash": self.block_hash}
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> ProviderIngestFinalizedAnchorV1:
+        """Decode one schema-closed finalized-anchor mapping."""
+
+        body = _exact_mapping(
+            payload,
+            frozenset({"height", "block_hash"}),
+            "ProviderIngestFinalizedAnchorV1",
+        )
+        return cls(height=body["height"], block_hash=body["block_hash"])
+
+
+@dataclass(frozen=True)
 class CompleteReplicationOrderInstruction:
     """Typed provider-specific `CompleteReplicationOrder` instruction payload."""
 
     order_id: str
     provider_id: str
     completion_epoch: int
+    expected_authority: ProviderIngestCompletionAuthorityV1
+    expected_assignment_revision: int
+    finalized_anchor: ProviderIngestFinalizedAnchorV1
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -332,25 +523,52 @@ class CompleteReplicationOrderInstruction:
             "completion_epoch",
             _epoch(self.completion_epoch, "completion_epoch"),
         )
+        if not isinstance(
+            self.expected_authority,
+            ProviderIngestCompletionAuthorityV1,
+        ):
+            raise TypeError(
+                "expected_authority must be ProviderIngestCompletionAuthorityV1"
+            )
+        object.__setattr__(
+            self,
+            "expected_assignment_revision",
+            _positive_u64(
+                self.expected_assignment_revision,
+                "expected_assignment_revision",
+            ),
+        )
+        if not isinstance(self.finalized_anchor, ProviderIngestFinalizedAnchorV1):
+            raise TypeError(
+                "finalized_anchor must be ProviderIngestFinalizedAnchorV1"
+            )
 
     def to_payload(self) -> dict[str, dict[str, Any]]:
-        """Return the exact three-field Rust/Norito JSON representation."""
+        """Return the exact six-field Rust/Norito JSON representation."""
 
         return {
             "CompleteReplicationOrder": {
                 "order_id": self.order_id,
                 "provider_id": self.provider_id,
                 "completion_epoch": self.completion_epoch,
+                "expected_authority": self.expected_authority.to_payload(),
+                "expected_assignment_revision": self.expected_assignment_revision,
+                "finalized_anchor": self.finalized_anchor.to_payload(),
             }
         }
 
     def to_instruction(self) -> Any:
         """Create the SDK's native `Instruction` value."""
 
-        from .crypto import Instruction
+        from .crypto import _native_complete_replication_order
 
-        return Instruction.from_json(
-            json.dumps(self.to_payload(), sort_keys=True, separators=(",", ":"))
+        return _native_complete_replication_order(
+            self.order_id,
+            self.provider_id,
+            self.completion_epoch,
+            self.expected_authority.to_payload(),
+            self.expected_assignment_revision,
+            self.finalized_anchor.to_payload(),
         )
 
     @classmethod
@@ -367,13 +585,29 @@ class CompleteReplicationOrderInstruction:
         )
         body = _exact_mapping(
             outer["CompleteReplicationOrder"],
-            frozenset({"order_id", "provider_id", "completion_epoch"}),
+            frozenset(
+                {
+                    "order_id",
+                    "provider_id",
+                    "completion_epoch",
+                    "expected_authority",
+                    "expected_assignment_revision",
+                    "finalized_anchor",
+                }
+            ),
             "CompleteReplicationOrder",
         )
         return cls(
             order_id=body["order_id"],
             provider_id=body["provider_id"],
             completion_epoch=body["completion_epoch"],
+            expected_authority=ProviderIngestCompletionAuthorityV1.from_payload(
+                body["expected_authority"]
+            ),
+            expected_assignment_revision=body["expected_assignment_revision"],
+            finalized_anchor=ProviderIngestFinalizedAnchorV1.from_payload(
+                body["finalized_anchor"]
+            ),
         )
 
 
@@ -409,10 +643,11 @@ class ExpireReplicationOrderInstruction:
     def to_instruction(self) -> Any:
         """Create the SDK's native `Instruction` value."""
 
-        from .crypto import Instruction
+        from .crypto import _native_expire_replication_order
 
-        return Instruction.from_json(
-            json.dumps(self.to_payload(), sort_keys=True, separators=(",", ":"))
+        return _native_expire_replication_order(
+            self.order_id,
+            self.expiration_epoch,
         )
 
     @classmethod
@@ -484,13 +719,19 @@ def build_complete_replication_order_instruction(
     order_id: str,
     provider_id: str,
     completion_epoch: int,
+    expected_authority: ProviderIngestCompletionAuthorityV1,
+    expected_assignment_revision: int,
+    finalized_anchor: ProviderIngestFinalizedAnchorV1,
 ) -> Any:
-    """Build the native provider-specific completion instruction."""
+    """Build the native six-field provider-specific completion instruction."""
 
     return CompleteReplicationOrderInstruction(
         order_id,
         provider_id,
         completion_epoch,
+        expected_authority,
+        expected_assignment_revision,
+        finalized_anchor,
     ).to_instruction()
 
 
@@ -510,6 +751,9 @@ __all__ = [
     "CompleteReplicationOrderInstruction",
     "ExpireReplicationOrderInstruction",
     "IssueReplicationOrderInstruction",
+    "ProviderIngestCompletionAuthorityV1",
+    "ProviderIngestCompletionSignerPolicyV1",
+    "ProviderIngestFinalizedAnchorV1",
     "ReplicationOrderInstruction",
     "SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1",
     "build_complete_replication_order_instruction",

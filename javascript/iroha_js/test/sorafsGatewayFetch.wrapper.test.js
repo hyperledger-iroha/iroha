@@ -242,6 +242,107 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
   assert.equal(optionArg.policy_override.anonymity_policy, "anon-strict-pq");
 });
 
+test("sorafsGatewayFetch rejects policy aliases before native dispatch", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+    {
+      name: "beta",
+      providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+      baseUrl: "https://beta-gateway.test/",
+      streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
+    },
+  ];
+  const invoke = (options) =>
+    sorafsGatewayFetch(
+      MANIFEST_HEX,
+      "sorafs.sf1@1.0.0",
+      "[]",
+      providers,
+      { ...options, __nativeBinding: stubBinding },
+    );
+
+  for (const [field, aliases] of [
+    [
+      "rolloutPhase",
+      ["stage-b", "RAMP", " ramp", "ramp ", "ramp_stage", "", null, 1],
+    ],
+    [
+      "transportPolicy",
+      [
+        "soranet_first",
+        "soranet-only",
+        "SORANET-FIRST",
+        " soranet-first",
+        "soranet-first ",
+        "",
+        null,
+        1,
+      ],
+    ],
+    [
+      "anonymityPolicy",
+      [
+        "anon_guard_pq",
+        "stage-a",
+        "stage_b",
+        "stagec",
+        "ANON-GUARD-PQ",
+        " anon-guard-pq",
+        "anon-guard-pq ",
+        "",
+        null,
+        1,
+      ],
+    ],
+    [
+      "writeMode",
+      [
+        "read_only",
+        "upload_pq_only",
+        "UPLOAD-PQ-ONLY",
+        " read-only",
+        "read-only ",
+        "",
+        null,
+        1,
+      ],
+    ],
+  ]) {
+    for (const alias of aliases) {
+      assert.throws(
+        () => invoke({ [field]: alias }),
+        new RegExp(`${field} must be one of`),
+        `${field} accepted ${alias}`,
+      );
+    }
+  }
+  for (const [field, value] of [
+    ["transportPolicy", "soranet_first"],
+    ["anonymityPolicy", "stage-a"],
+  ]) {
+    assert.throws(
+      () => invoke({ policyOverride: { [field]: value } }),
+      new RegExp(`policyOverride\\.${field} must be one of`),
+      `policyOverride.${field} accepted ${value}`,
+    );
+  }
+  assert.equal(calls, 0);
+});
+
 test("sorafsGatewayFetch rejects non-hex provider ids", () => {
   let calls = 0;
   const stubBinding = {

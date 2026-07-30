@@ -84,6 +84,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
+use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::codec::{DecodeAll, Encode};
@@ -3099,6 +3100,53 @@ fn submit_transaction_across_clients(
     Err(eyre!(
         "{context}: failed to submit transaction through any routed observer{suffix}"
     ))
+}
+
+fn grant_exact_dvp_consents_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    settlements: &[(&DvpIsi, AssetId)],
+    grantee: &AccountId,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        !settlements.is_empty(),
+        "{context}: at least one exact settlement consent is required"
+    );
+    let builder = clients_factory()
+        .into_iter()
+        .next()
+        .ok_or_else(|| eyre!("{context}: no counterparty client available"))?;
+    let grants = settlements
+        .iter()
+        .map(|(settlement, debited_asset)| {
+            InstructionBox::from(Grant::account_permission(
+                CanExecuteSettlement {
+                    debited_asset: debited_asset.clone(),
+                    settlement_id: settlement.settlement_id().clone(),
+                    intent_hash: settlement.intent_hash(),
+                },
+                grantee.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let transaction = builder.build_transaction(
+        grants,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    submit_transaction_across_clients(
+        || clients_factory(),
+        &transaction,
+        &format!("{context}: submit exact consent"),
+        SUBMIT_ENQUEUE_REQUEST_TIMEOUT,
+    )?;
+    wait_for_committed_success_across_clients(
+        || clients_factory(),
+        entrypoint_hash,
+        &format!("{context}: wait for exact consent"),
+        BLOCKING_CONFIRMATION_TIMEOUT,
+    )
 }
 
 fn entrypoint_occurrences(
@@ -6533,6 +6581,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 SettlementAtomicity::AllOrNothing,
             ),
         );
+        grant_exact_dvp_consents_across_clients(
+            || {
+                let (_, bob_submitter) = current_nexus_clients();
+                vec![bob_submitter]
+            },
+            &[(&successful_swap, bob_ds2_asset.clone())],
+            &ALICE_ID,
+            "successful swap counterparty consent",
+        )?;
         let (submitter, _) = current_nexus_clients();
         let mut successful_swap_synced_status = None;
         let successful_swap_pre_application = wait_for_independent_lane_application_progress(
@@ -6825,6 +6882,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                         SettlementAtomicity::AllOrNothing,
                     ),
                 );
+                grant_exact_dvp_consents_across_clients(
+                    || vec![soak_bob_observer.clone()],
+                    &[
+                        (&forward_swap, bob_ds2_asset.clone()),
+                        (&reverse_swap, bob_ds1_asset.clone()),
+                    ],
+                    &ALICE_ID,
+                    &format!("work unit {iteration}: bilateral settlement consent"),
+                )?;
                 let paired_swap_tx = soak_submitter.build_transaction(
                     vec![
                         InstructionBox::from(forward_swap),
@@ -7166,6 +7232,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     SettlementAtomicity::AllOrNothing,
                 ),
             );
+            grant_exact_dvp_consents_across_clients(
+                || {
+                    let (_, bob_submitter) = current_nexus_clients();
+                    vec![bob_submitter]
+                },
+                &[(&failing_swap, bob_ds2_asset.clone())],
+                &ALICE_ID,
+                &format!("rollback attempt {attempt}: counterparty consent"),
+            )?;
             let (submitter, _) = current_nexus_clients();
             let failing_swap_tx = submitter.build_transaction(
                 [InstructionBox::from(failing_swap)],

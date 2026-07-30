@@ -6,7 +6,10 @@
 //! lane/dataspace metadata. This module provides a global registry keyed by the
 //! transaction hash to keep those decisions alive across subsystem boundaries.
 
-use std::{collections::VecDeque, sync::LazyLock};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::LazyLock,
+};
 
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
@@ -23,7 +26,43 @@ static ROUTING_LEDGER: LazyLock<RoutingLedgerStore> = LazyLock::new(RoutingLedge
 struct RoutingLedgerStore {
     decisions: DashMap<HashOf<SignedTransaction>, RoutingDecision>,
     plans: DashMap<HashOf<SignedTransaction>, RoutingPlan>,
-    order: Mutex<VecDeque<HashOf<SignedTransaction>>>,
+    order: Mutex<RoutingOrder>,
+}
+
+#[derive(Default)]
+struct RoutingOrder {
+    entries: VecDeque<(HashOf<SignedTransaction>, u64)>,
+    live_generations: HashMap<HashOf<SignedTransaction>, u64>,
+    next_generation: u64,
+}
+
+impl RoutingOrder {
+    fn insert(&mut self, hash: HashOf<SignedTransaction>) {
+        if self.live_generations.contains_key(&hash) {
+            return;
+        }
+        self.next_generation = self.next_generation.wrapping_add(1).max(1);
+        let generation = self.next_generation;
+        self.live_generations.insert(hash, generation);
+        self.entries.push_back((hash, generation));
+    }
+
+    fn remove(&mut self, hash: &HashOf<SignedTransaction>) {
+        self.live_generations.remove(hash);
+    }
+
+    fn is_live(&self, hash: &HashOf<SignedTransaction>, generation: u64) -> bool {
+        self.live_generations.get(hash) == Some(&generation)
+    }
+
+    fn compact_if_needed(&mut self, max_entries: usize) {
+        let compact_threshold = max_entries.saturating_mul(2).max(2);
+        if self.entries.len() <= compact_threshold {
+            return;
+        }
+        self.entries
+            .retain(|(hash, generation)| self.live_generations.get(hash) == Some(generation));
+    }
 }
 
 impl RoutingLedgerStore {
@@ -31,7 +70,7 @@ impl RoutingLedgerStore {
         Self {
             decisions: DashMap::new(),
             plans: DashMap::new(),
-            order: Mutex::new(VecDeque::new()),
+            order: Mutex::new(RoutingOrder::default()),
         }
     }
 
@@ -43,13 +82,11 @@ impl RoutingLedgerStore {
         max_entries: usize,
     ) {
         let max_entries = max_entries.max(1);
-        let inserted = !self.decisions.contains_key(&hash) && !self.plans.contains_key(&hash);
-        self.decisions.insert(hash, decision);
         let mut order = self.order.lock();
-        if inserted {
-            order.push_back(hash);
-        }
+        order.insert(hash);
+        self.decisions.insert(hash, decision);
         self.evict_over_capacity(&mut order, max_entries, hash);
+        order.compact_if_needed(max_entries);
     }
 
     fn record_plan_bounded(
@@ -60,65 +97,74 @@ impl RoutingLedgerStore {
     ) {
         let max_entries = max_entries.max(1);
         let decision = plan.coordinator_route();
-        let inserted = !self.decisions.contains_key(&hash) && !self.plans.contains_key(&hash);
+        let mut order = self.order.lock();
+        order.insert(hash);
         self.plans.insert(hash, plan);
         self.decisions.insert(hash, decision);
-        let mut order = self.order.lock();
-        if inserted {
-            order.push_back(hash);
-        }
         self.evict_over_capacity(&mut order, max_entries, hash);
+        order.compact_if_needed(max_entries);
     }
 
     fn evict_over_capacity(
         &self,
-        order: &mut VecDeque<HashOf<SignedTransaction>>,
+        order: &mut RoutingOrder,
         max_entries: usize,
         protected_hash: HashOf<SignedTransaction>,
     ) {
         let mut inspected = 0usize;
-        let max_inspect = order.len();
+        let max_inspect = order.entries.len();
         while (self.plans.len() > max_entries || self.decisions.len() > max_entries)
             && inspected < max_inspect
         {
-            let Some(oldest) = order.pop_front() else {
+            let Some((oldest, generation)) = order.entries.pop_front() else {
                 break;
             };
             inspected = inspected.saturating_add(1);
-            if oldest == protected_hash {
-                order.push_back(oldest);
+            if !order.is_live(&oldest, generation) {
                 continue;
             }
+            if oldest == protected_hash {
+                order.entries.push_back((oldest, generation));
+                continue;
+            }
+            order.remove(&oldest);
             self.decisions.remove(&oldest);
             self.plans.remove(&oldest);
         }
     }
 
     fn take(&self, hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
+        let mut order = self.order.lock();
         let removed = self.decisions.remove(hash).map(|(_, decision)| decision);
         if removed.is_some() && !self.plans.contains_key(hash) {
-            self.remove_from_order(hash);
+            order.remove(hash);
         }
         removed
     }
 
     fn take_plan(&self, hash: &HashOf<SignedTransaction>) -> Option<RoutingPlan> {
+        let mut order = self.order.lock();
         let removed = self.plans.remove(hash).map(|(_, plan)| plan);
         if removed.is_some() && !self.decisions.contains_key(hash) {
-            self.remove_from_order(hash);
+            order.remove(hash);
         }
         removed
     }
 
     fn take_route(&self, hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
+        let mut order = self.order.lock();
         if let Some((_, plan)) = self.plans.remove(hash) {
             let route = plan.coordinator_route();
             self.decisions.remove(hash);
-            self.remove_from_order(hash);
+            order.remove(hash);
             return Some(route);
         }
 
-        self.take(hash)
+        let removed = self.decisions.remove(hash).map(|(_, decision)| decision);
+        if removed.is_some() {
+            order.remove(hash);
+        }
+        removed
     }
 
     #[cfg(test)]
@@ -131,17 +177,19 @@ impl RoutingLedgerStore {
     }
 
     fn discard_if_matches(&self, hash: &HashOf<SignedTransaction>, expected: RoutingDecision) {
+        let mut order = self.order.lock();
         if self
             .decisions
             .remove_if(hash, |_, current| *current == expected)
             .is_some()
             && !self.plans.contains_key(hash)
         {
-            self.remove_from_order(hash);
+            order.remove(hash);
         }
     }
 
     fn discard_plan_if_matches(&self, hash: &HashOf<SignedTransaction>, expected: &RoutingPlan) {
+        let mut order = self.order.lock();
         let expected_digest = expected.digest();
         if self
             .plans
@@ -149,13 +197,8 @@ impl RoutingLedgerStore {
             .is_some()
         {
             self.decisions.remove(hash);
-            self.remove_from_order(hash);
+            order.remove(hash);
         }
-    }
-
-    fn remove_from_order(&self, hash: &HashOf<SignedTransaction>) {
-        let mut order = self.order.lock();
-        order.retain(|entry| entry != hash);
     }
 
     #[cfg(test)]
@@ -327,5 +370,43 @@ mod tests {
         assert!(ledger.get_plan(&hash).is_none());
         assert!(ledger.get(&hash).is_none());
         assert_eq!(ledger.len_for_tests(), 0);
+    }
+
+    #[test]
+    fn removals_are_lazy_but_order_storage_stays_bounded() {
+        let ledger = RoutingLedgerStore::new();
+        for byte in 1_u8..=64 {
+            let hash = tx_hash(byte);
+            ledger.record_plan_bounded(hash, plan(u32::from(byte)), 2);
+            assert!(ledger.take_route(&hash).is_some());
+        }
+
+        assert_eq!(ledger.len_for_tests(), 0);
+        assert!(
+            ledger.order.lock().entries.len() <= 4,
+            "amortized compaction must bound lazy FIFO tombstones"
+        );
+    }
+
+    #[test]
+    fn stale_order_generation_cannot_evict_reinserted_hash() {
+        let ledger = RoutingLedgerStore::new();
+        let reinserted = tx_hash(31);
+        ledger.record_plan_bounded(reinserted, plan(1), 2);
+        assert!(ledger.take_route(&reinserted).is_some());
+        let genuinely_oldest = tx_hash(32);
+        ledger.record_plan_bounded(genuinely_oldest, plan(2), 2);
+        ledger.record_plan_bounded(reinserted, plan(3), 2);
+        ledger.record_plan_bounded(tx_hash(33), plan(4), 2);
+
+        assert!(
+            ledger.get_plan(&genuinely_oldest).is_none(),
+            "the genuinely oldest live generation should be evicted at capacity"
+        );
+        assert!(
+            ledger.get_plan(&reinserted).is_some(),
+            "a stale generation must not evict the reinserted live record"
+        );
+        assert!(ledger.get_plan(&tx_hash(33)).is_some());
     }
 }

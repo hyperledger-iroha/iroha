@@ -49,6 +49,7 @@ private object NativeBridgeBuildContract {
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
     const val pinnedRustToolchain = "1.93.1"
     const val pinnedCargoNdkVersion = "4.1.2"
+    const val pinnedPythonSeries = "3.12"
     const val pinnedAndroidNdkBaseRevision = "28.0.12674087"
     const val pinnedAndroidNdkRevision = "28.0.12674087-beta2"
     const val pinnedAndroidNdkReleaseName = "r28-beta2"
@@ -304,16 +305,6 @@ private object NativeBridgeBuildContract {
         return resolved
     }
 
-    private fun trustedPython(): java.nio.file.Path {
-        val candidate = listOf(
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3",
-        ).map(::File).firstOrNull { file -> file.isFile && file.canExecute() }
-            ?: throw GradleException("A pinned absolute Python 3 executable is required")
-        return requireExecutable(candidate.toPath(), "Python")
-    }
-
     private fun commandOutput(
         execOperations: ExecOperations,
         workingDirectory: File,
@@ -337,6 +328,115 @@ private object NativeBridgeBuildContract {
         return stdout.toString(Charsets.UTF_8.name()).trim()
     }
 
+    private fun probePython312(
+        execOperations: ExecOperations,
+        workingDirectory: File,
+        candidate: Path,
+    ): Path? {
+        val expected = runCatching { requireExecutable(candidate, "Python") }.getOrNull()
+            ?: return null
+        val stdout = ByteArrayOutputStream()
+        val result = execOperations.exec {
+            workingDir(workingDirectory)
+            setEnvironment(
+                mapOf(
+                    "HOME" to "/tmp",
+                    "PATH" to "/usr/bin:/bin",
+                    "TMPDIR" to "/tmp",
+                    "LANG" to "C.UTF-8",
+                    "LC_ALL" to "C.UTF-8",
+                ),
+            )
+            commandLine(
+                candidate.toString(),
+                "-I",
+                "-S",
+                "-c",
+                "import os,pathlib,stat,sys; " +
+                    "p=pathlib.Path(sys.executable).resolve(strict=True); " +
+                    "ok=(sys.version_info[:2] == (3, 12) and sys.flags.isolated " +
+                    "and 'SDKROOT' not in os.environ and stat.S_ISREG(p.stat().st_mode) " +
+                    "and os.access(p, os.X_OK)); " +
+                    "print(p) if ok else sys.exit(1)",
+            )
+            standardOutput = stdout
+            errorOutput = ByteArrayOutputStream()
+            isIgnoreExitValue = true
+        }
+        if (result.exitValue != 0) return null
+        val reported = runCatching {
+            Path.of(stdout.toString(Charsets.UTF_8.name()).trim())
+                .toRealPath(LinkOption.NOFOLLOW_LINKS)
+        }.getOrNull() ?: return null
+        return reported.takeIf { path ->
+            path == expected &&
+                Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(path) &&
+                Files.isExecutable(path)
+        }
+    }
+
+    private fun trustedPython(
+        execOperations: ExecOperations,
+        workingDirectory: File,
+    ): Path {
+        val override = System.getenv("MOBILE_SDK_PYTHON_BINARY").orEmpty()
+        if (override.isNotEmpty()) {
+            val supplied = runCatching { Path.of(override) }.getOrElse {
+                throw GradleException(
+                    "MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable",
+                    it,
+                )
+            }
+            if (
+                !supplied.isAbsolute ||
+                supplied.normalize() != supplied ||
+                !Files.isRegularFile(supplied, LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(supplied) ||
+                !Files.isExecutable(supplied)
+            ) {
+                throw GradleException(
+                    "MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable",
+                )
+            }
+            val canonical = runCatching {
+                supplied.toRealPath()
+            }.getOrElse {
+                throw GradleException(
+                    "MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable",
+                    it,
+                )
+            }
+            if (canonical != supplied) {
+                throw GradleException(
+                    "MOBILE_SDK_PYTHON_BINARY must already name its canonical executable",
+                )
+            }
+            return probePython312(execOperations, workingDirectory, canonical)
+                ?: throw GradleException(
+                    "MOBILE_SDK_PYTHON_BINARY must be an isolated Python " +
+                        "$pinnedPythonSeries executable",
+                )
+        }
+
+        val candidates = listOf(
+            "/opt/homebrew/opt/python@3.12/bin/python3.12",
+            "/opt/homebrew/bin/python3.12",
+            "/usr/local/opt/python@3.12/bin/python3.12",
+            "/usr/local/bin/python3.12",
+            "/usr/bin/python3.12",
+            "/usr/bin/python3",
+        )
+        for (candidate in candidates) {
+            val path = Path.of(candidate)
+            if (!Files.isRegularFile(path) || !Files.isExecutable(path)) continue
+            probePython312(execOperations, workingDirectory, path)?.let { return it }
+        }
+        throw GradleException(
+            "A trusted absolute Python $pinnedPythonSeries executable is required",
+        )
+    }
+
     private fun baseToolEnvironment(
         home: File,
         temporaryDirectory: File,
@@ -357,12 +457,12 @@ private object NativeBridgeBuildContract {
         hermeticRunnerFile: File,
         androidNdkDirectory: File,
     ): BuildTools {
-        val python = trustedPython()
+        val python = trustedPython(execOperations, irohaRoot)
         val homeText = commandOutput(
             execOperations,
             irohaRoot,
             mapOf(
-                "HOME" to "/",
+                "HOME" to "/tmp",
                 "PATH" to "${python.parent}:/usr/bin:/bin",
                 "TMPDIR" to "/tmp",
                 "LANG" to "C.UTF-8",
@@ -371,6 +471,7 @@ private object NativeBridgeBuildContract {
             listOf(
                 python.toString(),
                 "-I",
+                "-S",
                 "-c",
                 "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)",
             ),
@@ -526,6 +627,7 @@ private object NativeBridgeBuildContract {
             listOf(
                 python.toString(),
                 "-I",
+                "-S",
                 "-c",
                 "import platform; print(platform.python_version())",
             ),
@@ -562,8 +664,11 @@ private object NativeBridgeBuildContract {
                 ?.get(1)
                 ?: throw GradleException("rustup returned a non-canonical version")
         }
-        require(Regex("^[0-9]+(?:\\.[0-9]+){1,2}$").matches(pythonVersion)) {
-            "Python returned a non-canonical version"
+        require(
+            Regex("^${Regex.escape(pinnedPythonSeries)}\\.[0-9]+$")
+                .matches(pythonVersion),
+        ) {
+            "Python must report a canonical $pinnedPythonSeries release"
         }
 
         return BuildTools(
@@ -735,6 +840,7 @@ private object NativeBridgeBuildContract {
             commandLine(
                 tools.python.toString(),
                 "-I",
+                "-S",
                 sourceSealScript.absolutePath,
                 "snapshot",
                 "--root",
@@ -770,6 +876,7 @@ private object NativeBridgeBuildContract {
             commandLine(
                 tools.python.toString(),
                 "-I",
+                "-S",
                 sourceSealScript.absolutePath,
                 "verify",
                 "--root",
@@ -910,6 +1017,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                     listOf(
                         tools.python.toString(),
                         "-I",
+                        "-S",
                         tools.hermeticRunner.toString(),
                         "--profile",
                         "android-cargo",

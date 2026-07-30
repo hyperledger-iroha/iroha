@@ -21,20 +21,24 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_crypto::{
+    Algorithm, BlsNormal, Hash, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
+};
 use iroha_data_model::{
     account::AccountAddress,
     isi::sorafs::{
         ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-        RegisterPinManifest,
+        RegisterPinManifest, RegisterProviderOwner, SetProviderIngestCompletionAuthority,
     },
     prelude::*,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-            ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus, StorageClass,
         },
         reserve::{ReserveDuration, ReservePolicyV1, ReserveQuote, ReserveTier},
     },
@@ -42,6 +46,7 @@ use iroha_data_model::{
         TaikaiCacheConfigV1, TaikaiCacheProfileV1, TaikaiCacheQosConfigV1, TaikaiCacheRolloutStage,
     },
 };
+use iroha_primitives::json::Json as IrohaJson;
 use iroha_torii::sorafs::gateway::AcmeConfig;
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -1893,8 +1898,6 @@ mod reserve_matrix_tests {
 #[cfg(test)]
 mod rollout_tests {
     use std::fs;
-
-    use tempfile::tempdir;
 
     use super::*;
 
@@ -4357,8 +4360,15 @@ fn capability_label(cap: CapabilityType) -> &'static str {
 
 pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>> {
     let state = pin_fixture_make_state();
-    let mut block = state.block(pin_fixture_default_block_header());
+    pin_fixture_commit_completion_anchor(&state)?;
+    let mut block = state.block(pin_fixture_block_header(2));
     let mut tx = block.transaction();
+    let providers = [
+        ProviderId::new([0x51; 32]),
+        ProviderId::new([0x52; 32]),
+        ProviderId::new([0x53; 32]),
+    ];
+    pin_fixture_bootstrap(&mut tx, &providers)?;
 
     let (digest, manifest_root_cid, manifest_payload) = pin_fixture_default_manifest()?;
     let council_keys = pin_fixture_council_keypair();
@@ -4376,11 +4386,6 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     .execute(&pin_fixture_alice(), &mut tx)
     .map_err(|err| format!("failed to bind alias: {err}"))?;
 
-    let providers = [
-        ProviderId::new([0x51; 32]),
-        ProviderId::new([0x52; 32]),
-        ProviderId::new([0x53; 32]),
-    ];
     let order_id = ReplicationOrderId::new([0x44; 32]);
     let order_struct =
         pin_fixture_replication_order(order_id, digest, &manifest_root_cid, &providers, 3);
@@ -4399,6 +4404,9 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
             order_id,
             provider_id,
             completion_epoch: 25,
+            expected_authority: pin_fixture_completion_authority(),
+            expected_assignment_revision: 1,
+            finalized_anchor: pin_fixture_completion_anchor(),
         }
         .execute(&pin_fixture_alice(), &mut tx)
         .map_err(|err| format!("failed to complete provider replication assignment: {err}"))?;
@@ -4442,18 +4450,134 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
 fn pin_fixture_make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    State::new_for_testing(World::new(), kura, live)
+    let alice = pin_fixture_alice();
+    let domain_id = DomainId::try_new(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "universal",
+    )
+    .expect("default account domain label");
+    let world = World::with(
+        [Domain::new(domain_id).build(&alice)],
+        [Account::new(alice.clone()).build(&alice)],
+        std::iter::empty::<AssetDefinition>(),
+    );
+    State::new_for_testing(world, kura, live)
 }
 
-fn pin_fixture_default_block_header() -> iroha_data_model::block::BlockHeader {
+fn pin_fixture_block_header(height: u64) -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero height"),
+        NonZeroU64::new(height).expect("non-zero height"),
         None,
         None,
         None,
         0,
         0,
     )
+}
+
+fn pin_fixture_completion_anchor_header() -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero height"),
+        None,
+        None,
+        None,
+        42,
+        0,
+    )
+}
+
+fn pin_fixture_completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
+    ProviderIngestFinalizedAnchorV1 {
+        height: 1,
+        block_hash: *iroha_crypto::HashOf::new(&pin_fixture_completion_anchor_header()).as_ref(),
+    }
+}
+
+fn pin_fixture_commit_completion_anchor(state: &State) -> Result<(), Box<dyn Error>> {
+    let mut block = state.block(pin_fixture_completion_anchor_header());
+    block.block_hashes.push_for_tests(iroha_crypto::HashOf::new(
+        &pin_fixture_completion_anchor_header(),
+    ));
+    block.commit()?;
+    Ok(())
+}
+
+fn pin_fixture_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
+    ProviderIngestCompletionAuthorityV1::new(
+        pin_fixture_alice(),
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0xA1; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0xA2; 32],
+        },
+    )
+}
+
+fn pin_fixture_bootstrap(
+    tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+    providers: &[ProviderId],
+) -> Result<(), Box<dyn Error>> {
+    tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
+    let alice = pin_fixture_alice();
+    for name in [
+        "CanRegisterSorafsPin",
+        "CanApproveSorafsPin",
+        "CanBindSorafsAlias",
+        "CanIssueSorafsReplicationOrder",
+        "CanCompleteSorafsReplicationOrder",
+        "CanRegisterSorafsProviderOwner",
+    ] {
+        tx.world
+            .add_account_permission(&alice, Permission::new(name.to_owned(), IrohaJson::new(())));
+    }
+    pin_fixture_seed_public_pin_fee_assets(tx)?;
+    for provider_id in providers {
+        RegisterProviderOwner {
+            provider_id: *provider_id,
+            owner: alice.clone(),
+        }
+        .execute(&alice, tx)?;
+        SetProviderIngestCompletionAuthority::new(
+            *provider_id,
+            None,
+            pin_fixture_completion_authority(),
+        )
+        .execute(&alice, tx)?;
+    }
+    Ok(())
+}
+
+fn pin_fixture_seed_public_pin_fee_assets(
+    tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+) -> Result<(), Box<dyn Error>> {
+    let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
+    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
+        && tx.world().domains().get(&domain_id).is_none()
+    {
+        Register::domain(Domain::new(domain_id)).execute(&pin_fixture_alice(), tx)?;
+    }
+    let treasury = tx.gov.sorafs_pin_fee_treasury_account.clone();
+    if tx.world().account(&treasury).is_err() {
+        Register::account(NewAccount::new(treasury)).execute(&pin_fixture_alice(), tx)?;
+    }
+    if tx.world().asset_definitions().get(&fee_asset_id).is_none() {
+        Register::asset_definition(
+            AssetDefinition::numeric(fee_asset_id.clone()).with_name(
+                fee_asset_id
+                    .try_name()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "xor".to_owned()),
+            ),
+        )
+        .execute(&pin_fixture_alice(), tx)?;
+    }
+    Mint::asset_quantity(
+        10_000_000_000_000_u128,
+        AssetId::new(fee_asset_id, pin_fixture_alice()),
+    )
+    .execute(&pin_fixture_alice(), tx)?;
+    Ok(())
 }
 
 fn pin_fixture_register_and_approve(
@@ -4818,6 +4942,10 @@ fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Ma
     );
     order_obj.insert("issued_epoch".into(), Value::from(order.issued_epoch));
     order_obj.insert("deadline_epoch".into(), Value::from(order.deadline_epoch));
+    order_obj.insert(
+        "assignment_revision".into(),
+        Value::from(order.assignment_revision),
+    );
     let (status_label, status_epoch) = match order.status {
         ReplicationOrderStatus::Pending => ("pending", None),
         ReplicationOrderStatus::Completed(epoch) => ("completed", Some(epoch)),
@@ -4844,6 +4972,46 @@ fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Ma
             map.insert(
                 "completion_epoch".into(),
                 Value::from(completion.completion_epoch),
+            );
+            map.insert(
+                "assignment_revision".into(),
+                Value::from(completion.assignment_revision),
+            );
+            map.insert(
+                "expected_owner".into(),
+                Value::String(completion.completion_authority.provider_owner.to_string()),
+            );
+            map.insert(
+                "signer_policy_id_hex".into(),
+                Value::String(hex::encode(
+                    completion.completion_authority.signer_policy.policy_id,
+                )),
+            );
+            map.insert(
+                "signer_policy_revision".into(),
+                Value::from(completion.completion_authority.signer_policy.revision),
+            );
+            map.insert(
+                "signer_policy_predecessor_digest_hex".into(),
+                completion
+                    .completion_authority
+                    .signer_policy
+                    .predecessor_digest
+                    .map_or(Value::Null, |digest| Value::String(hex::encode(digest))),
+            );
+            map.insert(
+                "signer_policy_digest_hex".into(),
+                Value::String(hex::encode(
+                    completion.completion_authority.signer_policy.policy_digest,
+                )),
+            );
+            map.insert(
+                "finalized_height".into(),
+                Value::from(completion.finalized_anchor.height),
+            );
+            map.insert(
+                "finalized_block_hash_hex".into(),
+                Value::String(hex::encode(completion.finalized_anchor.block_hash)),
             );
             Value::Object(map)
         })
@@ -5833,8 +6001,12 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
                 "summary `{}` missing `transport_policy` string",
                 path.display()
             )
-        })?
-        .to_string();
+        })?;
+    require_canonical_transport_policy(
+        transport_policy,
+        &format!("summary `{}` transport_policy", path.display()),
+    )?;
+    let transport_policy = transport_policy.to_string();
     let transport_policy_override = summary
         .get("transport_policy_override")
         .and_then(Value::as_bool)
@@ -5848,6 +6020,15 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
         .get("transport_policy_override_label")
         .and_then(Value::as_str)
         .map(|value| value.to_string());
+    if let Some(label) = transport_policy_override_label.as_deref() {
+        require_canonical_transport_policy(
+            label,
+            &format!(
+                "summary `{}` transport_policy_override_label",
+                path.display()
+            ),
+        )?;
+    }
     let telemetry_source = summary
         .get("telemetry_source")
         .and_then(Value::as_str)
@@ -5918,6 +6099,21 @@ fn parse_scoreboard_metadata(
             obj.get("anonymity_policy_override_label"),
         ),
     };
+    if let Some(label) = metadata.transport_policy.as_deref() {
+        require_canonical_transport_policy(
+            label,
+            &format!("scoreboard `{}` metadata.transport_policy", path.display()),
+        )?;
+    }
+    if let Some(label) = metadata.transport_policy_override_label.as_deref() {
+        require_canonical_transport_policy(
+            label,
+            &format!(
+                "scoreboard `{}` metadata.transport_policy_override_label",
+                path.display()
+            ),
+        )?;
+    }
     Ok(Some(metadata))
 }
 
@@ -5963,8 +6159,16 @@ fn metadata_direct_transport_label(metadata: &ScoreboardMetadata) -> Option<&str
 }
 
 fn is_direct_only_label(label: &str) -> bool {
-    let normalised = label.trim().to_ascii_lowercase();
-    normalised == "direct-only" || normalised == "direct_only"
+    label == "direct-only"
+}
+
+fn require_canonical_transport_policy(label: &str, context: &str) -> Result<(), String> {
+    match label {
+        "soranet-first" | "soranet-strict" | "direct-only" => Ok(()),
+        _ => Err(format!(
+            "{context} must be exactly soranet-first|soranet-strict|direct-only, got `{label}`"
+        )),
+    }
 }
 
 fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
@@ -6819,6 +7023,63 @@ mod tests {
             to_string_pretty(&scoreboard).expect("render scoreboard"),
         )
         .expect("write scoreboard");
+    }
+
+    #[test]
+    fn adoption_transport_policies_require_exact_v1_labels() {
+        for canonical in ["soranet-first", "soranet-strict", "direct-only"] {
+            require_canonical_transport_policy(canonical, "test policy")
+                .expect("canonical transport policy");
+        }
+
+        let path = Path::new("selector-fixture.json");
+        for alias in [
+            "direct_only",
+            "DIRECT-ONLY",
+            " direct-only",
+            "direct-only ",
+            "SoraNet-first",
+            "unknown",
+        ] {
+            require_canonical_transport_policy(alias, "test policy")
+                .expect_err("transport policy alias must fail");
+
+            let mut summary = summary_with_providers_value(&[("alpha", 1), ("beta", 1)]);
+            summary
+                .as_object_mut()
+                .expect("summary object")
+                .insert("transport_policy".into(), Value::from(alias));
+            assert!(
+                collect_summary_stats(&summary, path).is_err(),
+                "summary transport policy alias must fail"
+            );
+
+            let metadata = norito::json!({
+                "transport_policy": alias,
+                "transport_policy_override": false,
+                "transport_policy_override_label": null,
+            });
+            parse_scoreboard_metadata(&metadata, path)
+                .expect_err("scoreboard transport policy alias must fail");
+
+            let mut summary = summary_with_providers_value(&[("alpha", 1), ("beta", 1)]);
+            summary
+                .as_object_mut()
+                .expect("summary object")
+                .insert("transport_policy_override_label".into(), Value::from(alias));
+            assert!(
+                collect_summary_stats(&summary, path).is_err(),
+                "summary override label alias must fail"
+            );
+
+            let metadata = norito::json!({
+                "transport_policy": "soranet-first",
+                "transport_policy_override": true,
+                "transport_policy_override_label": alias,
+            });
+            parse_scoreboard_metadata(&metadata, path)
+                .expect_err("scoreboard override label alias must fail");
+        }
     }
 
     #[test]

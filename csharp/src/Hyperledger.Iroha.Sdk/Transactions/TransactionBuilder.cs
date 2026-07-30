@@ -235,12 +235,18 @@ public sealed class TransactionBuilder
     public TransactionBuilder CompleteReplicationOrder(
         string orderId,
         string providerId,
-        ulong completionEpoch)
+        ulong completionEpoch,
+        ProviderIngestCompletionAuthorityV1 expectedAuthority,
+        ulong expectedAssignmentRevision,
+        ProviderIngestFinalizedAnchorV1 finalizedAnchor)
     {
         return AddInstruction(TransactionInstruction.CompleteReplicationOrder(
             orderId,
             providerId,
-            completionEpoch));
+            completionEpoch,
+            expectedAuthority,
+            expectedAssignmentRevision,
+            finalizedAnchor));
     }
 
     public TransactionBuilder ExpireReplicationOrder(
@@ -378,12 +384,11 @@ public sealed class TransactionBuilder
         signedTransaction.WriteField(context.EncodeConstVec(signature));
         signedTransaction.WriteField(transactionPayload);
         signedTransaction.WriteField(new byte[] { 0 });
-        signedTransaction.WriteField(new byte[] { 0 });
         var signedTransactionBytes = signedTransaction.ToArray();
 
         var entrypoint = new OfflineNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
-        entrypoint.WriteField(signedTransactionBytes);
+        entrypoint.WriteField(transactionPayload);
         var transactionHash = IrohaHash.Hash(entrypoint.ToArray());
 
         return new SignedTransactionEnvelope(signedTransactionBytes, signedTransactionBytes, transactionPayload, transactionHash);
@@ -403,6 +408,7 @@ public sealed class TransactionBuilder
         payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
         payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
         payload.WriteField(metadata.Count == 0 ? context.EncodeEmptyMetadata() : context.EncodeMetadata(metadata));
+        payload.WriteField(new byte[] { 0 });
         return payload.ToArray();
     }
 

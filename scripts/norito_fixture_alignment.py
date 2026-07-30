@@ -162,8 +162,44 @@ def _compact_length(value: int) -> bytes:
             return bytes(output)
 
 
+def _decode_compact_length(data: bytes, offset: int) -> tuple[int, int]:
+    start = offset
+    value = 0
+    shift = 0
+    while offset < len(data) and shift <= 63:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            if data[start:offset] != _compact_length(value):
+                raise ValueError("non-canonical compact field length")
+            return value, offset
+        shift += 7
+    raise ValueError("truncated or overflowing compact field length")
+
+
+def _read_field(data: bytes, offset: int, context: str) -> tuple[bytes, int]:
+    length, payload_offset = _decode_compact_length(data, offset)
+    end = payload_offset + length
+    if end > len(data):
+        raise ValueError(f"truncated {context}")
+    return data[payload_offset:end], end
+
+
+def _signed_transaction_payload(data: bytes) -> bytes:
+    _, offset = _read_field(data, 0, "SignedTransaction.signature")
+    payload, offset = _read_field(data, offset, "SignedTransaction.payload")
+    _, offset = _read_field(data, offset, "SignedTransaction.multisig_signatures")
+    if offset != len(data):
+        raise ValueError("SignedTransaction has trailing or legacy envelope fields")
+    return payload
+
+
 def _signed_transaction_hash(data: bytes) -> str:
-    return _iroha_hash(b"\x00\x00\x00\x00" + _compact_length(len(data)) + data)
+    payload = _signed_transaction_payload(data)
+    return _iroha_hash(
+        b"\x00\x00\x00\x00" + _compact_length(len(payload)) + payload
+    )
 
 
 def load_manifest(path: Path) -> ManifestSnapshot:

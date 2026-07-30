@@ -2007,9 +2007,6 @@ pub mod extractors {
     const OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
     #[cfg(feature = "app_api")]
     const OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES: usize = 64 * 1024;
-    #[cfg(feature = "app_api")]
-    const OFFLINE_CANONICAL_REDEEM_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES: usize = 1024 * 1024;
-
     /// Schema-specific body and decode limits for public Offline API requests.
     #[cfg(feature = "app_api")]
     pub(crate) trait OfflineCanonicalNoritoSchema:
@@ -2019,8 +2016,15 @@ pub mod extractors {
         const MAX_BODY_BYTES: usize;
         /// Maximum nested value-decode depth needed by this request schema.
         const MAX_NESTING_DEPTH: usize;
+        /// Extra frame-derived copies needed before semantic field caps run.
+        const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize = 0;
         /// Fixed allowance for schema-bounded nested proof reconstruction.
         const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 0;
+
+        /// Inspect schema-specific bounded fields before owned reconstruction.
+        fn preflight_canonical_norito(_body: &[u8]) -> Result<(), norito::Error> {
+            Ok(())
+        }
 
         /// Build payload-derived limits for one already body-capped archive.
         fn decode_limits(encoded_len: usize) -> norito::core::DecodeLimits {
@@ -2038,7 +2042,10 @@ pub mod extractors {
                 encoded_len,
                 encoded_len.saturating_mul(2),
                 encoded_len
-                    .saturating_mul(OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
+                    .saturating_mul(
+                        OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                            .saturating_add(Self::EXTRA_ENCODED_ALLOCATION_MULTIPLIER),
+                    )
                     .saturating_add(Self::FIXED_ALLOCATION_ALLOWANCE_BYTES),
                 Self::MAX_NESTING_DEPTH,
             )
@@ -2063,9 +2070,8 @@ pub mod extractors {
         const MAX_NESTING_DEPTH: usize = 32;
         // The proof bytes cross up to ten charged reconstruction boundaries;
         // the fourfold frame-derived base already covers four of them.
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 6
-            * iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2
-            + OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
     }
 
     #[cfg(feature = "app_api")]
@@ -2073,15 +2079,18 @@ pub mod extractors {
         const MAX_BODY_BYTES: usize =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4;
         const MAX_NESTING_DEPTH: usize = 64;
-        // Beyond the fourfold base, the main recursive proof crosses eleven
-        // additional charged boundaries, the optional change proof sixteen,
-        // and the unshield proof three. One MiB covers bounded state vectors
-        // plus remaining collection and string bookkeeping.
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 27
-            * iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-                as usize
-            + 3 * iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2
-            + OFFLINE_CANONICAL_REDEEM_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
+        // The main and optional-change recursive proofs have fixed protocol
+        // caps. Wire preflight reads the nested unshield Vec length and rejects
+        // it above 192 KiB before reconstruction; the fixed allowance therefore
+        // carries its three remaining charged copies.
+        const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+
+        fn preflight_canonical_norito(body: &[u8]) -> Result<(), norito::Error> {
+            iroha_data_model::offline::preflight_kagemusha_redeem_request_archive_v4(body)
+        }
     }
 
     #[cfg(feature = "app_api")]
@@ -2111,6 +2120,7 @@ pub mod extractors {
         body: &[u8],
     ) -> Result<T, OfflineCanonicalNoritoDecodeError> {
         validate_offline_canonical_norito_body_len(body.len(), T::MAX_BODY_BYTES)?;
+        T::preflight_canonical_norito(body).map_err(OfflineCanonicalNoritoDecodeError::Norito)?;
         norito::decode_canonical_with_limits(body, T::decode_limits(body.len()))
             .map_err(OfflineCanonicalNoritoDecodeError::Norito)
     }
@@ -2702,7 +2712,7 @@ pub mod extractors {
                     as usize
             ];
             redeem.redeem_proof.proof.bytes =
-                vec![0x73; iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2];
+                vec![0x73; iroha_data_model::offline::KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
             let mut change_output = redeem.bundle.statement.current_note.clone();
             change_output.note_commitment = [0x74; 32];
             change_output.spend_nullifier = [0x75; 32];
@@ -3899,7 +3909,10 @@ pub mod extractors {
                     limits.max_total_allocated_bytes(),
                     canonical
                         .len()
-                        .saturating_mul(OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
+                        .saturating_mul(
+                            OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                                .saturating_add(T::EXTRA_ENCODED_ALLOCATION_MULTIPLIER),
+                        )
                         .saturating_add(T::FIXED_ALLOCATION_ALLOWANCE_BYTES)
                 );
                 let decoded = decode_offline_canonical_norito::<T>(&canonical)
@@ -3953,6 +3966,21 @@ pub mod extractors {
                     .await
                     .expect("maximum-shaped canonical redeem must pass the HTTP extractor");
             assert_eq!(extracted.0, redeem);
+
+            let mut oversized_unshield = redeem.clone();
+            oversized_unshield.redeem_proof.proof.bytes.push(0x77);
+            let oversized_request = Request::builder()
+                .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
+                .body(Body::from(
+                    norito::encode_canonical(&oversized_unshield)
+                        .expect("encode oversized unshield request"),
+                ))
+                .expect("oversized unshield HTTP request");
+            let rejection =
+                OfflineNorito::<OfflineRedeemRequest>::from_request(oversized_request, &())
+                    .await
+                    .expect_err("wire preflight must reject an oversized unshield proof");
+            assert_eq!(rejection.status(), StatusCode::BAD_REQUEST);
 
             // A behavior assertion is deterministic under parallel tests,
             // unlike a process-wide RSS threshold. The canonical decoder's

@@ -2,7 +2,7 @@
 lang: my
 direction: ltr
 source: docs/source/sorafs/pin_registry_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: 09ccb3070b3667174455fdbc620d1acaf9dcd361a1cb2a47cfc5da38f07a1e8e
 source_last_modified: "2026-01-22T14:35:37.717243+00:00"

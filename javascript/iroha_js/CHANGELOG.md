@@ -15,6 +15,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   derives the native escrow id, requires a positive canonical
   `expected_remaining_amount`, and the native and pure-JavaScript codecs reject
   the retired one-field cancellation shape.
+- Added the exact bare `CancelAssetLock` V1 archive encoder/decoder and
+  appeal-finance reference-validation wrapper. They reject structured-field
+  aliases, noncanonical quantities, substituted framing, and trailing bytes.
 - Made transaction finality polling global-only and state-authoritative across
   the Node, browser, and Nexus clients. Raw status reads retain only explicit
   `local`/`global` diagnostics, while the pre-release `auto` mode, configurable

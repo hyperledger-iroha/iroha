@@ -90,10 +90,18 @@ fn manifest_builder_requires_one_positive_retention_epoch() {
 fn provider_admission_proposal_rejects_noncanonical_operator_inputs() {
     for (arg, expected) in [
         ("--chunker-profile= sorafs.sf1@1.0.0", "whitespace"),
+        ("--chunker-profile=sorafs/sf1@1.0.0", "not canonical"),
+        ("--jurisdiction=US", "unknown option"),
         ("--jurisdiction-code=us", "uppercase"),
         ("--capability= range:64", "ASCII whitespace"),
-        ("--capability=range:064", "canonical unsigned"),
-        ("--capability=soranet:guard, strict", "ASCII whitespace"),
+        ("--capability=range:064", "use --range-capability"),
+        ("--capability=torii-gateway", "unknown capability"),
+        ("--capability=soranet:guard", "use --soranet-pq"),
+        ("--soranet-pq=stage-a", "expected exactly"),
+        (
+            "--range-capability=max_chunk_span=64,min_granularity=4",
+            "unknown range-capability field",
+        ),
         (
             "--stream-budget=max_in_flight=02,max_bytes_per_sec=1024",
             "canonical unsigned",
@@ -102,8 +110,30 @@ fn provider_admission_proposal_rejects_noncanonical_operator_inputs() {
             "--stream-budget=max_in_flight=2, max_bytes_per_sec=1024",
             "ASCII whitespace",
         ),
+        (
+            "--stream-budget=max-in-flight=2,max_bytes_per_sec=1024",
+            "unknown stream-budget field",
+        ),
         ("--transport-hint=torii:01", "canonical unsigned"),
         ("--transport-hint= torii:1", "ASCII whitespace"),
+        (
+            "--transport-hint=torii_http:1",
+            "unknown transport protocol",
+        ),
+        (
+            "--endpoint=noritorpc:storage.example",
+            "unknown endpoint kind",
+        ),
+        ("--endpoint-kind=mtls", "unknown option"),
+        ("--endpoint-attested-at=1", "unknown option"),
+        ("--endpoint-expires-at=2", "unknown option"),
+        ("--endpoint-leaf=leaf.der", "unknown option"),
+        ("--endpoint-leaf-hex=11", "unknown option"),
+        ("--endpoint-alpn=h2", "unknown option"),
+        ("--endpoint-report=report.bin", "unknown option"),
+        ("--endpoint-report-hex=11", "unknown option"),
+        ("--endpoint-intermediate=chain.der", "unknown option"),
+        ("--endpoint-intermediate-hex=11", "unknown option"),
     ] {
         let output = cargo_bin_cmd!("sorafs_manifest_builder")
             .arg("provider-admission")

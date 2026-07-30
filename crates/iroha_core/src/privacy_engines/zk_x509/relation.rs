@@ -353,16 +353,16 @@ fn validate_certificate_path_v1(
 
 fn leaf_key_usage_flags_v1(key_usage: PrivacyX509KeyUsageV1) -> u16 {
     let mut flags = 0_u16;
-    if key_usage.digital_signature {
+    if key_usage.digital_signature.is_required() {
         flags |= KEY_USAGE_DIGITAL_SIGNATURE;
     }
-    if key_usage.content_commitment {
+    if key_usage.content_commitment.is_required() {
         flags |= KEY_USAGE_CONTENT_COMMITMENT;
     }
-    if key_usage.key_encipherment {
+    if key_usage.key_encipherment.is_required() {
         flags |= KEY_USAGE_KEY_ENCIPHERMENT;
     }
-    if key_usage.key_agreement {
+    if key_usage.key_agreement.is_required() {
         flags |= KEY_USAGE_KEY_AGREEMENT;
     }
     flags
@@ -1426,8 +1426,8 @@ pub(crate) mod tests {
             PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyDigestV1,
             PrivacyPolicyIdV1, PrivacyRootV1, PrivacyStatementContextV1,
             PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
-            PrivacyVerifierDigestV1, PrivacyX509TrustStoreDigestV1,
-            PrivacyZkX509DisclosedAttributeV1,
+            PrivacyVerifierDigestV1, PrivacyX509KeyUsageRequirementV1,
+            PrivacyX509TrustStoreDigestV1, PrivacyZkX509DisclosedAttributeV1,
         },
     };
     use p256::{
@@ -2082,10 +2082,10 @@ pub(crate) mod tests {
         )
         .expect("trust anchor");
         let key_usage = PrivacyX509KeyUsageV1 {
-            digital_signature: true,
-            content_commitment: false,
-            key_encipherment: false,
-            key_agreement: false,
+            digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+            content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+            key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+            key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
         };
         let extended_key_usages = vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication];
         let policy = PrivacyZkX509CertificatePolicyRecordV1::new(

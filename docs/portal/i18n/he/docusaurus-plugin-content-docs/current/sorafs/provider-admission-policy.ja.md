@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9ffe54617f5c5f7c3220bd07a1b3ce7d7cb09eb13d98413c072283d2bb7a8068
+source_hash: d6ee955afaac0515d2f19cd6ae168937948b936a701e9572be060017aa451211
 source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -47,7 +47,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## תהליך הקבלה
 
 1. **יצירת הצעה**
-   - CLI: להוסיף `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: להוסיף `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      שמייצר `ProviderAdmissionProposalV1` + חבילת attestation.
    - ולידציה: לוודא שדות חובה, stake > 0, ומזהה chunker קנוני ב-`profile_id`.
 2. **אישור ממשל**
@@ -72,7 +72,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ### רפרנס CLI
 
-הריצו כל פקודה דרך `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+הריצו כל פקודה דרך `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - דגלים נדרשים: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -112,7 +112,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. בנו את זוג ההצעה/advert העוקב עם `provider-admission proposal` ו-`provider-admission sign`, תוך הגדלת `--retention-epoch` ועדכון stake/endpoints לפי הצורך.
 2. הריצו
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -130,7 +130,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 #### ביטול חירום
 1. זיהוי ה-envelope שנפרץ והנפקת ביטול:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

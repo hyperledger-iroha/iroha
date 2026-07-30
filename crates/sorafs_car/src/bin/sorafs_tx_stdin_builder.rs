@@ -2,6 +2,7 @@ use std::{env, fs, process, str::FromStr};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_data_model::{
+    account::AccountId,
     isi::sorafs::{
         CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder,
         RegisterCapacityDeclaration,
@@ -10,7 +11,10 @@ use iroha_data_model::{
     prelude::{InstructionBox, Name},
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
-        pin_registry::ReplicationOrderId,
+        pin_registry::{
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+        },
     },
 };
 use iroha_primitives::json::Json;
@@ -59,7 +63,12 @@ Subcommands:
 Options:
   capacity-declaration --summary=<path>
   replication-order --summary=<path> --issued-epoch=<u64> --deadline-epoch=<u64>
-  complete-order --order-id-hex=<64-hex> --provider-id-hex=<64-hex> --completion-epoch=<u64>
+  complete-order --order-id-hex=<64-hex> --provider-id-hex=<64-hex> --completion-epoch=<positive-u64> \
+--expected-owner=<account-id> --assignment-revision=<positive-u64> \
+--signer-policy-id-hex=<64-hex> --signer-policy-revision=<positive-u64> \
+--signer-policy-predecessor-digest-hex=<64-hex; required after revision 1> \
+--signer-policy-digest-hex=<64-hex> --finalized-height=<positive-u64> \
+--finalized-block-hash-hex=<64-hex>
   expire-order --order-id-hex=<64-hex> --expiration-epoch=<positive-u64>
 "#
     .to_owned()
@@ -145,9 +154,23 @@ fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), Strin
 }
 
 fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> {
+    print_instruction_json(complete_order_instruction(args)?)
+}
+
+fn complete_order_instruction(
+    args: impl Iterator<Item = String>,
+) -> Result<InstructionBox, String> {
     let mut order_id_hex = None;
     let mut provider_id_hex = None;
     let mut completion_epoch = None;
+    let mut expected_owner = None;
+    let mut assignment_revision = None;
+    let mut signer_policy_id_hex = None;
+    let mut signer_policy_revision = None;
+    let mut signer_policy_predecessor_digest_hex = None;
+    let mut signer_policy_digest_hex = None;
+    let mut finalized_height = None;
+    let mut finalized_block_hash_hex = None;
 
     for arg in args {
         let (key, value) = split_option(&arg)?;
@@ -155,6 +178,42 @@ fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> 
             "--order-id-hex" => set_once(&mut order_id_hex, value.to_owned(), key)?,
             "--provider-id-hex" => set_once(&mut provider_id_hex, value.to_owned(), key)?,
             "--completion-epoch" => set_once(&mut completion_epoch, parse_u64(value, key)?, key)?,
+            "--expected-owner" => {
+                let parsed = AccountId::parse_encoded(value)
+                    .map_err(|error| format!("invalid `--expected-owner` account ID: {error}"))?;
+                if parsed.canonical() != value {
+                    return Err(
+                        "`--expected-owner` must be an exact canonical I105 account ID".to_owned(),
+                    );
+                }
+                let owner = parsed.into_account_id();
+                set_once(&mut expected_owner, owner, key)?;
+            }
+            "--assignment-revision" => {
+                set_once(&mut assignment_revision, parse_u64(value, key)?, key)?;
+            }
+            "--signer-policy-id-hex" => {
+                set_once(&mut signer_policy_id_hex, value.to_owned(), key)?;
+            }
+            "--signer-policy-revision" => {
+                set_once(&mut signer_policy_revision, parse_u64(value, key)?, key)?;
+            }
+            "--signer-policy-predecessor-digest-hex" => {
+                set_once(
+                    &mut signer_policy_predecessor_digest_hex,
+                    value.to_owned(),
+                    key,
+                )?;
+            }
+            "--signer-policy-digest-hex" => {
+                set_once(&mut signer_policy_digest_hex, value.to_owned(), key)?;
+            }
+            "--finalized-height" => {
+                set_once(&mut finalized_height, parse_u64(value, key)?, key)?;
+            }
+            "--finalized-block-hash-hex" => {
+                set_once(&mut finalized_block_hash_hex, value.to_owned(), key)?;
+            }
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
@@ -164,16 +223,59 @@ fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> 
     let provider_id_hex =
         provider_id_hex.ok_or_else(|| "missing `--provider-id-hex=<hex>`".to_owned())?;
     let provider_id = parse_hex_32(&provider_id_hex, "provider_id_hex")?;
-    let completion_epoch =
-        completion_epoch.ok_or_else(|| "missing `--completion-epoch=<u64>`".to_owned())?;
+    let completion_epoch = require_positive(completion_epoch, "--completion-epoch")?;
+    let expected_owner =
+        expected_owner.ok_or_else(|| "missing `--expected-owner=<account-id>`".to_owned())?;
+    let assignment_revision = require_positive(assignment_revision, "--assignment-revision")?;
+    let signer_policy_id_hex = signer_policy_id_hex
+        .ok_or_else(|| "missing `--signer-policy-id-hex=<64-hex>`".to_owned())?;
+    let signer_policy_revision =
+        require_positive(signer_policy_revision, "--signer-policy-revision")?;
+    let signer_policy_digest_hex = signer_policy_digest_hex
+        .ok_or_else(|| "missing `--signer-policy-digest-hex=<64-hex>`".to_owned())?;
+    let finalized_height = require_positive(finalized_height, "--finalized-height")?;
+    let finalized_block_hash_hex = finalized_block_hash_hex
+        .ok_or_else(|| "missing `--finalized-block-hash-hex=<64-hex>`".to_owned())?;
+    let signer_policy = ProviderIngestCompletionSignerPolicyV1 {
+        policy_id: parse_hex_32(&signer_policy_id_hex, "signer_policy_id_hex")?,
+        revision: signer_policy_revision,
+        predecessor_digest: if signer_policy_revision == 1 {
+            if signer_policy_predecessor_digest_hex.is_some() {
+                return Err(
+                    "`--signer-policy-predecessor-digest-hex` is forbidden at revision 1"
+                        .to_owned(),
+                );
+            }
+            None
+        } else {
+            let predecessor_hex = signer_policy_predecessor_digest_hex.ok_or_else(|| {
+                "missing `--signer-policy-predecessor-digest-hex=<64-hex>`".to_owned()
+            })?;
+            Some(parse_hex_32(
+                &predecessor_hex,
+                "signer_policy_predecessor_digest_hex",
+            )?)
+        },
+        policy_digest: parse_hex_32(&signer_policy_digest_hex, "signer_policy_digest_hex")?,
+    };
+    let expected_authority =
+        ProviderIngestCompletionAuthorityV1::new(expected_owner, signer_policy);
+    let finalized_anchor = ProviderIngestFinalizedAnchorV1 {
+        height: finalized_height,
+        block_hash: parse_hex_32(&finalized_block_hash_hex, "finalized_block_hash_hex")?,
+    };
+    if !expected_authority.is_valid() || !finalized_anchor.is_valid() {
+        return Err("completion authority and finalized anchor must be canonical".to_owned());
+    }
 
-    let instruction = CompleteReplicationOrder::new(
+    Ok(InstructionBox::from(CompleteReplicationOrder::new(
         ReplicationOrderId::new(order_id),
         ProviderId::new(provider_id),
         completion_epoch,
-    );
-
-    print_instruction_json(InstructionBox::from(instruction))
+        expected_authority,
+        assignment_revision,
+        finalized_anchor,
+    )))
 }
 
 fn run_expire_order(args: impl Iterator<Item = String>) -> Result<(), String> {
@@ -253,6 +355,14 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
     value
         .parse::<u64>()
         .map_err(|err| format!("invalid `{label}` value `{value}`: {err}"))
+}
+
+fn require_positive(value: Option<u64>, label: &str) -> Result<u64, String> {
+    let value = value.ok_or_else(|| format!("missing `{label}=<positive-u64>`"))?;
+    if value == 0 {
+        return Err(format!("`{label}` must be greater than zero"));
+    }
+    Ok(value)
 }
 
 fn parse_hex_32(value: &str, label: &str) -> Result<[u8; 32], String> {
@@ -340,6 +450,8 @@ fn print_instruction_json(instruction: InstructionBox) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const OWNER_I105: &str = "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T";
 
     #[test]
     fn parse_u64_rejects_noncanonical_epoch_tokens() {
@@ -436,5 +548,90 @@ mod tests {
                 "invalid expiration arguments must fail"
             );
         }
+    }
+
+    #[test]
+    fn complete_order_requires_and_encodes_exact_commit_context() {
+        let args = [
+            format!("--order-id-hex={}", "11".repeat(32)),
+            format!("--provider-id-hex={}", "22".repeat(32)),
+            "--completion-epoch=25".to_owned(),
+            format!("--expected-owner={OWNER_I105}"),
+            "--assignment-revision=3".to_owned(),
+            format!("--signer-policy-id-hex={}", "33".repeat(32)),
+            "--signer-policy-revision=2".to_owned(),
+            format!("--signer-policy-predecessor-digest-hex={}", "44".repeat(32)),
+            format!("--signer-policy-digest-hex={}", "55".repeat(32)),
+            "--finalized-height=19".to_owned(),
+            format!("--finalized-block-hash-hex={}", "66".repeat(32)),
+        ];
+        let actual =
+            complete_order_instruction(args.clone().into_iter()).expect("build exact completion");
+        let owner = AccountId::parse_encoded(OWNER_I105)
+            .expect("fixture owner")
+            .into_account_id();
+        let expected = InstructionBox::from(CompleteReplicationOrder::new(
+            ReplicationOrderId::new([0x11; 32]),
+            ProviderId::new([0x22; 32]),
+            25,
+            ProviderIngestCompletionAuthorityV1::new(
+                owner,
+                ProviderIngestCompletionSignerPolicyV1 {
+                    policy_id: [0x33; 32],
+                    revision: 2,
+                    predecessor_digest: Some([0x44; 32]),
+                    policy_digest: [0x55; 32],
+                },
+            ),
+            3,
+            ProviderIngestFinalizedAnchorV1 {
+                height: 19,
+                block_hash: [0x66; 32],
+            },
+        ));
+        assert_eq!(
+            to_bytes(&actual).expect("encode actual"),
+            to_bytes(&expected).expect("encode expected")
+        );
+
+        for noncanonical_owner in [
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C".to_owned(),
+            format!(" {OWNER_I105}"),
+            format!("{OWNER_I105} "),
+        ] {
+            let mut invalid = args.clone();
+            invalid[3] = format!("--expected-owner={noncanonical_owner}");
+            assert!(
+                complete_order_instruction(invalid.into_iter()).is_err(),
+                "noncanonical expected owner must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn complete_order_rejects_noncanonical_policy_predecessor_shape() {
+        let base = vec![
+            format!("--order-id-hex={}", "11".repeat(32)),
+            format!("--provider-id-hex={}", "22".repeat(32)),
+            "--completion-epoch=25".to_owned(),
+            format!("--expected-owner={OWNER_I105}"),
+            "--assignment-revision=3".to_owned(),
+            format!("--signer-policy-id-hex={}", "33".repeat(32)),
+            format!("--signer-policy-digest-hex={}", "55".repeat(32)),
+            "--finalized-height=19".to_owned(),
+            format!("--finalized-block-hash-hex={}", "66".repeat(32)),
+        ];
+
+        let mut missing_predecessor = base.clone();
+        missing_predecessor.push("--signer-policy-revision=2".to_owned());
+        assert!(complete_order_instruction(missing_predecessor.into_iter()).is_err());
+
+        let mut forbidden_predecessor = base;
+        forbidden_predecessor.push("--signer-policy-revision=1".to_owned());
+        forbidden_predecessor.push(format!(
+            "--signer-policy-predecessor-digest-hex={}",
+            "44".repeat(32)
+        ));
+        assert!(complete_order_instruction(forbidden_predecessor.into_iter()).is_err());
     }
 }

@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# Verify that mobile build and packaging entrypoints pin an isolated Python 3.12.
+set -euo pipefail
+
+PATH=/usr/bin:/bin
+export PATH
+
+ROOT_DIR="$(cd "${BASH_SOURCE[0]%/*}/../.." && pwd -P)"
+APPLE_BUILDER="$ROOT_DIR/scripts/build_norito_xcframework.sh"
+MOBILE_PACKAGER="$ROOT_DIR/scripts/package_mobile_sdk_artifacts.sh"
+MOBILE_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh"
+MOBILE_CHECKER_TEST="$ROOT_DIR/scripts/check_mobile_sdk_artifacts_test.sh"
+ANDROID_BUILDER="$ROOT_DIR/kotlin/client-android/build.gradle.kts"
+JVM_NATIVE_GATE="$ROOT_DIR/ci/check_kagemusha_jvm_native_bridge.sh"
+MOBILE_WORKFLOW="$ROOT_DIR/.github/workflows/mobile_sdk_artifacts.yml"
+TEST_ROOT="$(mktemp -d /tmp/iroha-mobile-python312-contract.XXXXXX)"
+
+cleanup() {
+  rm -rf -- "$TEST_ROOT"
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+  printf 'mobile Python 3.12 contract test failed: %s\n' "$*" >&2
+  exit 1
+}
+
+find_python312() {
+  local candidate canonical
+  local override="${MOBILE_SDK_PYTHON_BINARY:-}"
+  local candidates=()
+  if [[ -n "$override" ]]; then
+    [[ "$override" == /* && -f "$override" && ! -L "$override" && -x "$override" ]] \
+      || return 1
+    candidates=("$override")
+  else
+    candidates=(
+      /opt/homebrew/opt/python@3.12/bin/python3.12
+      /opt/homebrew/bin/python3.12
+      /usr/local/opt/python@3.12/bin/python3.12
+      /usr/local/bin/python3.12
+      /usr/bin/python3.12
+      /usr/bin/python3
+    )
+  fi
+  for candidate in "${candidates[@]}"; do
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    if canonical="$(
+      env -i \
+        HOME=/tmp \
+        PATH=/usr/bin:/bin \
+        TMPDIR=/tmp \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        "$candidate" -I -S -c '
+import os
+import pathlib
+import stat
+import sys
+
+if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
+    raise SystemExit(1)
+if "SDKROOT" in os.environ:
+    raise SystemExit(1)
+resolved = pathlib.Path(sys.executable).resolve(strict=True)
+if not stat.S_ISREG(resolved.stat().st_mode) or not os.access(resolved, os.X_OK):
+    raise SystemExit(1)
+print(resolved)
+'
+    )"; then
+      if [[ -n "$override" && "$canonical" != "$override" ]]; then
+        return 1
+      fi
+      printf '%s\n' "$canonical"
+      return 0
+    fi
+  done
+  return 1
+}
+
+expect_success() {
+  local label="$1"
+  shift
+  local output
+  if ! output="$("$@" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "$label unexpectedly failed"
+  fi
+}
+
+expect_failure_containing() {
+  local label="$1"
+  local expected="$2"
+  shift 2
+  local output
+  if output="$("$@" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "$label unexpectedly succeeded"
+  fi
+  case "$output" in
+    *"$expected"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "$label did not report: $expected"
+      ;;
+  esac
+}
+
+PYTHON312="$(find_python312)" || fail "no trusted Python 3.12 executable is available"
+[[ "$PYTHON312" == /* && -f "$PYTHON312" && ! -L "$PYTHON312" && -x "$PYTHON312" ]] \
+  || fail "Python 3.12 discovery did not return a canonical regular executable"
+
+for script in "$APPLE_BUILDER" "$MOBILE_PACKAGER"; do
+  grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$script" \
+    || fail "$script does not expose the canonical Python override"
+  grep -Fq "\"\$PYTHON_BINARY\" -I -S \"\$@\"" "$script" \
+    || fail "$script does not isolate helper Python invocations"
+  if grep -Eq '^[[:space:]]*python3([[:space:]]|$)' "$script"; then
+    fail "$script still invokes Python through ambient PATH"
+  fi
+done
+
+grep -Fq 'resolve_trusted_python312()' "$MOBILE_CHECKER" \
+  || fail "mobile checker does not authenticate Python 3.12"
+grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$MOBILE_CHECKER" \
+  || fail "mobile checker does not expose the canonical Python override"
+grep -Fq '"$CHECK_PYTHON_BINARY" -I -S "$@"' "$MOBILE_CHECKER" \
+  || fail "mobile checker does not isolate Python helpers from site packages"
+grep -Fq 'export MOBILE_SDK_PYTHON_BINARY="$TEST_PYTHON_BINARY"' "$MOBILE_CHECKER_TEST" \
+  || fail "mobile checker self-test does not bind its authenticated Python"
+grep -Fq 'System.getenv("MOBILE_SDK_PYTHON_BINARY")' "$ANDROID_BUILDER" \
+  || fail "Android native build logic does not honor the canonical Python override"
+grep -Fq 'const val pinnedPythonSeries = "3.12"' "$ANDROID_BUILDER" \
+  || fail "Android native build logic does not pin Python 3.12"
+grep -Fq '"/opt/homebrew/opt/python@3.12/bin/python3.12"' "$ANDROID_BUILDER" \
+  || fail "Android native build logic omits the Homebrew versioned Python locator"
+if grep -Fq '"/opt/homebrew/bin/python3",' "$ANDROID_BUILDER"; then
+  fail "Android native build logic still trusts an unversioned Homebrew Python"
+fi
+grep -Fq 'resolve_trusted_python312()' "$JVM_NATIVE_GATE" \
+  || fail "JVM native gate does not authenticate Python 3.12"
+grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$JVM_NATIVE_GATE" \
+  || fail "JVM native gate does not honor the canonical Python override"
+grep -Fq 'sys.version_info[:2] != (3, 12)' "$JVM_NATIVE_GATE" \
+  || fail "JVM native gate does not require exact Python 3.12"
+grep -Fq '"$PYTHON_BINARY" -I -S' "$JVM_NATIVE_GATE" \
+  || fail "JVM native gate does not isolate Python helpers from site packages"
+[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
+  || fail "mobile workflow must pin Python 3.12 in exactly three jobs"
+[[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
+  || fail "mobile workflow must bind the canonical Python in exactly three jobs"
+grep -Fq 'bash scripts/tests/mobile_sdk_python312_contract.sh' "$MOBILE_WORKFLOW" \
+  || fail "mobile workflow does not run the Python 3.12 contract"
+grep -Fq '"scripts/tests/mobile_sdk_python312_contract.sh"' "$MOBILE_WORKFLOW" \
+  || fail "mobile workflow does not trigger on Python 3.12 contract changes"
+
+mkdir -p "$TEST_ROOT/hostile-path" "$TEST_ROOT/forged-sdk"
+ln -s "$PYTHON312" "$TEST_ROOT/python312-link"
+
+expect_success \
+  "default package Python selection under a forged SDKROOT" \
+  env \
+    PATH="$TEST_ROOT/hostile-path" \
+    SDKROOT="$TEST_ROOT/forged-sdk" \
+    /bin/bash "$MOBILE_PACKAGER" --help
+
+expect_success \
+  "canonical Python override under a forged SDKROOT" \
+  env \
+    PATH="$TEST_ROOT/hostile-path" \
+    SDKROOT="$TEST_ROOT/forged-sdk" \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    /bin/bash "$MOBILE_PACKAGER" --help
+
+expect_failure_containing \
+  "symlinked Python override" \
+  "absolute canonical regular executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$TEST_ROOT/python312-link" \
+    /bin/bash "$MOBILE_PACKAGER" --help
+
+expect_failure_containing \
+  "relative Python override" \
+  "absolute canonical regular executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY=python3.12 \
+    /bin/bash "$MOBILE_PACKAGER" --help
+
+expect_failure_containing \
+  "non-Python override" \
+  "isolated Python 3.12 executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY=/bin/bash \
+    /bin/bash "$MOBILE_PACKAGER" --help
+
+jvm_python="$(
+  env \
+    PATH="$TEST_ROOT/hostile-path" \
+    SDKROOT="$TEST_ROOT/forged-sdk" \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
+)" || fail "JVM native gate rejected the canonical Python 3.12 override"
+[[ "$jvm_python" == "$PYTHON312" ]] \
+  || fail "JVM native gate substituted the canonical Python 3.12 override"
+
+expect_failure_containing \
+  "JVM native gate symlinked Python override" \
+  "absolute canonical regular executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$TEST_ROOT/python312-link" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
+
+expect_failure_containing \
+  "JVM native gate relative Python override" \
+  "absolute canonical regular executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY=python3.12 \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
+
+expect_failure_containing \
+  "JVM native gate non-Python override" \
+  "isolated Python 3.12 executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY=/bin/bash \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
+
+expect_failure_containing \
+  "Apple builder canonical Python override" \
+  "Unknown argument" \
+  env \
+    PATH="$TEST_ROOT/hostile-path" \
+    SDKROOT="$TEST_ROOT/forged-sdk" \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    NORITO_BRIDGE_BUILD_LOCK_HELD=1 \
+    /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
+
+printf 'mobile Python 3.12 contract tests passed\n'

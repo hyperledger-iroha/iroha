@@ -41,7 +41,7 @@ SoraFS Architecture RFC-д тодорхойлсон бөгөөд үлдсэн а
 ## Элсэлтийн ажлын явц
 
 1. **Санал үүсгэх**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` нэмнэ үү
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …` нэмнэ үү
      `ProviderAdmissionProposalV1` + баталгаажуулалтын багцыг үйлдвэрлэж байна.
    - Баталгаажуулалт: шаардлагатай талбаруудыг баталгаажуулах, гадас > 0, `profile_id` дахь каноник chunker бариул.
 2. **Засаглалын баталгаа**
@@ -70,7 +70,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
 
 ### CLI лавлагаа
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …`-ээр команд бүрийг ажиллуул.
+`cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …`-ээр команд бүрийг ажиллуул.
 
 - `proposal`
   - Шаардлагатай тугнууд: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -117,7 +117,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
 1. `provider-admission proposal` болон `provider-admission sign`-ээр залгамжлагч санал/зар сурталчилгааны хослолыг бүтээж, `--retention-epoch`-ийг нэмэгдүүлж, бооцоо/төгсгөлийн цэгүүдийг шаардлагатай бол шинэчилнэ үү.
 2. Гүйцэтгэх  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
 #### Яаралтай хүчингүй болгох
 1. Эвдэрсэн дугтуйг тодорхойлж, хүчингүй болгох:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

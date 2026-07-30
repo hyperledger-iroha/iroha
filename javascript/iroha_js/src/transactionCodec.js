@@ -1200,6 +1200,7 @@ function encodeTransferPayload(normalized) {
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
+    Buffer.of(0),
   ]);
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail("bounds_exceeded", `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
@@ -1293,6 +1294,7 @@ function encodeInstructionTransactionPayload(normalized) {
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
+    Buffer.of(0),
   ]);
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail("bounds_exceeded", `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
@@ -1489,6 +1491,7 @@ function encodeExecutableBatchTransactionPayload(normalized) {
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
+    Buffer.of(0),
   ]);
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail("bounds_exceeded", `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
@@ -2206,6 +2209,12 @@ function validateTransactionPayload(payload, authorityLiteral) {
       "transaction payload.metadata",
     ),
   );
+  if (!reader.readField("attachments").equals(Buffer.of(0))) {
+    fail(
+      "unsupported_payload",
+      "transaction payload proof attachments are not supported by the browser codec",
+    );
+  }
   reader.assertEof();
   return assertedAuthority ?? { publicKey: authorityPublicKey };
 }
@@ -2280,6 +2289,12 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
       "transaction payload.metadata",
     ),
   );
+  if (!reader.readField("attachments").equals(Buffer.of(0))) {
+    fail(
+      "unsupported_payload",
+      "transaction payload proof attachments are not supported by the browser codec",
+    );
+  }
   reader.assertEof();
   return assertedAuthority ?? { publicKey: authorityPublicKey };
 }
@@ -2321,16 +2336,11 @@ function signatureArchive(signature) {
 }
 
 function bareSignedTransaction(payload, signature) {
-  return struct([
-    signatureArchive(signature),
-    payload,
-    Buffer.of(0),
-    Buffer.of(0),
-  ]);
+  return struct([signatureArchive(signature), payload, Buffer.of(0)]);
 }
 
-function transactionHashFromBare(bare) {
-  return irohaHash(Buffer.concat([u32(0), field(bare)]));
+function transactionHashFromPayload(payload) {
+  return irohaHash(Buffer.concat([u32(0), field(payload)]));
 }
 
 /**
@@ -2645,7 +2655,7 @@ export function finalizeBrowserSignedTransaction(
   }
   const bare = bareSignedTransaction(payload, signatureBytes);
   const signedTransaction = Buffer.concat([Buffer.of(1), bare]);
-  const hash = transactionHashFromBare(bare);
+  const hash = transactionHashFromPayload(payload);
   return {
     signedTransaction,
     hash,
@@ -2728,7 +2738,7 @@ export function finalizeBrowserInstructionTransaction(
   }
   const bare = bareSignedTransaction(payload, signatureBytes);
   const signedTransaction = Buffer.concat([Buffer.of(1), bare]);
-  const hash = transactionHashFromBare(bare);
+  const hash = transactionHashFromPayload(payload);
   return {
     signedTransaction,
     hash,
@@ -2758,7 +2768,7 @@ export function finalizeBrowserExecutableBatchTransaction(
 }
 
 /**
- * Compute the canonical pipeline hash of exact versioned SignedTransaction bytes.
+ * Compute the canonical pipeline hash of a versioned SignedTransaction's intent.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @returns {string}
  */
@@ -2786,12 +2796,10 @@ export function browserSignedTransactionHashHex(signedTransaction) {
   );
   signatureValue.assertEof();
   const payload = reader.readField("payload");
-  const attachments = reader.readField("attachments");
   const multisig = reader.readField("multisigSignatures");
   reader.assertEof();
   if (
     rawSignature.length !== 64 ||
-    !attachments.equals(Buffer.of(0)) ||
     !multisig.equals(Buffer.of(0)) ||
     payload.length === 0 ||
     payload.length > MAX_PAYLOAD_BYTES
@@ -2823,7 +2831,7 @@ export function browserSignedTransactionHashHex(signedTransaction) {
       );
     }
   }
-  return transactionHashFromBare(bare).toString("hex");
+  return transactionHashFromPayload(payload).toString("hex");
 }
 
 /** Browser-safe codec implementing the Nexus transaction-codec contract. */

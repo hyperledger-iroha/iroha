@@ -27,6 +27,7 @@ import {
   probeNativeBindingExports,
   publishNativeBinding,
   recoverNativeBindingPublication,
+  REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   REQUIRED_NATIVE_EXPORTS,
   REQUIRED_NATIVE_EXPORT_RESULTS,
 } from "../scripts/copy-native.mjs";
@@ -103,6 +104,12 @@ await publishNativeBinding({
       source_tree_sha256: ${JSON.stringify(SOURCE_TREE_DIGEST)},
     };
   },
+  readSourceState() {
+    return {
+      sourceGitRevision: ${JSON.stringify(SOURCE_REVISION)},
+      sourceTreeClean: true,
+    };
+  },
   log() {},
   phaseHook(phase) {
     if (phase !== process.env.TARGET_PHASE) return;
@@ -176,6 +183,12 @@ function publicationOptions(layout, overrides = {}) {
     cargoProfile: "debug",
     readBuildProvenance(source) {
       return fixtureBuildProvenance(source);
+    },
+    readSourceState() {
+      return {
+        sourceGitRevision: SOURCE_REVISION,
+        sourceTreeClean: true,
+      };
     },
     ...overrides,
   };
@@ -358,21 +371,29 @@ test("an identical binary with different sealed-source provenance replaces the m
   writeFileSync(layout.source, bytes);
   await publishNativeBinding(publicationOptions(layout));
 
+  const nextRevision = "c".repeat(40);
   const nextDigest = "c".repeat(64);
   const second = await publishNativeBinding(
     publicationOptions(layout, {
       readBuildProvenance(source) {
         return fixtureBuildProvenance(source, "debug", {
-          source_tree_clean: false,
+          source_git_revision: nextRevision,
           source_tree_sha256: nextDigest,
         });
+      },
+      readSourceState() {
+        return {
+          sourceGitRevision: nextRevision,
+          sourceTreeClean: true,
+        };
       },
     }),
   );
 
   assert.equal(second.sha256, createHash("sha256").update(bytes).digest("hex"));
   const verification = assertVerifiedPair(layout, bytes);
-  assert.equal(verification.sourceTreeClean, false);
+  assert.equal(verification.sourceGitRevision, nextRevision);
+  assert.equal(verification.sourceTreeClean, true);
   assert.equal(verification.sourceTreeSha256, nextDigest);
 });
 
@@ -384,6 +405,7 @@ test("identical-binary provenance replacement failpoints restore the exact previ
       writeFileSync(layout.source, bytes);
       await publishNativeBinding(publicationOptions(layout));
       const before = snapshotPair(layout);
+      const replacementRevision = "d".repeat(40);
 
       await assert.rejects(
         publishNativeBinding(
@@ -391,9 +413,15 @@ test("identical-binary provenance replacement failpoints restore the exact previ
             failpoint,
             readBuildProvenance(source) {
               return fixtureBuildProvenance(source, "debug", {
-                source_tree_clean: false,
+                source_git_revision: replacementRevision,
                 source_tree_sha256: "d".repeat(64),
               });
+            },
+            readSourceState() {
+              return {
+                sourceGitRevision: replacementRevision,
+                sourceTreeClean: true,
+              };
             },
           }),
         ),
@@ -1514,7 +1542,10 @@ test("required-export probe accepts a complete module and rejects missing symbol
     ),
   );
 
-  assert.doesNotThrow(() => probeNativeBindingExports(complete));
+  assert.equal(
+    probeNativeBindingExports(complete),
+    REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  );
   assert.throws(
     () => probeNativeBindingExports(incomplete),
     /missing required native exports.*noritoDecodeInstruction.*compileKotodama/u,
@@ -1527,16 +1558,64 @@ test("required-export probe accepts a complete module and rejects missing symbol
     () => probeNativeBindingExports(complete, ["not-valid!"]),
     /non-empty identifier array/u,
   );
+  assert.throws(
+    () =>
+      probeNativeBindingExports(
+        complete,
+        REQUIRED_NATIVE_EXPORTS,
+        REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 2,
+      ),
+    /ABI mismatch.*expected 19.*found 21/u,
+  );
+});
+
+test("native publication rejects dirty or stale source provenance", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, Buffer.from("native source provenance fixture"));
+
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        readBuildProvenance(source) {
+          return {
+            ...fixtureBuildProvenance(source),
+            source_tree_clean: false,
+          };
+        },
+      }),
+    ),
+    /requires build provenance and current source to be clean/u,
+  );
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        readSourceState() {
+          return {
+            sourceGitRevision: "b".repeat(40),
+            sourceTreeClean: true,
+          };
+        },
+      }),
+    ),
+    /does not match the current source revision/u,
+  );
+  assert.equal(existsSync(layout.bindingPath), false);
+  assert.equal(existsSync(layout.manifestPath), false);
 });
 
 test(
   "required-export probe loads a real addon through the recovery-compatible private suffix",
-  { skip: !existsSync(path.resolve("native", NATIVE_FILENAME)) },
   (t) => {
+    const nativePath = path.resolve("native", NATIVE_FILENAME);
+    assert.equal(
+      existsSync(nativePath),
+      true,
+      `native addon is required at ${nativePath}; run \`npm run build:native\``,
+    );
     const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-dlopen-probe-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const staged = path.join(root, `${NATIVE_FILENAME}.next`);
-    copyFileSync(path.resolve("native", NATIVE_FILENAME), staged);
+    copyFileSync(nativePath, staged);
     // This test isolates the loader path from the release export contract so a
     // locally cached addon from an older compatible build cannot make the
     // focused unit suite ambient-state dependent.

@@ -145,6 +145,7 @@ negative_control_commands = (
     ("Python SDK major script negative control", f"{main_command} --negative-control-python-sdk-major-script"),
     ("Python SDK stale venv rebuild script negative control", f"{main_command} --negative-control-python-sdk-venv-rebuild-script"),
     ("Python SDK bytecode script negative control", f"{main_command} --negative-control-python-sdk-bytecode-script"),
+    ("Python SDK dependency lock script negative control", f"{main_command} --negative-control-python-sdk-lock-script"),
     ("Python SDK script workflow negative control", f"{main_command} --negative-control-python-sdk-script-workflow"),
     ("Python SDK dependency workflow negative control", f"{main_command} --negative-control-python-sdk-needs-workflow"),
     ("JavaScript source negative control", f"{main_command} --negative-control-js-source-endpoint"),
@@ -430,7 +431,7 @@ def check_workflow():
     )
     python_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(python_command)}\s*$", python)
     require(python_setup_match is not None, "Python SDK tests must set up Python")
-    require(re.search(r'(?m)^\s+python-version:\s+"3\.11"\s*$', python) is not None, "Python SDK tests must pin Python 3.11")
+    require(re.search(r'(?m)^\s+python-version:\s+"3\.12"\s*$', python) is not None, "Python SDK tests must pin Python 3.12")
     require_run(python, python_command, "Python SDK tests")
     if python_setup_match is not None and python_command_match is not None:
         require(
@@ -460,9 +461,9 @@ def check_scripts():
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "v24.*) ;;", "JavaScript SDK Node 24 matcher")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "client_sorafs_pin_register_test.py", "Python paid-pin test suite")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHON_OVERRIDE="${SORAFS_PIN_REGISTER_PYTHON_BIN:-}"', "Python SDK override variable")
-    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "resolve_python_311_bin()", "Python SDK 3.11 resolver")
-    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "python3.11", "Python SDK 3.11 resolver candidate")
-    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHON_BIN="$(resolve_python_311_bin)"', "Python SDK selected resolver")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "resolve_python_312_bin()", "Python SDK 3.12 resolver")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "python3.12", "Python SDK 3.12 resolver candidate")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHON_BIN="$(resolve_python_312_bin)"', "Python SDK selected resolver")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHON_VERSION="$("${PYTHON_BIN}" -c', "Python SDK selected version capture")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", '"${PYTHON_BIN}" --version', "Python SDK selected version evidence")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'VENV_PYTHON_VERSION="$("${VENV_DIR}/bin/python" -c', "Python SDK venv version capture")
@@ -472,10 +473,13 @@ def check_scripts():
         2,
         "Python SDK initial and rebuilt venv version evidence",
     )
-    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "3.11) ;;", "Python SDK 3.11 matcher")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "3.12) ;;", "Python SDK 3.12 matcher")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "recreating SoraFS pin-register Python SDK venv", "Python SDK stale venv rebuild evidence")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'rm -rf "${VENV_DIR}"', "Python SDK stale venv removal")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "export PYTHONDONTWRITEBYTECODE=1", "Python SDK bytecode-cache guard")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "--require-hashes", "Python SDK hashed dependency lock")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "--only-binary=:all:", "Python SDK binary-only dependency lock")
+    require_contains("ci/check_sorafs_pin_register_python_sdk.sh", '"${ROOT_DIR}/python/iroha_python/requirements-ci.lock"', "Python SDK exact dependency lock")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", '"${ROOT_DIR}/python/norito_py"', "Python SDK local Norito package install")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", '"${ROOT_DIR}/python/iroha_torii_client"', "Python SDK local Torii package install")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"', "Python SDK local source path")
@@ -971,14 +975,14 @@ if mode == "--negative-control-python-sdk-override-script":
 if mode == "--negative-control-python-sdk-resolver-script":
     target = "ci/check_sorafs_pin_register_python_sdk.sh"
     original = read(target)
-    mutated = original.replace("resolve_python_311_bin()", "resolve_python_bin()", 1)
+    mutated = original.replace("resolve_python_312_bin()", "resolve_python_bin()", 1)
     require(mutated != original, "negative control failed: unable to mutate Python SDK resolver")
     reject_mutation(target, mutated, "Python SDK resolver drift")
 
 if mode == "--negative-control-python-sdk-major-script":
     target = "ci/check_sorafs_pin_register_python_sdk.sh"
     original = read(target)
-    mutated = original.replace("3.11) ;;", "3.10) ;;")
+    mutated = original.replace("3.12) ;;", "3.11) ;;")
     require(mutated != original, "negative control failed: unable to mutate Python SDK major matcher")
     reject_mutation(target, mutated, "Python SDK major script drift")
 
@@ -995,6 +999,13 @@ if mode == "--negative-control-python-sdk-bytecode-script":
     mutated = original.replace("export PYTHONDONTWRITEBYTECODE=1\n\n", "", 1)
     require(mutated != original, "negative control failed: unable to mutate Python SDK bytecode guard")
     reject_mutation(target, mutated, "Python SDK bytecode script drift")
+
+if mode == "--negative-control-python-sdk-lock-script":
+    target = "ci/check_sorafs_pin_register_python_sdk.sh"
+    original = read(target)
+    mutated = original.replace("  --require-hashes \\\n", "", 1)
+    require(mutated != original, "negative control failed: unable to mutate Python SDK dependency lock")
+    reject_mutation(target, mutated, "Python SDK dependency lock drift")
 
 if mode == "--negative-control-swift-sdk-version-script":
     target = "ci/check_sorafs_pin_register_swift_sdk.sh"
@@ -1064,7 +1075,7 @@ workflow_modes = {
     "--negative-control-js-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_python_sdk_tests]", "JavaScript SDK dependency drift"),
     "--negative-control-python-sdk-job-workflow": ("  sorafs_pin_register_python_sdk_tests:\n", "  sorafs_pin_register_python_sdk_tests_disabled:\n", "Python SDK job drift"),
     "--negative-control-python-sdk-setup-workflow": ("      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n", "", "Python SDK setup drift"),
-    "--negative-control-python-sdk-version-workflow": ('          python-version: "3.11"', '          python-version: "3.10"', "Python SDK version drift"),
+    "--negative-control-python-sdk-version-workflow": ('          python-version: "3.12"', '          python-version: "3.11"', "Python SDK version drift"),
     "--negative-control-python-sdk-script-workflow": (f"        run: {python_command}", "        run: bash ci/check_sorafs_pin_register_python_sdk.sh --skip", "Python SDK script drift"),
     "--negative-control-python-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests]", "Python SDK dependency drift"),
 }

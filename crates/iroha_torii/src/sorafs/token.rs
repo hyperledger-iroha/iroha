@@ -11,7 +11,7 @@ use std::{
 
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
-use iroha_config::parameters::actual;
+use iroha_config::parameters::{actual, validate_production_runtime_handle};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -159,9 +159,8 @@ impl StreamTokenIssuer {
             .signer_handle
             .as_ref()
             .ok_or(StreamTokenIssuerError::MissingRuntimeSignerHandle)?;
-        if !is_production_runtime_handle(configured_handle) {
-            return Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle);
-        }
+        validate_production_runtime_handle(configured_handle)
+            .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerHandle)?;
         let configured_public_key = config
             .signer_public_key
             .ok_or(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)?;
@@ -417,29 +416,8 @@ fn validate_client_id(client_id: &str) -> Result<(), StreamTokenIssuerError> {
     Ok(())
 }
 
-fn is_production_runtime_handle(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > 256
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let lowercase = value.to_ascii_lowercase();
-    !lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-            )
-        })
-}
-
 /// Validate the context-free, canonical v1 stream-token body policy.
-pub(crate) fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
+pub fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
     if body.token_id.len() != TOKEN_ID_HEX_LEN
         || !body
             .token_id
@@ -883,6 +861,12 @@ mod tests {
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
         let mut config = token_config(signer.public_key(), 2);
 
+        assert!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone()))
+                .expect("canonical production handle must be accepted")
+                .is_some()
+        );
+
         config.enabled = false;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
@@ -901,11 +885,20 @@ mod tests {
             Err(StreamTokenIssuerError::MissingRuntimeSignerHandle)
         ));
 
-        config.signer_handle = Some("mock-stream-token".to_owned());
-        assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
-            Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
-        ));
+        for invalid_handle in [
+            "mock-stream-token",
+            "https://operator:secret@signer",
+            "https://signer/path?credential=secret",
+            "https://signer/path#fragment",
+            "pkcs11:prod/%73tream-token/v1",
+            "pkcs11:prod\\stream-token\\v1",
+        ] {
+            config.signer_handle = Some(invalid_handle.to_owned());
+            assert!(matches!(
+                StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+                Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
+            ));
+        }
 
         config.signer_handle = Some("pkcs11:prod/other-token/v1".to_owned());
         assert!(matches!(

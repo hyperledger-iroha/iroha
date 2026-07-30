@@ -41,7 +41,7 @@ kuzatilishi mumkin bo'lgan muhandislik vazifalari.
 ## Qabul ish jarayoni
 
 1. **Taklif yaratish**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` qo'shing
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …` qo'shing
      `ProviderAdmissionProposalV1` + attestatsiya to'plamini ishlab chiqarish.
    - Tasdiqlash: `profile_id` da kerakli maydonlar, stavka > 0, kanonik chunker tutqichiga ishonch hosil qiling.
 2. **Boshqaruvni tasdiqlash**
@@ -70,7 +70,7 @@ Avtomatlashtirish qulayligi uchun `--council-signature-public-key` `--council-si
 
 ### CLI ma'lumotnomasi
 
-Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` orqali bajaring.
+Har bir buyruqni `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …` orqali bajaring.
 
 - `proposal`
   - Kerakli bayroqlar: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -117,7 +117,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- 
 1. `provider-admission proposal` va `provider-admission sign` bilan voris taklifi/reklama juftligini yarating, `--retention-epoch` ni oshiring va kerak bo'lganda ulush/so'nggi nuqtalarni yangilang.
 2. Bajarmoq  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- 
 #### Favqulodda bekor qilish
 1. Buzilgan konvertni aniqlang va bekor qilish to'g'risida qaror chiqaring:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

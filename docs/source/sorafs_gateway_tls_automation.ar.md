@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs_gateway_tls_automation.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: cac7ebfcd500348d610633e0260d6b4dcc5f2d262237cd9d4a9e0dcab4d2c3a7
-source_last_modified: "2026-07-25T15:12:37.376659+00:00"
+source_hash: 224624aa611803ff752214e6201b77ead140ec536a3c68bc70b75960fb1817cc
+source_last_modified: "2026-07-26T22:47:31.104631+00:00"
 translation_last_reviewed: null
 ---
 

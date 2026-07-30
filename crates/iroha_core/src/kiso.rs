@@ -534,12 +534,56 @@ impl Actor {
         pow: &mut SoranetPow,
         update: &SoranetHandshakePowUpdate,
     ) -> Result<(), String> {
-        if let Some(required) = update.required {
-            if !required {
+        if matches!(update.required, Some(false)) {
+            return Err(
+                "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
+            );
+        }
+        if let Some(difficulty) = update.difficulty
+            && difficulty > iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
+        {
+            return Err(format!(
+                "SoraNet PoW difficulty {difficulty} exceeds the supported maximum {}",
+                iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
+            ));
+        }
+        if let Some(puzzle_update) = &update.puzzle {
+            if matches!(puzzle_update.enabled, Some(false)) {
                 return Err(
-                    "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
+                    "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
+                        .to_string(),
                 );
             }
+            if let Some(memory) = puzzle_update.memory_kib
+                && !(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+                    ..=iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB)
+                    .contains(&memory)
+            {
+                return Err(format!(
+                    "SoraNet Argon2 memory_kib {memory} is outside the supported range {}..={}",
+                    iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB,
+                    iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
+                ));
+            }
+            if let Some(time_cost) = puzzle_update.time_cost
+                && !(1..=iroha_crypto::soranet::puzzle::MAX_TIME_COST).contains(&time_cost)
+            {
+                return Err(format!(
+                    "SoraNet Argon2 time_cost {time_cost} is outside the supported range 1..={}",
+                    iroha_crypto::soranet::puzzle::MAX_TIME_COST
+                ));
+            }
+            if let Some(lanes) = puzzle_update.lanes
+                && !(1..=iroha_crypto::soranet::puzzle::MAX_LANES).contains(&lanes)
+            {
+                return Err(format!(
+                    "SoraNet Argon2 lanes {lanes} is outside the supported range 1..={}",
+                    iroha_crypto::soranet::puzzle::MAX_LANES
+                ));
+            }
+        }
+
+        if let Some(required) = update.required {
             pow.required = required;
         }
         if let Some(difficulty) = update.difficulty {
@@ -556,26 +600,22 @@ impl Actor {
         }
         if let Some(puzzle_update) = &update.puzzle {
             if let Some(enabled) = puzzle_update.enabled {
-                if !enabled {
-                    return Err(
-                        "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
-                            .to_string(),
-                    );
-                } else if pow.puzzle.is_none() {
+                if enabled && pow.puzzle.is_none() {
                     pow.puzzle = Some(default_puzzle_params());
                 }
             }
             if let Some(puzzle) = &mut pow.puzzle {
                 if let Some(memory) = puzzle_update.memory_kib {
-                    puzzle.memory_kib = NonZeroU32::new(memory.max(1)).unwrap_or(puzzle.memory_kib);
+                    puzzle.memory_kib =
+                        NonZeroU32::new(memory).expect("validated puzzle memory is non-zero");
                 }
                 if let Some(time_cost) = puzzle_update.time_cost {
                     puzzle.time_cost =
-                        NonZeroU32::new(time_cost.max(1)).unwrap_or(puzzle.time_cost);
+                        NonZeroU32::new(time_cost).expect("validated puzzle time cost is non-zero");
                 }
                 if let Some(lanes) = puzzle_update.lanes {
-                    let clamped = lanes.clamp(1, 16);
-                    puzzle.lanes = NonZeroU32::new(clamped).unwrap_or(puzzle.lanes);
+                    puzzle.lanes =
+                        NonZeroU32::new(lanes).expect("validated puzzle lane count is non-zero");
                 }
             } else if puzzle_update.enabled.unwrap_or(false) {
                 pow.puzzle = Some(default_puzzle_params());
@@ -652,6 +692,92 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
+    #[test]
+    fn pow_updates_reject_unbounded_costs_before_mutating_state() {
+        fn update(
+            difficulty: Option<u8>,
+            memory_kib: Option<u32>,
+            time_cost: Option<u32>,
+            lanes: Option<u32>,
+        ) -> SoranetHandshakePowUpdate {
+            SoranetHandshakePowUpdate {
+                required: Some(true),
+                difficulty,
+                max_future_skew_secs: Some(999),
+                min_ticket_ttl_secs: None,
+                ticket_ttl_secs: None,
+                puzzle: Some(SoranetHandshakePuzzleUpdate {
+                    enabled: Some(true),
+                    memory_kib,
+                    time_cost,
+                    lanes,
+                }),
+                signed_ticket_public_key_hex: None,
+            }
+        }
+
+        let invalid = [
+            (
+                update(
+                    Some(iroha_crypto::soranet::puzzle::MAX_DIFFICULTY + 1),
+                    None,
+                    None,
+                    None,
+                ),
+                "difficulty",
+            ),
+            (
+                update(
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB - 1),
+                    None,
+                    None,
+                ),
+                "memory_kib",
+            ),
+            (
+                update(
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB + 1),
+                    None,
+                    None,
+                ),
+                "memory_kib",
+            ),
+            (
+                update(
+                    None,
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MAX_TIME_COST + 1),
+                    None,
+                ),
+                "time_cost",
+            ),
+            (
+                update(
+                    None,
+                    None,
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MAX_LANES + 1),
+                ),
+                "lanes",
+            ),
+        ];
+
+        for (update, field) in invalid {
+            let mut pow = SoranetPow::default();
+            let original_difficulty = pow.difficulty;
+            let original_skew = pow.max_future_skew;
+            let original_puzzle = pow.puzzle;
+            let error = Actor::apply_pow_update(&mut pow, &update)
+                .expect_err("unbounded puzzle update must fail");
+            assert!(error.contains(field), "unexpected error: {error}");
+            assert_eq!(pow.difficulty, original_difficulty);
+            assert_eq!(pow.max_future_skew, original_skew);
+            assert_eq!(pow.puzzle, original_puzzle);
+        }
     }
 
     #[allow(clippy::too_many_lines)]

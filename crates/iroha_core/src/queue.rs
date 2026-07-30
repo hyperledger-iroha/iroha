@@ -140,7 +140,10 @@ use crate::{
     },
     sumeragi::status,
     telemetry::StateTelemetry,
-    tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
+    tx::{
+        CheckedTransaction, allows_unregistered_authority,
+        instructions_allow_multisig_envelope_authority,
+    },
 };
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
@@ -154,10 +157,8 @@ fn exact_signed_transaction_hash(
     entrypoint: &TransactionEntrypoint,
 ) -> Option<HashOf<iroha_data_model::transaction::SignedTransaction>> {
     match entrypoint {
-        TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
-        TransactionEntrypoint::SealedReveal(reveal) => {
-            Some(HashOf::new(reveal.signed_transaction()))
-        }
+        TransactionEntrypoint::External(signed) => Some(signed.hash()),
+        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
         TransactionEntrypoint::SealedCommitment(_)
         | TransactionEntrypoint::PrivateKaigi(_)
         | TransactionEntrypoint::Time(_) => None,
@@ -1523,8 +1524,8 @@ pub struct Queue {
     plan_journal_durability_fault: AtomicBool,
     /// Sticky process-lifetime fault after an ambiguous reservation-journal durability boundary.
     lane_reservation_durability_fault: AtomicBool,
-    /// Sticky process-lifetime fault when accepted work cannot be revalidated without changing
-    /// its immutable routing or fee-admission identity.
+    /// Sticky process-lifetime fault when accepted work exposes internally inconsistent immutable
+    /// routing or fee-admission identity. Expected catalog retirement evicts affected work instead.
     accepted_work_validation_fault: AtomicBool,
     /// Exact queue hashes fenced by an in-construction global carrier candidate.
     global_selection_owners: parking_lot::Mutex<BTreeMap<SignedTxHash, u64>>,
@@ -1536,6 +1537,15 @@ pub struct Queue {
     txs_per_user: DashMap<AccountId, usize>,
     /// Lock to synchronize push and remove operations
     push_remove_lock: parking_lot::Mutex<()>,
+    /// Exact hashes whose journal transition is in progress without the queue mutation lock.
+    durability_transitions: parking_lot::Mutex<HashSet<SignedTxHash>>,
+    /// Wakes exact-hash removals after an off-lock durability transition publishes or rolls back.
+    durability_transition_done: parking_lot::Condvar,
+    /// Serializes reservation state machines before they acquire the queue mutation lock.
+    ///
+    /// A waiting reservation operation therefore cannot hold `push_remove_lock` while another
+    /// operation is completing a storage barrier.
+    lane_reservation_transition_lock: parking_lot::Mutex<()>,
     /// Deterministic test handoff between a durability precheck and its protected recheck.
     #[cfg(test)]
     durability_observer_lock_handoff:
@@ -1621,8 +1631,15 @@ impl fmt::Debug for Queue {
 
 const QUEUE_PRESSURE_MIN_AGE_BUDGET_MS: u64 = 2_000;
 const QUEUE_PRESSURE_MAX_AGE_BUDGET_MS: u64 = 5_000;
-/// Queue-side retained heap estimate charged to each transaction in addition to its canonical bytes.
-const TX_RETAINED_OVERHEAD_BYTES: u64 = 128 * 1024;
+/// Fixed queue/index overhead charged to every retained transaction.
+///
+/// Canonical bytes are charged separately with a conservative expansion factor so small
+/// transactions do not each consume an arbitrary 128 KiB while large decoded payloads cannot
+/// evade the retained-memory budget.
+const TX_RETAINED_OVERHEAD_BYTES: u64 = 2 * 1024;
+/// Conservative encoded-to-retained expansion for decoded transaction payloads and canonical
+/// bytes kept across queue indexes.
+const TX_RETAINED_DECODE_EXPANSION_FACTOR: u64 = 8;
 
 /// Snapshot of queue pressure used by Torii admission and status reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2296,6 +2313,11 @@ pub enum Error {
     MaximumTransactionsPerUser,
     /// The transaction is already in the queue
     IsInQueue,
+    /// Transaction authority is not registered: {authority}
+    UnregisteredAuthority {
+        /// Authority that was absent from the committed world state.
+        authority: AccountId,
+    },
     /// Transaction routing could not be resolved: {reason}
     UnresolvedRoute {
         /// Deterministic route-resolution failure reason.
@@ -2386,6 +2408,24 @@ pub struct TransactionGuard {
     released: bool,
     #[cfg(feature = "telemetry")]
     telemetry: Option<crate::telemetry::StateTelemetry>,
+}
+
+/// Keeps exact queue identities unavailable to removal while their ownership transition is made
+/// durable without holding [`Queue::push_remove_lock`].
+struct QueueDurabilityTransition<'queue> {
+    queue: &'queue Queue,
+    hashes: Vec<SignedTxHash>,
+}
+
+impl Drop for QueueDurabilityTransition<'_> {
+    fn drop(&mut self) {
+        let mut active = self.queue.durability_transitions.lock();
+        for hash in &self.hashes {
+            let removed = active.remove(hash);
+            debug_assert!(removed, "durability transition must remain registered");
+        }
+        self.queue.durability_transition_done.notify_all();
+    }
 }
 
 /// Outcome of atomically returning popped transaction guards to the scheduling queue.
@@ -2584,6 +2624,8 @@ impl Drop for TransactionGuard {
 }
 
 trait QueueAdmissionStateAccess {
+    fn authority_exists(&mut self, authority: &AccountId) -> bool;
+
     fn recheck_external_nexus_fee_admission(
         &mut self,
         queue: &Queue,
@@ -2646,6 +2688,10 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
 }
 
 impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, W> {
+    fn authority_exists(&mut self, authority: &AccountId) -> bool {
+        self.world.accounts().get(authority).is_some()
+    }
+
     fn recheck_external_nexus_fee_admission(
         &mut self,
         queue: &Queue,
@@ -2742,7 +2788,12 @@ impl Queue {
     fn retained_byte_cost(encoded_len: usize) -> u64 {
         u64::try_from(encoded_len)
             .unwrap_or(u64::MAX)
+            .saturating_mul(TX_RETAINED_DECODE_EXPANSION_FACTOR)
             .saturating_add(TX_RETAINED_OVERHEAD_BYTES)
+    }
+
+    fn retained_byte_materialization_delta(encoded_len: usize) -> u64 {
+        Self::retained_byte_cost(encoded_len).saturating_sub(TX_RETAINED_OVERHEAD_BYTES)
     }
 
     /// Return the minimum retained-byte estimate charged for `count` incoming transactions.
@@ -3159,6 +3210,10 @@ impl Queue {
         excluded_entrypoint_hashes: &BTreeSet<HashOf<TransactionEntrypoint>>,
         routing_mode: LaneQueueReservationRoutingMode,
     ) -> Result<Vec<LaneReservedTransaction>, LaneQueueReservationError> {
+        // Autonomous-lane selection is a production consumer of the queue. Run the bounded
+        // residence sweep before taking lifecycle/queue ownership so expired entries cannot
+        // accumulate indefinitely when the legacy pop path is unused.
+        let _ = self.cull_expired_entries_if_due();
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
@@ -4233,8 +4288,8 @@ impl Queue {
             || self.accepted_work_validation_faulted()
     }
 
-    /// Return whether accepted queue ownership requires restart recovery after a semantic
-    /// revalidation failure.
+    /// Return whether accepted queue ownership requires restart recovery after an internal
+    /// identity-consistency failure.
     #[must_use]
     pub fn accepted_work_validation_faulted(&self) -> bool {
         self.accepted_work_validation_fault.load(Ordering::Acquire)
@@ -6301,6 +6356,9 @@ impl Queue {
                 global_selection_owners: parking_lot::Mutex::new(BTreeMap::new()),
                 next_global_selection_owner: AtomicU64::new(1),
                 push_remove_lock: parking_lot::Mutex::new(()),
+                durability_transitions: parking_lot::Mutex::new(HashSet::new()),
+                durability_transition_done: parking_lot::Condvar::new(),
+                lane_reservation_transition_lock: parking_lot::Mutex::new(()),
                 #[cfg(test)]
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
@@ -6413,6 +6471,9 @@ impl Queue {
     }
 
     fn is_pending(&self, tx: &CheckedTransaction<'static>, state_view: &StateView) -> bool {
+        if self.durability_transition_active(&tx.hash()) {
+            return false;
+        }
         if tx.is_in_blockchain(state_view) {
             return false;
         }
@@ -6446,9 +6507,22 @@ impl Queue {
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
         if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
-            // Sealed commitments have no wall-clock creation timestamp; their lifetime is
-            // bounded by reveal heights during block execution.
-            return false;
+            // Sealed commitments have no signed wall-clock creation timestamp. Bound their local
+            // queue residence from the admission timestamp instead; reveal-height validation
+            // remains the consensus rule after inclusion, but cannot reclaim a commitment that
+            // never reaches a block.
+            let hash = tx.hash();
+            let Some(enqueued_at_ms) = self
+                .tx_enqueued_at_ms
+                .get(&hash)
+                .map(|entry| *entry.value())
+            else {
+                // A transaction being checked before admission has no queue residence yet.
+                return false;
+            };
+            let now_ms = Self::duration_to_millis(now);
+            return now_ms.saturating_sub(enqueued_at_ms)
+                > Self::duration_to_millis(self.tx_time_to_live);
         }
         let tx_creation_time = tx.creation_time();
         let time_limit = self.effective_tx_time_to_live(tx);
@@ -6732,6 +6806,9 @@ impl Queue {
         state_view: &StateView<'_>,
         max_scan: NonZeroUsize,
     ) -> Option<(Vec<AcceptedTransaction<'static>>, GlobalQueueSelectionLease)> {
+        // This is the normal Sumeragi v2 proposal path. Keep TTL reclamation reachable even when
+        // the legacy destructive pop API is never called.
+        let _ = self.cull_expired_entries_if_due();
         if self.transaction_selection_durability_faulted() {
             return None;
         }
@@ -6788,14 +6865,13 @@ impl Queue {
                     return None;
                 }
                 let transaction = self.txs.get(hash)?;
-                let transaction = transaction.value().as_ref();
-                self.is_pending(transaction, state_view)
-                    .then(|| transaction.as_accepted().clone())
+                self.is_pending(transaction.value().as_ref(), state_view)
+                    .then(|| (*hash, Arc::clone(transaction.value())))
             })
             .collect::<Vec<_>>();
         if pending.is_empty() {
             return Some((
-                pending,
+                Vec::new(),
                 GlobalQueueSelectionLease {
                     queue: Arc::downgrade(self),
                     owner: 0,
@@ -6803,10 +6879,7 @@ impl Queue {
                 },
             ));
         }
-        let hashes = pending
-            .iter()
-            .map(AcceptedTransaction::hash)
-            .collect::<Vec<_>>();
+        let hashes = pending.iter().map(|(hash, _)| *hash).collect::<Vec<_>>();
         let owner = match self.next_global_selection_owner.fetch_update(
             Ordering::AcqRel,
             Ordering::Acquire,
@@ -6848,6 +6921,15 @@ impl Queue {
                 return None;
             }
         }
+        // Ownership is now published. Drop every queue lock before deep-cloning payloads so large
+        // transactions cannot serialize admission, removal, and independent lane selection.
+        drop(age_ring);
+        drop(global_owners);
+        drop(queue_guard);
+        let pending = pending
+            .into_iter()
+            .map(|(_, transaction)| transaction.as_accepted().clone())
+            .collect();
         Some((
             pending,
             GlobalQueueSelectionLease {
@@ -8325,6 +8407,60 @@ impl Queue {
         _gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
+        // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
+        // manifest, privacy-proof, compliance, and gas analysis.
+        let _ = self.cull_expired_entries_if_due();
+        let hash = checked.as_ref().hash();
+        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
+        let replaces_missing_payload = self
+            .lane_reservations
+            .lock()
+            .missing_payload_hashes
+            .contains(&hash);
+        let retained_cost = if replaces_missing_payload {
+            Self::retained_byte_materialization_delta(encoded_len)
+        } else {
+            Self::retained_byte_cost(encoded_len)
+        };
+        let cheap_error = if self.transaction_selection_durability_faulted() {
+            Some(Error::PlanJournalDurabilityRejected {
+                reason: "queue ownership requires restart recovery".to_owned(),
+            })
+        } else if self.txs.contains_key(&hash) {
+            Some(Error::IsInQueue)
+        } else if (!replaces_missing_payload && self.active_len() >= self.capacity.get())
+            || self.retained_bytes().saturating_add(retained_cost) > self.max_retained_bytes.get()
+        {
+            Some(Error::Full)
+        } else {
+            checked.as_ref().authority_opt().and_then(|authority| {
+                self.txs_per_user
+                    .get(authority)
+                    .is_some_and(|count| *count.value() >= self.capacity_per_user.get())
+                    .then_some(Error::MaximumTransactionsPerUser)
+            })
+        };
+        if let Some(err) = cheap_error {
+            return Err(Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err,
+            });
+        }
+
+        if let Some(transaction) = checked.as_accepted().external() {
+            let authority = transaction.authority();
+            if !state_access.authority_exists(authority)
+                && !allows_unregistered_authority(transaction.instructions(), authority)
+            {
+                return Err(Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err: Error::UnregisteredAuthority {
+                        authority: authority.clone(),
+                    },
+                });
+            }
+        }
+
         let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
@@ -8655,9 +8791,7 @@ impl Queue {
             telemetry_handle.record_manifest_admission("allowed");
         }
 
-        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
-        let hash = checked.as_ref().hash();
         let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
         #[cfg(feature = "telemetry")]
         let pending_teu = Self::compute_teu_weight(checked.as_accepted());
@@ -8776,7 +8910,7 @@ impl Queue {
                 }
 
                 let retained_cost = if replaces_missing_payload {
-                    u64::try_from(admission.encoded_len).unwrap_or(u64::MAX)
+                    Self::retained_byte_materialization_delta(admission.encoded_len)
                 } else {
                     Self::retained_byte_cost(admission.encoded_len)
                 };
@@ -9665,7 +9799,7 @@ impl Queue {
             }
 
             let retained_cost = if replaces_missing_payload {
-                u64::try_from(encoded_len).unwrap_or(u64::MAX)
+                Self::retained_byte_materialization_delta(encoded_len)
             } else {
                 Self::retained_byte_cost(encoded_len)
             };
@@ -9872,10 +10006,11 @@ impl Queue {
     ///
     /// Used when a peer is removed from the topology so it stops advertising stale transactions.
     pub fn clear_all(&self) {
-        let journal_flush;
+        self.wait_for_all_durability_transitions();
+        let journal_removals;
         {
             let _guard = self.push_remove_lock.lock();
-            let journal_removals = self
+            journal_removals = self
                 .durable_plan_claims
                 .iter()
                 .map(|claim| {
@@ -9952,8 +10087,8 @@ impl Queue {
                 self.lane_teu_pending.clear();
                 self.dataspace_teu_pending.clear();
             }
-            journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
         }
+        let journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
         self.flush_plan_journal_deferred(journal_flush);
         self.publish_backpressure_state(self.active_len(), None);
     }
@@ -10262,7 +10397,9 @@ impl Queue {
                 .txs
                 .iter()
                 .map(|entry| *entry.key())
-                .filter(|hash| !live_reservations.contains(hash))
+                .filter(|hash| {
+                    !live_reservations.contains(hash) && !self.durability_transition_active(hash)
+                })
             {
                 let Some(order) = self
                     .fifo_order_by_hash
@@ -10392,6 +10529,52 @@ impl Queue {
 
     fn materialized_retained_bytes(&self) -> u64 {
         self.retained_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Register exact hashes before releasing the queue lock for a durability barrier.
+    ///
+    /// The returned guard must outlive both the journal operation and the final in-memory
+    /// publication or rollback. Exact-hash removals wait on the guard without holding
+    /// `push_remove_lock`, while unrelated queue work remains independent.
+    fn begin_durability_transition_locked(
+        &self,
+        hashes: impl IntoIterator<Item = SignedTxHash>,
+    ) -> Result<QueueDurabilityTransition<'_>, SignedTxHash> {
+        let hashes = hashes.into_iter().collect::<Vec<_>>();
+        let mut active = self.durability_transitions.lock();
+        if let Some(hash) = hashes
+            .iter()
+            .find(|hash| active.contains(hash))
+            .copied()
+        {
+            return Err(hash);
+        }
+        for hash in &hashes {
+            active.insert(*hash);
+        }
+        drop(active);
+        Ok(QueueDurabilityTransition {
+            queue: self,
+            hashes,
+        })
+    }
+
+    fn durability_transition_active(&self, hash: &SignedTxHash) -> bool {
+        self.durability_transitions.lock().contains(hash)
+    }
+
+    fn wait_for_durability_transitions(&self, hashes: &[SignedTxHash]) {
+        let mut active = self.durability_transitions.lock();
+        while hashes.iter().any(|hash| active.contains(hash)) {
+            self.durability_transition_done.wait(&mut active);
+        }
+    }
+
+    fn wait_for_all_durability_transitions(&self) {
+        let mut active = self.durability_transitions.lock();
+        while !active.is_empty() {
+            self.durability_transition_done.wait(&mut active);
+        }
     }
 
     /// Return the configured retained-byte budget for the queue.
@@ -11525,6 +11708,10 @@ impl Queue {
                 ring.push_back(hash);
                 continue;
             }
+            if self.durability_transition_active(&hash) {
+                ring.push_back(hash);
+                continue;
+            }
             let Some(entry) = self.txs.get(&hash) else {
                 self.expiry_ring_members.remove(&hash);
                 continue;
@@ -11564,6 +11751,10 @@ impl Queue {
         let _guard = self.push_remove_lock.lock();
         let mut removed = 0usize;
         for hash in to_remove {
+            if self.durability_transition_active(&hash) {
+                self.track_expiry_hash(hash);
+                continue;
+            }
             if self.has_globally_bound_durable_claim(hash) {
                 self.track_expiry_hash(hash);
                 continue;
@@ -12125,14 +12316,20 @@ impl Queue {
         hashes: impl IntoIterator<Item = SignedTxHash>,
         telemetry: Option<&StateTelemetry>,
     ) -> usize {
-        let journal_flush;
+        let hashes = hashes.into_iter().collect::<Vec<_>>();
+        // A hash being made durable is not yet selectable or externally acknowledged. If a
+        // concurrent block nevertheless commits that exact transaction, wait for its journal
+        // boundary without owning the global queue mutation lock; unrelated queue work proceeds.
+        self.wait_for_durability_transitions(&hashes);
+        let journal_removals;
         let publish_backpressure;
         let removed;
         {
             let _guard = self.push_remove_lock.lock();
             let mut removed_inner = 0usize;
-            let mut journal_removals = Vec::new();
+            let mut removals = Vec::new();
             for hash in hashes {
+                let stale_fifo_hash_remains = self.queued_tx_enqueued_at_ms.contains_key(&hash);
                 let journal_removal = self
                     .routing_plans
                     .get(&hash)
@@ -12143,7 +12340,7 @@ impl Queue {
                 let _ = self.routing_decisions.remove(&hash);
                 let _ = self.routing_plans.remove(&hash);
                 if let Some(removal) = journal_removal {
-                    journal_removals.push(removal);
+                    removals.push(removal);
                 }
                 self.durable_plan_claims.remove(&hash);
                 let _ = routing_ledger::take(&hash);
@@ -12155,7 +12352,12 @@ impl Queue {
                 self.remove_queued_age(&hash);
                 if let Some(tx_arc) = tx_arc {
                     self.untrack_active_transaction();
-                    self.removed_hashes.insert(hash, ());
+                    // Tombstones exist solely to skip hashes still resident in `tx_hashes`.
+                    // Lane reservations and popped guards already removed their FIFO hash; adding
+                    // a marker for them would create a permanent, unreachable tombstone.
+                    if stale_fifo_hash_remains {
+                        self.removed_hashes.insert(hash, ());
+                    }
                     if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
@@ -12168,12 +12370,13 @@ impl Queue {
                 let mut store = self.lane_reservations.lock();
                 self.reconcile_missing_reservation_payloads_locked(&mut store);
             }
-            journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
+            journal_removals = removals;
             // Keep removed markers until the consumer drains stale hashes or a push triggers
             // compaction, so committed removals stay observable to in-flight guards.
             publish_backpressure = removed_inner > 0;
             removed = removed_inner;
         }
+        let journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
         self.flush_plan_journal_deferred(journal_flush);
         if publish_backpressure {
             self.publish_backpressure_state(self.active_len(), telemetry);
@@ -12548,7 +12751,8 @@ impl Queue {
             .iter()
             .map(|entry| (*entry.key(), Arc::clone(entry.value())))
             .collect::<Vec<_>>();
-        let mut invalid_ownership = Vec::new();
+        let mut invalid_lifecycle = Vec::new();
+        let mut corrupt_ownership = Vec::new();
         for (hash, tx) in tracked {
             if !self.is_pending(tx.as_ref(), state_view) {
                 #[cfg(feature = "telemetry")]
@@ -12566,13 +12770,20 @@ impl Queue {
             ) {
                 Ok(plan) => plan,
                 Err(err) => {
-                    iroha_logger::error!(
+                    iroha_logger::warn!(
                         tx = %hash,
                         reason = %err,
                         reason_label = err.as_label(),
                         "queued transaction failed immutable routing validation during Nexus reconfiguration"
                     );
-                    invalid_ownership.push((hash, err));
+                    if matches!(err, RoutingResolveError::StaleRoutingPlan) {
+                        corrupt_ownership.push((hash, err));
+                    } else {
+                        // Catalog/lane lifecycle changes are expected administrative events.
+                        // Terminally evict only the now-unroutable transaction instead of
+                        // converting one retired lane into a process-lifetime queue outage.
+                        invalid_lifecycle.push(hash);
+                    }
                     continue;
                 }
             };
@@ -12615,7 +12826,10 @@ impl Queue {
         let validation_telemetry = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let validation_telemetry = None;
-        if let Some((hash, reason)) = invalid_ownership.first() {
+        if !invalid_lifecycle.is_empty() {
+            self.remove_committed_hashes(invalid_lifecycle, validation_telemetry);
+        }
+        if let Some((hash, reason)) = corrupt_ownership.first() {
             self.mark_accepted_work_validation_fault(
                 *hash,
                 "nexus_reconfiguration",
@@ -12788,7 +13002,7 @@ impl Queue {
     }
 
     /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
-    /// update while preserving immutable plans for already accepted work.
+    /// update while preserving still-valid immutable plans and evicting work whose route retired.
     pub fn reconfigure_nexus(
         &self,
         nexus: &Nexus,
@@ -12836,7 +13050,7 @@ impl Queue {
     }
 
     /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
-    /// update while preserving immutable plans for already accepted work.
+    /// update while preserving still-valid immutable plans and evicting work whose route retired.
     pub fn reconfigure_nexus_with_state(
         &self,
         nexus: &Nexus,
@@ -13899,7 +14113,7 @@ pub mod tests {
     }
 
     #[test]
-    fn reconfiguration_retains_pending_transaction_when_its_lane_was_removed() {
+    fn reconfiguration_evicts_only_transaction_whose_lane_was_removed() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -13997,33 +14211,15 @@ pub mod tests {
             dataspace_catalog.as_ref(),
         );
 
-        assert_eq!(queue.active_len(), 1);
-        assert_eq!(queue.queued_len(), 1);
-        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 1);
-        assert!(queue.txs.get(&tx_hash).is_some());
-        assert_eq!(
-            queue
-                .routing_decisions
-                .get(&tx_hash)
-                .map(|entry| *entry.value()),
-            Some(RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL))
-        );
-        assert_eq!(
-            queue
-                .routing_plans
-                .get(&tx_hash)
-                .map(|entry| entry.coordinator_route()),
-            Some(RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL))
-        );
-        assert_eq!(
-            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
-            Some(RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL))
-        );
-        assert!(
-            queue.accepted_work_validation_faulted(),
-            "removing a route under accepted work must fail closed"
-        );
-        assert!(queue.transaction_selection_durability_faulted());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 0);
+        assert!(queue.txs.get(&tx_hash).is_none());
+        assert!(queue.routing_decisions.get(&tx_hash).is_none());
+        assert!(queue.routing_plans.get(&tx_hash).is_none());
+        assert!(routing_ledger::get_plan(&tx_hash).is_none());
+        assert!(!queue.accepted_work_validation_faulted());
+        assert!(!queue.transaction_selection_durability_faulted());
         assert!(
             active_catalog
                 .lanes()
@@ -14345,7 +14541,7 @@ pub mod tests {
     }
 
     #[test]
-    fn forced_scale_in_under_pending_work_retains_identity_and_fails_closed() {
+    fn forced_scale_in_evicts_retired_lane_work_without_global_fault() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -14456,36 +14652,13 @@ pub mod tests {
         let committed_nexus = state.nexus_snapshot();
 
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
-        assert_eq!(queue.active_len(), 1);
-        assert_eq!(queue.queued_len(), 1);
-        let admitted = *queue
-            .routing_decisions
-            .get(&tx_hash)
-            .expect("admitted decision");
-        assert_eq!(
-            admitted,
-            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL),
-            "forced retirement must not mutate accepted ownership"
-        );
-        let admitted_plan = queue
-            .routing_plans
-            .get(&tx_hash)
-            .expect("admitted plan")
-            .clone();
-        assert_eq!(
-            admitted_plan.coordinator_route(),
-            admitted,
-            "autoscale scale-in must preserve the full admitted proposal routing plan"
-        );
-        assert_eq!(
-            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
-            Some(admitted),
-            "autoscale scale-in must preserve the local routing ledger plan"
-        );
-        assert!(
-            queue.accepted_work_validation_faulted(),
-            "forced retirement under pending work must stop selection until recovery"
-        );
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(queue.routing_decisions.get(&tx_hash).is_none());
+        assert!(queue.routing_plans.get(&tx_hash).is_none());
+        assert!(routing_ledger::get_plan(&tx_hash).is_none());
+        assert!(!queue.accepted_work_validation_faulted());
+        assert!(!queue.transaction_selection_durability_faulted());
         assert!(
             queue
                 .lane_catalog
@@ -16179,6 +16352,68 @@ pub mod tests {
         assert!(one > 0, "each incoming tx must carry a non-zero floor");
         assert_eq!(Queue::retained_byte_cost_floor_for_transactions(0), 0);
         assert_eq!(Queue::retained_byte_cost_floor_for_transactions(3), one * 3);
+    }
+
+    #[test]
+    fn queue_rejects_unregistered_authority_before_expensive_admission() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let key_pair = checked_random_queue_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        assert!(state.view().world().accounts().get(&authority).is_none());
+
+        let tx = accepted_tx_with(
+            authority.clone(),
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "unregistered authority".into(),
+            ))],
+            Metadata::default(),
+        );
+        let failure = queue
+            .push(tx, state.view())
+            .expect_err("ordinary unregistered authority must fail at queue admission");
+        assert!(matches!(
+            failure.err,
+            Error::UnregisteredAuthority {
+                authority: rejected
+            } if rejected == authority
+        ));
+        assert_eq!(queue.active_len(), 0);
+    }
+
+    #[test]
+    fn queue_preserves_self_registration_bootstrap() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let key_pair = checked_random_queue_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let tx = accepted_tx_with(
+            authority.clone(),
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Register::account(Account::new(
+                authority,
+            )))],
+            Metadata::default(),
+        );
+
+        queue
+            .push(tx, state.view())
+            .expect("exact self-registration remains the intentional bootstrap exception");
+        assert_eq!(queue.active_len(), 1);
     }
 
     #[test]
@@ -21145,9 +21380,21 @@ pub mod tests {
     }
 
     #[test]
-    fn sealed_commitment_is_not_expired_by_wall_clock_queue_ttl() {
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_secs(3600));
-        let queue = Queue::test(config_factory(), &time_source);
+    fn sealed_commitment_uses_local_queue_residence_ttl() {
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::from_secs(3600));
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(1),
+                expired_cull_interval: Duration::from_secs(1),
+                ..config_factory()
+            },
+            &time_source,
+        );
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
         let chain_id = ChainId::from("sealed-queue-expiry");
         let (authority, keypair) = gen_account_in("wonderland");
         let inner_tx = TransactionBuilder::new_with_time_source(
@@ -21184,8 +21431,18 @@ pub mod tests {
 
         assert!(
             !queue.is_expired(&accepted),
-            "sealed commitment queue lifetime is height-based, not wall-clock based"
+            "a commitment has no queue residence before admission"
         );
+        queue
+            .push(accepted, state.view())
+            .expect("sealed commitment admission");
+        time_handle.advance(Duration::from_secs(2));
+        assert_eq!(
+            queue.cull_expired_entries_if_due(),
+            1,
+            "a commitment that never reaches a block must not become a permanent queue entry"
+        );
+        assert_eq!(queue.active_len(), 0);
     }
 
     #[test]
@@ -25233,6 +25490,38 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn committing_popped_transaction_does_not_create_fifo_tombstone() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let transaction = accepted_tx_by_someone(&time_source);
+        let hash = transaction.as_ref().hash();
+
+        queue
+            .push(transaction, state.view())
+            .expect("push transaction");
+        let mut expired_transactions = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired_transactions)
+            .expect("pop transaction");
+        assert!(expired_transactions.is_empty());
+        assert!(
+            !queue.queued_tx_enqueued_at_ms.contains_key(&hash),
+            "popping removes the transaction's FIFO owner"
+        );
+
+        assert_eq!(queue.remove_committed_hashes([hash], None), 1);
+        assert!(
+            queue.removed_hashes.is_empty(),
+            "an in-flight guard has no stale FIFO hash that needs a tombstone"
+        );
+        drop(guard);
+        assert!(queue.removed_hashes.is_empty());
+    }
+
+    #[tokio::test]
     async fn push_tx_overflow() {
         let capacity = nonzero!(10_usize);
 
@@ -26275,6 +26564,35 @@ pub mod tests {
             "expired tx removed from active count"
         );
         queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
+    fn v2_pending_snapshot_runs_bounded_expiry_sweep() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(1),
+                expired_cull_interval: Duration::from_secs(1),
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push transaction");
+        time_handle.advance(Duration::from_secs(2));
+
+        let (pending, _lease) = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+            .expect("selection remains healthy");
+        assert!(pending.is_empty());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
     }
 
     #[test]

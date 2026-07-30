@@ -40,8 +40,5 @@ hex = { workspace = true }
 
 [features]
 default = []
-# Allow norito derive macros to detect optional packed-struct layout without
-# tripping unexpected-cfg checks in this destination crate.
-packed-struct = []
 # Enable Connect examples (WS demo) gating to avoid unexpected-cfg warnings
 connect = []

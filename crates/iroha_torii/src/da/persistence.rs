@@ -3,10 +3,11 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     ffi::OsStr,
-    fs,
-    io::{ErrorKind, Write},
+    fs::{self, File},
+    io::{ErrorKind, Seek, SeekFrom, Write},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -27,6 +28,15 @@ use norito::{
 use sorafs_manifest::pdp::PdpCommitmentV1;
 
 const CURSOR_FILE_NAME: &str = "replay_cursors.norito.json";
+const CURSOR_JOURNAL_FILE_NAME: &str = "replay_cursors.journal";
+const CURSOR_SNAPSHOT_VERSION: u32 = 1;
+const CURSOR_JOURNAL_VERSION: u32 = 1;
+const CURSOR_JOURNAL_MAX_PAYLOAD_BYTES: usize = 256;
+const CURSOR_JOURNAL_CHECKSUM_BYTES: usize = blake3::OUT_LEN;
+const CURSOR_JOURNAL_FRAME_PREFIX_BYTES: usize = std::mem::size_of::<u32>();
+const CURSOR_JOURNAL_DOMAIN: &[u8] = b"iroha.da.replay.cursor.journal.v1";
+const CURSOR_SNAPSHOT_MAX_ENTRY_BYTES: usize = 256;
+const CURSOR_SNAPSHOT_FIXED_OVERHEAD_BYTES: usize = 128;
 const RECEIPT_FILE_PREFIX: &str = "da-receipt";
 /// Placeholder signature bytes used before signing DA receipts.
 pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA5; 64];
@@ -43,12 +53,16 @@ pub(crate) fn receipt_signature_placeholder() -> Signature {
 /// Persistent store tracking the highest sequence observed per `(lane, epoch)`.
 pub struct ReplayCursorStore {
     dir: PathBuf,
+    max_lane_epochs: NonZeroUsize,
     inner: Mutex<ReplayCursorState>,
 }
 
-#[derive(Default)]
 struct ReplayCursorState {
-    highest: HashMap<LaneEpoch, u64>,
+    highest: BTreeMap<LaneEpoch, u64>,
+    journal: Option<File>,
+    journal_records: usize,
+    checkpoint_pending: bool,
+    journal_healthy: bool,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -59,6 +73,14 @@ struct CursorSnapshot {
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct CursorEntry {
+    lane_id: u32,
+    epoch: u64,
+    highest_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct CursorJournalRecord {
+    version: u32,
     lane_id: u32,
     epoch: u64,
     highest_sequence: u64,
@@ -75,13 +97,25 @@ enum CursorSnapshotRelation {
 impl ReplayCursorStore {
     /// Load the replay cursor store from disk, returning an empty store when no snapshot exists.
     pub fn open(path: PathBuf) -> eyre::Result<Self> {
+        Self::open_with_max_lane_epochs(
+            path,
+            NonZeroUsize::new(iroha_core::da::ReplayCacheConfig::DEFAULT_LANE_EPOCH_CAPACITY)
+                .expect("default DA replay lane/epoch capacity is non-zero"),
+        )
+    }
+
+    /// Load a replay cursor store with an explicit global `(lane, epoch)` bound.
+    pub fn open_with_max_lane_epochs(
+        path: PathBuf,
+        max_lane_epochs: NonZeroUsize,
+    ) -> eyre::Result<Self> {
         create_replay_cursor_dir_no_follow(&path).wrap_err_with(|| {
             format!("failed to create DA replay directory at {}", path.display())
         })?;
         let file_path = path.join(CURSOR_FILE_NAME);
         let tmp_path = replay_cursor_temp_path(&file_path);
-        let state = match read_cursor_snapshot(&file_path) {
-            Ok(Some(snapshot)) => match read_cursor_snapshot(&tmp_path) {
+        let mut state = match read_cursor_snapshot(&file_path, max_lane_epochs) {
+            Ok(Some(snapshot)) => match read_cursor_snapshot(&tmp_path, max_lane_epochs) {
                 Ok(Some(tmp_snapshot)) => {
                     match compare_cursor_snapshots(&snapshot, &tmp_snapshot) {
                         CursorSnapshotRelation::CandidateAhead => {
@@ -117,15 +151,15 @@ impl ReplayCursorStore {
                     ReplayCursorState::from_snapshot(snapshot)
                 }
             },
-            Ok(None) => match read_cursor_snapshot(&tmp_path) {
+            Ok(None) => match read_cursor_snapshot(&tmp_path, max_lane_epochs) {
                 Ok(Some(snapshot)) => {
                     promote_replay_cursor_temp(&tmp_path, &file_path)?;
                     ReplayCursorState::from_snapshot(snapshot)
                 }
-                Ok(None) => ReplayCursorState::default(),
+                Ok(None) => ReplayCursorState::empty(),
                 Err(err) => return Err(err),
             },
-            Err(err) => match read_cursor_snapshot(&tmp_path) {
+            Err(err) => match read_cursor_snapshot(&tmp_path, max_lane_epochs) {
                 Ok(Some(snapshot)) => {
                     warn!(
                         ?err,
@@ -147,28 +181,84 @@ impl ReplayCursorStore {
             },
         };
 
-        Ok(Self::with_state(path, state))
+        let journal_path = replay_cursor_journal_path(&path);
+        let recovery = read_cursor_journal(&journal_path, max_lane_epochs)?;
+        for record in recovery.records {
+            state.apply_journal_record(record, max_lane_epochs)?;
+        }
+        state.journal_records = recovery.record_count;
+        state.checkpoint_pending = state.journal_records >= max_lane_epochs.get();
+        state.journal = Some(open_cursor_journal(
+            &journal_path,
+            recovery.valid_bytes,
+            recovery.had_torn_tail,
+        )?);
+
+        let store = Self::with_state(path, max_lane_epochs, state);
+        let checkpoint_pending = store.lock_state()?.checkpoint_pending;
+        if checkpoint_pending {
+            store.checkpoint()?;
+        }
+        Ok(store)
     }
 
     /// Create an empty store backed by the provided directory (creating it if missing).
     pub fn empty(path: PathBuf) -> eyre::Result<Self> {
+        Self::empty_with_max_lane_epochs(
+            path,
+            NonZeroUsize::new(iroha_core::da::ReplayCacheConfig::DEFAULT_LANE_EPOCH_CAPACITY)
+                .expect("default DA replay lane/epoch capacity is non-zero"),
+        )
+    }
+
+    /// Create an empty persistent store with an explicit global `(lane, epoch)` bound.
+    pub fn empty_with_max_lane_epochs(
+        path: PathBuf,
+        max_lane_epochs: NonZeroUsize,
+    ) -> eyre::Result<Self> {
         create_replay_cursor_dir_no_follow(&path).wrap_err_with(|| {
             format!("failed to create DA replay directory at {}", path.display())
         })?;
-        Ok(Self::with_state(path, ReplayCursorState::default()))
+        for artifact in [
+            path.join(CURSOR_FILE_NAME),
+            replay_cursor_temp_path(&path.join(CURSOR_FILE_NAME)),
+            replay_cursor_journal_path(&path),
+        ] {
+            if fs::symlink_metadata(&artifact).is_ok() {
+                return Err(eyre!(
+                    "refusing to reset existing DA replay cursor artifact at {}",
+                    artifact.display()
+                ));
+            }
+        }
+        let journal_path = replay_cursor_journal_path(&path);
+        let journal = create_cursor_journal(&journal_path)?;
+        let mut state = ReplayCursorState::empty();
+        state.journal = Some(journal);
+        Ok(Self::with_state(path, max_lane_epochs, state))
     }
 
     /// Create an in-memory store (persistence disabled).
     pub fn in_memory() -> Self {
+        Self::in_memory_with_max_lane_epochs(
+            NonZeroUsize::new(iroha_core::da::ReplayCacheConfig::DEFAULT_LANE_EPOCH_CAPACITY)
+                .expect("default DA replay lane/epoch capacity is non-zero"),
+        )
+    }
+
+    /// Create an in-memory store with an explicit global `(lane, epoch)` bound.
+    pub fn in_memory_with_max_lane_epochs(max_lane_epochs: NonZeroUsize) -> Self {
         Self {
             dir: PathBuf::new(),
-            inner: Mutex::new(ReplayCursorState::default()),
+            max_lane_epochs,
+            inner: Mutex::new(ReplayCursorState::empty()),
         }
     }
 
-    fn with_state(path: PathBuf, state: ReplayCursorState) -> Self {
+    fn with_state(path: PathBuf, max_lane_epochs: NonZeroUsize, state: ReplayCursorState) -> Self {
         Self {
             dir: path,
+            max_lane_epochs,
             inner: Mutex::new(state),
         }
     }
@@ -182,46 +272,113 @@ impl ReplayCursorStore {
                 return Vec::new();
             }
         };
-        let mut entries = guard
+        guard
             .highest
             .iter()
             .map(|(lane_epoch, highest)| (*lane_epoch, *highest))
-            .collect::<Vec<_>>();
-        entries.sort_by_key(|(lane_epoch, _)| (lane_epoch.lane_id.as_u32(), lane_epoch.epoch));
-        entries
+            .collect()
     }
 
     /// Record a newly observed sequence for the provided `(lane, epoch)` window.
     pub fn record(&self, lane_epoch: LaneEpoch, sequence: u64) -> eyre::Result<()> {
-        use std::collections::hash_map::Entry;
-
         let mut guard = self.lock_state()?;
-        let previous = match guard.highest.entry(lane_epoch) {
-            Entry::Occupied(mut entry) => {
-                if *entry.get() >= sequence {
-                    return Ok(());
-                }
-                let previous = *entry.get();
-                *entry.get_mut() = sequence;
-                Some(previous)
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(sequence);
-                None
-            }
-        };
-        let snapshot = guard.to_snapshot();
-        if let Err(err) = self.persist_snapshot(&snapshot) {
-            match previous {
-                Some(previous) => {
-                    guard.highest.insert(lane_epoch, previous);
-                }
-                None => {
-                    guard.highest.remove(&lane_epoch);
-                }
-            }
-            return Err(err);
+        if guard
+            .highest
+            .get(&lane_epoch)
+            .is_some_and(|highest| *highest >= sequence)
+        {
+            return Ok(());
         }
+        if !guard.highest.contains_key(&lane_epoch)
+            && guard.highest.len() >= self.max_lane_epochs.get()
+        {
+            return Err(eyre!(
+                "DA replay lane/epoch capacity {} is exhausted",
+                self.max_lane_epochs
+            ));
+        }
+
+        if guard.checkpoint_pending {
+            self.checkpoint_locked(&mut guard)?;
+        }
+
+        if !self.dir.as_os_str().is_empty() {
+            if !guard.journal_healthy {
+                return Err(eyre!(
+                    "DA replay cursor journal is unhealthy; restart is required before recording more cursors"
+                ));
+            }
+            let record = CursorJournalRecord {
+                version: CURSOR_JOURNAL_VERSION,
+                lane_id: lane_epoch.lane_id.as_u32(),
+                epoch: lane_epoch.epoch,
+                highest_sequence: sequence,
+            };
+            if let Err(err) =
+                append_cursor_journal_record(&self.dir, self.max_lane_epochs, &mut guard, &record)
+            {
+                guard.journal_healthy = false;
+                return Err(err);
+            }
+        }
+
+        guard.highest.insert(lane_epoch, sequence);
+        if guard.journal.is_some() {
+            guard.journal_records = guard.journal_records.saturating_add(1);
+            if guard.journal_records >= self.max_lane_epochs.get() {
+                guard.checkpoint_pending = true;
+                if let Err(err) = self.checkpoint_locked(&mut guard) {
+                    warn!(
+                        ?err,
+                        "DA replay cursor checkpoint deferred; durable journal remains authoritative"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Force a durable checkpoint and truncate the applied journal.
+    pub(crate) fn checkpoint(&self) -> eyre::Result<()> {
+        let mut guard = self.lock_state()?;
+        self.checkpoint_locked(&mut guard)
+    }
+
+    fn checkpoint_locked(&self, guard: &mut ReplayCursorState) -> eyre::Result<()> {
+        if self.dir.as_os_str().is_empty() {
+            guard.checkpoint_pending = false;
+            guard.journal_records = 0;
+            return Ok(());
+        }
+        if !guard.journal_healthy {
+            return Err(eyre!(
+                "DA replay cursor journal is unhealthy; refusing to checkpoint"
+            ));
+        }
+
+        self.persist_snapshot(&guard.to_snapshot())?;
+        validate_replay_cursor_dir_no_follow(&self.dir).wrap_err_with(|| {
+            format!(
+                "failed to inspect DA replay journal directory at {}",
+                self.dir.display()
+            )
+        })?;
+        let journal = guard
+            .journal
+            .as_mut()
+            .ok_or_else(|| eyre!("DA replay cursor journal handle is missing"))?;
+        journal
+            .set_len(0)
+            .wrap_err("failed to truncate DA replay cursor journal after checkpoint")?;
+        journal
+            .seek(SeekFrom::Start(0))
+            .wrap_err("failed to rewind DA replay cursor journal after checkpoint")?;
+        journal
+            .sync_all()
+            .wrap_err("failed to sync truncated DA replay cursor journal")?;
+        sync_dir(&self.dir).wrap_err("failed to sync DA replay cursor checkpoint directory")?;
+        guard.journal_records = 0;
+        guard.checkpoint_pending = false;
         Ok(())
     }
 
@@ -303,6 +460,351 @@ impl ReplayCursorStore {
     }
 }
 
+struct CursorJournalRecovery {
+    records: Vec<CursorJournalRecord>,
+    record_count: usize,
+    valid_bytes: u64,
+    had_torn_tail: bool,
+}
+
+fn read_cursor_journal(
+    path: &Path,
+    max_lane_epochs: NonZeroUsize,
+) -> eyre::Result<CursorJournalRecovery> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Ok(CursorJournalRecovery {
+                records: Vec::new(),
+                record_count: 0,
+                valid_bytes: 0,
+                had_torn_tail: false,
+            });
+        }
+        Err(err) => {
+            return Err(eyre!(err)).wrap_err_with(|| {
+                format!("failed to inspect DA replay journal at {}", path.display())
+            });
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(eyre!(
+            "DA replay cursor journal {} is not a regular file",
+            path.display()
+        ));
+    }
+    let max_bytes = max_cursor_journal_bytes(max_lane_epochs)?;
+    if metadata.len() > max_bytes {
+        return Err(eyre!(
+            "DA replay cursor journal {} is {} bytes, exceeding bounded maximum {}",
+            path.display(),
+            metadata.len(),
+            max_bytes
+        ));
+    }
+
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read DA replay journal at {}", path.display()))?;
+    let current_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to re-inspect DA replay cursor journal at {}",
+            path.display()
+        )
+    })?;
+    if !current_metadata.file_type().is_file()
+        || current_metadata.len() != metadata.len()
+        || u64::try_from(bytes.len()).ok() != Some(metadata.len())
+    {
+        return Err(eyre!(
+            "DA replay cursor journal {} changed while reading",
+            path.display()
+        ));
+    }
+
+    let mut records = Vec::new();
+    let mut offset = 0usize;
+    let mut had_torn_tail = false;
+    while offset < bytes.len() {
+        let frame_start = offset;
+        let Some(prefix_end) = offset.checked_add(CURSOR_JOURNAL_FRAME_PREFIX_BYTES) else {
+            return Err(eyre!("DA replay cursor journal frame offset overflowed"));
+        };
+        if prefix_end > bytes.len() {
+            had_torn_tail = true;
+            break;
+        }
+        let payload_len = u32::from_be_bytes(
+            bytes[offset..prefix_end]
+                .try_into()
+                .expect("journal length prefix has fixed width"),
+        ) as usize;
+        if payload_len > CURSOR_JOURNAL_MAX_PAYLOAD_BYTES {
+            return Err(eyre!(
+                "DA replay cursor journal frame payload length {payload_len} exceeds maximum {}",
+                CURSOR_JOURNAL_MAX_PAYLOAD_BYTES
+            ));
+        }
+        let Some(payload_end) = prefix_end.checked_add(payload_len) else {
+            return Err(eyre!("DA replay cursor journal payload length overflowed"));
+        };
+        let Some(frame_end) = payload_end.checked_add(CURSOR_JOURNAL_CHECKSUM_BYTES) else {
+            return Err(eyre!("DA replay cursor journal frame length overflowed"));
+        };
+        if frame_end > bytes.len() {
+            had_torn_tail = true;
+            break;
+        }
+
+        let payload = &bytes[prefix_end..payload_end];
+        let expected_checksum = cursor_journal_checksum(payload);
+        if bytes[payload_end..frame_end] != expected_checksum {
+            return Err(eyre!(
+                "DA replay cursor journal frame checksum mismatch at byte {frame_start}"
+            ));
+        }
+        let record: CursorJournalRecord = json::from_slice(payload).wrap_err_with(|| {
+            format!("failed to decode DA replay cursor journal frame at byte {frame_start}")
+        })?;
+        if record.version != CURSOR_JOURNAL_VERSION {
+            return Err(eyre!(
+                "unsupported DA replay cursor journal version {} at byte {}",
+                record.version,
+                frame_start
+            ));
+        }
+        records.push(record);
+        if records.len() > max_lane_epochs.get() {
+            return Err(eyre!(
+                "DA replay cursor journal contains more than {} bounded records",
+                max_lane_epochs
+            ));
+        }
+        offset = frame_end;
+    }
+
+    Ok(CursorJournalRecovery {
+        record_count: records.len(),
+        records,
+        valid_bytes: u64::try_from(offset)
+            .map_err(|_| eyre!("DA replay cursor journal offset exceeds u64"))?,
+        had_torn_tail,
+    })
+}
+
+fn max_cursor_journal_bytes(max_lane_epochs: NonZeroUsize) -> eyre::Result<u64> {
+    let max_frame_bytes = CURSOR_JOURNAL_FRAME_PREFIX_BYTES
+        .checked_add(CURSOR_JOURNAL_MAX_PAYLOAD_BYTES)
+        .and_then(|bytes| bytes.checked_add(CURSOR_JOURNAL_CHECKSUM_BYTES))
+        .ok_or_else(|| eyre!("DA replay cursor journal frame bound overflowed"))?;
+    let bytes = max_lane_epochs
+        .get()
+        .checked_mul(max_frame_bytes)
+        .ok_or_else(|| eyre!("DA replay cursor journal size bound overflowed"))?;
+    u64::try_from(bytes).map_err(|_| eyre!("DA replay cursor journal size bound exceeds u64"))
+}
+
+fn max_cursor_snapshot_bytes(max_lane_epochs: NonZeroUsize) -> eyre::Result<u64> {
+    let entries_bytes = max_lane_epochs
+        .get()
+        .checked_mul(CURSOR_SNAPSHOT_MAX_ENTRY_BYTES)
+        .ok_or_else(|| eyre!("DA replay cursor snapshot size bound overflowed"))?;
+    let bytes = entries_bytes
+        .checked_add(CURSOR_SNAPSHOT_FIXED_OVERHEAD_BYTES)
+        .ok_or_else(|| eyre!("DA replay cursor snapshot size bound overflowed"))?;
+    u64::try_from(bytes).map_err(|_| eyre!("DA replay cursor snapshot size bound exceeds u64"))
+}
+
+fn cursor_journal_checksum(payload: &[u8]) -> [u8; blake3::OUT_LEN] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(CURSOR_JOURNAL_DOMAIN);
+    hasher.update(payload);
+    hasher.finalize().into()
+}
+
+fn encode_cursor_journal_frame(record: &CursorJournalRecord) -> eyre::Result<Vec<u8>> {
+    let payload =
+        json::to_vec(record).wrap_err("failed to encode DA replay cursor journal entry")?;
+    if payload.len() > CURSOR_JOURNAL_MAX_PAYLOAD_BYTES {
+        return Err(eyre!(
+            "encoded DA replay cursor journal entry is {} bytes, exceeding maximum {}",
+            payload.len(),
+            CURSOR_JOURNAL_MAX_PAYLOAD_BYTES
+        ));
+    }
+    let payload_len = u32::try_from(payload.len())
+        .map_err(|_| eyre!("DA replay cursor journal entry length exceeds u32"))?;
+    let frame_capacity = CURSOR_JOURNAL_FRAME_PREFIX_BYTES
+        .checked_add(payload.len())
+        .and_then(|bytes| bytes.checked_add(CURSOR_JOURNAL_CHECKSUM_BYTES))
+        .ok_or_else(|| eyre!("DA replay cursor journal frame length overflowed"))?;
+    let mut frame = Vec::with_capacity(frame_capacity);
+    frame.extend_from_slice(&payload_len.to_be_bytes());
+    frame.extend_from_slice(&payload);
+    frame.extend_from_slice(&cursor_journal_checksum(&payload));
+    Ok(frame)
+}
+
+fn replay_cursor_journal_path(dir: &Path) -> PathBuf {
+    dir.join(CURSOR_JOURNAL_FILE_NAME)
+}
+
+fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
+    let file = fs::OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .append(true)
+        .open(path)
+        .wrap_err_with(|| {
+            format!(
+                "failed to create DA replay cursor journal at {}",
+                path.display()
+            )
+        })?;
+    file.sync_all().wrap_err_with(|| {
+        format!(
+            "failed to sync new DA replay cursor journal at {}",
+            path.display()
+        )
+    })?;
+    if let Some(parent) = path.parent() {
+        sync_dir(parent).wrap_err_with(|| {
+            format!(
+                "failed to sync DA replay cursor directory after journal creation at {}",
+                parent.display()
+            )
+        })?;
+    }
+    Ok(file)
+}
+
+fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> eyre::Result<File> {
+    let mut file = match fs::OpenOptions::new().read(true).append(true).open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return create_cursor_journal(path),
+        Err(err) => {
+            return Err(eyre!(err)).wrap_err_with(|| {
+                format!(
+                    "failed to open DA replay cursor journal at {}",
+                    path.display()
+                )
+            });
+        }
+    };
+    validate_open_cursor_journal(path, &file)?;
+    if had_torn_tail {
+        file.set_len(valid_bytes).wrap_err_with(|| {
+            format!(
+                "failed to truncate torn DA replay cursor journal tail at {}",
+                path.display()
+            )
+        })?;
+        file.seek(SeekFrom::Start(valid_bytes)).wrap_err_with(|| {
+            format!(
+                "failed to seek recovered DA replay cursor journal at {}",
+                path.display()
+            )
+        })?;
+        file.sync_all().wrap_err_with(|| {
+            format!(
+                "failed to sync recovered DA replay cursor journal at {}",
+                path.display()
+            )
+        })?;
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync DA replay cursor directory after journal recovery at {}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+    Ok(file)
+}
+
+fn validate_open_cursor_journal(path: &Path, file: &File) -> eyre::Result<()> {
+    let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect DA replay cursor journal at {}",
+            path.display()
+        )
+    })?;
+    if !path_metadata.file_type().is_file() {
+        return Err(eyre!(
+            "DA replay cursor journal {} is not a regular file",
+            path.display()
+        ));
+    }
+    let file_metadata = file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to inspect open DA replay cursor journal at {}",
+            path.display()
+        )
+    })?;
+    if !file_metadata.file_type().is_file() || file_metadata.len() != path_metadata.len() {
+        return Err(eyre!(
+            "DA replay cursor journal {} changed while open",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if file_metadata.dev() != path_metadata.dev() || file_metadata.ino() != path_metadata.ino()
+        {
+            return Err(eyre!(
+                "DA replay cursor journal {} was replaced while open",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn append_cursor_journal_record(
+    dir: &Path,
+    max_lane_epochs: NonZeroUsize,
+    state: &mut ReplayCursorState,
+    record: &CursorJournalRecord,
+) -> eyre::Result<()> {
+    validate_replay_cursor_dir_no_follow(dir).wrap_err_with(|| {
+        format!(
+            "failed to inspect DA replay journal directory at {}",
+            dir.display()
+        )
+    })?;
+    let journal_path = replay_cursor_journal_path(dir);
+    let journal = state
+        .journal
+        .as_mut()
+        .ok_or_else(|| eyre!("DA replay cursor journal handle is missing"))?;
+    validate_open_cursor_journal(&journal_path, journal)?;
+    let frame = encode_cursor_journal_frame(record)?;
+    let current_len = journal
+        .metadata()
+        .wrap_err("failed to inspect DA replay cursor journal length")?
+        .len();
+    let appended_len = current_len
+        .checked_add(
+            u64::try_from(frame.len())
+                .map_err(|_| eyre!("DA replay cursor journal frame length exceeds u64"))?,
+        )
+        .ok_or_else(|| eyre!("DA replay cursor journal length overflowed"))?;
+    let max_len = max_cursor_journal_bytes(max_lane_epochs)?;
+    if appended_len > max_len {
+        return Err(eyre!(
+            "DA replay cursor journal would exceed bounded maximum {max_len} bytes"
+        ));
+    }
+    journal
+        .write_all(&frame)
+        .wrap_err("failed to append DA replay cursor journal entry")?;
+    journal
+        .sync_all()
+        .wrap_err("failed to sync DA replay cursor journal entry")?;
+    Ok(())
+}
+
 fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
     fs::create_dir_all(path)?;
     validate_replay_cursor_dir_no_follow(path)
@@ -332,7 +834,10 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn read_cursor_snapshot(path: &Path) -> eyre::Result<Option<CursorSnapshot>> {
+fn read_cursor_snapshot(
+    path: &Path,
+    max_lane_epochs: NonZeroUsize,
+) -> eyre::Result<Option<CursorSnapshot>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -346,6 +851,15 @@ fn read_cursor_snapshot(path: &Path) -> eyre::Result<Option<CursorSnapshot>> {
         return Err(eyre!(
             "DA replay snapshot {} is not a regular file",
             path.display()
+        ));
+    }
+    let max_bytes = max_cursor_snapshot_bytes(max_lane_epochs)?;
+    if metadata.len() > max_bytes {
+        return Err(eyre!(
+            "DA replay snapshot {} is {} bytes, exceeding bounded maximum {}",
+            path.display(),
+            metadata.len(),
+            max_bytes
         ));
     }
     let data = fs::read(path)
@@ -372,16 +886,28 @@ fn read_cursor_snapshot(path: &Path) -> eyre::Result<Option<CursorSnapshot>> {
     }
     let snapshot: CursorSnapshot = json::from_slice(&data)
         .wrap_err_with(|| format!("failed to decode DA replay snapshot at {}", path.display()))?;
-    validate_cursor_snapshot(path, &snapshot)?;
+    validate_cursor_snapshot(path, &snapshot, max_lane_epochs)?;
     Ok(Some(snapshot))
 }
 
-fn validate_cursor_snapshot(path: &Path, snapshot: &CursorSnapshot) -> eyre::Result<()> {
-    if snapshot.version != 1 {
+fn validate_cursor_snapshot(
+    path: &Path,
+    snapshot: &CursorSnapshot,
+    max_lane_epochs: NonZeroUsize,
+) -> eyre::Result<()> {
+    if snapshot.version != CURSOR_SNAPSHOT_VERSION {
         return Err(eyre!(
             "unsupported DA replay snapshot version {} at {}",
             snapshot.version,
             path.display()
+        ));
+    }
+    if snapshot.entries.len() > max_lane_epochs.get() {
+        return Err(eyre!(
+            "DA replay snapshot at {} contains {} lane/epoch cursors, exceeding configured maximum {}",
+            path.display(),
+            snapshot.entries.len(),
+            max_lane_epochs
         ));
     }
 
@@ -1227,13 +1753,42 @@ fn read_regular_spool_artifact(path: &Path, artifact: &str) -> std::io::Result<V
 }
 
 impl ReplayCursorState {
+    fn empty() -> Self {
+        Self {
+            highest: BTreeMap::new(),
+            journal: None,
+            journal_records: 0,
+            checkpoint_pending: false,
+            journal_healthy: true,
+        }
+    }
+
     fn from_snapshot(snapshot: CursorSnapshot) -> Self {
-        let mut highest = HashMap::new();
+        let mut state = Self::empty();
         for entry in snapshot.entries {
             let lane_epoch = LaneEpoch::new(LaneId::from(entry.lane_id), entry.epoch);
-            highest.insert(lane_epoch, entry.highest_sequence);
+            state.highest.insert(lane_epoch, entry.highest_sequence);
         }
-        Self { highest }
+        state
+    }
+
+    fn apply_journal_record(
+        &mut self,
+        record: CursorJournalRecord,
+        max_lane_epochs: NonZeroUsize,
+    ) -> eyre::Result<()> {
+        let lane_epoch = LaneEpoch::new(LaneId::from(record.lane_id), record.epoch);
+        if !self.highest.contains_key(&lane_epoch) && self.highest.len() >= max_lane_epochs.get() {
+            return Err(eyre!(
+                "DA replay cursor journal exceeds configured lane/epoch capacity {}",
+                max_lane_epochs
+            ));
+        }
+        self.highest
+            .entry(lane_epoch)
+            .and_modify(|highest| *highest = (*highest).max(record.highest_sequence))
+            .or_insert(record.highest_sequence);
+        Ok(())
     }
 
     fn to_snapshot(&self) -> CursorSnapshot {
@@ -1247,7 +1802,7 @@ impl ReplayCursorState {
         }
         entries.sort_by_key(|entry| (entry.lane_id, entry.epoch));
         CursorSnapshot {
-            version: 1,
+            version: CURSOR_SNAPSHOT_VERSION,
             entries,
         }
     }

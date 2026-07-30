@@ -247,7 +247,6 @@ fn build_ballot_pair(
         choice: options.choice,
         nonce: options.nonce.clone(),
         revealed_at_unix_ms: unix_millis(reveal_at)?,
-        #[cfg(feature = "zk-ballot")]
         zk_proof_uris: Vec::new(),
     };
     let commit = PolicyJuryBallotCommitV1 {

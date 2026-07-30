@@ -71,6 +71,12 @@ tasks.withType<Test>().configureEach {
             .dir("..")
             .dir("fixtures/sorafs_manifest/appeal_finance"),
     )
+    inputs.dir(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .dir("fixtures/sorafs_manifest/reference_sdk"),
+    )
     val harnessFilter = System.getenv("ANDROID_HARNESS_MAINS")
     if (!harnessFilter.isNullOrBlank()) {
         systemProperty("android.test.mains", harnessFilter)

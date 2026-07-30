@@ -37,7 +37,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## Процесс допуска
 
 1. **Создание предложения**
-   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
+   - CLI: добавить `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      формирующий `ProviderAdmissionProposalV1` + бандл аттестации.
    - Валидация: убедиться в наличии обязательных полей, stake > 0, канонического chunker handle в `profile_id`.
 2. **Одобрение governance**
@@ -66,7 +66,7 @@ CLI поток теперь принимает промежуточные бан
 
 ### Справочник CLI
 
-Запускайте каждую команду через `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+Запускайте каждую команду через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - Обязательные флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -114,7 +114,7 @@ CLI поток теперь принимает промежуточные бан
    увеличив `--retention-epoch` и обновив stake/эндпоинты по необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI поток теперь принимает промежуточные бан
 #### Аварийный отзыв
 1. Определите компрометированный envelope и выпустите отзыв:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

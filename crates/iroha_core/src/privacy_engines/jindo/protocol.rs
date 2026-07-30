@@ -17,6 +17,7 @@ use crate::privacy_engines::p256::TranscriptBindingV1;
 
 use super::{
     JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1, JINDO_RING_DEGREE_V1,
+    JindoCanonicalPolynomialErrorV1,
     codec::{JINDO_PROOF_BYTES_V1, JindoEvaluationProofV1, JindoProofCodecErrorV1},
     crs::{commit_key_v1, crs_digest_v1},
     encoding::{decode_coefficient_slots_v1, encode_coefficient_slots_v1},
@@ -34,6 +35,7 @@ use super::{
         sample_gaussian_polynomial_v1, sample_uniform_field_element_v1,
     },
     transcript::{JindoTranscriptErrorV1, JindoTranscriptV1},
+    validate_canonical_polynomial_v1,
 };
 
 /// Exact native proof byte width for this Jindo profile.
@@ -99,6 +101,13 @@ pub enum JindoErrorV1 {
         /// Compiled first-release maximum.
         max: usize,
     },
+    /// A polynomial used the empty vector instead of the unique `[0]` zero
+    /// polynomial encoding.
+    #[error("Jindo polynomial {index} is empty")]
+    EmptyPolynomial {
+        /// Zero-based polynomial index.
+        index: usize,
+    },
     /// A witness polynomial exceeds the fixed degree bound.
     #[error("Jindo polynomial {index} has {count} coefficients; maximum is {max}")]
     PolynomialTooLarge {
@@ -116,6 +125,12 @@ pub enum JindoErrorV1 {
         polynomial_index: usize,
         /// Zero-based coefficient index.
         coefficient_index: usize,
+    },
+    /// A polynomial used a redundant high zero coefficient.
+    #[error("Jindo polynomial {index} has a trailing zero coefficient")]
+    TrailingZeroCoefficient {
+        /// Zero-based polynomial index.
+        index: usize,
     },
     /// The evaluation point is not a canonical coefficient-field element.
     #[error("Jindo statement evaluation point is non-canonical")]
@@ -215,6 +230,36 @@ impl From<JindoSamplingErrorV1> for JindoErrorV1 {
     }
 }
 
+impl From<JindoCanonicalPolynomialErrorV1> for JindoErrorV1 {
+    fn from(error: JindoCanonicalPolynomialErrorV1) -> Self {
+        match error {
+            JindoCanonicalPolynomialErrorV1::Empty { polynomial_index } => Self::EmptyPolynomial {
+                index: polynomial_index,
+            },
+            JindoCanonicalPolynomialErrorV1::TooLarge {
+                polynomial_index,
+                count,
+            } => Self::PolynomialTooLarge {
+                index: polynomial_index,
+                count,
+                max: JINDO_MAX_COEFFICIENTS_V1,
+            },
+            JindoCanonicalPolynomialErrorV1::NonCanonicalCoefficient {
+                polynomial_index,
+                coefficient_index,
+            } => Self::NonCanonicalCoefficient {
+                polynomial_index,
+                coefficient_index,
+            },
+            JindoCanonicalPolynomialErrorV1::TrailingZeroCoefficient { polynomial_index } => {
+                Self::TrailingZeroCoefficient {
+                    index: polynomial_index,
+                }
+            }
+        }
+    }
+}
+
 impl From<JindoTranscriptErrorV1> for JindoErrorV1 {
     fn from(value: JindoTranscriptErrorV1) -> Self {
         Self::Transcript(value)
@@ -237,8 +282,8 @@ pub fn jindo_crs_digest_v1() -> [u8; 32] {
 ///
 /// # Errors
 ///
-/// Returns an error for an oversized or non-canonical polynomial, or for a
-/// non-canonical evaluation point.
+/// Returns an error for an empty, oversized, trailing-zero, or non-canonical
+/// polynomial, or for a non-canonical evaluation point.
 pub fn evaluate_polynomial_v1(
     coefficients: &[PrivacyJindoFieldElementV1],
     evaluation_point: PrivacyJindoFieldElementV1,
@@ -251,7 +296,8 @@ pub fn evaluate_polynomial_v1(
     ))
 }
 
-/// Commit one degree-bounded polynomial with fresh evaluation-hiding randomness.
+/// Commit one canonically encoded degree-bounded polynomial with fresh
+/// evaluation-hiding randomness.
 pub fn commit_polynomial_v1<R>(
     coefficients: &[PrivacyJindoFieldElementV1],
     rng: &mut R,
@@ -708,13 +754,7 @@ fn parse_polynomial(
     coefficients: &[PrivacyJindoFieldElementV1],
     polynomial_index: usize,
 ) -> Result<Zeroizing<Vec<JindoFieldElementV1>>, JindoErrorV1> {
-    if coefficients.len() > JINDO_MAX_COEFFICIENTS_V1 {
-        return Err(JindoErrorV1::PolynomialTooLarge {
-            index: polynomial_index,
-            count: coefficients.len(),
-            max: JINDO_MAX_COEFFICIENTS_V1,
-        });
-    }
+    validate_canonical_polynomial_v1(coefficients, polynomial_index).map_err(JindoErrorV1::from)?;
     let mut polynomial = Zeroizing::new(vec![JindoFieldElementV1::ZERO; JINDO_MAX_COEFFICIENTS_V1]);
     for (coefficient_index, coefficient) in coefficients.iter().enumerate() {
         polynomial[coefficient_index] = JindoFieldElementV1::from_canonical_bytes(
@@ -1259,6 +1299,28 @@ mod tests {
 
     impl CryptoRng for NonCanonicalFieldRng {}
 
+    struct PanicRng;
+
+    impl RngCore for PanicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("non-canonical polynomial reached Jindo randomness")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("non-canonical polynomial reached Jindo randomness")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("non-canonical polynomial reached Jindo randomness")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+            panic!("non-canonical polynomial reached Jindo randomness")
+        }
+    }
+
+    impl CryptoRng for PanicRng {}
+
     fn field(value: u64) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         encoding[..8].copy_from_slice(&value.to_le_bytes());
@@ -1273,6 +1335,14 @@ mod tests {
         {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
+        encoding
+    }
+
+    fn field_modulus_plus_one_encoding() -> [u8; 32] {
+        let mut encoding = field_modulus_encoding();
+        encoding[0] = encoding[0]
+            .checked_add(1)
+            .expect("Jindo modulus low byte leaves room for one");
         encoding
     }
 
@@ -1412,7 +1482,7 @@ mod tests {
     #[test]
     fn two_polynomial_batch_and_zero_evaluation_point_roundtrip() {
         let polynomials = vec![
-            Vec::new(),
+            vec![field(0)],
             vec![field(5), field(7), field(11), field(13), field(17)],
         ];
         let (statement, proof) = prove_fixture(&polynomials, field(0), 0x2234_5678_9abc_def0);
@@ -1436,6 +1506,129 @@ mod tests {
             ),
             Err(JindoErrorV1::DuplicateCommitment { index: 1 })
         );
+    }
+
+    #[test]
+    fn canonical_polynomial_rule_is_shared_by_evaluate_commit_and_prove() {
+        let zero = vec![field(0)];
+        assert_eq!(
+            evaluate_polynomial_v1(&zero, field(29)),
+            Ok(field(0)),
+            "[0] is the unique zero-polynomial encoding"
+        );
+
+        let exact_cap = vec![field(1); JINDO_MAX_COEFFICIENTS_V1];
+        assert_eq!(
+            evaluate_polynomial_v1(&exact_cap, field(0)),
+            Ok(field(1)),
+            "a non-zero leading coefficient at the exact cap is canonical"
+        );
+
+        let mut trailing_zero_at_cap = exact_cap.clone();
+        trailing_zero_at_cap[JINDO_MAX_COEFFICIENTS_V1 - 1] = field(0);
+        let oversized = vec![field(1); JINDO_MAX_COEFFICIENTS_V1 + 1];
+        let noncanonical_modulus = vec![PrivacyJindoFieldElementV1::new(field_modulus_encoding())];
+        let noncanonical_modulus_plus_one = vec![PrivacyJindoFieldElementV1::new(
+            field_modulus_plus_one_encoding(),
+        )];
+
+        for (label, polynomial, expected) in [
+            (
+                "empty",
+                Vec::new(),
+                JindoErrorV1::EmptyPolynomial { index: 0 },
+            ),
+            (
+                "redundant zero polynomial",
+                vec![field(0), field(0)],
+                JindoErrorV1::TrailingZeroCoefficient { index: 0 },
+            ),
+            (
+                "trailing zero at cap",
+                trailing_zero_at_cap,
+                JindoErrorV1::TrailingZeroCoefficient { index: 0 },
+            ),
+            (
+                "over coefficient cap",
+                oversized,
+                JindoErrorV1::PolynomialTooLarge {
+                    index: 0,
+                    count: JINDO_MAX_COEFFICIENTS_V1 + 1,
+                    max: JINDO_MAX_COEFFICIENTS_V1,
+                },
+            ),
+            (
+                "field modulus",
+                noncanonical_modulus,
+                JindoErrorV1::NonCanonicalCoefficient {
+                    polynomial_index: 0,
+                    coefficient_index: 0,
+                },
+            ),
+            (
+                "field modulus plus one",
+                noncanonical_modulus_plus_one,
+                JindoErrorV1::NonCanonicalCoefficient {
+                    polynomial_index: 0,
+                    coefficient_index: 0,
+                },
+            ),
+        ] {
+            assert_eq!(
+                evaluate_polynomial_v1(&polynomial, field(31)),
+                Err(expected),
+                "{label} reached polynomial evaluation"
+            );
+            let commit_error = commit_polynomial_v1(&polynomial, &mut PanicRng)
+                .expect_err("non-canonical polynomial reached prover randomness");
+            assert_eq!(commit_error, expected, "{label} returned the wrong error");
+        }
+
+        let canonical = vec![field(37), field(41), field(43)];
+        let (statement, openings) = commit_statement(
+            core::slice::from_ref(&canonical),
+            field(47),
+            0x2a34_5678_9abc_def0,
+        );
+        for (label, polynomial, expected) in [
+            (
+                "empty",
+                Vec::new(),
+                JindoErrorV1::EmptyPolynomial { index: 0 },
+            ),
+            (
+                "trailing zero",
+                {
+                    let mut value = canonical.clone();
+                    value.push(field(0));
+                    value
+                },
+                JindoErrorV1::TrailingZeroCoefficient { index: 0 },
+            ),
+            (
+                "noncanonical coefficient",
+                {
+                    let mut value = canonical.clone();
+                    value[1] = PrivacyJindoFieldElementV1::new(field_modulus_plus_one_encoding());
+                    value
+                },
+                JindoErrorV1::NonCanonicalCoefficient {
+                    polynomial_index: 0,
+                    coefficient_index: 1,
+                },
+            ),
+        ] {
+            assert_eq!(
+                prove_batched_evaluation_v1(
+                    &statement,
+                    &[polynomial],
+                    &openings,
+                    &binding(&statement),
+                ),
+                Err(expected),
+                "{label} reached the Jindo proving transcript"
+            );
+        }
     }
 
     #[test]

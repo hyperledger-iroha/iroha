@@ -374,7 +374,7 @@ public sealed record SccpBridgeSubmitResponse(
                 if (!string.Equals(txHash, expectedTransactionHash, StringComparison.Ordinal))
                 {
                     throw new ArgumentException(
-                        "tx_hash_hex does not match the exact detached signed transaction.");
+                        "tx_hash_hex does not match the exact detached transaction intent.");
                 }
             }
         }
@@ -645,7 +645,7 @@ internal static class SccpSubmitValidation
                 "signature_b64 does not verify the exact transaction payload for authority.");
         }
 
-        return Convert.ToHexString(DetachedTransactionHash(payload, signature))
+        return Convert.ToHexString(DetachedTransactionHash(payload))
             .ToLowerInvariant();
     }
 
@@ -673,6 +673,7 @@ internal static class SccpSubmitValidation
         var nonce = cursor.TakeField("nonce");
         var feePayment = cursor.TakeField("fee_payment");
         var metadata = cursor.TakeField("metadata");
+        var attachments = cursor.TakeField("attachments");
         if (!cursor.IsFinished
             || creation.Length != sizeof(ulong)
             || BinaryPrimitives.ReadUInt64LittleEndian(creation) != creationTimeMs)
@@ -704,6 +705,7 @@ internal static class SccpSubmitValidation
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
         RequireCanonicalMetadata(metadata);
+        RequireAbsentOption(attachments, "attachments");
     }
 
     private static DetachedBridgeBinding InspectCanonicalDetachedExecutable(
@@ -1001,29 +1003,13 @@ internal static class SccpSubmitValidation
     private static bool SupportedNoritoFlags(byte flags) =>
         (flags & ~0x27) == 0 && ((flags & 0x20) == 0 || (flags & 0x06) == 0x06);
 
-    private static byte[] DetachedTransactionHash(
-        ReadOnlySpan<byte> payload,
-        ReadOnlySpan<byte> signature)
+    private static byte[] DetachedTransactionHash(ReadOnlySpan<byte> payload)
     {
-        using var signatureVector = new MemoryStream();
-        WriteLittleEndianUInt64(signatureVector, checked((ulong)signature.Length));
-        foreach (var item in signature)
-        {
-            WriteLittleEndianUInt64(signatureVector, 1);
-            signatureVector.WriteByte(item);
-        }
-
-        using var signedTransaction = new MemoryStream();
-        WriteFixedField(signedTransaction, signatureVector.ToArray());
-        WriteFixedField(signedTransaction, payload);
-        WriteFixedField(signedTransaction, [0]);
-        WriteFixedField(signedTransaction, [0]);
-
         using var entrypoint = new MemoryStream();
         Span<byte> variant = stackalloc byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(variant, 0);
         entrypoint.Write(variant);
-        WriteFixedField(entrypoint, signedTransaction.ToArray());
+        WriteFixedField(entrypoint, payload);
         return IrohaHash.Hash(entrypoint.ToArray());
     }
 

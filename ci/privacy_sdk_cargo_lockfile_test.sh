@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
 source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 
@@ -38,9 +39,20 @@ write_test_lock() {
   chmod 600 "${path}"
 }
 
+write_test_rust_toolchain() {
+  local root="$1"
+  printf '%s\n' '[toolchain]' 'channel = "1.93.1"' \
+    >"${root}/rust-toolchain.toml"
+  chmod 600 "${root}/rust-toolchain.toml"
+}
+
+write_test_rust_toolchain "${REPOSITORY_ROOT}"
 write_test_lock "${REPOSITORY_ROOT}/Cargo.lock" "workspace"
 write_test_lock "${PRIVATE_ROOT}/Cargo.lock" "selected"
 write_test_lock "${PRIVATE_ROOT}/other-Cargo.lock" "other"
+REPOSITORY_PRIVATE_LOCK="${REPOSITORY_ROOT}/target/kotodama-lock-final-current.test/Cargo.lock"
+mkdir -p "$(dirname "${REPOSITORY_PRIVATE_LOCK}")"
+write_test_lock "${REPOSITORY_PRIVATE_LOCK}" "repository-private-selected"
 
 expect_failure() {
   local expected="$1"
@@ -59,6 +71,63 @@ expect_failure() {
   esac
 }
 
+expect_failure_first_line() {
+  local expected="$1"
+  shift
+  local output first_line
+  if output="$("$@" 2>&1)"; then
+    echo "expected command to fail: $*" >&2
+    exit 1
+  fi
+  first_line="${output%%$'\n'*}"
+  if [[ "${first_line}" != *"${expected}"* ]]; then
+    echo \
+      "first failure line did not contain '${expected}': ${output}" \
+      >&2
+    exit 1
+  fi
+}
+
+expect_failure_first_diagnostic() {
+  local expected="$1"
+  shift
+  local output first_diagnostic="" output_line
+  if output="$("$@" 2>&1)"; then
+    echo "expected command to fail: $*" >&2
+    exit 1
+  fi
+  while IFS= read -r output_line; do
+    case "${output_line}" in
+      error:*)
+        first_diagnostic="${output_line}"
+        break
+        ;;
+    esac
+  done <<<"${output}"
+  if [[ -z "${first_diagnostic}" || \
+    "${first_diagnostic}" != *"${expected}"* ]]; then
+    echo \
+      "first failure diagnostic did not contain '${expected}': ${output}" \
+      >&2
+    exit 1
+  fi
+}
+
+ASSERT_EXACT_LINES_INDEX=0
+assert_exact_lines() {
+  local actual_path="$1"
+  shift
+  local expected_path
+  ASSERT_EXACT_LINES_INDEX=$((ASSERT_EXACT_LINES_INDEX + 1))
+  expected_path="${TEST_ROOT}/expected-lines-${ASSERT_EXACT_LINES_INDEX}"
+  printf '%s\n' "$@" >"${expected_path}"
+  if ! cmp -s "${expected_path}" "${actual_path}"; then
+    echo "exact transcript drifted: ${actual_path}" >&2
+    diff -u "${expected_path}" "${actual_path}" >&2 || true
+    exit 1
+  fi
+}
+
 unset \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH \
   IROHA_JS_CARGO_LOCKFILE_PATH \
@@ -68,7 +137,12 @@ unset \
   IROHA_PRIVACY_REAL_CARGO \
   IROHA_PRIVACY_CARGO_AUDIT_PATH \
   IROHA_PRIVACY_SDK_ROOT \
-  IROHA_PRIVACY_LOCKFILE_PYTHON_BIN
+  IROHA_PRIVACY_LOCKFILE_PYTHON_BIN \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON
 expect_failure \
   "IROHA_PRIVACY_CARGO_LOCKFILE_PATH is required" \
   privacy_sdk_resolve_cargo_lockfile "${REPOSITORY_ROOT}"
@@ -81,14 +155,51 @@ expect_failure \
 
 IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${REPOSITORY_ROOT}/Cargo.lock"
 expect_failure \
-  "must be external to the repository" \
+  "must not select the workspace Cargo.lock" \
   privacy_sdk_resolve_cargo_lockfile "${REPOSITORY_ROOT}"
+
+IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${REPOSITORY_PRIVATE_LOCK}"
+RESOLVED_REPOSITORY_PRIVATE_LOCK="$(
+  privacy_sdk_resolve_cargo_lockfile "${REPOSITORY_ROOT}"
+)"
+[[ "${RESOLVED_REPOSITORY_PRIVATE_LOCK}" == "${REPOSITORY_PRIVATE_LOCK}" ]]
 
 IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/Cargo.lock"
 RESOLVED_PRIVATE_LOCK="$(
   privacy_sdk_resolve_cargo_lockfile "${REPOSITORY_ROOT}"
 )"
 [[ "${RESOLVED_PRIVATE_LOCK}" == "${PRIVATE_ROOT}/Cargo.lock" ]]
+
+mkdir -p "${PRIVATE_ROOT}/hardlink"
+ln "${PRIVATE_ROOT}/Cargo.lock" "${PRIVATE_ROOT}/hardlink/Cargo.lock"
+IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/hardlink/Cargo.lock"
+expect_failure \
+  "must be singly linked" \
+  privacy_sdk_resolve_cargo_lockfile "${REPOSITORY_ROOT}"
+rm "${PRIVATE_ROOT}/hardlink/Cargo.lock"
+
+CI_INTERNAL_ROOT="${TEST_ROOT}/ci-internal-repository"
+CI_INTERNAL_LOCK="${CI_INTERNAL_ROOT}/target/private/Cargo.lock"
+mkdir -p "$(dirname "${CI_INTERNAL_LOCK}")"
+write_test_lock "${CI_INTERNAL_LOCK}" "ci-internal-selected"
+IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${CI_INTERNAL_LOCK}"
+IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${CI_INTERNAL_LOCK}"
+IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="$(
+  privacy_sdk_file_seal "${CI_INTERNAL_LOCK}"
+)"
+IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="absent"
+export \
+  IROHA_PRIVACY_CARGO_LOCKFILE_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE
+expect_failure \
+  "CI Cargo.lock must remain external to the repository" \
+  privacy_sdk_assert_ci_cargo_lock_state "${CI_INTERNAL_ROOT}"
+unset \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE
 
 unset IROHA_PRIVACY_CARGO_LOCKFILE_PATH
 IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/Cargo.lock"
@@ -188,13 +299,48 @@ expect_failure \
   "${MUTATED_PRIVATE_SEAL}" \
   "test mutated selected"
 
+REPLACED_PRIVATE_LOCK="${TEST_ROOT}/replaced-private/Cargo.lock"
+REPLACEMENT_PRIVATE_LOCK="${TEST_ROOT}/replaced-private/replacement"
+mkdir -p "$(dirname "${REPLACED_PRIVATE_LOCK}")"
+write_test_lock "${REPLACED_PRIVATE_LOCK}" "replaced-private"
+REPLACED_PRIVATE_SEAL="$(privacy_sdk_file_seal "${REPLACED_PRIVATE_LOCK}")"
+cp "${REPLACED_PRIVATE_LOCK}" "${REPLACEMENT_PRIVATE_LOCK}"
+mv "${REPLACEMENT_PRIVATE_LOCK}" "${REPLACED_PRIVATE_LOCK}"
+expect_failure \
+  "test replaced selected changed" \
+  privacy_sdk_assert_file_seal \
+  "${REPLACED_PRIVATE_LOCK}" \
+  "${REPLACED_PRIVATE_SEAL}" \
+  "test replaced selected"
+
 FAKE_CARGO_LOG="${TEST_ROOT}/fake-cargo.log"
-FAKE_CARGO="${TEST_ROOT}/real-cargo"
+FAKE_TOOLCHAIN_BIN="${TEST_ROOT}/direct-toolchain/1.93.1-aarch64-apple-darwin/bin"
+FAKE_RUSTUP="${TEST_ROOT}/rustup"
+FAKE_CARGO="${FAKE_TOOLCHAIN_BIN}/cargo"
+FAKE_RUSTC="${FAKE_TOOLCHAIN_BIN}/rustc"
+FAKE_RUSTDOC="${FAKE_TOOLCHAIN_BIN}/rustdoc"
+mkdir -p "${FAKE_TOOLCHAIN_BIN}"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   ': "${FAKE_CARGO_LOG:?}"' \
+  'while IFS= read -r environment_name; do' \
+  '  case "${environment_name}" in' \
+  '    IROHA_PRIVACY_*|IROHA_JS_CARGO_LOCKFILE_PATH)' \
+  '      echo "real Cargo child inherited guard internal ${environment_name}" >&2' \
+  '      exit 82' \
+  '      ;;' \
+  '  esac' \
+  'done < <(compgen -e || true)' \
+  '[[ -n "${CARGO:-}" && -x "${CARGO}" ]] || { echo "real Cargo child did not retain the wrapper path" >&2; exit 83; }' \
+  '[[ "${CARGO}" == "${FAKE_EXPECTED_CARGO_WRAPPER}" ]] || { echo "real Cargo child received the wrong CARGO wrapper" >&2; exit 84; }' \
+  '[[ "${RUSTC:-}" == "${FAKE_EXPECTED_RUSTC}" ]] || { echo "real Cargo child received the wrong rustc" >&2; exit 85; }' \
+  '[[ "${RUSTDOC:-}" == "${FAKE_EXPECTED_RUSTDOC}" ]] || { echo "real Cargo child received the wrong rustdoc" >&2; exit 86; }' \
   'printf "invocation\\n" >>"${FAKE_CARGO_LOG}"' \
+  'printf "CARGO_HOME=%s\\n" "${CARGO_HOME:-}" >>"${FAKE_CARGO_LOG}"' \
+  'printf "CARGO_BUILD_JOBS=%s\\n" "${CARGO_BUILD_JOBS:-}" >>"${FAKE_CARGO_LOG}"' \
+  'printf "CARGO_NET_OFFLINE=%s\\n" "${CARGO_NET_OFFLINE:-}" >>"${FAKE_CARGO_LOG}"' \
+  'printf "CARGO_TARGET_DIR=%s\\n" "${CARGO_TARGET_DIR:-}" >>"${FAKE_CARGO_LOG}"' \
   'seen_delimiter=0' \
   'for argument in "$@"; do' \
   '  if [[ "${argument}" == "--" ]]; then seen_delimiter=1; fi' \
@@ -207,21 +353,108 @@ printf '%s\n' \
   'if [[ -n "${FAKE_CARGO_MUTATE_PATH:-}" ]]; then' \
   '  printf "%s\\n" "# adversarial Cargo workspace mutation" >>"${FAKE_CARGO_MUTATE_PATH}"' \
   'fi' \
+  'if [[ -n "${FAKE_CARGO_REPLACE_HOME:-}" ]]; then' \
+  '  mv "${CARGO_HOME}" "${CARGO_HOME}.replaced"' \
+  '  mkdir -m 700 "${CARGO_HOME}"' \
+  'fi' \
   >"${FAKE_CARGO}"
 chmod 700 "${FAKE_CARGO}"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${FAKE_RUSTC}"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${FAKE_RUSTDOC}"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${FAKE_RUSTUP}"
+chmod 700 "${FAKE_RUSTC}" "${FAKE_RUSTDOC}" "${FAKE_RUSTUP}"
 : >"${FAKE_CARGO_LOG}"
 
 CARGO_AUDIT="${TEST_ROOT}/cargo-audit"
 : >"${CARGO_AUDIT}"
 chmod 600 "${CARGO_AUDIT}"
+WRAPPER_CARGO_HOME="${TEST_ROOT}/wrapper-cargo-home"
+WRAPPER_CARGO_TARGET="${TEST_ROOT}/wrapper-cargo-target"
+WRAPPER_CONFIG_PATH="${REPOSITORY_ROOT}/.cargo/config.toml"
+mkdir -m 700 "${WRAPPER_CARGO_HOME}" "${WRAPPER_CARGO_TARGET}"
+mkdir -p "$(dirname "${WRAPPER_CONFIG_PATH}")"
+printf '%s\n' '[build]' 'jobs = 1' >"${WRAPPER_CONFIG_PATH}"
+WRAPPER_CONFIG_SEAL="$(privacy_sdk_file_seal "${WRAPPER_CONFIG_PATH}")"
+WRAPPER_CARGO_HOME_STATE="$(
+  privacy_sdk_capture_directory_state "${WRAPPER_CARGO_HOME}"
+)"
+WRAPPER_CARGO_REGISTRY_STATE="$(
+  privacy_sdk_capture_cargo_cache_component_state \
+    "${WRAPPER_CARGO_HOME}" registry
+)"
+WRAPPER_CARGO_GIT_STATE="$(
+  privacy_sdk_capture_cargo_cache_component_state \
+    "${WRAPPER_CARGO_HOME}" git
+)"
+WRAPPER_CARGO_TARGET_STATE="$(
+  privacy_sdk_capture_directory_state "${WRAPPER_CARGO_TARGET}"
+)"
+WRAPPER_TOOLCHAIN_PATH="${REPOSITORY_ROOT}/rust-toolchain.toml"
+WRAPPER_TOOLCHAIN_SEAL="$(privacy_sdk_file_seal "${WRAPPER_TOOLCHAIN_PATH}")"
+FAKE_CARGO_SEAL="$(privacy_sdk_executable_seal "${FAKE_CARGO}")"
+FAKE_RUSTC_SEAL="$(privacy_sdk_executable_seal "${FAKE_RUSTC}")"
+FAKE_RUSTDOC_SEAL="$(privacy_sdk_executable_seal "${FAKE_RUSTDOC}")"
+FAKE_RUSTUP_SEAL="$(privacy_sdk_executable_seal "${FAKE_RUSTUP}")"
 export FAKE_CARGO_LOG
+export FAKE_EXPECTED_CARGO_WRAPPER="${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
+export FAKE_EXPECTED_RUSTC="${FAKE_RUSTC}"
+export FAKE_EXPECTED_RUSTDOC="${FAKE_RUSTDOC}"
 export IROHA_PRIVACY_SDK_ROOT="${REPOSITORY_ROOT}"
 export IROHA_PRIVACY_REAL_CARGO="${FAKE_CARGO}"
 export IROHA_PRIVACY_CARGO_AUDIT_PATH="${CARGO_AUDIT}"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/Cargo.lock"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="${PRIVATE_SEAL}"
 export IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="present:${WORKSPACE_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${WRAPPER_CARGO_HOME}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${WRAPPER_CARGO_HOME_STATE}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE="${WRAPPER_CARGO_REGISTRY_STATE}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE="${WRAPPER_CARGO_GIT_STATE}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${WRAPPER_CARGO_TARGET}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${WRAPPER_CARGO_TARGET_STATE}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${WRAPPER_CONFIG_PATH}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${WRAPPER_CONFIG_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH="${WRAPPER_TOOLCHAIN_PATH}"
+export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL="${WRAPPER_TOOLCHAIN_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR="1.93.1-aarch64-apple-darwin"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH="${FAKE_RUSTUP}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL="${FAKE_RUSTUP_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH="${FAKE_CARGO}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL="${FAKE_CARGO_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH="${FAKE_RUSTC}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL="${FAKE_RUSTC_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH="${FAKE_RUSTDOC}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL="${FAKE_RUSTDOC_SEAL}"
 export IROHA_PRIVACY_LOCKFILE_PYTHON_BIN="${PRIVACY_SDK_LOCK_TEST_PYTHON_BIN:-python3}"
+export CARGO_HOME="${WRAPPER_CARGO_HOME}"
+export CARGO_TARGET_DIR="${WRAPPER_CARGO_TARGET}"
+export CARGO_BUILD_JOBS=1
+export CARGO_NET_OFFLINE=true
+export CARGO_INCREMENTAL=0
+export CARGO_ENCODED_RUSTFLAGS=""
+export RUSTC_BOOTSTRAP=1
+cd "${REPOSITORY_ROOT}"
+
+expect_wrapper_rejection() {
+  local expected="$1"
+  shift
+  local cargo_lines_before audit_lines_before
+  cargo_lines_before="$(wc -l <"${FAKE_CARGO_LOG}")"
+  audit_lines_before="$(wc -l <"${CARGO_AUDIT}")"
+  expect_failure "${expected}" "$@"
+  [[ "$(wc -l <"${FAKE_CARGO_LOG}")" -eq "${cargo_lines_before}" ]]
+  [[ "$(wc -l <"${CARGO_AUDIT}")" -eq "${audit_lines_before}" ]]
+}
+
+expect_wrapper_rejection_first_line() {
+  local expected="$1"
+  shift
+  local cargo_lines_before audit_lines_before
+  cargo_lines_before="$(wc -l <"${FAKE_CARGO_LOG}")"
+  audit_lines_before="$(wc -l <"${CARGO_AUDIT}")"
+  expect_failure_first_line "${expected}" "$@"
+  [[ "$(wc -l <"${FAKE_CARGO_LOG}")" -eq "${cargo_lines_before}" ]]
+  [[ "$(wc -l <"${CARGO_AUDIT}")" -eq "${audit_lines_before}" ]]
+}
 
 IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/other-Cargo.lock"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH
@@ -231,10 +464,43 @@ expect_failure \
 IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/Cargo.lock"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH
 
+for missing_authentication in \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL; do
+  expect_failure \
+    "${missing_authentication}" \
+    env -u "${missing_authentication}" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+done
+expect_failure \
+  "requires an authenticated Cargo target" \
+  env \
+  -u IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR \
+  -u IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE \
+  -u CARGO_TARGET_DIR \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+
 IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="${PRIVATE_SEAL}-invalid"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL
 expect_failure \
-  "selected external Cargo.lock changed" \
+  "selected authenticated Cargo.lock changed" \
   bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
 IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="${PRIVATE_SEAL}"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL
@@ -242,7 +508,7 @@ export IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL
 bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
   metadata --format-version 1 --manifest-path "${REPOSITORY_ROOT}/Cargo.toml"
 bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
-  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- --cfg test_value
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" --
 
 AUDITED_COMMANDS=()
 while IFS= read -r audited_command; do
@@ -251,15 +517,106 @@ done <"${CARGO_AUDIT}"
 [[ "${#AUDITED_COMMANDS[@]}" -eq 2 ]]
 [[ "${AUDITED_COMMANDS[0]}" == "metadata" ]]
 [[ "${AUDITED_COMMANDS[1]}" == "rustc" ]]
-[[ "$(grep -c '^arg=--lockfile-path$' "${FAKE_CARGO_LOG}")" -eq 2 ]]
-[[ "$(grep -Fxc "arg=${PRIVATE_ROOT}/Cargo.lock" "${FAKE_CARGO_LOG}")" -eq 2 ]]
-[[ "$(grep -c '^arg=--locked$' "${FAKE_CARGO_LOG}")" -eq 2 ]]
-[[ "$(grep -c '^arg=-Z$' "${FAKE_CARGO_LOG}")" -eq 2 ]]
-[[ "$(grep -c '^arg=unstable-options$' "${FAKE_CARGO_LOG}")" -eq 2 ]]
-if grep -Fq "arg=${REPOSITORY_ROOT}/Cargo.lock" "${FAKE_CARGO_LOG}"; then
-  echo "Cargo wrapper leaked the workspace Cargo.lock path" >&2
-  exit 1
-fi
+assert_exact_lines "${FAKE_CARGO_LOG}" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=metadata" \
+  "arg=--format-version" \
+  "arg=1" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=rustc" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked" \
+  "arg=--"
+env \
+  CARGO_INCREMENTAL=0 \
+  CARGO_ENCODED_RUSTFLAGS="" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --all-features --format-version 1 --no-deps
+[[ "$(grep -c '^metadata$' "${CARGO_AUDIT}")" -eq 2 ]]
+assert_exact_lines "${FAKE_CARGO_LOG}" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=metadata" \
+  "arg=--format-version" \
+  "arg=1" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=rustc" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked" \
+  "arg=--" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=metadata" \
+  "arg=--all-features" \
+  "arg=--format-version" \
+  "arg=1" \
+  "arg=--no-deps" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked"
+REPLACEABLE_RUSTC="${FAKE_TOOLCHAIN_BIN}/replaceable-rustc"
+REPLACEMENT_RUSTC="${TEST_ROOT}/replacement-rustc"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${REPLACEABLE_RUSTC}"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${REPLACEMENT_RUSTC}"
+chmod 700 "${REPLACEABLE_RUSTC}" "${REPLACEMENT_RUSTC}"
+REPLACEABLE_RUSTC_SEAL="$(privacy_sdk_executable_seal "${REPLACEABLE_RUSTC}")"
+env \
+  FAKE_EXPECTED_RUSTC="${REPLACEABLE_RUSTC}" \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH="${REPLACEABLE_RUSTC}" \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL="${REPLACEABLE_RUSTC_SEAL}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+mv "${REPLACEMENT_RUSTC}" "${REPLACEABLE_RUSTC}"
+expect_wrapper_rejection \
+  "authenticated RUSTC changed after toolchain authentication" \
+  env \
+  FAKE_EXPECTED_RUSTC="${REPLACEABLE_RUSTC}" \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH="${REPLACEABLE_RUSTC}" \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL="${REPLACEABLE_RUSTC_SEAL}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
 
 FAKE_INVOCATIONS_BEFORE="$(grep -c '^invocation$' "${FAKE_CARGO_LOG}")"
 expect_failure \
@@ -272,8 +629,575 @@ expect_failure \
   metadata "--lockfile-path=${REPOSITORY_ROOT}/Cargo.lock"
 [[ "$(grep -c '^invocation$' "${FAKE_CARGO_LOG}")" -eq "${FAKE_INVOCATIONS_BEFORE}" ]]
 
+for external_command in \
+  fmt help external generate-lockfile run bench doc tree package publish install; do
+  expect_wrapper_rejection \
+    "alias or external subcommand ${external_command}" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    "${external_command}" -- build
+done
+expect_wrapper_rejection \
+  "invalid Cargo color value" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  --color build external
+expect_wrapper_rejection \
+  "caller-provided unstable Cargo option" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  -Z build external
+expect_wrapper_rejection \
+  "working-directory override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  -C build external
+expect_wrapper_rejection \
+  "alias or external subcommand external" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  -- external build
+expect_wrapper_rejection \
+  "version flag combined" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  --version build
+expect_wrapper_rejection \
+  "control-flow option" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  --help metadata
+expect_wrapper_rejection \
+  "control-flow option" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --help
+expect_wrapper_rejection \
+  "alias-affecting environment variable CARGO_ALIAS_EVIL" \
+  env CARGO_ALIAS_EVIL=build \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "native Cargo invocation must not inherit the Cargo selector environment" \
+  env CARGO="${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "policy-affecting environment variable PYO3_NO_PYTHON" \
+  env PYO3_NO_PYTHON=1 \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "PyO3 interpreter environment is not authenticated" \
+  env PYO3_PYTHON="${TEST_ROOT}/native-preseed-python" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "Python-build policy marker is not exactly authenticated" \
+  env IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY=preseeded \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+DIRECT_PYTHON_POLICY_PATH="${TEST_ROOT}/wrapper-python"
+DIRECT_PYTHON_POLICY="$(
+  printf 'v1|%s|%s|%s|%s|%s|%s|%s' \
+    "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" \
+    "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR}" \
+    "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE}" \
+    "${IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME}" \
+    "${IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE}" \
+    "${DIRECT_PYTHON_POLICY_PATH}" \
+    "1.14.1"
+)"
+expect_wrapper_rejection \
+  "Python-build policy marker is not exactly authenticated" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON="${DIRECT_PYTHON_POLICY_PATH}" \
+  IROHA_PRIVACY_AUTHENTICATED_MATURIN_VERSION=1.14.1 \
+  IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY="${DIRECT_PYTHON_POLICY}-near-miss" \
+  PYO3_PYTHON="${DIRECT_PYTHON_POLICY_PATH}" \
+  IROHA_PYTHON_SKIP_RUNTIME_LINK=1 \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "must remain offline" \
+  env CARGO_NET_OFFLINE=false \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+for policy_environment in \
+  CARGO_BUILD_TARGET \
+  CARGO_HOST_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS \
+  CARGO_HTTP_CAINFO \
+  CARGO_REGISTRIES_CRATES_IO_INDEX \
+  CARGO_SOURCE_CRATES_IO_REPLACE_WITH \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER \
+  CARGO_UNSTABLE_BUILD_STD \
+  CARGO_INCREMENTAL \
+  CARGO_ENCODED_RUSTDOCFLAGS \
+  CARGO_ENCODED_RUSTFLAGS \
+  RUSTC \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  RUSTDOCFLAGS \
+  RUSTUP_TOOLCHAIN \
+  RUSTUP_DIST_SERVER \
+  RUSTFLAGS; do
+  case "${policy_environment}" in
+    CARGO_INCREMENTAL)
+      expected_policy_error="incremental policy must remain disabled"
+      ;;
+    CARGO_ENCODED_RUSTFLAGS)
+      expected_policy_error=\
+"Darwin Maturin rustc policy is not exactly authenticated"
+      ;;
+    *)
+      expected_policy_error="policy-affecting environment variable ${policy_environment}"
+      ;;
+  esac
+  if [[ "${policy_environment}" == "CARGO_ENCODED_RUSTFLAGS" ]]; then
+    expect_wrapper_rejection_first_line \
+      "${expected_policy_error}" \
+      env "${policy_environment}=adversarial" \
+      bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+  else
+    expect_wrapper_rejection \
+      "${expected_policy_error}" \
+      env "${policy_environment}=adversarial" \
+      bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+  fi
+done
+
+expect_wrapper_rejection \
+  "rejected --config" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  --config "${TEST_ROOT}/cargo-config.toml" metadata
+expect_wrapper_rejection \
+  "rejected --config" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  --config alias.evil=build metadata
+expect_wrapper_rejection \
+  "rejected --config" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --config=build.jobs=2
+expect_wrapper_rejection \
+  "rejected --config" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --config '"target.x86_64-unknown-linux-gnu".rustflags=["-C","linker=evil"]'
+
+expect_wrapper_rejection \
+  "target-dir override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --target-dir "${OTHER_TARGET:-${TEST_ROOT}/other-target}"
+expect_wrapper_rejection \
+  "target-dir override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata "--target-dir=${TEST_ROOT}/other-target"
+expect_wrapper_rejection \
+  "target or compiler policy override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --target x86_64-unknown-linux-gnu
+expect_wrapper_rejection \
+  "target or compiler policy override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --target=x86_64-unknown-linux-gnu
+for output_override in \
+  "--artifact-dir=${TEST_ROOT}/escaped-artifacts" \
+  "--out-dir=${TEST_ROOT}/escaped-output" \
+  "--root=${TEST_ROOT}/escaped-install"; do
+  expect_wrapper_rejection \
+    "artifact or installation output override" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    build "${output_override}"
+done
+for output_option in --artifact-dir --out-dir --root; do
+  expect_wrapper_rejection \
+    "artifact or installation output override" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    build "${output_option}" "${TEST_ROOT}/escaped-output"
+done
+expect_wrapper_rejection \
+  "Cargo-side compiler output override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --crate-type cdylib
+expect_wrapper_rejection \
+  "Cargo-side compiler output override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --crate-type=cdylib
+for jobs_override in --jobs=2 -j2 -j=2 -vvj8; do
+  expect_wrapper_rejection \
+    "concurrency override" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    metadata "${jobs_override}"
+done
+expect_wrapper_rejection \
+  "concurrency override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --jobs 2
+expect_wrapper_rejection \
+  "concurrency override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata -j 2
+for network_override in --offline=false --frozen --online --network=online; do
+  expect_wrapper_rejection \
+    "network policy override" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    metadata "${network_override}"
+done
+for compiler_override in \
+  --rustc=evil \
+  --rustc-wrapper=evil \
+  --rustc-workspace-wrapper=evil \
+  --rustflags=-Ctarget-cpu=native; do
+  expect_wrapper_rejection \
+    "compiler policy override" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    metadata "${compiler_override}"
+done
+expect_wrapper_rejection \
+  "compiler policy override" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --rustc evil
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  --target x86_64-unknown-linux-gnu
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  --target=x86_64-unknown-linux-gnu
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  -C linker=evil
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  -Clinker=evil
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  -C link-arg=-Wl,-rpath,/tmp/evil
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  -Clink-arg=-Wl,-rpath,/tmp/evil
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  --sysroot /tmp/evil
+expect_wrapper_rejection \
+  "rustc-side compiler arguments" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  rustc --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  --sysroot=/tmp/evil
+
+: >"${FAKE_CARGO_LOG}"
+: >"${CARGO_AUDIT}"
+bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  --color always metadata --format-version 1
+bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  test --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" -- \
+  --locked -Z unstable-options
+assert_exact_lines "${FAKE_CARGO_LOG}" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=--color" \
+  "arg=always" \
+  "arg=metadata" \
+  "arg=--format-version" \
+  "arg=1" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked" \
+  "invocation" \
+  "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
+  "CARGO_BUILD_JOBS=1" \
+  "CARGO_NET_OFFLINE=true" \
+  "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=test" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--locked" \
+  "arg=--" \
+  "arg=--locked" \
+  "arg=-Z" \
+  "arg=unstable-options"
+assert_exact_lines "${CARGO_AUDIT}" "metadata" "test"
+
+AUTHENTICATED_TARGET="${TEST_ROOT}/authenticated-target"
+OTHER_TARGET="${TEST_ROOT}/other-target"
+SYMLINK_TARGET="${TEST_ROOT}/symlink-target"
+mkdir -p "${AUTHENTICATED_TARGET}" "${OTHER_TARGET}"
+AUTHENTICATED_TARGET_STATE="$(
+  privacy_sdk_capture_directory_state "${AUTHENTICATED_TARGET}"
+)"
+FAKE_INVOCATIONS_BEFORE="$(grep -c '^invocation$' "${FAKE_CARGO_LOG}")"
+expect_failure \
+  "target does not match the authenticated private target" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${OTHER_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_failure \
+  "build jobs must remain fixed at one" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  CARGO_BUILD_JOBS=2 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_failure \
+  "must remain offline" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=false \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_failure \
+  "fetch must explicitly select online or offline mode" \
+  env \
+  -u CARGO_NET_OFFLINE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" fetch --locked
+ln -s "${AUTHENTICATED_TARGET}" "${SYMLINK_TARGET}"
+expect_failure \
+  "target must be a real directory" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${SYMLINK_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${SYMLINK_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+[[ "$(grep -c '^invocation$' "${FAKE_CARGO_LOG}")" -eq "${FAKE_INVOCATIONS_BEFORE}" ]]
+env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=false \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" fetch --locked
+
+run_authenticated_policy_success() {
+  env \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+    CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_NET_OFFLINE=true \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" "$@"
+}
+
+run_authenticated_policy_success \
+  metadata --offline --jobs 1 --target-dir "${AUTHENTICATED_TARGET}"
+run_authenticated_policy_success \
+  metadata --offline --jobs=1 "--target-dir=${AUTHENTICATED_TARGET}"
+run_authenticated_policy_success \
+  metadata --offline -j1 --target-dir "${AUTHENTICATED_TARGET}"
+run_authenticated_policy_success \
+  metadata --offline -j 1 --target-dir "${AUTHENTICATED_TARGET}"
+run_authenticated_policy_success \
+  metadata --offline -j=1 --target-dir "${AUTHENTICATED_TARGET}"
+run_authenticated_policy_success \
+  metadata --offline -vvj1 --target-dir "${AUTHENTICATED_TARGET}"
+
+BETWEEN_TARGET="${TEST_ROOT}/between-invocation-target"
+mkdir -m 700 "${BETWEEN_TARGET}"
+BETWEEN_TARGET_STATE="$(
+  privacy_sdk_capture_directory_state "${BETWEEN_TARGET}"
+)"
+env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${BETWEEN_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${BETWEEN_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${BETWEEN_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+mv "${BETWEEN_TARGET}" "${BETWEEN_TARGET}.replaced"
+mkdir -m 700 "${BETWEEN_TARGET}"
+expect_wrapper_rejection \
+  "privacy SDK Cargo target directory identity changed" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${BETWEEN_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${BETWEEN_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${BETWEEN_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+
+for mismatched_jobs in --jobs=2 -j2 -j=2 -vvj8; do
+  expect_wrapper_rejection \
+    "mismatched Cargo concurrency override" \
+    env \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+    CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_NET_OFFLINE=true \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+    metadata "${mismatched_jobs}" --target-dir "${AUTHENTICATED_TARGET}"
+done
+expect_wrapper_rejection \
+  "mismatched Cargo target-dir override" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --jobs 1 --target-dir "${OTHER_TARGET}"
+expect_wrapper_rejection \
+  "mismatched Cargo target-dir override" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${AUTHENTICATED_TARGET_STATE}" \
+  CARGO_TARGET_DIR="${AUTHENTICATED_TARGET}" \
+  CARGO_BUILD_JOBS=1 \
+  CARGO_NET_OFFLINE=true \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  metadata --jobs=1 "--target-dir=${OTHER_TARGET}"
+
+AUTHENTICATED_HOME="${TEST_ROOT}/authenticated-cargo-home"
+OTHER_HOME="${TEST_ROOT}/other-cargo-home"
+SYMLINK_HOME="${TEST_ROOT}/symlink-cargo-home"
+REPLACED_HOME="${TEST_ROOT}/replaceable-cargo-home"
+mkdir -m 700 "${AUTHENTICATED_HOME}" "${OTHER_HOME}" "${REPLACED_HOME}"
+AUTHENTICATED_HOME_STATE="$(
+  privacy_sdk_capture_directory_state "${AUTHENTICATED_HOME}"
+)"
+REPLACED_HOME_STATE="$(
+  privacy_sdk_capture_directory_state "${REPLACED_HOME}"
+)"
+BETWEEN_HOME="${TEST_ROOT}/between-invocation-home"
+mkdir -m 700 "${BETWEEN_HOME}"
+BETWEEN_HOME_STATE="$(privacy_sdk_capture_directory_state "${BETWEEN_HOME}")"
+env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${BETWEEN_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${BETWEEN_HOME_STATE}" \
+  CARGO_HOME="${BETWEEN_HOME}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+mv "${BETWEEN_HOME}" "${BETWEEN_HOME}.replaced"
+mkdir -m 700 "${BETWEEN_HOME}"
+expect_wrapper_rejection \
+  "privacy SDK Cargo home directory identity changed" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${BETWEEN_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${BETWEEN_HOME_STATE}" \
+  CARGO_HOME="${BETWEEN_HOME}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "home does not match the authenticated private home" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${AUTHENTICATED_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${AUTHENTICATED_HOME_STATE}" \
+  CARGO_HOME="${OTHER_HOME}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+ln -s "${AUTHENTICATED_HOME}" "${SYMLINK_HOME}"
+expect_wrapper_rejection \
+  "home must be a real directory" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${SYMLINK_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${AUTHENTICATED_HOME_STATE}" \
+  CARGO_HOME="${SYMLINK_HOME}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+expect_wrapper_rejection \
+  "home must be canonical" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${AUTHENTICATED_HOME}/../authenticated-cargo-home" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${AUTHENTICATED_HOME_STATE}" \
+  CARGO_HOME="${AUTHENTICATED_HOME}/../authenticated-cargo-home" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+printf '%s\n' '[alias]' 'build = "poison"' >"${AUTHENTICATED_HOME}/config.toml"
+expect_wrapper_rejection \
+  "home must not contain Cargo configuration" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${AUTHENTICATED_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${AUTHENTICATED_HOME_STATE}" \
+  CARGO_HOME="${AUTHENTICATED_HOME}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+rm "${AUTHENTICATED_HOME}/config.toml"
+expect_failure \
+  "home directory identity changed" \
+  env \
+  FAKE_CARGO_REPLACE_HOME=1 \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${REPLACED_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${REPLACED_HOME_STATE}" \
+  CARGO_HOME="${REPLACED_HOME}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+
+DIRECT_CONFIG_PATH="${REPOSITORY_ROOT}/.cargo/config.toml"
+DIRECT_NESTED_DIRECTORY="${REPOSITORY_ROOT}/nested/project"
+mkdir -p "$(dirname "${DIRECT_CONFIG_PATH}")" \
+  "${DIRECT_NESTED_DIRECTORY}/.cargo"
+printf '%s\n' '[build]' 'jobs = 1' >"${DIRECT_CONFIG_PATH}"
+DIRECT_CONFIG_SEAL="$(privacy_sdk_file_seal "${DIRECT_CONFIG_PATH}")"
+printf '%s\n' '[alias]' 'build = "poison"' \
+  >"${DIRECT_NESTED_DIRECTORY}/.cargo/config.toml"
+expect_wrapper_rejection \
+  "untrusted Cargo configuration is active at invocation" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${DIRECT_CONFIG_PATH}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${DIRECT_CONFIG_SEAL}" \
+  bash -c 'cd "$1"; exec bash "$2" metadata' \
+  _ "${DIRECT_NESTED_DIRECTORY}" "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
+rm "${DIRECT_NESTED_DIRECTORY}/.cargo/config.toml"
+printf '%s\n' '1.92.0' >"${DIRECT_NESTED_DIRECTORY}/rust-toolchain"
+expect_wrapper_rejection \
+  "untrusted active Rust toolchain override" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${DIRECT_CONFIG_PATH}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${DIRECT_CONFIG_SEAL}" \
+  bash -c 'cd "$1"; exec bash "$2" metadata' \
+  _ "${DIRECT_NESTED_DIRECTORY}" "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
+rm "${DIRECT_NESTED_DIRECTORY}/rust-toolchain"
+env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${AUTHENTICATED_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${AUTHENTICATED_HOME_STATE}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${DIRECT_CONFIG_PATH}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${DIRECT_CONFIG_SEAL}" \
+  CARGO_HOME="${AUTHENTICATED_HOME}" \
+  CARGO_NET_OFFLINE=false \
+  bash -c 'cd "$1"; exec bash "$2" fetch --locked' \
+  _ "${REPOSITORY_ROOT}" "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
+expect_wrapper_rejection \
+  "must remain offline" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${AUTHENTICATED_HOME}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${AUTHENTICATED_HOME_STATE}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${DIRECT_CONFIG_PATH}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${DIRECT_CONFIG_SEAL}" \
+  CARGO_HOME="${AUTHENTICATED_HOME}" \
+  CARGO_NET_OFFLINE=false \
+  bash -c 'cd "$1"; exec bash "$2" metadata' \
+  _ "${REPOSITORY_ROOT}" "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
+expect_wrapper_rejection \
+  "invocation directory escaped the authenticated root" \
+  env \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${DIRECT_CONFIG_PATH}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${DIRECT_CONFIG_SEAL}" \
+  bash -c 'cd "$1"; exec bash "$2" metadata' \
+  _ "${TEST_ROOT}" "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
+
 WRAPPER_CREATED_ROOT="${TEST_ROOT}/wrapper-created-workspace"
-mkdir -p "${WRAPPER_CREATED_ROOT}"
+WRAPPER_CREATED_CONFIG="${WRAPPER_CREATED_ROOT}/.cargo/config.toml"
+mkdir -p "$(dirname "${WRAPPER_CREATED_CONFIG}")"
+printf '%s\n' '[build]' 'jobs = 1' >"${WRAPPER_CREATED_CONFIG}"
+write_test_rust_toolchain "${WRAPPER_CREATED_ROOT}"
+WRAPPER_CREATED_CONFIG_SEAL="$(privacy_sdk_file_seal "${WRAPPER_CREATED_CONFIG}")"
+WRAPPER_CREATED_TOOLCHAIN="${WRAPPER_CREATED_ROOT}/rust-toolchain.toml"
+WRAPPER_CREATED_TOOLCHAIN_SEAL="$(
+  privacy_sdk_file_seal "${WRAPPER_CREATED_TOOLCHAIN}"
+)"
 IROHA_PRIVACY_SDK_ROOT="${WRAPPER_CREATED_ROOT}"
 IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="absent"
 export IROHA_PRIVACY_SDK_ROOT IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE
@@ -281,10 +1205,16 @@ expect_failure \
   "workspace Cargo.lock was created" \
   env \
   FAKE_CARGO_MUTATE_PATH="${WRAPPER_CREATED_ROOT}/Cargo.lock" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${WRAPPER_CREATED_CONFIG}" \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${WRAPPER_CREATED_CONFIG_SEAL}" \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH="${WRAPPER_CREATED_TOOLCHAIN}" \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL="${WRAPPER_CREATED_TOOLCHAIN_SEAL}" \
+  bash -c 'cd "$1"; exec bash "$2" metadata' \
+  _ "${WRAPPER_CREATED_ROOT}" "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh"
 IROHA_PRIVACY_SDK_ROOT="${REPOSITORY_ROOT}"
 IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="present:${WORKSPACE_SEAL}"
 export IROHA_PRIVACY_SDK_ROOT IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE
+cd "${SOURCE_ROOT}"
 
 # Do not let the direct-wrapper fixture (or an enclosing guarded CI job)
 # choose Cargo for the complete Python-guard fixtures below.
@@ -295,14 +1225,42 @@ unset \
   IROHA_PRIVACY_REAL_CARGO \
   IROHA_PRIVACY_CARGO_AUDIT_PATH \
   IROHA_PRIVACY_SDK_ROOT \
-  IROHA_PRIVACY_LOCKFILE_PYTHON_BIN
+  IROHA_PRIVACY_LOCKFILE_PYTHON_BIN \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH \
+  IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL \
+  IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON \
+  PYO3_PYTHON \
+  IROHA_PYTHON_SKIP_RUNTIME_LINK \
+  RUSTC_BOOTSTRAP \
+  CARGO_BUILD_JOBS \
+  CARGO_NET_OFFLINE \
+  CARGO_INCREMENTAL \
+  CARGO_ENCODED_RUSTFLAGS \
+  CARGO_TARGET_DIR
 
 TEST_PYTHON="${PRIVACY_SDK_LOCK_TEST_PYTHON_BIN:-}"
 if [[ -z "${TEST_PYTHON}" ]]; then
-  TEST_PYTHON="$(command -v python3.11 || command -v python3)"
+  TEST_PYTHON="$(command -v python3.12 || command -v python3)"
 fi
-if [[ "$("${TEST_PYTHON}" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')" != "3.11" ]]; then
-  echo "error: privacy SDK lockfile self-test requires Python 3.11" >&2
+if [[ "$("${TEST_PYTHON}" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')" != "3.12" ]]; then
+  echo "error: privacy SDK lockfile self-test requires Python 3.12" >&2
   exit 1
 fi
 
@@ -311,13 +1269,16 @@ fi
 # external-lock arguments; no real Cargo command runs in this self-test.
 PROVISION_REPOSITORY="${TEST_ROOT}/provision-repository"
 PROVISION_CORRIDOR="${TEST_ROOT}/provision-corridor"
-PROVISION_BIN="${TEST_ROOT}/provision-bin"
+PROVISION_BIN="${TEST_ROOT}/provision-toolchain/1.93.1-x86_64-unknown-linux-gnu/bin"
 PROVISION_GITHUB_ENV="${TEST_ROOT}/provision-github-env"
 PROVISION_GITHUB_PATH="${TEST_ROOT}/provision-github-path"
 PROVISION_CARGO_LOG="${TEST_ROOT}/provision-cargo.log"
 export PROVISION_CARGO_LOG
-mkdir -p "${PROVISION_REPOSITORY}" "${PROVISION_BIN}"
+mkdir -p "${PROVISION_REPOSITORY}/.cargo" "${PROVISION_BIN}"
 : >"${PROVISION_REPOSITORY}/Cargo.toml"
+write_test_rust_toolchain "${PROVISION_REPOSITORY}"
+cp "${SOURCE_ROOT}/.cargo/config.toml" \
+  "${PROVISION_REPOSITORY}/.cargo/config.toml"
 : >"${PROVISION_GITHUB_ENV}"
 : >"${PROVISION_GITHUB_PATH}"
 : >"${PROVISION_CARGO_LOG}"
@@ -325,7 +1286,16 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   ': "${PROVISION_CARGO_LOG:?}"' \
+  '[[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}" && ! -e "${CARGO_HOME}/config" && ! -e "${CARGO_HOME}/config.toml" ]] || exit 96' \
+  'printf "invocation\\n" >>"${PROVISION_CARGO_LOG}"' \
+  'printf "CARGO_HOME=%s\\n" "${CARGO_HOME}" >>"${PROVISION_CARGO_LOG}"' \
+  'printf "CARGO_NET_OFFLINE=%s\\n" "${CARGO_NET_OFFLINE:-}" >>"${PROVISION_CARGO_LOG}"' \
   'for argument in "$@"; do printf "arg=%s\\n" "${argument}" >>"${PROVISION_CARGO_LOG}"; done' \
+  'if [[ "${FAKE_PROVISION_POPULATE_CACHE:-0}" == "1" ]]; then' \
+  '  mkdir -p "${CARGO_HOME}/registry" "${CARGO_HOME}/git"' \
+  '  printf "%s\\n" cached >"${CARGO_HOME}/registry/fake-cache-entry"' \
+  '  printf "%s\\n" cached >"${CARGO_HOME}/git/fake-cache-entry"' \
+  'fi' \
   'command_name=""' \
   'lockfile_path=""' \
   'while [[ $# -gt 0 ]]; do' \
@@ -345,47 +1315,499 @@ printf '%s\n' \
   '    "[[package]]" \' \
   '    "name = \\"provisioned\\"" \' \
   '    "version = \\"0.0.0\\"" >"${lockfile_path}"' \
+  '  if [[ "${FAKE_PROVISION_EXIT_AFTER_LOCK:-0}" == "1" ]]; then exit 98; fi' \
   'fi' \
   'if [[ -n "${FAKE_PROVISION_WORKSPACE_LOCK:-}" ]]; then' \
   '  printf "%s\\n" "# adversarial provisioning workspace lock" >"${FAKE_PROVISION_WORKSPACE_LOCK}"' \
   'fi' \
   >"${PROVISION_BIN}/cargo"
 chmod 700 "${PROVISION_BIN}/cargo"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${PROVISION_BIN}/rustc"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${PROVISION_BIN}/rustdoc"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'printf "%s\\n" "$*" >>"${BASH_SOURCE[0]%/*}/rustup-args.log"' \
+  '[[ "${RUSTUP_AUTO_INSTALL:-}" == "0" ]] || exit 97' \
+  'if [[ "${1:-}" != "which" || "${2:-}" != "--toolchain" || "${3:-}" != "1.93.1-x86_64-unknown-linux-gnu" ]]; then' \
+  '  printf "%s/%s\\n" "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" "directory-override-${2:-cargo}"' \
+  '  exit 0' \
+  'fi' \
+  'case "${4:-}" in' \
+  '  cargo|rustc|rustdoc)' \
+  '    printf "%s/%s\\n" "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" "${4}"' \
+  '    ;;' \
+  '  *) exit 99 ;;' \
+  'esac' \
+  'if [[ -e "${BASH_SOURCE[0]%/*}/rustup-exit-after-output" ]]; then exit 98; fi' \
+  >"${PROVISION_BIN}/rustup"
+chmod 700 \
+  "${PROVISION_BIN}/rustc" \
+  "${PROVISION_BIN}/rustdoc" \
+  "${PROVISION_BIN}/rustup"
+: >"${PROVISION_BIN}/rustup-args.log"
 
+for hardlinked_tool in rustup cargo; do
+  hardlink_path="${TEST_ROOT}/hardlinked-${hardlinked_tool}"
+  ln "${PROVISION_BIN}/${hardlinked_tool}" "${hardlink_path}"
+  expect_failure \
+    "singly linked executable regular file" \
+    privacy_sdk_executable_seal \
+    "${PROVISION_BIN}/${hardlinked_tool}" "${TEST_PYTHON}"
+  rm "${hardlink_path}"
+done
+
+PROVISION_POLICY_REPOSITORY="${TEST_ROOT}/provision-policy-repository"
+PROVISION_POLICY_CORRIDOR="${TEST_ROOT}/provision-policy-corridor"
+PROVISION_POLICY_ENV="${TEST_ROOT}/provision-policy-env"
+PROVISION_POLICY_PATH="${TEST_ROOT}/provision-policy-path"
+mkdir -p "${PROVISION_POLICY_REPOSITORY}/.cargo"
+: >"${PROVISION_POLICY_REPOSITORY}/Cargo.toml"
+write_test_rust_toolchain "${PROVISION_POLICY_REPOSITORY}"
+: >"${PROVISION_POLICY_ENV}"
+: >"${PROVISION_POLICY_PATH}"
+cp "${SOURCE_ROOT}/.cargo/config.toml" \
+  "${PROVISION_POLICY_REPOSITORY}/.cargo/config.toml"
+for policy_environment in \
+  CARGO \
+  CARGO_HOST_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS \
+  CARGO_ENCODED_RUSTDOCFLAGS \
+  CARGO_UNSTABLE_BUILD_STD \
+  RUSTUP_TOOLCHAIN \
+  RUSTUP_DIST_SERVER \
+  PYO3_NO_PYTHON \
+  IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY; do
+  expect_failure \
+    "${policy_environment}" \
+    env \
+    "${policy_environment}=adversarial" \
+    PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+    PATH="${PROVISION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+    "${PROVISION_POLICY_REPOSITORY}" \
+    "${PROVISION_POLICY_CORRIDOR}" \
+    "${PROVISION_POLICY_ENV}" \
+    "${PROVISION_POLICY_PATH}" \
+    "${PROVISION_BIN}/rustup" \
+    "1.93.1-x86_64-unknown-linux-gnu" \
+    "${TEST_PYTHON}"
+done
+
+TOOLCHAIN_VARIANT_ROOT="${TEST_ROOT}/toolchain-variant-repository"
+mkdir -p "${TOOLCHAIN_VARIANT_ROOT}"
+for descriptor_variant in \
+  stable nightly custom short path extra-top-level extra-field; do
+  case "${descriptor_variant}" in
+    stable)
+      printf '%s\n' '[toolchain]' 'channel = "stable"' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+    nightly)
+      printf '%s\n' '[toolchain]' 'channel = "nightly"' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+    custom)
+      printf '%s\n' '[toolchain]' 'channel = "company-rust"' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+    short)
+      printf '%s\n' '[toolchain]' 'channel = "1.93"' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+    path)
+      printf '%s\n' '[toolchain]' 'path = "/tmp/untrusted-rust"' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+    extra-top-level)
+      printf '%s\n' \
+        '[toolchain]' \
+        'channel = "1.93.1"' \
+        '[profile]' \
+        'name = "poison"' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+    extra-field)
+      printf '%s\n' \
+        '[toolchain]' \
+        'channel = "1.93.1"' \
+        'components = ["rust-src"]' \
+        >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+      ;;
+  esac
+  chmod 600 "${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
+  expect_failure \
+    "exact Rust 1.93.1 toolchain" \
+    privacy_sdk_validate_rust_toolchain_overrides \
+    "${TOOLCHAIN_VARIANT_ROOT}" "${TOOLCHAIN_VARIANT_ROOT}" "${TEST_PYTHON}"
+done
+
+PROVISION_NESTED_REPOSITORY="${TEST_ROOT}/provision-nested-toolchain-repository"
+PROVISION_NESTED_CORRIDOR="${TEST_ROOT}/provision-nested-toolchain-corridor"
+PROVISION_NESTED_ENV="${TEST_ROOT}/provision-nested-toolchain-env"
+PROVISION_NESTED_PATH="${TEST_ROOT}/provision-nested-toolchain-path"
+mkdir -p \
+  "${PROVISION_NESTED_REPOSITORY}/.cargo" \
+  "${PROVISION_NESTED_REPOSITORY}/python/iroha_python"
+: >"${PROVISION_NESTED_REPOSITORY}/Cargo.toml"
+: >"${PROVISION_NESTED_ENV}"
+: >"${PROVISION_NESTED_PATH}"
+write_test_rust_toolchain "${PROVISION_NESTED_REPOSITORY}"
+printf '%s\n' '1.93.1' \
+  >"${PROVISION_NESTED_REPOSITORY}/python/iroha_python/rust-toolchain"
+cp "${SOURCE_ROOT}/.cargo/config.toml" \
+  "${PROVISION_NESTED_REPOSITORY}/.cargo/config.toml"
+expect_failure \
+  "untrusted active Rust toolchain override" \
+  env \
+  PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+  PATH="${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  "${PROVISION_NESTED_REPOSITORY}" \
+  "${PROVISION_NESTED_CORRIDOR}" \
+  "${PROVISION_NESTED_ENV}" \
+  "${PROVISION_NESTED_PATH}" \
+  "${PROVISION_BIN}/rustup" \
+  "1.93.1-x86_64-unknown-linux-gnu" \
+  "${TEST_PYTHON}"
+
+RUSTUP_SHADOW_BIN="${TEST_ROOT}/rustup-shadow-bin"
+RUSTUP_SHADOW_MARKER="${TEST_ROOT}/rustup-shadow-executed"
+RUSTUP_SHADOW_ENV="${TEST_ROOT}/rustup-shadow-env"
+RUSTUP_SHADOW_PATH="${TEST_ROOT}/rustup-shadow-path"
+mkdir -p "${RUSTUP_SHADOW_BIN}"
+: >"${RUSTUP_SHADOW_ENV}"
+: >"${RUSTUP_SHADOW_PATH}"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  "printf '%s\\n' shadowed >'${RUSTUP_SHADOW_MARKER}'" \
+  'exit 91' \
+  >"${RUSTUP_SHADOW_BIN}/rustup"
+chmod 700 "${RUSTUP_SHADOW_BIN}/rustup"
+expect_failure \
+  "PATH does not select the explicit authenticated rustup" \
+  env \
+  PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+  PATH="${RUSTUP_SHADOW_BIN}:${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  "${PROVISION_POLICY_REPOSITORY}" \
+  "${TEST_ROOT}/rustup-shadow-corridor" \
+  "${RUSTUP_SHADOW_ENV}" \
+  "${RUSTUP_SHADOW_PATH}" \
+  "${PROVISION_BIN}/rustup" \
+  "1.93.1-x86_64-unknown-linux-gnu" \
+  "${TEST_PYTHON}"
+if [[ -e "${RUSTUP_SHADOW_MARKER}" || -L "${RUSTUP_SHADOW_MARKER}" ]]; then
+  echo "untrusted PATH rustup executed" >&2
+  exit 1
+fi
+
+PROVISION_CONFIG_REPOSITORY="${TEST_ROOT}/provision-config-repository"
+PROVISION_CONFIG_CORRIDOR="${TEST_ROOT}/provision-config-corridor"
+PROVISION_CONFIG_ENV="${TEST_ROOT}/provision-config-env"
+PROVISION_CONFIG_PATH="${TEST_ROOT}/provision-config-path"
+mkdir -p "${PROVISION_CONFIG_REPOSITORY}/.cargo"
+: >"${PROVISION_CONFIG_REPOSITORY}/Cargo.toml"
+write_test_rust_toolchain "${PROVISION_CONFIG_REPOSITORY}"
+: >"${PROVISION_CONFIG_ENV}"
+: >"${PROVISION_CONFIG_PATH}"
+printf '%s\n' '[alias]' 'build = "poison"' \
+  >"${PROVISION_CONFIG_REPOSITORY}/.cargo/config.toml"
+expect_failure \
+  "repository Cargo configuration may only" \
+  env \
+  PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+  PATH="${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  "${PROVISION_CONFIG_REPOSITORY}" \
+  "${PROVISION_CONFIG_CORRIDOR}" \
+  "${PROVISION_CONFIG_ENV}" \
+  "${PROVISION_CONFIG_PATH}" \
+  "${PROVISION_BIN}/rustup" \
+  "1.93.1-x86_64-unknown-linux-gnu" \
+  "${TEST_PYTHON}"
+
+PROVISION_AMBIENT_CARGO_HOME="${TEST_ROOT}/provision-ambient-cargo-home"
+mkdir -p \
+  "${PROVISION_AMBIENT_CARGO_HOME}/registry" \
+  "${PROVISION_AMBIENT_CARGO_HOME}/git"
+printf '%s\n' '[alias]' 'build = "ambient-poison"' \
+  >"${PROVISION_AMBIENT_CARGO_HOME}/config.toml"
+
+prepare_provision_failure_fixture() {
+  local repository="$1"
+  local github_env="$2"
+  local github_path="$3"
+  mkdir -p "${repository}/.cargo" || return 1
+  : >"${repository}/Cargo.toml" || return 1
+  write_test_rust_toolchain "${repository}" || return 1
+  cp "${SOURCE_ROOT}/.cargo/config.toml" \
+    "${repository}/.cargo/config.toml" || return 1
+  : >"${github_env}" || return 1
+  : >"${github_path}" || return 1
+}
+
+PROVISION_CARGO_FAILURE_REPOSITORY=\
+"${TEST_ROOT}/provision-cargo-nonzero-repository"
+PROVISION_CARGO_FAILURE_CORRIDOR=\
+"${TEST_ROOT}/provision-cargo-nonzero-corridor"
+PROVISION_CARGO_FAILURE_ENV="${TEST_ROOT}/provision-cargo-nonzero-env"
+PROVISION_CARGO_FAILURE_PATH="${TEST_ROOT}/provision-cargo-nonzero-path"
+prepare_provision_failure_fixture \
+  "${PROVISION_CARGO_FAILURE_REPOSITORY}" \
+  "${PROVISION_CARGO_FAILURE_ENV}" \
+  "${PROVISION_CARGO_FAILURE_PATH}"
+: >"${PROVISION_CARGO_LOG}"
+: >"${PROVISION_BIN}/rustup-args.log"
+expect_failure \
+  "Cargo failed to generate the required external Cargo.lock" \
+  env \
+  FAKE_PROVISION_EXIT_AFTER_LOCK=1 \
+  PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+  CARGO_HOME="${PROVISION_AMBIENT_CARGO_HOME}" \
+  PATH="${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  "${PROVISION_CARGO_FAILURE_REPOSITORY}" \
+  "${PROVISION_CARGO_FAILURE_CORRIDOR}" \
+  "${PROVISION_CARGO_FAILURE_ENV}" \
+  "${PROVISION_CARGO_FAILURE_PATH}" \
+  "${PROVISION_BIN}/rustup" \
+  "1.93.1-x86_64-unknown-linux-gnu" \
+  "${TEST_PYTHON}"
+[[ ! -s "${PROVISION_CARGO_FAILURE_ENV}" ]]
+[[ ! -s "${PROVISION_CARGO_FAILURE_PATH}" ]]
+[[ -f "${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock" ]]
+assert_exact_lines "${PROVISION_CARGO_LOG}" \
+  "invocation" \
+  "CARGO_HOME=${PROVISION_CARGO_FAILURE_CORRIDOR}/cargo-home" \
+  "CARGO_NET_OFFLINE=false" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=generate-lockfile" \
+  "arg=--manifest-path" \
+  "arg=${PROVISION_CARGO_FAILURE_REPOSITORY}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock"
+assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
+
+PROVISION_RUSTUP_FAILURE_REPOSITORY=\
+"${TEST_ROOT}/provision-rustup-nonzero-repository"
+PROVISION_RUSTUP_FAILURE_ENV="${TEST_ROOT}/provision-rustup-nonzero-env"
+PROVISION_RUSTUP_FAILURE_PATH="${TEST_ROOT}/provision-rustup-nonzero-path"
+prepare_provision_failure_fixture \
+  "${PROVISION_RUSTUP_FAILURE_REPOSITORY}" \
+  "${PROVISION_RUSTUP_FAILURE_ENV}" \
+  "${PROVISION_RUSTUP_FAILURE_PATH}"
+: >"${PROVISION_CARGO_LOG}"
+: >"${PROVISION_BIN}/rustup-args.log"
+: >"${PROVISION_BIN}/rustup-exit-after-output"
+expect_failure \
+  "authenticated rustup failed to resolve cargo" \
+  env \
+  PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+  CARGO_HOME="${PROVISION_AMBIENT_CARGO_HOME}" \
+  PATH="${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  "${PROVISION_RUSTUP_FAILURE_REPOSITORY}" \
+  "${TEST_ROOT}/provision-rustup-nonzero-corridor" \
+  "${PROVISION_RUSTUP_FAILURE_ENV}" \
+  "${PROVISION_RUSTUP_FAILURE_PATH}" \
+  "${PROVISION_BIN}/rustup" \
+  "1.93.1-x86_64-unknown-linux-gnu" \
+  "${TEST_PYTHON}"
+rm "${PROVISION_BIN}/rustup-exit-after-output"
+[[ ! -s "${PROVISION_RUSTUP_FAILURE_ENV}" ]]
+[[ ! -s "${PROVISION_RUSTUP_FAILURE_PATH}" ]]
+[[ ! -s "${PROVISION_CARGO_LOG}" ]]
+assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo"
+
+: >"${PROVISION_CARGO_LOG}"
+: >"${PROVISION_BIN}/rustup-args.log"
 PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+CARGO_HOME="${PROVISION_AMBIENT_CARGO_HOME}" \
+CARGO_INCREMENTAL=0 \
+CARGO_ENCODED_RUSTFLAGS="" \
 PATH="${PROVISION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
     "${PROVISION_REPOSITORY}" \
     "${PROVISION_CORRIDOR}" \
     "${PROVISION_GITHUB_ENV}" \
     "${PROVISION_GITHUB_PATH}" \
+    "${PROVISION_BIN}/rustup" \
+    "1.93.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
 if [[ -e "${PROVISION_REPOSITORY}/Cargo.lock" || -L "${PROVISION_REPOSITORY}/Cargo.lock" ]]; then
   echo "CI provisioning created workspace Cargo.lock" >&2
   exit 1
 fi
-grep -Fxq 'arg=-Z' "${PROVISION_CARGO_LOG}"
-grep -Fxq 'arg=unstable-options' "${PROVISION_CARGO_LOG}"
-grep -Fxq 'arg=generate-lockfile' "${PROVISION_CARGO_LOG}"
-grep -Fxq 'arg=--lockfile-path' "${PROVISION_CARGO_LOG}"
-grep -Fxq "arg=${PROVISION_CORRIDOR}/lock/Cargo.lock" "${PROVISION_CARGO_LOG}"
+assert_exact_lines "${PROVISION_CARGO_LOG}" \
+  "invocation" \
+  "CARGO_HOME=${PROVISION_CORRIDOR}/cargo-home" \
+  "CARGO_NET_OFFLINE=false" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=generate-lockfile" \
+  "arg=--manifest-path" \
+  "arg=${PROVISION_REPOSITORY}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PROVISION_CORRIDOR}/lock/Cargo.lock"
+assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH=' "${PROVISION_GITHUB_ENV}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL=' "${PROVISION_GITHUB_ENV}"
+grep -Fxq \
+  'IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR=1.93.1-x86_64-unknown-linux-gnu' \
+  "${PROVISION_GITHUB_ENV}"
+grep -Fxq \
+  "IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH=${PROVISION_BIN}/rustup" \
+  "${PROVISION_GITHUB_ENV}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL=' \
+  "${PROVISION_GITHUB_ENV}"
+grep -Fq "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME=${PROVISION_CORRIDOR}/cargo-home" \
+  "${PROVISION_GITHUB_ENV}"
+grep -Fq "CARGO_HOME=${PROVISION_CORRIDOR}/cargo-home" "${PROVISION_GITHUB_ENV}"
+[[ "$(sed -n '1p' "${PROVISION_GITHUB_PATH}")" == "${PROVISION_BIN}" ]]
+[[ "$(sed -n '2p' "${PROVISION_GITHUB_PATH}")" == "${PROVISION_CORRIDOR}/bin" ]]
+[[ "$(wc -l <"${PROVISION_GITHUB_PATH}")" -eq 2 ]]
+[[ -L "${PROVISION_CORRIDOR}/cargo-home/registry" ]]
+[[ -L "${PROVISION_CORRIDOR}/cargo-home/git" ]]
+[[ ! -e "${PROVISION_CORRIDOR}/cargo-home/config" ]]
+[[ ! -e "${PROVISION_CORRIDOR}/cargo-home/config.toml" ]]
 (
   set -a
   # shellcheck disable=SC1090
   source "${PROVISION_GITHUB_ENV}"
   set +a
-  export PATH="$(tail -n 1 "${PROVISION_GITHUB_PATH}"):${PATH}"
+  while IFS= read -r provisioned_path_entry; do
+    PATH="${provisioned_path_entry}:${PATH}"
+  done <"${PROVISION_GITHUB_PATH}"
+  export PATH
+  cd "${PROVISION_REPOSITORY}"
   bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
     "${PROVISION_REPOSITORY}" "${TEST_PYTHON}"
   bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+)
+for deterministic_environment_drift in \
+  jobs offline incremental encoded encoded-unset bootstrap; do
+  (
+    set -a
+    # shellcheck disable=SC1090
+    source "${PROVISION_GITHUB_ENV}"
+    set +a
+    while IFS= read -r provisioned_path_entry; do
+      PATH="${provisioned_path_entry}:${PATH}"
+    done <"${PROVISION_GITHUB_PATH}"
+    export PATH
+    case "${deterministic_environment_drift}" in
+      jobs) export CARGO_BUILD_JOBS=2 ;;
+      offline) export CARGO_NET_OFFLINE=false ;;
+      incremental) export CARGO_INCREMENTAL=1 ;;
+      encoded) export CARGO_ENCODED_RUSTFLAGS=adversarial ;;
+      encoded-unset) unset CARGO_ENCODED_RUSTFLAGS ;;
+      bootstrap) export RUSTC_BOOTSTRAP=0 ;;
+    esac
+    cd "${PROVISION_REPOSITORY}"
+    expect_failure \
+      "privacy SDK CI deterministic Cargo environment changed" \
+      env \
+      PRIVACY_SDK_DETERMINISTIC_DRIFT="${deterministic_environment_drift}" \
+      bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+      "${PROVISION_REPOSITORY}" "${TEST_PYTHON}"
+  )
+done
+(
+  set -a
+  # shellcheck disable=SC1090
+  source "${PROVISION_GITHUB_ENV}"
+  set +a
+  while IFS= read -r provisioned_path_entry; do
+    PATH="${provisioned_path_entry}:${PATH}"
+  done <"${PROVISION_GITHUB_PATH}"
+  export PATH
+  cd "${PROVISION_REPOSITORY}"
+  expect_failure \
+    "privacy SDK CI Cargo selector must be absent before wrapper selection" \
+    env CARGO="${PROVISION_CORRIDOR}/bin/cargo" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+    "${PROVISION_REPOSITORY}" "${TEST_PYTHON}"
+)
+(
+  set -a
+  # shellcheck disable=SC1090
+  source "${PROVISION_GITHUB_ENV}"
+  set +a
+  while IFS= read -r provisioned_path_entry; do
+    PATH="${provisioned_path_entry}:${PATH}"
+  done <"${PROVISION_GITHUB_PATH}"
+  export PATH
+  replacement_registry="${TEST_ROOT}/replacement-cargo-registry"
+  mkdir -p "${replacement_registry}"
+  rm "${PROVISION_CORRIDOR}/cargo-home/registry"
+  ln -s "${replacement_registry}" \
+    "${PROVISION_CORRIDOR}/cargo-home/registry"
+  cd "${PROVISION_REPOSITORY}"
+  expect_failure \
+    "registry cache link identity changed" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+)
+
+PROVISION_EMPTY_CACHE_REPOSITORY="${TEST_ROOT}/provision-empty-cache-repository"
+PROVISION_EMPTY_CACHE_CORRIDOR="${TEST_ROOT}/provision-empty-cache-corridor"
+PROVISION_EMPTY_CACHE_ENV="${TEST_ROOT}/provision-empty-cache-env"
+PROVISION_EMPTY_CACHE_PATH="${TEST_ROOT}/provision-empty-cache-path"
+PROVISION_EMPTY_AMBIENT_HOME="${TEST_ROOT}/provision-empty-ambient-home"
+mkdir -p \
+  "${PROVISION_EMPTY_CACHE_REPOSITORY}/.cargo" \
+  "${PROVISION_EMPTY_AMBIENT_HOME}"
+: >"${PROVISION_EMPTY_CACHE_REPOSITORY}/Cargo.toml"
+: >"${PROVISION_EMPTY_CACHE_ENV}"
+: >"${PROVISION_EMPTY_CACHE_PATH}"
+write_test_rust_toolchain "${PROVISION_EMPTY_CACHE_REPOSITORY}"
+cp "${SOURCE_ROOT}/.cargo/config.toml" \
+  "${PROVISION_EMPTY_CACHE_REPOSITORY}/.cargo/config.toml"
+FAKE_PROVISION_POPULATE_CACHE=1 \
+PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+CARGO_HOME="${PROVISION_EMPTY_AMBIENT_HOME}" \
+PATH="${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+    "${PROVISION_EMPTY_CACHE_REPOSITORY}" \
+    "${PROVISION_EMPTY_CACHE_CORRIDOR}" \
+    "${PROVISION_EMPTY_CACHE_ENV}" \
+    "${PROVISION_EMPTY_CACHE_PATH}" \
+    "${PROVISION_BIN}/rustup" \
+    "1.93.1-x86_64-unknown-linux-gnu" \
+    "${TEST_PYTHON}" >/dev/null
+[[ -L "${PROVISION_EMPTY_CACHE_CORRIDOR}/cargo-home/registry" ]]
+[[ -L "${PROVISION_EMPTY_CACHE_CORRIDOR}/cargo-home/git" ]]
+[[ -f "${PROVISION_EMPTY_CACHE_CORRIDOR}/cargo-home/registry/fake-cache-entry" ]]
+[[ -f "${PROVISION_EMPTY_CACHE_CORRIDOR}/cargo-home/git/fake-cache-entry" ]]
+(
+  set -a
+  # shellcheck disable=SC1090
+  source "${PROVISION_EMPTY_CACHE_ENV}"
+  set +a
+  while IFS= read -r provisioned_path_entry; do
+    PATH="${provisioned_path_entry}:${PATH}"
+  done <"${PROVISION_EMPTY_CACHE_PATH}"
+  export PATH
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+    "${PROVISION_EMPTY_CACHE_REPOSITORY}" "${TEST_PYTHON}"
 )
 
 PROVISION_BAD_REPOSITORY="${TEST_ROOT}/provision-bad-repository"
 PROVISION_BAD_CORRIDOR="${TEST_ROOT}/provision-bad-corridor"
 PROVISION_BAD_ENV="${TEST_ROOT}/provision-bad-env"
 PROVISION_BAD_PATH="${TEST_ROOT}/provision-bad-path"
-mkdir -p "${PROVISION_BAD_REPOSITORY}"
+mkdir -p "${PROVISION_BAD_REPOSITORY}/.cargo"
 : >"${PROVISION_BAD_REPOSITORY}/Cargo.toml"
+write_test_rust_toolchain "${PROVISION_BAD_REPOSITORY}"
+cp "${SOURCE_ROOT}/.cargo/config.toml" \
+  "${PROVISION_BAD_REPOSITORY}/.cargo/config.toml"
 : >"${PROVISION_BAD_ENV}"
 : >"${PROVISION_BAD_PATH}"
 expect_failure \
@@ -399,64 +1821,1554 @@ expect_failure \
   "${PROVISION_BAD_CORRIDOR}" \
   "${PROVISION_BAD_ENV}" \
   "${PROVISION_BAD_PATH}" \
+  "${PROVISION_BIN}/rustup" \
+  "1.93.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 
 # Exercise the complete Python guard with fake venv and Cargo executables. This
 # proves its maturin path cannot bypass the wrapper without running Cargo or
 # maturin in the test itself.
-INTEGRATION_ROOT="${TEST_ROOT}/integration-repository"
-INTEGRATION_PRIVATE_ROOT="${TEST_ROOT}/integration-private"
-INTEGRATION_VENV="${TEST_ROOT}/fake-venv"
-INTEGRATION_BIN="${TEST_ROOT}/fake-bin"
+prepare_python_guard_root() {
+  local root="$1"
+  mkdir -p \
+    "${root}/.cargo" \
+    "${root}/python/iroha_python/src/iroha_python"
+  cp \
+    "${SOURCE_ROOT}/python/iroha_python/requirements-ci.lock" \
+    "${root}/python/iroha_python/requirements-ci.lock"
+  cp "${SOURCE_ROOT}/.cargo/config.toml" "${root}/.cargo/config.toml"
+  write_test_rust_toolchain "${root}"
+  printf '%s\n' "sealed checkout native extension fixture" \
+    >"${root}/python/iroha_python/src/iroha_python/_crypto.abi3.so"
+}
+
+# Literal whitespace and a record-separator-like newline in the repository and
+# venv paths prove the NUL-framed transcript cannot merge or split authenticated
+# argv path elements. The selected lock path retains whitespace but no control
+# characters because the production resolver rejects those before authentication.
+INTEGRATION_ROOT="${TEST_ROOT}/integration root"$'\n'"record-boundary"
+INTEGRATION_PRIVATE_ROOT="${TEST_ROOT}/integration private"
+INTEGRATION_VENV="${TEST_ROOT}/fake venv"$'\n'"record-boundary"
+INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.93.1-aarch64-apple-darwin/bin"
+INTEGRATION_SELECTED_LOCK="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
+prepare_python_guard_root "${INTEGRATION_ROOT}"
 mkdir -p \
-  "${INTEGRATION_ROOT}/python/iroha_python" \
   "${INTEGRATION_PRIVATE_ROOT}" \
+  "$(dirname "${INTEGRATION_SELECTED_LOCK}")" \
   "${INTEGRATION_VENV}/bin" \
   "${INTEGRATION_BIN}"
-write_test_lock "${INTEGRATION_ROOT}/Cargo.lock" "integration-workspace"
 write_test_lock "${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" "integration-selected"
 
 INTEGRATION_CARGO_LOG="${TEST_ROOT}/integration-cargo.log"
+INTEGRATION_PYTHON_LOG="${TEST_ROOT}/integration-python.log"
+INTEGRATION_CARGO_HOME="${TEST_ROOT}/integration-cargo-home"
+mkdir -p \
+  "${INTEGRATION_CARGO_HOME}/registry" \
+  "${INTEGRATION_CARGO_HOME}/git"
+printf '%s\n' \
+  '[alias]' \
+  'build = "external-poison"' \
+  >"${INTEGRATION_CARGO_HOME}/config.toml"
+export CARGO_HOME="${INTEGRATION_CARGO_HOME}"
 : >"${INTEGRATION_CARGO_LOG}"
+: >"${INTEGRATION_PYTHON_LOG}"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   ': "${INTEGRATION_CARGO_LOG:?}"' \
-  'for argument in "$@"; do printf "%s\\n" "${argument}" >>"${INTEGRATION_CARGO_LOG}"; done' \
+  'while IFS= read -r environment_name; do' \
+  '  case "${environment_name}" in' \
+  '    IROHA_PRIVACY_*|IROHA_JS_CARGO_LOCKFILE_PATH)' \
+  '      echo "real Cargo child inherited guard internal ${environment_name}" >&2' \
+  '      exit 112' \
+  '      ;;' \
+  '  esac' \
+  'done < <(compgen -e || true)' \
+  '[[ -n "${CARGO:-}" && -x "${CARGO}" ]] || { echo "real Cargo child did not retain the wrapper path" >&2; exit 113; }' \
+  '[[ "$(basename "${CARGO}")" == "cargo" ]] || { echo "real Cargo child received a non-wrapper CARGO path" >&2; exit 114; }' \
+  '[[ "${RUSTC:-}" == "${INTEGRATION_EXPECTED_RUSTC}" ]] || { echo "real Cargo child received the wrong rustc" >&2; exit 115; }' \
+  '[[ "${RUSTDOC:-}" == "${INTEGRATION_EXPECTED_RUSTDOC}" ]] || { echo "real Cargo child received the wrong rustdoc" >&2; exit 116; }' \
+  '[[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}" && ! -e "${CARGO_HOME}/config" && ! -e "${CARGO_HOME}/config.toml" ]] || exit 111' \
+  'printf "invocation\\0" >>"${INTEGRATION_CARGO_LOG}"' \
+  'printf "CARGO_HOME=%s\\0" "${CARGO_HOME}" >>"${INTEGRATION_CARGO_LOG}"' \
+  'printf "CARGO_BUILD_JOBS=%s\\0" "${CARGO_BUILD_JOBS:-}" >>"${INTEGRATION_CARGO_LOG}"' \
+  'printf "CARGO_NET_OFFLINE=%s\\0" "${CARGO_NET_OFFLINE:-}" >>"${INTEGRATION_CARGO_LOG}"' \
+  'printf "CARGO_TARGET_DIR=%s\\0" "${CARGO_TARGET_DIR:-}" >>"${INTEGRATION_CARGO_LOG}"' \
+  'for argument in "$@"; do printf "arg=%s\\0" "${argument}" >>"${INTEGRATION_CARGO_LOG}"; done' \
   >"${INTEGRATION_BIN}/cargo"
 chmod 700 "${INTEGRATION_BIN}/cargo"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${INTEGRATION_BIN}/rustc"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${INTEGRATION_BIN}/rustdoc"
+chmod 700 "${INTEGRATION_BIN}/rustc" "${INTEGRATION_BIN}/rustdoc"
+INTEGRATION_CARGO_SEAL="$(
+  privacy_sdk_executable_seal "${INTEGRATION_BIN}/cargo" "${TEST_PYTHON}"
+)"
+INTEGRATION_RUSTC_SEAL="$(
+  privacy_sdk_executable_seal "${INTEGRATION_BIN}/rustc" "${TEST_PYTHON}"
+)"
+INTEGRATION_RUSTDOC_SEAL="$(
+  privacy_sdk_executable_seal "${INTEGRATION_BIN}/rustdoc" "${TEST_PYTHON}"
+)"
+export INTEGRATION_EXPECTED_RUSTC="${INTEGRATION_BIN}/rustc"
+export INTEGRATION_EXPECTED_RUSTDOC="${INTEGRATION_BIN}/rustdoc"
+export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR="1.93.1-aarch64-apple-darwin"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH="${FAKE_RUSTUP}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL="${FAKE_RUSTUP_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH="${INTEGRATION_BIN}/cargo"
+export IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL="${INTEGRATION_CARGO_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH="${INTEGRATION_BIN}/rustc"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL="${INTEGRATION_RUSTC_SEAL}"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH="${INTEGRATION_BIN}/rustdoc"
+export IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL="${INTEGRATION_RUSTDOC_SEAL}"
+export IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo"
+
+run_python_guard_for_root() {
+  local root="$1"
+  local toolchain_path toolchain_seal inherited_target inherited_target_state
+  local inherited_home inherited_home_state inherited_registry_state
+  local inherited_git_state selected_lock selected_lock_seal
+  local workspace_state cargo_config_path cargo_config_seal argument
+  shift
+  toolchain_path="${root}/rust-toolchain.toml"
+  if ! toolchain_seal="$(
+    privacy_sdk_file_seal "${toolchain_path}" "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  inherited_target="${TEST_ROOT}/inherited-cargo-targets/$(basename "${root}")"
+  mkdir -p "${inherited_target}" || return 1
+  if ! inherited_target="$(cd "${inherited_target}" && pwd -P)"; then
+    return 1
+  fi
+  if ! inherited_target_state="$(
+    privacy_sdk_capture_directory_state "${inherited_target}" "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  inherited_home="${TEST_ROOT}/inherited-cargo-homes/$(basename "${root}")"
+  mkdir -p "${inherited_home}" || return 1
+  if ! inherited_home="$(cd "${inherited_home}" && pwd -P)"; then
+    return 1
+  fi
+  if ! inherited_home_state="$(
+    privacy_sdk_capture_directory_state "${inherited_home}" "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  if ! inherited_registry_state="$(
+    privacy_sdk_capture_cargo_cache_component_state \
+      "${inherited_home}" registry "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  if ! inherited_git_state="$(
+    privacy_sdk_capture_cargo_cache_component_state \
+      "${inherited_home}" git "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  selected_lock="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
+  for argument in "$@"; do
+    case "${argument}" in
+      IROHA_PRIVACY_CARGO_LOCKFILE_PATH=*)
+        selected_lock="${argument#*=}"
+        ;;
+    esac
+  done
+  if ! selected_lock_seal="$(
+    privacy_sdk_file_seal "${selected_lock}" "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  if ! workspace_state="$(
+    privacy_sdk_capture_optional_file_state \
+      "${root}/Cargo.lock" "integration workspace Cargo.lock" "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  cargo_config_path="${root}/.cargo/config.toml"
+  if ! cargo_config_seal="$(
+    privacy_sdk_file_seal "${cargo_config_path}" "${TEST_PYTHON}"
+  )"; then
+    return 1
+  fi
+  env \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${selected_lock}" \
+    IROHA_JS_CARGO_LOCKFILE_PATH="${selected_lock}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${selected_lock}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="${selected_lock_seal}" \
+    IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="${workspace_state}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${cargo_config_path}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${cargo_config_seal}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${inherited_home}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="${inherited_home_state}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE="${inherited_registry_state}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE="${inherited_git_state}" \
+    IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH="${toolchain_path}" \
+    IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL="${toolchain_seal}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR="${inherited_target}" \
+    IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE="${inherited_target_state}" \
+    CARGO_TARGET_DIR="${inherited_target}" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_INCREMENTAL=0 \
+    CARGO_ENCODED_RUSTFLAGS="" \
+    CARGO_HOME="${inherited_home}" \
+    RUSTC_BOOTSTRAP=1 \
+    "$@" || return 1
+}
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  'if [[ "${1:-}" == "--version" ]]; then echo "Python 3.11.0"; exit 0; fi' \
-  'if [[ "${1:-}" == "-c" ]]; then echo "3.11"; exit 0; fi' \
+  ': "${INTEGRATION_PYTHON_LOG:?}"' \
+  'python_invocation_kind=unexpected' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-c" ]]; then' \
+  '  case "${3:-}" in *"version(\"maturin\")"*) python_invocation_kind=probe:maturin-version ;; *) python_invocation_kind=probe:python-version ;; esac' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "--version" ]]; then python_invocation_kind=probe:python-version-output' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then python_invocation_kind=verifier' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == "-m" ]]; then python_invocation_kind="module:${4:-}"' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-m" ]]; then python_invocation_kind="module:${3:-}"' \
+  'fi' \
+  'printf "invocation\\0kind=%s\\0" "${python_invocation_kind}" >>"${INTEGRATION_PYTHON_LOG}"' \
+  'for argument in "$@"; do printf "arg=%s\\0" "${argument}" >>"${INTEGRATION_PYTHON_LOG}"; done' \
+  'if [[ "${1:-}" == "--version" ]]; then echo "Python 3.12.0"; exit 0; fi' \
+  'if [[ "${1:-}" == "-c" ]]; then echo "3.12"; exit 0; fi' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "--version" ]]; then echo "Python 3.12.0"; exit 0; fi' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-c" ]]; then' \
+  '  case "${3:-}" in *"version(\"maturin\")"*) echo "1.14.1" ;; *) echo "3.12" ;; esac' \
+  '  exit 0' \
+  'fi' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then' \
+  '  [[ -f "${5:-}" ]] || { echo "fresh wheel is unavailable to verifier" >&2; exit 99; }' \
+  '  [[ -n "${6:-}" && "${6}" == "${IROHA_PRIVACY_AUTHENTICATED_WHEEL_SEAL:-}" ]] || { echo "verifier did not receive the authenticated wheel seal" >&2; exit 112; }' \
+  '  [[ "${6}" =~ ^[0-9a-f]{64}:[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-9]+:0o[0-7]+$ ]] || { echo "verifier received a malformed wheel seal" >&2; exit 113; }' \
+  '  if [[ "${4:-}" == "--preflight" ]]; then' \
+  '    [[ "$#" -eq 6 ]] || { echo "preflight verifier received extra dependency roots" >&2; exit 114; }' \
+  '    if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "preflight" ]]; then printf "%s\\n" "preflight mutation" >>"${5}"; fi' \
+  '    printf "%s\\n" "${5}"' \
+  '    exit 0' \
+  '  fi' \
+  '  [[ "$#" -eq 8 ]] || { echo "installed verifier did not receive exactly two dependency roots" >&2; exit 115; }' \
+  '  [[ "${7}" == "${PRIVACY_PYTHON_SDK_ROOT}/python/norito_py/src" ]] || { echo "installed verifier received the wrong Norito root" >&2; exit 116; }' \
+  '  [[ "${8}" == "${PRIVACY_PYTHON_SDK_ROOT}/python/iroha_torii_client" ]] || { echo "installed verifier received the wrong Torii root" >&2; exit 117; }' \
+  '  native="${4}/lib/python3.12/site-packages/iroha_python/_crypto.abi3.so"' \
+  '  [[ -f "${native}" ]] || { echo "installed native module is unavailable" >&2; exit 100; }' \
+  '  if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "verify" ]]; then printf "%s\\n" "verifier mutation" >>"${5}"; fi' \
+  '  printf "%s\\n" "${native}"' \
+  '  exit 0' \
+  'fi' \
+  'isolated_bytecode_disabled=0' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == "-m" ]]; then isolated_bytecode_disabled=1; shift 2; fi' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-m" ]]; then shift; fi' \
   'if [[ "${1:-}" != "-m" ]]; then echo "unexpected fake Python command" >&2; exit 91; fi' \
   'case "${2:-}" in' \
-  '  pip|pytest) exit 0 ;;' \
+  '  pip)' \
+  '    while IFS= read -r environment_name; do' \
+  '      case "${environment_name}" in' \
+  '        PIP_CONFIG_FILE) [[ "${PIP_CONFIG_FILE}" == "/dev/null" ]] || exit 114 ;;' \
+  '        PIP_*) echo "pip inherited untrusted ${environment_name}" >&2; exit 115 ;;' \
+  '      esac' \
+  '    done < <(compgen -e || true)' \
+  '    case " $* " in' \
+  '      *" -m pip --isolated --disable-pip-version-check --no-input --no-cache-dir install --require-hashes --only-binary=:all: --force-reinstall -r "*) ;;' \
+  '      *" -m pip --isolated --disable-pip-version-check --no-input --no-cache-dir install --no-compile --no-deps --no-index --force-reinstall "*)' \
+  '        [[ "${isolated_bytecode_disabled}" == "1" ]] || { echo "private wheel pip install must disable bytecode" >&2; exit 119; }' \
+  '        wheel="${!#}"' \
+  '        case "${wheel}" in *.whl) ;; *) echo "pip did not receive one wheel" >&2; exit 106 ;; esac' \
+  '        [[ -f "${wheel}" ]] || { echo "pip wheel path is unavailable" >&2; exit 101; }' \
+  '        package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/lib/python3.12/site-packages/iroha_python"' \
+  '        mkdir -p "${package_dir}"' \
+  '        printf "%s\\n" "fake installed package" >"${package_dir}/__init__.py"' \
+  '        printf "%s\\n" "fake installed native module" >"${package_dir}/_crypto.abi3.so"' \
+  '        ;;' \
+  '      *) echo "pip did not use an authenticated requirements or private-wheel install policy" >&2; exit 94 ;;' \
+  '    esac' \
+  '    ;;' \
+  '  pytest)' \
+  '    [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]] || exit 102' \
+  '    [[ "${isolated_bytecode_disabled}" == "1" ]] || { echo "pytest must use isolated no-bytecode mode" >&2; exit 118; }' \
+  '    [[ "${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-}" == "1" ]] || exit 108' \
+  '    [[ -z "${PYTEST_ADDOPTS:-}" && -z "${PYTEST_PLUGINS:-}" ]] || exit 109' \
+  '    case "${PYTHONPATH:-}" in *"/iroha_python/src"*) exit 103 ;; esac' \
+  '    if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "pytest" ]]; then' \
+  '      printf "%s\\n" "pytest mutation" >>"${IROHA_PRIVACY_AUTHENTICATED_WHEEL_PATH}"' \
+  '    fi' \
+  '    exit 0' \
+  '    ;;' \
   '  maturin)' \
-  '    [[ "$*" == "-m maturin develop --release --locked" ]] || exit 92' \
+  '    case " $* " in' \
+  '      *" -m maturin build --release --locked --offline --jobs 1 --target-dir "*) ;;' \
+  '      *) echo "maturin did not receive the locked offline single-job private target policy" >&2; exit 92 ;;' \
+  '    esac' \
+  '    case " $* " in *" --out "*) ;; *) echo "maturin did not receive a private wheel output" >&2; exit 107 ;; esac' \
+  '    [[ "${CARGO_BUILD_JOBS:-}" == "1" ]] || exit 95' \
+  '    [[ "${CARGO_NET_OFFLINE:-}" == "true" ]] || exit 96' \
+  '    [[ -n "${CARGO_TARGET_DIR:-}" && -d "${CARGO_TARGET_DIR}" ]] || exit 97' \
+  '    [[ "${PYO3_PYTHON:-}" == "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/python" ]] || exit 98' \
+  '    [[ "${IROHA_PYTHON_SKIP_RUNTIME_LINK:-}" == "1" ]] || exit 104' \
   '    if [[ "${FAKE_MATURIN_BYPASS_WRAPPER:-0}" == "1" ]]; then exit 0; fi' \
-  '    "${CARGO}" metadata --format-version 1 --manifest-path Cargo.toml' \
-  '    "${CARGO}" rustc --manifest-path Cargo.toml -- --cfg privacy_sdk_test' \
+  '    wheel_directory=""' \
+  '    previous=""' \
+  '    for argument in "$@"; do' \
+  '      if [[ "${previous}" == "--out" ]]; then wheel_directory="${argument}"; fi' \
+  '      previous="${argument}"' \
+  '    done' \
+  '    [[ -n "${wheel_directory}" && -d "${wheel_directory}" ]] || exit 105' \
+  '    rustc --version >/dev/null' \
+  '    native_manifest="${PRIVACY_PYTHON_SDK_ROOT}/python/iroha_python/iroha_python_rs/Cargo.toml"' \
+  '    metadata_manifest="${native_manifest}"' \
+  '    rustc_manifest="${native_manifest}"' \
+  '    rustc_profile="release"' \
+  '    rustc_message_format="json-render-diagnostics"' \
+  '    case "${FAKE_MATURIN_ARG_NEAR_MISS:-}" in' \
+  '      "") ;;' \
+  '      metadata-manifest) metadata_manifest="${metadata_manifest}x" ;;' \
+  '      rustc-manifest) rustc_manifest="${rustc_manifest}x" ;;' \
+  '      rustc-profile) rustc_profile="debug" ;;' \
+  '      rustc-message) rustc_message_format="short" ;;' \
+  '      *) exit 120 ;;' \
+  '    esac' \
+  '    metadata_environment_command=(env)' \
+  '    if [[ "${FAKE_MATURIN_CARGO_ENV_NEAR_MISS:-}" == "metadata-missing" ]]; then metadata_environment_command+=(-u CARGO); fi' \
+  '    if [[ "${FAKE_MATURIN_CARGO_ENV_NEAR_MISS:-}" == "metadata-wrong" ]]; then metadata_environment_command+=("CARGO=${CARGO}x"); fi' \
+  '    if [[ "${FAKE_MATURIN_REORDER_CARGO:-0}" != "1" ]]; then' \
+  '      "${metadata_environment_command[@]}" cargo metadata --format-version 1 --manifest-path "${metadata_manifest}" --locked --offline' \
+  '    fi' \
+  '    case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR:-}" in' \
+  '      1.93.1-aarch64-apple-darwin) host_triple="aarch64-apple-darwin"; maturin_host_kind="darwin" ;;' \
+  '      1.93.1-x86_64-unknown-linux-gnu) host_triple="x86_64-unknown-linux-gnu"; maturin_host_kind="linux" ;;' \
+  '      *) exit 118 ;;' \
+  '    esac' \
+  '    pyo3_config="${CARGO_TARGET_DIR}/maturin/pyo3-config-${host_triple}-3.12-abi3.txt"' \
+  '    mkdir -p "$(dirname "${pyo3_config}")"' \
+  '    printf "%b" "implementation=CPython\\nversion=3.9\\ntarget_abi=CPython-abi3-3.9\\nshared=true\\nbuild_flags=\\nsuppress_build_script_link_lines=false\\npointer_width=64" >"${pyo3_config}"' \
+  '    case "${FAKE_MATURIN_PYO3_CONFIG_ACTION:-}" in' \
+  '      "") ;;' \
+  '      bad-content)' \
+  '        pyo3_payload="$(<"${pyo3_config}")"' \
+  '        printf "X%s" "${pyo3_payload:1}" >"${pyo3_config}"' \
+  '        ;;' \
+  '      bad-path) wrong_config="${CARGO_TARGET_DIR}/maturin/wrong-config.txt"; cp "${pyo3_config}" "${wrong_config}"; pyo3_config="${wrong_config}" ;;' \
+  '      hardlink) ln "${pyo3_config}" "${pyo3_config}.hardlink" ;;' \
+  '      *) exit 117 ;;' \
+  '    esac' \
+  '    printf -v encoded_rustflags "%b" "-C\\037link-arg=-undefined\\037-C\\037link-arg=dynamic_lookup"' \
+  '    rustc_link_arg="link-args=-Wl,-install_name,@rpath/iroha_python._crypto.abi3.so"' \
+  '    python_sys_executable="${PYO3_PYTHON}"' \
+  '    pyo3_extension_module="1"' \
+  '    pyo3_environment_signature="cpython-3.12-64bit"' \
+  '    macosx_deployment_target="11.0"' \
+  '    omit_policy="${FAKE_MATURIN_OMIT_POLICY:-}"' \
+  '    case "${omit_policy}" in ""|PYO3_CONFIG_FILE|PYO3_BUILD_EXTENSION_MODULE|PYO3_ENVIRONMENT_SIGNATURE|PYTHON_SYS_EXECUTABLE|CARGO_ENCODED_RUSTFLAGS|MACOSX_DEPLOYMENT_TARGET) ;; *) exit 119 ;; esac' \
+  '    if [[ "${FAKE_MATURIN_ENCODED_RUSTFLAGS_NEAR_MISS:-0}" == "1" ]]; then encoded_rustflags="${encoded_rustflags}x"; fi' \
+  '    if [[ "${FAKE_MATURIN_RUSTC_LINK_ARG_NEAR_MISS:-0}" == "1" ]]; then rustc_link_arg="${rustc_link_arg}x"; fi' \
+  '    if [[ "${FAKE_MATURIN_PYTHON_SYS_NEAR_MISS:-0}" == "1" ]]; then python_sys_executable="${python_sys_executable}x"; fi' \
+  '    if [[ "${FAKE_MATURIN_EXTENSION_MODULE_NEAR_MISS:-0}" == "1" ]]; then pyo3_extension_module="0"; fi' \
+  '    if [[ "${FAKE_MATURIN_SIGNATURE_NEAR_MISS:-0}" == "1" ]]; then pyo3_environment_signature="${pyo3_environment_signature}x"; fi' \
+  '    if [[ "${FAKE_MATURIN_DEPLOYMENT_TARGET_NEAR_MISS:-0}" == "1" ]]; then macosx_deployment_target="10.15"; fi' \
+  '    rustc_environment=()' \
+  '    [[ "${omit_policy}" == "PYO3_CONFIG_FILE" ]] || rustc_environment+=("PYO3_CONFIG_FILE=${pyo3_config}")' \
+  '    [[ "${omit_policy}" == "PYO3_BUILD_EXTENSION_MODULE" ]] || rustc_environment+=("PYO3_BUILD_EXTENSION_MODULE=${pyo3_extension_module}")' \
+  '    [[ "${omit_policy}" == "PYO3_ENVIRONMENT_SIGNATURE" ]] || rustc_environment+=("PYO3_ENVIRONMENT_SIGNATURE=${pyo3_environment_signature}")' \
+  '    [[ "${omit_policy}" == "PYTHON_SYS_EXECUTABLE" ]] || rustc_environment+=("PYTHON_SYS_EXECUTABLE=${python_sys_executable}")' \
+  '    rustc_environment_command=(env)' \
+  '    cargo_program="${CARGO}"' \
+  '    if [[ "${FAKE_MATURIN_CARGO_ENV_NEAR_MISS:-}" != "rustc-present" ]]; then rustc_environment_command+=(-u CARGO); fi' \
+  '    if [[ "${omit_policy}" == "CARGO_ENCODED_RUSTFLAGS" ]]; then rustc_environment_command+=(-u CARGO_ENCODED_RUSTFLAGS); fi' \
+  '    if [[ "${FAKE_MATURIN_SKIP_RUSTC:-0}" != "1" && "${maturin_host_kind}" == "darwin" ]]; then' \
+  '      [[ "${omit_policy}" == "CARGO_ENCODED_RUSTFLAGS" ]] || rustc_environment+=("CARGO_ENCODED_RUSTFLAGS=${encoded_rustflags}")' \
+  '      [[ "${omit_policy}" == "MACOSX_DEPLOYMENT_TARGET" ]] || rustc_environment+=("MACOSX_DEPLOYMENT_TARGET=${macosx_deployment_target}")' \
+  '      "${rustc_environment_command[@]}" "${rustc_environment[@]}" \' \
+  '        "${cargo_program}" rustc --jobs 1 --profile "${rustc_profile}" --target-dir "${CARGO_TARGET_DIR}" --message-format "${rustc_message_format}" --locked --offline --manifest-path "${rustc_manifest}" --lib -- -C "${rustc_link_arg}"' \
+  '    elif [[ "${FAKE_MATURIN_SKIP_RUSTC:-0}" != "1" ]]; then' \
+  '      "${rustc_environment_command[@]}" "${rustc_environment[@]}" \' \
+  '        "${cargo_program}" rustc --jobs 1 --profile "${rustc_profile}" --target-dir "${CARGO_TARGET_DIR}" --message-format "${rustc_message_format}" --locked --offline --manifest-path "${rustc_manifest}" --lib' \
+  '    fi' \
+  '    if [[ "${FAKE_MATURIN_REORDER_CARGO:-0}" == "1" ]]; then' \
+  '      "${metadata_environment_command[@]}" cargo metadata --format-version 1 --manifest-path "${metadata_manifest}" --locked --offline' \
+  '    fi' \
+  '    if [[ "${FAKE_MATURIN_EXTRA_CARGO_COMMAND:-0}" == "1" ]]; then' \
+  '      "${CARGO}" build --locked --offline --manifest-path "${native_manifest}"' \
+  '    fi' \
   '    if [[ -n "${FAKE_MATURIN_MUTATE_PATH:-}" ]]; then' \
   '      printf "%s\\n" "# adversarial maturin mutation" >>"${FAKE_MATURIN_MUTATE_PATH}"' \
   '    fi' \
+  '    case "${FAKE_MATURIN_ARTIFACT_ACTION:-}" in' \
+  '      "") ;;' \
+  '      add) printf "%s\\n" "added artifact" >"${FAKE_MATURIN_ARTIFACT_DIR}/helper.so" ;;' \
+  '      nested) mkdir -p "${FAKE_MATURIN_ARTIFACT_DIR}/nested"; printf "%s\\n" "nested artifact" >"${FAKE_MATURIN_ARTIFACT_DIR}/nested/helper.pyd" ;;' \
+  '      uppercase) printf "%s\\n" "uppercase artifact" >"${FAKE_MATURIN_ARTIFACT_DIR}/helper.SO" ;;' \
+  '      delete) rm "${FAKE_MATURIN_ARTIFACT_DIR}/_crypto.abi3.so" ;;' \
+  '      hardlink) ln "${FAKE_MATURIN_ARTIFACT_DIR}/_crypto.abi3.so" "${FAKE_MATURIN_ARTIFACT_DIR}/_crypto.linked.so" ;;' \
+  '      symlink) ln -s "_crypto.abi3.so" "${FAKE_MATURIN_ARTIFACT_DIR}/_crypto.symlink.so" ;;' \
+  '      *) exit 110 ;;' \
+  '    esac' \
+  '    printf "%s\\n" "fake fresh wheel" >"${wheel_directory}/iroha_python-0.0.0-cp312-abi3-test.whl"' \
   '    ;;' \
   '  *) echo "unexpected fake Python module: ${2:-}" >&2; exit 93 ;;' \
   'esac' \
   >"${INTEGRATION_VENV}/bin/python"
 chmod 700 "${INTEGRATION_VENV}/bin/python"
+VENV_RUSTC_SHADOW_MARKER="${TEST_ROOT}/venv-rustc-shadow-executed"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  "printf '%s\\n' shadowed >'${VENV_RUSTC_SHADOW_MARKER}'" \
+  'exit 93' \
+  >"${INTEGRATION_VENV}/bin/rustc"
+chmod 700 "${INTEGRATION_VENV}/bin/rustc"
+export INTEGRATION_CARGO_LOG INTEGRATION_PYTHON_LOG
+
+# Exercise the production verifier with bounded real ZIP/filesystem metadata,
+# authenticated fake dependency imports, and an inert extension loader. No
+# real native extension or compiler is involved.
+VERIFIER_FIXTURE_ROOT="${TEST_ROOT}/wheel-verifier"
+"${TEST_PYTHON}" -I -B - \
+  "${SOURCE_ROOT}/ci/verify_privacy_python_wheel.py" \
+  "${VERIFIER_FIXTURE_ROOT}" <<'PY'
+import base64
+import hashlib
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import stat
+import struct
+import sys
+import types
+import warnings
+import zipfile
+from pathlib import Path
+
+verifier_path = Path(sys.argv[1])
+fixture_root = Path(sys.argv[2])
+fixture_root.mkdir()
+module_name = "privacy_wheel_verifier_under_test"
+spec = importlib.util.spec_from_file_location(module_name, verifier_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load production privacy wheel verifier")
+verifier = importlib.util.module_from_spec(spec)
+sys.modules[module_name] = verifier
+spec.loader.exec_module(verifier)
+
+environment_root = fixture_root / "venv"
+site_root = environment_root / "lib/python3.12/site-packages"
+package_root = site_root / "iroha_python"
+package_root.mkdir(parents=True)
+package_path = package_root / "__init__.py"
+package_sibling_path = package_root / "sibling.py"
+native_path = package_root / "_crypto.abi3.so"
+dist_info_root = site_root / "iroha_python-0.0.0.dist-info"
+package_bytes = (
+    b"from importlib import metadata\n"
+    b"import norito\n"
+    b"import iroha_torii_client\n"
+    b"from . import sibling\n"
+    b"__version__ = metadata.version('iroha-python')\n"
+)
+sibling_bytes = b"VALUE = 'authenticated sibling bytes'\n"
+native_bytes = b"fresh inert native bytes\n"
+package_path.write_bytes(package_bytes)
+package_sibling_path.write_bytes(sibling_bytes)
+native_path.write_bytes(native_bytes)
+
+dependency_python_root = fixture_root / "checkout/python"
+norito_root = dependency_python_root / "norito_py/src"
+torii_root = dependency_python_root / "iroha_torii_client"
+(norito_root / "norito").mkdir(parents=True)
+torii_root.mkdir(parents=True)
+(norito_root / "norito/__init__.py").write_text(
+    "SOURCE = 'authenticated norito root'\n",
+    encoding="utf-8",
+)
+(torii_root / "__init__.py").write_text(
+    "SOURCE = 'authenticated torii root'\n",
+    encoding="utf-8",
+)
+dependencies = verifier.authenticate_dependency_roots(
+    environment_root=environment_root,
+    norito_root=norito_root,
+    torii_root=torii_root,
+)
+
+
+def member(name, payload=b"fixture\n", mode=stat.S_IFREG | 0o644):
+    info = zipfile.ZipInfo(name)
+    info.create_system = 3
+    info.external_attr = mode << 16
+    info.compress_type = zipfile.ZIP_STORED
+    return info, payload
+
+
+def write_wheel(path, entries):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(path, "w") as wheel:
+            for info, payload in entries:
+                wheel.writestr(info, payload)
+    return path
+
+
+class NonSeekableWheelBuffer(io.BytesIO):
+    def seekable(self):
+        return False
+
+    def seek(self, *_args, **_kwargs):
+        raise OSError("fixture intentionally disables seeking")
+
+
+def write_streamed_wheel(path, entries):
+    destination = NonSeekableWheelBuffer()
+    with zipfile.ZipFile(destination, "w") as wheel:
+        for info, payload in entries:
+            wheel.writestr(info, payload)
+    path.write_bytes(destination.getvalue())
+    return path
+
+
+def record_hash(payload):
+    digest = hashlib.sha256(payload).digest()
+    encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return f"sha256={encoded}"
+
+
+def with_record(entries):
+    record_name = "iroha_python-0.0.0.dist-info/RECORD"
+    rows = [
+        f"{info.filename},{record_hash(payload)},{len(payload)}"
+        for info, payload in entries
+        if not info.is_dir()
+    ]
+    rows.append(f"{record_name},,")
+    return entries + [member(record_name, ("\n".join(rows) + "\n").encode())]
+
+
+def valid_entries(
+    *,
+    package_payload=package_bytes,
+    sibling_payload=sibling_bytes,
+):
+    return with_record([
+        member("iroha_python/__init__.py", package_payload),
+        member("iroha_python/sibling.py", sibling_payload),
+        member("iroha_python/_crypto.abi3.so", native_bytes),
+        member(
+            "iroha_python-0.0.0.dist-info/METADATA",
+            b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 0.0.0\n",
+        ),
+        member(
+            "iroha_python-0.0.0.dist-info/WHEEL",
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
+            b"Tag: cp312-abi3-any\n",
+        ),
+    ])
+
+
+def write_installed_record():
+    record_path = dist_info_root / "RECORD"
+    installed_files = sorted(
+        (
+            *package_root.rglob("*"),
+            *dist_info_root.rglob("*"),
+        ),
+        key=lambda path: path.as_posix(),
+    )
+    rows = []
+    for path in installed_files:
+        if not path.is_file() or path == record_path:
+            continue
+        payload = path.read_bytes()
+        relative = path.relative_to(site_root).as_posix()
+        rows.append(f"{relative},{record_hash(payload)},{len(payload)}")
+    rows.append("iroha_python-0.0.0.dist-info/RECORD,,")
+    record_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def install_dist_info(wheel):
+    dist_info_root.mkdir(exist_ok=True)
+    (dist_info_root / "METADATA").write_bytes(
+        b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 0.0.0\n"
+    )
+    (dist_info_root / "WHEEL").write_bytes(
+        b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
+        b"Tag: cp312-abi3-any\n"
+    )
+    (dist_info_root / "INSTALLER").write_bytes(b"pip\n")
+    (dist_info_root / "REQUESTED").write_bytes(b"")
+    (dist_info_root / "direct_url.json").write_text(
+        json.dumps(
+            {
+                "archive_info": {
+                    "hash": f"sha256={wheel.seal.sha256}",
+                    "hashes": {"sha256": wheel.seal.sha256},
+                },
+                "url": wheel.path.as_uri(),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    write_installed_record()
+
+
+def seal(path):
+    metadata = os.stat(path, follow_symlinks=False)
+    return verifier.FileSeal.from_stat(
+        hashlib.sha256(path.read_bytes()).hexdigest(), metadata
+    ).render()
+
+
+def expect_failure(fragment, callback):
+    try:
+        callback()
+    except verifier.VerificationError as error:
+        if fragment not in str(error):
+            raise AssertionError(f"missing {fragment!r} in verifier failure: {error}")
+    else:
+        raise AssertionError(f"wheel verifier accepted negative control: {fragment}")
+
+
+expect_failure(
+    "source root is unavailable",
+    lambda: verifier.authenticate_dependency_roots(
+        environment_root=environment_root,
+        norito_root=dependency_python_root / "missing",
+        torii_root=torii_root,
+    ),
+)
+wrong_root = fixture_root / "wrong-dependency-root"
+wrong_root.mkdir()
+expect_failure(
+    "expected repository layout",
+    lambda: verifier.authenticate_dependency_roots(
+        environment_root=environment_root,
+        norito_root=wrong_root,
+        torii_root=torii_root,
+    ),
+)
+shadow_root = norito_root / "iroha_python"
+shadow_root.mkdir()
+expect_failure(
+    "contains an iroha_python shadow",
+    lambda: verifier.authenticate_dependency_roots(
+        environment_root=environment_root,
+        norito_root=norito_root,
+        torii_root=torii_root,
+    ),
+)
+shadow_root.rmdir()
+bytecode_directory = norito_root / "norito/__pycache__"
+bytecode_directory.mkdir()
+expect_failure(
+    "contains bytecode",
+    lambda: verifier.authenticate_dependency_roots(
+        environment_root=environment_root,
+        norito_root=norito_root,
+        torii_root=torii_root,
+    ),
+)
+bytecode_directory.rmdir()
+native_alias = norito_root / "norito/codec.so"
+native_alias.write_bytes(b"inert native alias")
+expect_failure(
+    "bytecode or native loader alias",
+    lambda: verifier.authenticate_dependency_roots(
+        environment_root=environment_root,
+        norito_root=norito_root,
+        torii_root=torii_root,
+    ),
+)
+native_alias.unlink()
+source_symlink = norito_root / "norito/linked.py"
+source_symlink.symlink_to("__init__.py")
+expect_failure(
+    "contains a symbolic link",
+    lambda: verifier.authenticate_dependency_roots(
+        environment_root=environment_root,
+        norito_root=norito_root,
+        torii_root=torii_root,
+    ),
+)
+source_symlink.unlink()
+
+
+def preflight(path):
+    return verifier.preflight_wheel(
+        path,
+        seal(path),
+        extension_suffixes=(".abi3.so",),
+    )
+
+
+wheel_path = write_wheel(fixture_root / "fresh.whl", valid_entries())
+wheel = preflight(wheel_path)
+install_dist_info(wheel)
+if wheel.package_member != "iroha_python/__init__.py":
+    raise AssertionError("wheel preflight selected the wrong package initializer")
+if wheel.native_member != "iroha_python/_crypto.abi3.so":
+    raise AssertionError("wheel preflight selected the wrong native extension")
+streamed_wheel_path = write_streamed_wheel(
+    fixture_root / "streamed-data-descriptors.whl",
+    valid_entries(),
+)
+preflight(streamed_wheel_path)
+layout = verifier.derive_installed_layout(
+    environment_root=environment_root,
+    site_roots={site_root},
+    wheel=wheel,
+)
+if layout.package_path != package_path or layout.native_path != native_path:
+    raise AssertionError("installed layout was not derived from wheel members")
+installed_files = verifier.verify_installed_files(wheel, layout)
+if (
+    installed_files.package.path != package_path
+    or installed_files.native.path != native_path
+):
+    raise AssertionError("installed file verifier returned untrusted paths")
+package_spec, native_spec = verifier.trusted_import_specs(layout)
+if type(package_spec.loader) is not importlib.machinery.SourceFileLoader:
+    raise AssertionError("package spec did not use SourceFileLoader")
+if type(native_spec.loader) is not importlib.machinery.ExtensionFileLoader:
+    raise AssertionError("native spec did not use ExtensionFileLoader")
+if native_spec.origin != str(native_path) or native_spec.loader_state is not None:
+    raise AssertionError("native spec did not retain its trusted origin/state")
+
+
+class InertExtensionLoader(importlib.machinery.ExtensionFileLoader):
+    def create_module(self, spec):
+        return types.ModuleType(spec.name)
+
+    def exec_module(self, module):
+        module.INERT_EXTENSION_LOADED = True
+
+
+inert_loader = InertExtensionLoader(
+    "iroha_python._crypto",
+    str(native_path),
+)
+inert_native_spec = importlib.util.spec_from_file_location(
+    "iroha_python._crypto",
+    native_path,
+    loader=inert_loader,
+)
+if inert_native_spec is None:
+    raise AssertionError("unable to construct inert extension-loader spec")
+loaded_package, loaded_native = verifier.load_from_trusted_specs(
+    wheel=wheel,
+    layout=layout,
+    package_spec=package_spec,
+    native_spec=inert_native_spec,
+    dependencies=dependencies,
+)
+if not loaded_native.INERT_EXTENSION_LOADED:
+    raise AssertionError("authenticated inert extension loader did not run")
+if loaded_package.sibling.VALUE != "authenticated sibling bytes":
+    raise AssertionError("package initializer did not use authenticated sibling bytes")
+if loaded_package.norito.SOURCE != "authenticated norito root":
+    raise AssertionError("package initializer did not use authenticated Norito")
+if (
+    loaded_package.iroha_torii_client.SOURCE
+    != "authenticated torii root"
+):
+    raise AssertionError("package initializer did not use authenticated Torii client")
+installed_after_import = verifier.verify_installed_files(wheel, layout)
+if installed_after_import.files != installed_files.files:
+    raise AssertionError("authenticated installed tree changed during positive import")
+for loaded_name in tuple(sys.modules):
+    if (
+        loaded_name == "iroha_python"
+        or loaded_name.startswith("iroha_python.")
+        or loaded_name == "norito"
+        or loaded_name.startswith("norito.")
+        or loaded_name == "iroha_torii_client"
+        or loaded_name.startswith("iroha_torii_client.")
+    ):
+        sys.modules.pop(loaded_name, None)
+
+
+class HostileCachedFinder:
+    calls = 0
+
+    def find_spec(self, *_args, **_kwargs):
+        type(self).calls += 1
+        raise AssertionError("preseeded importer cache was consulted")
+
+
+hostile_hook_calls = 0
+
+
+def hostile_path_hook(_path):
+    global hostile_hook_calls
+    hostile_hook_calls += 1
+    raise AssertionError("preseeded path hook was consulted")
+
+
+saved_path_hooks = tuple(sys.path_hooks)
+saved_importer_cache = dict(sys.path_importer_cache)
+try:
+    sys.path_hooks.insert(0, hostile_path_hook)
+    sys.path_importer_cache[str(package_root)] = HostileCachedFinder()
+    cache_safe_package, _cache_safe_native = verifier.load_from_trusted_specs(
+        wheel=wheel,
+        layout=layout,
+        package_spec=package_spec,
+        native_spec=inert_native_spec,
+        dependencies=dependencies,
+    )
+    if cache_safe_package.sibling.VALUE != "authenticated sibling bytes":
+        raise AssertionError("trusted source finder did not load sealed sibling")
+    if HostileCachedFinder.calls != 0 or hostile_hook_calls != 0:
+        raise AssertionError("verifier consulted a preseeded path importer")
+finally:
+    sys.path_hooks[:] = saved_path_hooks
+    sys.path_importer_cache.clear()
+    sys.path_importer_cache.update(saved_importer_cache)
+    for loaded_name in tuple(sys.modules):
+        if (
+            loaded_name == "iroha_python"
+            or loaded_name.startswith("iroha_python.")
+            or loaded_name == "norito"
+            or loaded_name.startswith("norito.")
+            or loaded_name == "iroha_torii_client"
+            or loaded_name.startswith("iroha_torii_client.")
+        ):
+            sys.modules.pop(loaded_name, None)
+
+package_path.write_bytes(package_bytes + b"__version__ = '9.9-TAMPERED'\n")
+expect_failure(
+    "observed a version outside authenticated METADATA",
+    lambda: verifier.load_from_trusted_specs(
+        wheel=wheel,
+        layout=layout,
+        package_spec=package_spec,
+        native_spec=inert_native_spec,
+        dependencies=dependencies,
+    ),
+)
+package_path.write_bytes(package_bytes)
+
+mutable_dependency_source = norito_root / "norito/mutable.py"
+mutable_dependency_source.write_text("VALUE = 'before mutation'\n", encoding="utf-8")
+mutation_dependencies = verifier.authenticate_dependency_roots(
+    environment_root=environment_root,
+    norito_root=norito_root,
+    torii_root=torii_root,
+)
+package_path.write_text(
+    "from importlib import metadata\n"
+    "import norito\n"
+    "import iroha_torii_client\n"
+    "from pathlib import Path\n"
+    "Path(norito.__file__).with_name('mutable.py').write_text("
+    "'VALUE = mutation\\n', encoding='utf-8')\n"
+    "__version__ = metadata.version('iroha-python')\n",
+    encoding="utf-8",
+)
+expect_failure(
+    "source tree changed during package import",
+    lambda: verifier.load_from_trusted_specs(
+        wheel=wheel,
+        layout=layout,
+        package_spec=package_spec,
+        native_spec=inert_native_spec,
+        dependencies=mutation_dependencies,
+    ),
+)
+package_path.write_bytes(package_bytes)
+mutable_dependency_source.unlink()
+
+package_sibling_path.write_bytes(b"VALUE = 'tampered installed sibling'\n")
+expect_failure(
+    "does not match the fresh wheel",
+    lambda: verifier.verify_installed_files(wheel, layout),
+)
+package_sibling_path.write_bytes(sibling_bytes)
+
+metadata_path = dist_info_root / "METADATA"
+metadata_bytes = metadata_path.read_bytes()
+metadata_path.write_bytes(
+    b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 9.9-TAMPERED\n"
+)
+write_installed_record()
+expect_failure(
+    "does not match the fresh wheel",
+    lambda: verifier.verify_installed_files(wheel, layout),
+)
+metadata_path.write_bytes(metadata_bytes)
+write_installed_record()
+
+injected_source = package_root / "injected.py"
+injected_source.write_bytes(b"VALUE = 'untrusted extra source'\n")
+expect_failure(
+    "file layout does not exactly match",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+injected_source.unlink()
+
+bytecode_root = package_root / "__pycache__"
+bytecode_root.mkdir()
+(bytecode_root / "injected.cpython-312.pyc").write_bytes(b"untrusted bytecode")
+expect_failure(
+    "bytecode cache directory",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+(bytecode_root / "injected.cpython-312.pyc").unlink()
+bytecode_root.rmdir()
+
+installed_symlink = package_root / "linked.py"
+installed_symlink.symlink_to("sibling.py")
+expect_failure(
+    "contains a symbolic link",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+installed_symlink.unlink()
+
+dist_info_extra = dist_info_root / "unmodeled.json"
+dist_info_extra.write_bytes(b"{}\n")
+expect_failure(
+    "file layout does not exactly match",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+dist_info_extra.unlink()
+
+duplicate_dist_info = site_root / "iroha_python-9.9.dist-info"
+duplicate_dist_info.mkdir()
+expect_failure(
+    "exactly one matching iroha-python distribution origin",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+duplicate_dist_info.rmdir()
+for alias_name in (
+    "iroha-python-9.9.dist-info",
+    "iroha.python-9.9.dist-info",
+    "IROHA_PYTHON-9.9.DIST-INFO",
+):
+    alias_dist_info = site_root / alias_name
+    alias_dist_info.mkdir()
+    expect_failure(
+        "exactly one matching iroha-python distribution origin",
+        lambda: verifier.derive_installed_layout(
+            environment_root=environment_root,
+            site_roots={site_root},
+            wheel=wheel,
+        ),
+    )
+    alias_dist_info.rmdir()
+
+direct_url_path = dist_info_root / "direct_url.json"
+direct_url_bytes = direct_url_path.read_bytes()
+direct_url_path.write_text(
+    '{"archive_info":{"hashes":{"sha256":"'
+    + ("0" * 64)
+    + '"}},"url":"file:///untrusted.whl"}',
+    encoding="utf-8",
+)
+expect_failure(
+    "does not name the authenticated wheel",
+    lambda: verifier.verify_installed_files(wheel, layout),
+)
+direct_url_path.write_bytes(direct_url_bytes)
+
+record_path = dist_info_root / "RECORD"
+record_bytes = record_path.read_bytes()
+record_path.write_bytes(record_bytes + b"iroha_python/injected.py,,\n")
+expect_failure(
+    "unexpected member row",
+    lambda: verifier.verify_installed_files(wheel, layout),
+)
+record_path.write_bytes(record_bytes)
+
+mutating_package_bytes = (
+    b"from importlib import metadata\n"
+    b"import norito\n"
+    b"import iroha_torii_client\n"
+    b"from pathlib import Path\n"
+    b"from . import sibling\n"
+    b"Path(sibling.__file__).write_text("
+    b"\"VALUE = 'mutated during import'\\n\", encoding='utf-8')\n"
+    b"__version__ = metadata.version('iroha-python')\n"
+)
+mutating_wheel_path = write_wheel(
+    fixture_root / "mutating-sibling.whl",
+    valid_entries(package_payload=mutating_package_bytes),
+)
+mutating_wheel = preflight(mutating_wheel_path)
+package_path.write_bytes(mutating_package_bytes)
+package_sibling_path.write_bytes(sibling_bytes)
+install_dist_info(mutating_wheel)
+mutating_layout = verifier.derive_installed_layout(
+    environment_root=environment_root,
+    site_roots={site_root},
+    wheel=mutating_wheel,
+)
+verifier.verify_installed_files(mutating_wheel, mutating_layout)
+mutating_package_spec, _mutating_native_spec = verifier.trusted_import_specs(
+    mutating_layout
+)
+
+
+def import_mutating_package_and_reverify():
+    verifier.load_from_trusted_specs(
+        wheel=mutating_wheel,
+        layout=mutating_layout,
+        package_spec=mutating_package_spec,
+        native_spec=inert_native_spec,
+        dependencies=dependencies,
+    )
+    verifier.verify_installed_files(mutating_wheel, mutating_layout)
+
+
+expect_failure(
+    "does not match the fresh wheel",
+    import_mutating_package_and_reverify,
+)
+for loaded_name in tuple(sys.modules):
+    if (
+        loaded_name == "iroha_python"
+        or loaded_name.startswith("iroha_python.")
+        or loaded_name == "norito"
+        or loaded_name.startswith("norito.")
+        or loaded_name == "iroha_torii_client"
+        or loaded_name.startswith("iroha_torii_client.")
+    ):
+        sys.modules.pop(loaded_name, None)
+package_path.write_bytes(package_bytes)
+package_sibling_path.write_bytes(sibling_bytes)
+install_dist_info(wheel)
+
+
+expect_failure(
+    "expected shell-provided seal",
+    lambda: verifier.preflight_wheel(
+        wheel_path,
+        "0" * 64 + wheel.seal.render()[64:],
+        extension_suffixes=(".abi3.so",),
+    ),
+)
+sealed_before_mutation = wheel.seal
+with wheel_path.open("ab") as destination:
+    destination.write(b"adversarial wheel mutation")
+expect_failure(
+    "expected shell-provided seal",
+    lambda: verifier.assert_expected_file_seal(
+        wheel_path,
+        sealed_before_mutation,
+        label="fresh private wheel",
+        max_bytes=verifier.MAX_WHEEL_BYTES,
+    ),
+)
+expect_failure(
+    "outside its canonical ZIP records",
+    lambda: verifier.preflight_wheel(
+        wheel_path,
+        seal(wheel_path),
+        extension_suffixes=(".abi3.so",),
+    ),
+)
+wheel_path = write_wheel(wheel_path, valid_entries())
+wheel = preflight(wheel_path)
+install_dist_info(wheel)
+hidden_gap_path = write_wheel(
+    fixture_root / "hidden-local-gap.whl",
+    valid_entries(),
+)
+hidden_gap_payload = bytearray(hidden_gap_path.read_bytes())
+eocd = struct.Struct("<4s4H2LH")
+eocd_fields = eocd.unpack(hidden_gap_payload[-eocd.size :])
+old_central_offset = eocd_fields[6]
+hidden_payload = b"UNREFERENCED-HIDDEN-PAYLOAD"
+if len(hidden_payload) != 27:
+    raise AssertionError("hidden-payload negative control changed size")
+hidden_gap_payload[old_central_offset:old_central_offset] = hidden_payload
+struct.pack_into(
+    "<L",
+    hidden_gap_payload,
+    len(hidden_gap_payload) - eocd.size + 16,
+    old_central_offset + len(hidden_payload),
+)
+hidden_gap_path.write_bytes(hidden_gap_payload)
+expect_failure(
+    "local records do not contiguously cover",
+    lambda: preflight(hidden_gap_path),
+)
+layout = verifier.derive_installed_layout(
+    environment_root=environment_root,
+    site_roots={site_root},
+    wheel=wheel,
+)
+
+path_cases = (
+    ("traversal", "../escape.py", "dot or empty path alias"),
+    ("absolute", "/absolute.py", "relative POSIX path"),
+    ("backslash", r"iroha_python\escape.py", "POSIX path"),
+    ("dot", "iroha_python/./escape.py", "dot or empty path alias"),
+    ("empty", "iroha_python//escape.py", "dot or empty path alias"),
+    ("drive", "C:/escape.py", "drive path"),
+    ("trailing-dot", "iroha_python/escape.", "platform path alias"),
+)
+for label, unsafe_name, fragment in path_cases:
+    candidate = write_wheel(
+        fixture_root / f"{label}.whl",
+        valid_entries() + [member(unsafe_name)],
+    )
+    expect_failure(fragment, lambda candidate=candidate: preflight(candidate))
+
+duplicate = write_wheel(
+    fixture_root / "duplicate.whl",
+    valid_entries() + [member("iroha_python/__init__.py", package_bytes)],
+)
+expect_failure("not unique", lambda: preflight(duplicate))
+case_alias = write_wheel(
+    fixture_root / "case-alias.whl",
+    valid_entries()
+    + [member("iroha_python/Name.py"), member("iroha_python/name.py")],
+)
+expect_failure("not unique", lambda: preflight(case_alias))
+symlink_member = write_wheel(
+    fixture_root / "symlink.whl",
+    valid_entries()
+    + [member("iroha_python/link.py", b"target", stat.S_IFLNK | 0o777)],
+)
+expect_failure("special-file mode", lambda: preflight(symlink_member))
+fifo_member = write_wheel(
+    fixture_root / "fifo.whl",
+    valid_entries()
+    + [member("iroha_python/fifo", b"", stat.S_IFIFO | 0o600)],
+)
+expect_failure("special-file mode", lambda: preflight(fifo_member))
+missing_initializer = write_wheel(
+    fixture_root / "missing-init.whl",
+    [
+        entry
+        for entry in valid_entries()
+        if entry[0].filename != "iroha_python/__init__.py"
+    ],
+)
+expect_failure("exactly one package initializer", lambda: preflight(missing_initializer))
+wrong_platform = write_wheel(
+    fixture_root / "wrong-platform.whl",
+    [
+        (
+            member("iroha_python/_crypto.cpython-39-darwin.so", native_bytes)
+            if entry[0].filename == "iroha_python/_crypto.abi3.so"
+            else entry
+        )
+        for entry in valid_entries()
+    ],
+)
+expect_failure("current-platform native module", lambda: preflight(wrong_platform))
+for label, extra_name in (
+    ("loose", "_crypto.abi3.so"),
+    ("nested", "iroha_python/sub/_crypto.abi3.so"),
+    ("stale", "iroha_python/_crypto.cpython-39-darwin.so"),
+    ("foreign", "iroha_python/helper.so"),
+    ("foreign-case", "iroha_python/helper.SO"),
+):
+    candidate = write_wheel(
+        fixture_root / f"{label}-native.whl",
+        valid_entries() + [member(extra_name, native_bytes)],
+    )
+    expect_failure(
+        "loose, nested, or non-current native module",
+        lambda candidate=candidate: preflight(candidate),
+    )
+for label, extra_name in (
+    ("script-root", "iroha_python-0.0.0.data/scripts/python"),
+    ("other-package", "other_package/__init__.py"),
+):
+    candidate = write_wheel(
+        fixture_root / f"{label}.whl",
+        valid_entries() + [member(extra_name, b"untrusted extra\n")],
+    )
+    expect_failure(
+        "scripts, data roots, or other packages",
+        lambda candidate=candidate: preflight(candidate),
+    )
+
+saved_member_bound = verifier.MAX_MEMBER_BYTES
+try:
+    verifier.MAX_MEMBER_BYTES = 4
+    expect_failure("archive size bound", lambda: preflight(wheel_path))
+finally:
+    verifier.MAX_MEMBER_BYTES = saved_member_bound
+
+native_path.write_bytes(b"mutated installed native bytes\n")
+expect_failure(
+    "does not match the fresh wheel",
+    lambda: verifier.verify_installed_files(wheel, layout),
+)
+native_path.write_bytes(native_bytes)
+nested_root = package_root / "nested"
+nested_root.mkdir()
+nested_native = nested_root / "helper.so"
+nested_native.write_bytes(native_bytes)
+expect_failure(
+    "file layout does not exactly match",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+nested_native.unlink()
+nested_root.rmdir()
+hardlink_native = package_root / "helper.so"
+os.link(native_path, hardlink_native)
+expect_failure(
+    "contains a multiply linked file",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+hardlink_native.unlink()
+uppercase_native = package_root / "helper.PYD"
+uppercase_native.write_bytes(native_bytes)
+expect_failure(
+    "file layout does not exactly match",
+    lambda: verifier.derive_installed_layout(
+        environment_root=environment_root,
+        site_roots={site_root},
+        wheel=wheel,
+    ),
+)
+uppercase_native.unlink()
+verifier.verify_installed_files(wheel, layout)
+
+verifier.reject_preseeded_modules({})
+expect_failure(
+    "preseeded package modules",
+    lambda: verifier.reject_preseeded_modules({"iroha_python": object()}),
+)
+expect_failure(
+    "preseeded package modules",
+    lambda: verifier.reject_preseeded_modules(
+        {"iroha_python.injected": object()}
+    ),
+)
+
+saved_file_finder = verifier.importlib.machinery.FileFinder
+
+
+class SpoofedNativeFinder:
+    calls = 0
+
+    def __init__(self, *_args):
+        pass
+
+    def find_spec(self, _name):
+        type(self).calls += 1
+        if type(self).calls == 1:
+            return package_spec
+        return importlib.machinery.ModuleSpec(
+            "iroha_python._crypto",
+            importlib.machinery.SourceFileLoader(
+                "iroha_python._crypto", str(native_path)
+            ),
+            origin=str(native_path),
+        )
+
+
+try:
+    verifier.importlib.machinery.FileFinder = SpoofedNativeFinder
+    expect_failure(
+        "must use ExtensionFileLoader",
+        lambda: verifier.trusted_import_specs(layout),
+    )
+finally:
+    verifier.importlib.machinery.FileFinder = saved_file_finder
+
+
+class LoaderStateFinder:
+    calls = 0
+
+    def __init__(self, *_args):
+        pass
+
+    def find_spec(self, _name):
+        type(self).calls += 1
+        if type(self).calls == 1:
+            return package_spec
+        native_spec.loader_state = {"spoofed": True}
+        return native_spec
+
+
+try:
+    verifier.importlib.machinery.FileFinder = LoaderStateFinder
+    expect_failure(
+        "unexpected loader_state",
+        lambda: verifier.trusted_import_specs(layout),
+    )
+finally:
+    native_spec.loader_state = None
+    verifier.importlib.machinery.FileFinder = saved_file_finder
+
+spoofed_spec = importlib.machinery.ModuleSpec(
+    "iroha_python._crypto",
+    importlib.machinery.SourceFileLoader("iroha_python._crypto", str(native_path)),
+    origin=str(native_path),
+)
+expect_failure(
+    "lost ExtensionFileLoader",
+    lambda: verifier.load_from_trusted_specs(
+        wheel=wheel,
+        layout=layout,
+        package_spec=package_spec,
+        native_spec=spoofed_spec,
+        dependencies=dependencies,
+    ),
+)
+
+expect_failure(
+    "Python.framework or libpython",
+    lambda: verifier.assert_no_python_runtime_dependency(
+        "@rpath/libpython3.12.dylib"
+    ),
+)
+expect_failure(
+    "Python.framework or libpython",
+    lambda: verifier.assert_no_python_runtime_dependency(
+        "/Library/Frameworks/Python.framework/Versions/3.12/Python"
+    ),
+)
+verifier.assert_no_python_runtime_dependency(
+    f"{native_path}:\n\t/usr/lib/libSystem.B.dylib\n"
+)
+PY
+
+run_ambient_build_environment_negative_control() {
+  local variable_name="$1"
+  expect_failure \
+    "${variable_name}" \
+    run_python_guard_for_root "${INTEGRATION_ROOT}" \
+    env \
+    "${variable_name}=adversarial" \
+    PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+}
+expect_failure \
+  "PRIVACY_PYTHON_SDK_VENV is forbidden" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
+  env \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+expect_failure \
+  "requires explicit test mode" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
+  env \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+expect_failure \
+  "Python/root overrides require explicit test mode" \
+  run_python_guard_for_root "${SOURCE_ROOT}" \
+  env \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+expect_failure \
+  "Python/root overrides require explicit test mode" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
+  env \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+
+run_repository_cargo_config_negative_control() {
+  local kind="$1"
+  local config_root="${TEST_ROOT}/cargo-config-${kind}-repository"
+  prepare_python_guard_root "${config_root}"
+  case "${kind}" in
+    alias)
+      printf '%s\n' '[alias]' 'build = "external-poison"' \
+        >"${config_root}/.cargo/config.toml"
+      ;;
+    build)
+      printf '%s\n' '[build]' 'jobs = 2' 'target-dir = "/tmp/poison"' \
+        >"${config_root}/.cargo/config.toml"
+      ;;
+    net)
+      printf '%s\n' '[net]' 'offline = false' \
+        >"${config_root}/.cargo/config.toml"
+      ;;
+    *) echo "invalid Cargo config negative control" >&2; exit 1 ;;
+  esac
+  expect_failure \
+    "repository Cargo configuration may only" \
+    run_python_guard_for_root "${config_root}" \
+    env \
+    PRIVACY_PYTHON_SDK_ROOT="${config_root}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+}
+run_repository_cargo_config_negative_control alias
+run_repository_cargo_config_negative_control build
+run_repository_cargo_config_negative_control net
+
+FAKE_SITE_PACKAGES="${INTEGRATION_VENV}/lib/python3.12/site-packages"
+mkdir -p "${FAKE_SITE_PACKAGES}"
+printf '%s\n' "import stale_plugin" >"${FAKE_SITE_PACKAGES}/stale.pth"
+expect_failure \
+  "forbidden Python startup injection" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
+  env \
+  IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+  IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+  PATH="${INTEGRATION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+rm "${FAKE_SITE_PACKAGES}/stale.pth"
+printf '%s\n' "raise RuntimeError('stale')" >"${FAKE_SITE_PACKAGES}/sitecustomize.py"
+expect_failure \
+  "forbidden Python startup injection" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
+  env \
+  IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+  IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+  PATH="${INTEGRATION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+rm "${FAKE_SITE_PACKAGES}/sitecustomize.py"
+
+for ambient_variable in \
+  CARGO \
+  CARGO_BUILD_TARGET \
+  CARGO_BUILD_RUSTC \
+  CARGO_BUILD_RUSTC_WRAPPER \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
+  CARGO_BUILD_RUSTFLAGS \
+  CARGO_BUILD_RUSTDOC \
+  CARGO_BUILD_RUSTDOCFLAGS \
+  CARGO_BUILD_TARGET_DIR \
+  CARGO_ALIAS_BUILD \
+  CARGO_HOST_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS \
+  CARGO_HTTP_CAINFO \
+  CARGO_NET_RETRY \
+  CARGO_REGISTRIES_CRATES_IO_INDEX \
+  CARGO_REGISTRY_DEFAULT \
+  CARGO_SOURCE_CRATES_IO_REPLACE_WITH \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS \
+  CARGO_UNSTABLE_BUILD_STD \
+  CARGO_INCREMENTAL \
+  CARGO_ENCODED_RUSTDOCFLAGS \
+  RUSTFLAGS \
+  RUSTC \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  RUSTDOCFLAGS \
+  RUSTUP_TOOLCHAIN \
+  RUSTUP_DIST_SERVER \
+  RUSTUP_UPDATE_ROOT \
+  CARGO_ENCODED_RUSTFLAGS \
+  CARGO_ENCODED_RUSTDOCFLAGS \
+  PYO3_CONFIG_FILE \
+  PYO3_CROSS_LIB_DIR \
+  PYO3_BUILD_EXTENSION_MODULE \
+  PYO3_ENVIRONMENT_SIGNATURE \
+  PYO3_NO_PYTHON \
+  PYTHON_SYS_EXECUTABLE \
+  PYTHON \
+  IROHA_PYTHON_RUNTIME_PATH \
+  CARGO_PROFILE_RELEASE_LTO \
+  PYO3_PYTHON \
+  IROHA_PYTHON_SKIP_RUNTIME_LINK \
+  IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY \
+  PIP_TARGET \
+  PIP_PREFIX \
+  PIP_ROOT \
+  PIP_USER \
+  PIP_CONFIG_FILE \
+  PIP_REPORT \
+  PIP_LOG \
+  PIP_CACHE_DIR; do
+  run_ambient_build_environment_negative_control "${ambient_variable}"
+done
+for python_optimization in 1 2; do
+  expect_failure \
+    "PYTHONOPTIMIZE" \
+    run_python_guard_for_root "${INTEGRATION_ROOT}" \
+    env \
+    PYTHONOPTIMIZE="${python_optimization}" \
+    PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+done
+PIP_ESCAPE_TARGET="${TEST_ROOT}/escaped-pip-target"
+PIP_ESCAPE_CONFIG="${TEST_ROOT}/adversarial-pip.conf"
+printf '%s\n' '[global]' "target = ${PIP_ESCAPE_TARGET}" \
+  >"${PIP_ESCAPE_CONFIG}"
+expect_failure \
+  "PIP_CONFIG_FILE" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
+  env \
+  PIP_CONFIG_FILE="${PIP_ESCAPE_CONFIG}" \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+if [[ -e "${PIP_ESCAPE_TARGET}" || -L "${PIP_ESCAPE_TARGET}" ]]; then
+  echo "ambient pip configuration escaped the private venv" >&2
+  exit 1
+fi
+if [[ -s "${INTEGRATION_CARGO_LOG}" ]]; then
+  echo "ambient build-environment negative controls reached fake Cargo" >&2
+  exit 1
+fi
 
 MISSING_WORKSPACE_ROOT="${TEST_ROOT}/missing-workspace-lock-repository"
-mkdir -p "${MISSING_WORKSPACE_ROOT}/python/iroha_python"
-INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
-IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
-IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
-PRIVACY_PYTHON_SDK_ROOT="${MISSING_WORKSPACE_ROOT}" \
-PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
-PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
-PATH="${INTEGRATION_BIN}:${PATH}" \
+prepare_python_guard_root "${MISSING_WORKSPACE_ROOT}"
+run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
+  INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+  IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
+  IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
+  CARGO_INCREMENTAL=0 \
+  CARGO_ENCODED_RUSTFLAGS="" \
+  PYTEST_ADDOPTS="--stale-option" \
+  PYTEST_PLUGINS="stale_plugin" \
+  PRIVACY_PYTHON_SDK_ROOT="${MISSING_WORKSPACE_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+  PATH="${INTEGRATION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
 if [[ -e "${MISSING_WORKSPACE_ROOT}/Cargo.lock" || -L "${MISSING_WORKSPACE_ROOT}/Cargo.lock" ]]; then
   echo "Python SDK guard created Cargo.lock in an initially clean workspace" >&2
@@ -464,97 +3376,842 @@ if [[ -e "${MISSING_WORKSPACE_ROOT}/Cargo.lock" || -L "${MISSING_WORKSPACE_ROOT}
 fi
 
 CREATED_WORKSPACE_ROOT="${TEST_ROOT}/created-workspace-lock-repository"
-mkdir -p "${CREATED_WORKSPACE_ROOT}/python/iroha_python"
+prepare_python_guard_root "${CREATED_WORKSPACE_ROOT}"
 expect_failure \
   "workspace Cargo.lock was created" \
+  run_python_guard_for_root "${CREATED_WORKSPACE_ROOT}" \
   env \
   FAKE_MATURIN_MUTATE_PATH="${CREATED_WORKSPACE_ROOT}/Cargo.lock" \
   INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
   PRIVACY_PYTHON_SDK_ROOT="${CREATED_WORKSPACE_ROOT}" \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
-  PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
 
-INTEGRATION_WORKSPACE_SEAL="$(
-  privacy_sdk_file_seal "${INTEGRATION_ROOT}/Cargo.lock" "${TEST_PYTHON}"
+INTEGRATION_SELECTED_SEAL="$(
+  privacy_sdk_file_seal "${INTEGRATION_SELECTED_LOCK}" "${TEST_PYTHON}"
 )"
-INTEGRATION_PRIVATE_SEAL="$(
-  privacy_sdk_file_seal "${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" "${TEST_PYTHON}"
-)"
-INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
-IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
-IROHA_JS_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
-PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
-PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
-PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
-PATH="${INTEGRATION_BIN}:${PATH}" \
+RUSTC_PATH_SHADOW_BIN="${TEST_ROOT}/rustc-path-shadow"
+RUSTC_PATH_SHADOW_MARKER="${TEST_ROOT}/rustc-path-shadow-executed"
+mkdir -p "${RUSTC_PATH_SHADOW_BIN}"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  "printf '%s\\n' shadowed >'${RUSTC_PATH_SHADOW_MARKER}'" \
+  'exit 92' \
+  >"${RUSTC_PATH_SHADOW_BIN}/rustc"
+chmod 700 "${RUSTC_PATH_SHADOW_BIN}/rustc"
+: >"${INTEGRATION_CARGO_LOG}"
+: >"${INTEGRATION_PYTHON_LOG}"
+run_python_guard_for_root "${INTEGRATION_ROOT}" env \
+  INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+  IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+  IROHA_JS_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+  PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+  PATH="${RUSTC_PATH_SHADOW_BIN}:${INTEGRATION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
-
-privacy_sdk_assert_file_seal \
-  "${INTEGRATION_ROOT}/Cargo.lock" \
-  "${INTEGRATION_WORKSPACE_SEAL}" \
-  "integration workspace Cargo.lock" \
-  "${TEST_PYTHON}"
-privacy_sdk_assert_file_seal \
-  "${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
-  "${INTEGRATION_PRIVATE_SEAL}" \
-  "integration selected Cargo.lock" \
-  "${TEST_PYTHON}"
-grep -Fq -- "--lockfile-path" "${INTEGRATION_CARGO_LOG}"
-grep -Fq -- "${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" "${INTEGRATION_CARGO_LOG}"
-if grep -Fq -- "${INTEGRATION_ROOT}/Cargo.lock" "${INTEGRATION_CARGO_LOG}"; then
-  echo "Python SDK guard selected the workspace Cargo.lock" >&2
+if [[ -e "${RUSTC_PATH_SHADOW_MARKER}" || -L "${RUSTC_PATH_SHADOW_MARKER}" ]]; then
+  echo "Maturin executed an unsealed PATH-shadow rustc" >&2
+  exit 1
+fi
+if [[ -e "${VENV_RUSTC_SHADOW_MARKER}" || -L "${VENV_RUSTC_SHADOW_MARKER}" ]]; then
+  echo "Maturin executed an unsealed venv rustc" >&2
   exit 1
 fi
 
+privacy_sdk_assert_optional_file_state \
+  "${INTEGRATION_ROOT}/Cargo.lock" \
+  "absent" \
+  "integration workspace Cargo.lock" \
+  "${TEST_PYTHON}"
+privacy_sdk_assert_file_seal \
+  "${INTEGRATION_SELECTED_LOCK}" \
+  "${INTEGRATION_SELECTED_SEAL}" \
+  "integration selected Cargo.lock" \
+  "${TEST_PYTHON}"
+"${TEST_PYTHON}" -I - \
+  "${INTEGRATION_CARGO_LOG}" \
+  "${INTEGRATION_ROOT}/python/iroha_python/iroha_python_rs/Cargo.toml" \
+  "${INTEGRATION_SELECTED_LOCK}" \
+  "${TEST_ROOT}/inherited-cargo-homes/$(basename "${INTEGRATION_ROOT}")" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+log_path = Path(sys.argv[1])
+manifest_path = sys.argv[2]
+lock_path = sys.argv[3]
+expected_home = Path(sys.argv[4])
+records = log_path.read_bytes().split(b"\0")
+if not records or records[-1] != b"":
+    raise SystemExit("fake Cargo transcript is not NUL terminated")
+lines = [os.fsdecode(record) for record in records[:-1]]
+groups = []
+for line in lines:
+    if line == "invocation":
+        groups.append([])
+    elif not groups:
+        raise SystemExit("fake Cargo transcript lacks an invocation delimiter")
+    else:
+        groups[-1].append(line)
+if len(groups) != 2:
+    raise SystemExit("fake Cargo did not record exactly two wrapped invocations")
+homes = []
+targets = []
+for group in groups:
+    if len(group) < 4 or not group[0].startswith("CARGO_HOME="):
+        raise SystemExit("fake Cargo invocation lacks its authenticated Cargo home")
+    if group[1:3] != ["CARGO_BUILD_JOBS=1", "CARGO_NET_OFFLINE=true"]:
+        raise SystemExit("fake Cargo invocation has nondeterministic jobs/network state")
+    if not group[3].startswith("CARGO_TARGET_DIR="):
+        raise SystemExit("fake Cargo invocation lacks its authenticated target")
+    homes.append(group[0].removeprefix("CARGO_HOME="))
+    targets.append(group[3].removeprefix("CARGO_TARGET_DIR="))
+if len(set(homes)) != 1 or len(set(targets)) != 1:
+    raise SystemExit("fake Cargo invocations did not share one Cargo home and target")
+home = Path(homes[0])
+target_path = Path(targets[0])
+if (
+    home != expected_home
+    or not home.is_absolute()
+    or not target_path.is_absolute()
+    or target_path.name != "target"
+):
+    raise SystemExit("fake Cargo did not use its authenticated home and private target")
+target = str(target_path)
+environment = [
+    f"CARGO_HOME={home}",
+    "CARGO_BUILD_JOBS=1",
+    "CARGO_NET_OFFLINE=true",
+    f"CARGO_TARGET_DIR={target}",
+]
+expected_arguments = (
+    [
+        "-Z",
+        "unstable-options",
+        "metadata",
+        "--format-version",
+        "1",
+        "--manifest-path",
+        manifest_path,
+        "--locked",
+        "--offline",
+        "--lockfile-path",
+        lock_path,
+    ],
+    [
+        "-Z",
+        "unstable-options",
+        "rustc",
+        "--jobs",
+        "1",
+        "--profile",
+        "release",
+        "--target-dir",
+        target,
+        "--message-format",
+        "json-render-diagnostics",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        manifest_path,
+        "--lib",
+        "--lockfile-path",
+        lock_path,
+        "--",
+        "-C",
+        "link-args=-Wl,-install_name,@rpath/iroha_python._crypto.abi3.so",
+    ],
+)
+expected = [
+    environment + [f"arg={argument}" for argument in invocation]
+    for invocation in expected_arguments
+]
+if groups != expected:
+    raise SystemExit(
+        f"wrapped Maturin transcript drifted:\nobserved={groups!r}\n"
+        f"expected={expected!r}"
+    )
+PY
+"${TEST_PYTHON}" -I - \
+  "${INTEGRATION_PYTHON_LOG}" \
+  "${INTEGRATION_ROOT}" \
+  "${INTEGRATION_VENV}" \
+  "${SCRIPT_DIR}/verify_privacy_python_wheel.py" \
+  "${INTEGRATION_CARGO_LOG}" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+log_path = Path(sys.argv[1])
+root = Path(sys.argv[2])
+venv = Path(sys.argv[3])
+verifier = Path(sys.argv[4])
+cargo_log_path = Path(sys.argv[5])
+
+
+def nul_records(path: Path) -> list[str]:
+    records = path.read_bytes().split(b"\0")
+    if not records or records[-1] != b"":
+        raise SystemExit(f"transcript is not NUL terminated: {path}")
+    return [os.fsdecode(record) for record in records[:-1]]
+
+
+groups: list[dict[str, object]] = []
+for record in nul_records(log_path):
+    if record == "invocation":
+        groups.append({"kind": None, "arguments": []})
+    elif not groups:
+        raise SystemExit("Python transcript lacks an invocation delimiter")
+    elif record.startswith("kind=") and groups[-1]["kind"] is None:
+        groups[-1]["kind"] = record.removeprefix("kind=")
+    elif record.startswith("arg="):
+        arguments_list = groups[-1]["arguments"]
+        assert isinstance(arguments_list, list)
+        arguments_list.append(record.removeprefix("arg="))
+    else:
+        raise SystemExit(f"malformed Python transcript record: {record!r}")
+
+expected_kinds = [
+    "probe:python-version",
+    "probe:python-version-output",
+    "module:pip",
+    "probe:maturin-version",
+    "module:maturin",
+    "verifier",
+    "module:pip",
+    "verifier",
+    "module:pytest",
+]
+if [group["kind"] for group in groups] != expected_kinds:
+    raise SystemExit(
+        "Python SDK gate call inventory/order drifted: "
+        f"{[group['kind'] for group in groups]!r}"
+    )
+
+
+def arguments(index: int) -> list[str]:
+    result = groups[index]["arguments"]
+    assert isinstance(result, list)
+    return result
+
+
+if arguments(0) != [
+    "-I",
+    "-c",
+    'import sys; print(".".join(map(str, sys.version_info[:2])))',
+]:
+    raise SystemExit("venv Python-version probe transcript drifted")
+if arguments(1) != ["-I", "--version"]:
+    raise SystemExit("venv Python executable probe transcript drifted")
+
+
+requirements = root / "python/iroha_python/requirements-ci.lock"
+if arguments(2) != [
+    "-I",
+    "-m",
+    "pip",
+    "--isolated",
+    "--disable-pip-version-check",
+    "--no-input",
+    "--no-cache-dir",
+    "install",
+    "--require-hashes",
+    "--only-binary=:all:",
+    "--force-reinstall",
+    "-r",
+    str(requirements),
+]:
+    raise SystemExit("requirements installation transcript drifted")
+
+if arguments(3) != [
+    "-I",
+    "-c",
+    'from importlib.metadata import version; print(version("maturin"))',
+]:
+    raise SystemExit("Maturin-version probe transcript drifted")
+
+cargo_targets = [
+    Path(record.removeprefix("CARGO_TARGET_DIR="))
+    for record in nul_records(cargo_log_path)
+    if record.startswith("CARGO_TARGET_DIR=")
+]
+
+
+def checked_maturin_layout(
+    maturin_arguments: list[str],
+    observed_cargo_targets: list[Path],
+) -> tuple[Path, Path]:
+    if len(maturin_arguments) != 13 or maturin_arguments[:11] != [
+        "-I",
+        "-m",
+        "maturin",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--jobs",
+        "1",
+        "--target-dir",
+        maturin_arguments[10],
+    ] or maturin_arguments[11:] != ["--out", maturin_arguments[12]]:
+        raise SystemExit(
+            f"Maturin Python transcript drifted: {maturin_arguments!r}"
+        )
+    target_path = Path(maturin_arguments[10])
+    wheel_path = Path(maturin_arguments[12])
+    if not target_path.is_absolute() or target_path.name != "target":
+        raise SystemExit("Maturin target directory is not one private target")
+    if (
+        not wheel_path.is_absolute()
+        or wheel_path.name != "wheels"
+        or target_path.parent != wheel_path.parent
+    ):
+        raise SystemExit(
+            "Maturin output directory is not one private wheel directory"
+        )
+    if observed_cargo_targets != [target_path, target_path]:
+        raise SystemExit(
+            "Maturin target does not match both wrapped Cargo invocations: "
+            f"{observed_cargo_targets!r} != {[target_path, target_path]!r}"
+        )
+    return target_path, wheel_path
+
+
+maturin = arguments(4)
+target, wheel_directory = checked_maturin_layout(maturin, cargo_targets)
+for label, near_miss_arguments, near_miss_targets in (
+    (
+        "Cargo target mismatch",
+        maturin,
+        [target.parent / "other" / "target"] * 2,
+    ),
+    (
+        "wheel output parent mismatch",
+        maturin[:12] + [str(target.parent / "other" / "wheels")],
+        cargo_targets,
+    ),
+):
+    try:
+        checked_maturin_layout(near_miss_arguments, near_miss_targets)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit(f"{label} negative control was accepted")
+
+preflight = arguments(5)
+if len(preflight) != 6 or preflight[:4] != [
+    "-I",
+    "-B",
+    str(verifier),
+    "--preflight",
+]:
+    raise SystemExit(f"wheel preflight transcript drifted: {preflight!r}")
+wheel = Path(preflight[4])
+seal = preflight[5]
+if wheel.parent != wheel_directory or not re.fullmatch(
+    r"iroha_python-0\.0\.0-cp312-abi3-test\.whl", wheel.name
+):
+    raise SystemExit("wheel preflight did not receive the fresh private wheel")
+if not re.fullmatch(r"[0-9a-f]{64}(?::[0-9]+){5}:0o[0-7]+", seal):
+    raise SystemExit("wheel preflight did not receive an authenticated seal")
+
+if arguments(6) != [
+    "-I",
+    "-B",
+    "-m",
+    "pip",
+    "--isolated",
+    "--disable-pip-version-check",
+    "--no-input",
+    "--no-cache-dir",
+    "install",
+    "--no-compile",
+    "--no-deps",
+    "--no-index",
+    "--force-reinstall",
+    str(wheel),
+]:
+    raise SystemExit("private wheel installation transcript drifted")
+
+if arguments(7) != [
+    "-I",
+    "-B",
+    str(verifier),
+    str(venv),
+    str(wheel),
+    seal,
+    str(root / "python/norito_py/src"),
+    str(root / "python/iroha_torii_client"),
+]:
+    raise SystemExit("installed wheel verification transcript drifted")
+
+if arguments(8) != [
+    "-I",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "tests/privacy_catalog_test.py",
+    "tests/package_import_fallback_test.py",
+    "tests/privacy_native_registry_test.py",
+    "tests/crypto_algorithms_test.py",
+]:
+    raise SystemExit("installed-package pytest transcript drifted")
+PY
+
+integration_cargo_invocation_count() {
+  "${TEST_PYTHON}" -I - "${INTEGRATION_CARGO_LOG}" <<'PY'
+import sys
+from pathlib import Path
+
+records = Path(sys.argv[1]).read_bytes().split(b"\0")
+if not records or records[-1] != b"":
+    raise SystemExit("integration Cargo transcript is not NUL terminated")
+print(records[:-1].count(b"invocation"))
+PY
+}
+
+expect_integration_failure_delta() {
+  local expected="$1"
+  local expected_delta="$2"
+  local require_first_diagnostic="$3"
+  shift 3
+  local before after
+  before="$(integration_cargo_invocation_count)"
+  if [[ "${require_first_diagnostic}" == "1" ]]; then
+    expect_failure_first_diagnostic "${expected}" "$@"
+  else
+    expect_failure "${expected}" "$@"
+  fi
+  after="$(integration_cargo_invocation_count)"
+  if [[ $((after - before)) -ne "${expected_delta}" ]]; then
+    echo \
+      "integration failure '${expected}' reached fake Cargo $((after - before)) times; expected ${expected_delta}" \
+      >&2
+    exit 1
+  fi
+}
+
+provision_cargo_invocation_count() {
+  awk '/^invocation$/ { count += 1 } END { print count + 0 }' \
+    "${PROVISION_CARGO_LOG}"
+}
+
+expect_provision_failure_delta() {
+  local expected="$1"
+  local expected_delta="$2"
+  local require_first_diagnostic="$3"
+  shift 3
+  local before after
+  before="$(provision_cargo_invocation_count)"
+  if [[ "${require_first_diagnostic}" == "1" ]]; then
+    expect_failure_first_diagnostic "${expected}" "$@"
+  else
+    expect_failure "${expected}" "$@"
+  fi
+  after="$(provision_cargo_invocation_count)"
+  if [[ $((after - before)) -ne "${expected_delta}" ]]; then
+    echo \
+      "provisioned failure '${expected}' reached authenticated fake Cargo $((after - before)) times; expected ${expected_delta}" \
+      >&2
+    exit 1
+  fi
+}
+
+run_maturin_policy_negative_control() {
+  local kind="$1"
+  local variable_name variable_value expected_failure
+  local require_first_diagnostic=0
+  case "${kind}" in
+    config-content)
+      variable_name="FAKE_MATURIN_PYO3_CONFIG_ACTION"
+      variable_value="bad-content"
+      expected_failure="authenticated PyO3 config content is invalid"
+      ;;
+    config-path)
+      variable_name="FAKE_MATURIN_PYO3_CONFIG_ACTION"
+      variable_value="bad-path"
+      expected_failure="PYO3_CONFIG_FILE path is not authenticated"
+      ;;
+    config-hardlink)
+      variable_name="FAKE_MATURIN_PYO3_CONFIG_ACTION"
+      variable_value="hardlink"
+      expected_failure="singly linked"
+      ;;
+    encoded-rustflags)
+      variable_name="FAKE_MATURIN_ENCODED_RUSTFLAGS_NEAR_MISS"
+      variable_value="1"
+      expected_failure="Darwin Maturin rustc policy is not exactly authenticated"
+      require_first_diagnostic=1
+      ;;
+    rustc-link-arg)
+      variable_name="FAKE_MATURIN_RUSTC_LINK_ARG_NEAR_MISS"
+      variable_value="1"
+      expected_failure="Maturin Cargo arguments do not match pinned 1.14.1"
+      ;;
+    python-sys)
+      variable_name="FAKE_MATURIN_PYTHON_SYS_NEAR_MISS"
+      variable_value="1"
+      expected_failure="Python sys executable is not authenticated"
+      ;;
+    extension-module)
+      variable_name="FAKE_MATURIN_EXTENSION_MODULE_NEAR_MISS"
+      variable_value="1"
+      expected_failure="extension-module policy is not authenticated"
+      ;;
+    environment-signature)
+      variable_name="FAKE_MATURIN_SIGNATURE_NEAR_MISS"
+      variable_value="1"
+      expected_failure="environment signature is not authenticated"
+      ;;
+    deployment-target)
+      variable_name="FAKE_MATURIN_DEPLOYMENT_TARGET_NEAR_MISS"
+      variable_value="1"
+      expected_failure="macOS deployment target is not authenticated"
+      ;;
+    missing-config)
+      variable_name="FAKE_MATURIN_OMIT_POLICY"
+      variable_value="PYO3_CONFIG_FILE"
+      expected_failure="Maturin PYO3_CONFIG_FILE path is not authenticated"
+      ;;
+    missing-extension-module)
+      variable_name="FAKE_MATURIN_OMIT_POLICY"
+      variable_value="PYO3_BUILD_EXTENSION_MODULE"
+      expected_failure="authenticated Maturin rustc environment is incomplete"
+      ;;
+    missing-environment-signature)
+      variable_name="FAKE_MATURIN_OMIT_POLICY"
+      variable_value="PYO3_ENVIRONMENT_SIGNATURE"
+      expected_failure="authenticated Maturin rustc environment is incomplete"
+      ;;
+    missing-python-sys)
+      variable_name="FAKE_MATURIN_OMIT_POLICY"
+      variable_value="PYTHON_SYS_EXECUTABLE"
+      expected_failure="authenticated Maturin rustc environment is incomplete"
+      ;;
+    missing-encoded-rustflags)
+      variable_name="FAKE_MATURIN_OMIT_POLICY"
+      variable_value="CARGO_ENCODED_RUSTFLAGS"
+      expected_failure="Darwin Maturin rustc policy is not exactly authenticated"
+      require_first_diagnostic=1
+      ;;
+    missing-deployment-target)
+      variable_name="FAKE_MATURIN_OMIT_POLICY"
+      variable_value="MACOSX_DEPLOYMENT_TARGET"
+      expected_failure="Darwin Maturin deployment target is missing"
+      ;;
+    *) echo "invalid Maturin policy negative kind" >&2; exit 1 ;;
+  esac
+  expect_integration_failure_delta \
+    "${expected_failure}" 1 "${require_first_diagnostic}" \
+    run_python_guard_for_root "${INTEGRATION_ROOT}" \
+    env \
+    "${variable_name}=${variable_value}" \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+    PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    PATH="${INTEGRATION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+}
+for maturin_policy_negative in \
+  config-content \
+  config-path \
+  config-hardlink \
+  encoded-rustflags \
+  rustc-link-arg \
+  python-sys \
+  extension-module \
+  environment-signature \
+  deployment-target \
+  missing-config \
+  missing-extension-module \
+  missing-environment-signature \
+  missing-python-sys \
+  missing-encoded-rustflags \
+  missing-deployment-target; do
+  run_maturin_policy_negative_control "${maturin_policy_negative}"
+done
+for maturin_argument_near_miss in \
+  metadata-manifest rustc-manifest rustc-profile rustc-message; do
+  case "${maturin_argument_near_miss}" in
+    metadata-manifest) expected_maturin_argument_delta=0 ;;
+    *) expected_maturin_argument_delta=1 ;;
+  esac
+  expect_integration_failure_delta \
+    "Maturin Cargo arguments do not match pinned 1.14.1" \
+    "${expected_maturin_argument_delta}" 0 \
+    run_python_guard_for_root "${INTEGRATION_ROOT}" \
+    env \
+    FAKE_MATURIN_ARG_NEAR_MISS="${maturin_argument_near_miss}" \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+    PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    PATH="${INTEGRATION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+done
+for maturin_cargo_environment_near_miss in \
+  metadata-missing metadata-wrong rustc-present; do
+  case "${maturin_cargo_environment_near_miss}" in
+    metadata-missing|metadata-wrong)
+      expected_maturin_cargo_environment_failure=\
+"Maturin metadata must select the authenticated Cargo wrapper"
+      expected_maturin_cargo_environment_delta=0
+      ;;
+    rustc-present)
+      expected_maturin_cargo_environment_failure=\
+"Maturin rustc must not inherit the Cargo selector environment"
+      expected_maturin_cargo_environment_delta=1
+      ;;
+  esac
+  expect_integration_failure_delta \
+    "${expected_maturin_cargo_environment_failure}" \
+    "${expected_maturin_cargo_environment_delta}" 0 \
+    run_python_guard_for_root "${INTEGRATION_ROOT}" \
+    env \
+    FAKE_MATURIN_CARGO_ENV_NEAR_MISS=\
+"${maturin_cargo_environment_near_miss}" \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_SELECTED_LOCK}" \
+    PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    PATH="${INTEGRATION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+done
+
+PROVISIONED_GATE_ROOT="${TEST_ROOT}/provisioned-gate-repository"
+PROVISIONED_GATE_CORRIDOR="${TEST_ROOT}/provisioned-gate-corridor"
+PROVISIONED_GATE_ENV="${TEST_ROOT}/provisioned-gate-env"
+PROVISIONED_GATE_PATH="${TEST_ROOT}/provisioned-gate-path"
+PROVISIONED_GATE_AMBIENT_HOME="${TEST_ROOT}/provisioned-gate-ambient-home"
+prepare_python_guard_root "${PROVISIONED_GATE_ROOT}"
+: >"${PROVISIONED_GATE_ROOT}/Cargo.toml"
+: >"${PROVISIONED_GATE_ENV}"
+: >"${PROVISIONED_GATE_PATH}"
+mkdir -p \
+  "${PROVISIONED_GATE_AMBIENT_HOME}/registry" \
+  "${PROVISIONED_GATE_AMBIENT_HOME}/git"
+printf '%s\n' '[alias]' 'build = "ambient-poison"' \
+  >"${PROVISIONED_GATE_AMBIENT_HOME}/config.toml"
+CARGO_HOME="${PROVISIONED_GATE_AMBIENT_HOME}" \
+PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
+PATH="${PROVISION_BIN}:${PATH}" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+    "${PROVISIONED_GATE_ROOT}" \
+    "${PROVISIONED_GATE_CORRIDOR}" \
+    "${PROVISIONED_GATE_ENV}" \
+    "${PROVISIONED_GATE_PATH}" \
+    "${PROVISION_BIN}/rustup" \
+    "1.93.1-x86_64-unknown-linux-gnu" \
+    "${TEST_PYTHON}" >/dev/null
+(
+  set -a
+  # shellcheck disable=SC1090
+  source "${PROVISIONED_GATE_ENV}"
+  set +a
+  PATH="${INTEGRATION_BIN}:${PATH}"
+  while IFS= read -r provisioned_path_entry; do
+    PATH="${provisioned_path_entry}:${PATH}"
+  done <"${PROVISIONED_GATE_PATH}"
+  export PATH
+  cd "${PROVISIONED_GATE_ROOT}"
+  INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+  PRIVACY_PYTHON_SDK_ROOT="${PROVISIONED_GATE_ROOT}" \
+  PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+    "${PROVISIONED_GATE_ROOT}" "${TEST_PYTHON}"
+)
+(
+  set -a
+  # shellcheck disable=SC1090
+  source "${PROVISIONED_GATE_ENV}"
+  set +a
+  PATH="${INTEGRATION_BIN}:${PATH}"
+  while IFS= read -r provisioned_path_entry; do
+    PATH="${provisioned_path_entry}:${PATH}"
+  done <"${PROVISIONED_GATE_PATH}"
+  export PATH
+  cd "${PROVISIONED_GATE_ROOT}"
+  expect_provision_failure_delta \
+    "Linux Maturin rustc environment is not exactly authenticated" 1 1 \
+    env \
+    FAKE_MATURIN_OMIT_POLICY=CARGO_ENCODED_RUSTFLAGS \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    PRIVACY_PYTHON_SDK_ROOT="${PROVISIONED_GATE_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+)
+grep -Fq "CARGO_HOME=${PROVISIONED_GATE_CORRIDOR}/cargo-home" \
+  "${PROVISION_CARGO_LOG}"
+
 expect_failure \
-  "without using the authenticated Cargo wrapper" \
+  "exactly for metadata then rustc" \
+  run_python_guard_for_root "${INTEGRATION_ROOT}" \
   env \
   FAKE_MATURIN_BYPASS_WRAPPER=1 \
   INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
   PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
-  PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
+  PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+  PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+for audit_negative in missing reordered extra; do
+  case "${audit_negative}" in
+    missing)
+      audit_variable="FAKE_MATURIN_SKIP_RUSTC"
+      audit_expected="exactly for metadata then rustc"
+      ;;
+    reordered)
+      audit_variable="FAKE_MATURIN_REORDER_CARGO"
+      audit_expected="exactly for metadata then rustc"
+      ;;
+    extra)
+      audit_variable="FAKE_MATURIN_EXTRA_CARGO_COMMAND"
+      audit_expected="authenticated Python build permits only metadata and rustc"
+      ;;
+  esac
+  expect_failure \
+    "${audit_expected}" \
+    run_python_guard_for_root "${INTEGRATION_ROOT}" \
+    env \
+    "${audit_variable}=1" \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
+    PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    PATH="${INTEGRATION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+done
+
+run_wheel_mutation_negative_control() {
+  local phase="$1"
+  local wheel_root="${TEST_ROOT}/wheel-${phase}-repository"
+  local wheel_selected="${TEST_ROOT}/wheel-${phase}-private/Cargo.lock"
+  prepare_python_guard_root "${wheel_root}"
+  mkdir -p "$(dirname "${wheel_selected}")"
+  write_test_lock "${wheel_selected}" "wheel-${phase}-selected"
+  expect_failure \
+    "fresh private wheel changed" \
+    run_python_guard_for_root "${wheel_root}" \
+    env \
+    FAKE_WHEEL_MUTATE_PHASE="${phase}" \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${wheel_selected}" \
+    PRIVACY_PYTHON_SDK_ROOT="${wheel_root}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    PATH="${INTEGRATION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+}
+run_wheel_mutation_negative_control preflight
+run_wheel_mutation_negative_control verify
+run_wheel_mutation_negative_control pytest
 
 run_mutation_negative_control() {
   local target_kind="$1"
   local mutation_root="${TEST_ROOT}/mutation-${target_kind}-repository"
-  local mutation_private="${TEST_ROOT}/mutation-${target_kind}-private"
+  local mutation_selected="${TEST_ROOT}/mutation-${target_kind}-private/Cargo.lock"
   local mutation_target
   local expected_failure
-  mkdir -p "${mutation_root}/python/iroha_python" "${mutation_private}"
-  write_test_lock "${mutation_root}/Cargo.lock" "mutation-${target_kind}-workspace"
-  write_test_lock "${mutation_private}/Cargo.lock" "mutation-${target_kind}-selected"
+  prepare_python_guard_root "${mutation_root}"
+  mkdir -p "$(dirname "${mutation_selected}")"
+  write_test_lock "${mutation_selected}" "mutation-${target_kind}-selected"
   case "${target_kind}" in
     workspace)
       mutation_target="${mutation_root}/Cargo.lock"
-      expected_failure="workspace Cargo.lock changed"
+      expected_failure="workspace Cargo.lock was created"
       ;;
     selected)
-      mutation_target="${mutation_private}/Cargo.lock"
-      expected_failure="selected external Cargo.lock changed"
+      mutation_target="${mutation_selected}"
+      expected_failure="selected authenticated Cargo.lock changed"
+      ;;
+    requirements)
+      mutation_target="${mutation_root}/python/iroha_python/requirements-ci.lock"
+      expected_failure="Python SDK requirements lock changed"
+      ;;
+    source-extension)
+      mutation_target="${mutation_root}/python/iroha_python/src/iroha_python/helper.so"
+      expected_failure="checkout Python native artifacts changed"
+      ;;
+    cargo-config)
+      mutation_target="${mutation_root}/.cargo/config.toml"
+      expected_failure="repository Cargo configuration changed"
       ;;
     *) echo "invalid mutation target kind" >&2; exit 1 ;;
   esac
   expect_failure \
     "${expected_failure}" \
+    run_python_guard_for_root "${mutation_root}" \
     env \
     FAKE_MATURIN_MUTATE_PATH="${mutation_target}" \
     INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
-    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${mutation_private}/Cargo.lock" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${mutation_selected}" \
     PRIVACY_PYTHON_SDK_ROOT="${mutation_root}" \
     PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
-    PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
     bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
 }
 run_mutation_negative_control workspace
 run_mutation_negative_control selected
+run_mutation_negative_control requirements
+run_mutation_negative_control source-extension
+run_mutation_negative_control cargo-config
+
+run_artifact_set_negative_control() {
+  local action="$1"
+  local artifact_root="${TEST_ROOT}/artifact-${action}-repository"
+  local artifact_selected="${TEST_ROOT}/artifact-${action}-private/Cargo.lock"
+  local artifact_directory="${artifact_root}/python/iroha_python/src/iroha_python"
+  prepare_python_guard_root "${artifact_root}"
+  mkdir -p "$(dirname "${artifact_selected}")"
+  write_test_lock "${artifact_selected}" "artifact-${action}-selected"
+  expect_failure \
+    "checkout Python native artifacts" \
+    run_python_guard_for_root "${artifact_root}" \
+    env \
+    FAKE_MATURIN_ARTIFACT_ACTION="${action}" \
+    FAKE_MATURIN_ARTIFACT_DIR="${artifact_directory}" \
+    INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
+    IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${artifact_selected}" \
+    PRIVACY_PYTHON_SDK_ROOT="${artifact_root}" \
+    PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
+    PRIVACY_PYTHON_SDK_TEST_MODE=1 \
+    PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
+    PATH="${INTEGRATION_BIN}:${PATH}" \
+    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+}
+run_artifact_set_negative_control add
+run_artifact_set_negative_control nested
+run_artifact_set_negative_control uppercase
+run_artifact_set_negative_control delete
+run_artifact_set_negative_control hardlink
+run_artifact_set_negative_control symlink
 
 # Exercise the standalone JavaScript guard with fake Node. It must preserve an
 # existing workspace lock and preserve absence in a clean checkout even though
@@ -610,19 +4267,316 @@ expect_failure \
   bash "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
 # Source-level CI coverage: the ignored root lock is not tracked, every
-# Cargo-using job enters the same checked-in corridor before rust-cache, and the
-# helper generates directly into the authenticated external lock path.
-SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+# Cargo-using job authenticates one host-qualified toolchain, fetches through
+# the checked-in corridor, and then consumes dependencies offline.
 WORKFLOW_PATH="${SOURCE_ROOT}/.github/workflows/pr_privacy_sdk_guard.yml"
 LOCK_HELPER_PATH="${SOURCE_ROOT}/ci/privacy_sdk_cargo_lockfile.sh"
 WRAPPER_PATH="${SOURCE_ROOT}/ci/privacy_sdk_cargo_wrapper.sh"
+PYTHON_GUARD_PATH="${SOURCE_ROOT}/ci/check_privacy_python_sdk.sh"
+PYTHON_WHEEL_VERIFIER_PATH="${SOURCE_ROOT}/ci/verify_privacy_python_wheel.py"
+PYTHON_CONFTEST_PATH="${SOURCE_ROOT}/python/iroha_python/tests/conftest.py"
+PYTHON_IMPORT_FALLBACK_PATH="${SOURCE_ROOT}/python/iroha_python/tests/package_import_fallback_test.py"
+PYTHON_PYPROJECT_PATH="${SOURCE_ROOT}/python/iroha_python/pyproject.toml"
 [[ "$(grep -Fc 'ci/privacy_sdk_cargo_lockfile.sh provision-ci \' "${WORKFLOW_PATH}")" -eq 3 ]]
 [[ "$(grep -Fc 'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"' "${WORKFLOW_PATH}")" -eq 6 ]]
-[[ "$(grep -Fc 'RUSTC_BOOTSTRAP=1 "${real_cargo}" -Z unstable-options generate-lockfile \' "${LOCK_HELPER_PATH}")" -eq 1 ]]
+[[ "$(grep -Fc 'python-version: "3.12"' "${WORKFLOW_PATH}")" -eq 2 ]]
+[[ "$(grep -Fc 'id: privacy-python' "${WORKFLOW_PATH}")" -eq 2 ]]
+[[ "$(grep -Fc 'update-environment: false' "${WORKFLOW_PATH}")" -eq 2 ]]
+[[ "$(grep -Fc '${{ steps.privacy-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 8 ]]
+if grep -Fq 'cache-dependency-path: python/iroha_python/requirements-ci.lock' \
+  "${WORKFLOW_PATH}" || grep -Fq 'Swatinem/rust-cache@' "${WORKFLOW_PATH}"; then
+  echo "privacy workflow retained a forbidden pip or Rust cache action" >&2
+  exit 1
+fi
+[[ "$(grep -Fc 'run: cargo fetch --locked' "${WORKFLOW_PATH}")" -eq 3 ]]
+[[ "$(grep -Fc 'RUSTUP_DIST_SERVER="https://static.rust-lang.org" \' "${WORKFLOW_PATH}")" -eq 3 ]]
+[[ "$(grep -Fc '"${HOME}/.cargo/bin/rustup" toolchain install \' "${WORKFLOW_PATH}")" -eq 3 ]]
+grep -Fq 'RUSTC_BOOTSTRAP=1 \' "${LOCK_HELPER_PATH}"
+grep -Fq '"${real_cargo}" -Z unstable-options generate-lockfile \' \
+  "${LOCK_HELPER_PATH}"
+grep -Fq 'CARGO_HOME="${private_cargo_home}"' "${LOCK_HELPER_PATH}"
 [[ "$(grep -Fc -- '--lockfile-path "${lock_path}"' "${LOCK_HELPER_PATH}")" -eq 1 ]]
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=absent' "${LOCK_HELPER_PATH}"
+grep -Fq 'privacy_sdk_validate_repository_cargo_configuration' "${LOCK_HELPER_PATH}"
+grep -Fq 'privacy_sdk_prepare_private_cargo_home' "${LOCK_HELPER_PATH}"
+grep -Fq 'privacy_sdk_assert_ci_executable_path_order' "${LOCK_HELPER_PATH}"
+grep -Fq 'printf '\''%s\n'\'' "${toolchain_bin_directory}" \' "${LOCK_HELPER_PATH}"
+grep -Fq 'printf '\''%s\n'\'' "${cargo_wrapper_directory}" \' "${LOCK_HELPER_PATH}"
+[[ "$(grep -Fc '>>"${github_path_path}" || return 1' "${LOCK_HELPER_PATH}")" -eq 2 ]]
+grep -Fq 'CARGO_ENCODED_RUSTDOCFLAGS' "${LOCK_HELPER_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL' "${LOCK_HELPER_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME' "${LOCK_HELPER_PATH}"
+grep -Fq 'must not select the workspace Cargo.lock' "${LOCK_HELPER_PATH}"
+grep -Fq 'before.st_nlink != 1' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_cargo_wrapper.sh' "${LOCK_HELPER_PATH}"
 grep -Fq 'run_real_cargo_and_verify_locks' "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_cargo_execution_policy' "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_cargo_configuration' "${WRAPPER_PATH}"
+grep -Fq 'assert_no_cargo_policy_environment' "${WRAPPER_PATH}"
+grep -Fq 'command_index=-1' "${WRAPPER_PATH}"
+grep -Fq 'cargo_argument_limit=' "${WRAPPER_PATH}"
+grep -Fq 'rejected --config because' "${WRAPPER_PATH}"
+grep -Fq 'is_cargo_jobs_option' "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_jobs_option' "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_target_dir_option' "${WRAPPER_PATH}"
+grep -Fq 'assert_reinforcing_offline_option' "${WRAPPER_PATH}"
+grep -Fq 'CARGO_ALIAS_*' "${WRAPPER_PATH}"
+grep -Fq 'CARGO_HOST_*' "${WRAPPER_PATH}"
+grep -Fq 'CARGO_UNSTABLE_*' "${WRAPPER_PATH}"
+grep -Fq 'cargo_child_environment' "${WRAPPER_PATH}"
+grep -Fq 'cargo_child_environment+=("CARGO=${CARGO_WRAPPER_ENTRY_PATH}")' \
+  "${WRAPPER_PATH}"
+grep -Fq 'IROHA_PRIVACY_*|IROHA_JS_CARGO_LOCKFILE_PATH' "${WRAPPER_PATH}"
+grep -Fq 'rejected caller-supplied rustc-side compiler arguments' "${WRAPPER_PATH}"
+grep -Fq 'configuration search path' "${WRAPPER_PATH}"
+grep -Fq 'home must not contain Cargo configuration' "${WRAPPER_PATH}"
+grep -Fq 'privacy_sdk_assert_directory_state' "${WRAPPER_PATH}"
+grep -Fq 'metadata|rustc|build|check|test|fetch)' "${WRAPPER_PATH}"
+grep -Fq -- '--artifact-dir|--artifact-dir=*|--out-dir|--out-dir=*|--root|--root=*' \
+  "${WRAPPER_PATH}"
+grep -Fq 'artifact or installation output override' "${WRAPPER_PATH}"
+grep -Fq -- '--crate-type|--crate-type=*' "${WRAPPER_PATH}"
+grep -Fq 'Cargo-side compiler output override' "${WRAPPER_PATH}"
+grep -Fq 'incremental policy must remain disabled' "${WRAPPER_PATH}"
+grep -Fq 'encoded rustflags are not authenticated' "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_maturin_darwin_rustc_policy' "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_python_command_environment' "${WRAPPER_PATH}"
+grep -Fq 'native Cargo invocation must not inherit the Cargo selector environment' \
+  "${WRAPPER_PATH}"
+grep -Fq 'Maturin metadata must select the authenticated Cargo wrapper' \
+  "${WRAPPER_PATH}"
+grep -Fq 'Maturin rustc must not inherit the Cargo selector environment' \
+  "${WRAPPER_PATH}"
+grep -Fq 'assert_authenticated_maturin_arguments' "${WRAPPER_PATH}"
+grep -Fq 'Maturin Cargo arguments do not match pinned 1.14.1' "${WRAPPER_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY' "${WRAPPER_PATH}"
+grep -Fq 'native Cargo invocation rejected an unauthenticated Python-build surface' \
+  "${WRAPPER_PATH}"
+grep -Fq 'CARGO_ENCODED_RUSTDOCFLAGS' "${WRAPPER_PATH}"
+grep -Fq 'requires an authenticated Cargo home' "${WRAPPER_PATH}"
+grep -Fq 'requires an authenticated Cargo config path' "${WRAPPER_PATH}"
+grep -Fq 'requires an authenticated Cargo config seal' "${WRAPPER_PATH}"
+grep -Fq 'requirements-ci.lock' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--require-hashes' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--only-binary=:all:' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--force-reinstall' "${PYTHON_GUARD_PATH}"
+grep -Fq '"PIP_",' "${PYTHON_GUARD_PATH}"
+grep -Fq 'PIP_CONFIG_FILE=/dev/null' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--isolated' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--no-cache-dir' "${PYTHON_GUARD_PATH}"
+grep -Fq 'IROHA_PYTHON_SKIP_RUNTIME_LINK=1' "${PYTHON_GUARD_PATH}"
+grep -Fq 'PYO3_PYTHON="${VENV_DIR}/bin/python"' "${PYTHON_GUARD_PATH}"
+grep -Fq 'export CARGO_BUILD_JOBS=1' "${PYTHON_GUARD_PATH}"
+grep -Fq 'export CARGO_NET_OFFLINE=true' "${PYTHON_GUARD_PATH}"
+grep -Fq 'export CARGO_TARGET_DIR="${PRIVATE_CARGO_TARGET_DIR}"' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '-I -m maturin build' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--offline' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--jobs 1' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--target-dir "${PRIVATE_CARGO_TARGET_DIR}"' "${PYTHON_GUARD_PATH}"
+if grep -Fq -- '-m maturin develop' "${PYTHON_GUARD_PATH}"; then
+  echo "privacy Python SDK guard still builds into the checkout" >&2
+  exit 1
+fi
+grep -Fq -- '--out "${PRIVATE_WHEEL_DIR}"' "${PYTHON_GUARD_PATH}"
+grep -Fq '"${VENV_DIR}/bin/python" -I -B -m pip' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--no-compile' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--no-deps' "${PYTHON_GUARD_PATH}"
+grep -Fq -- '--no-index' "${PYTHON_GUARD_PATH}"
+grep -Fq 'resolve_private_wheel' "${PYTHON_GUARD_PATH}"
+grep -Fq 'verify_installed_wheel' "${PYTHON_GUARD_PATH}"
+grep -Fq 'verify_privacy_python_wheel.py' "${PYTHON_GUARD_PATH}"
+[[ "$(grep -Fc '"${VENV_DIR}/bin/python" -I -B \' \
+  "${PYTHON_GUARD_PATH}")" -eq 2 ]]
+grep -Fq '"${VENV_DIR}/bin/python" -I -B -m pytest -q \' \
+  "${PYTHON_GUARD_PATH}"
+grep -Fq '"${ROOT_DIR}/python/norito_py/src"' "${PYTHON_GUARD_PATH}"
+grep -Fq '"${ROOT_DIR}/python/iroha_torii_client"' "${PYTHON_GUARD_PATH}"
+grep -Fq 'checkout_native_artifact_state' "${PYTHON_GUARD_PATH}"
+grep -Fq 'assert_checkout_native_artifacts_unchanged' "${PYTHON_GUARD_PATH}"
+grep -Fq 'native_endings = (".so", ".dylib", ".pyd")' "${PYTHON_GUARD_PATH}"
+grep -Fq 'path.name.casefold().endswith(native_endings)' "${PYTHON_GUARD_PATH}"
+grep -Fq 'native artifact suffix must be lowercase' "${PYTHON_GUARD_PATH}"
+grep -Fq 'PRIVACY_PYTHON_SDK_TEST_MODE' "${PYTHON_GUARD_PATH}"
+grep -Fq 'PRIVACY_PYTHON_SDK_TEST_VENV' "${PYTHON_GUARD_PATH}"
+grep -Fq 'PRIVACY_PYTHON_SDK_VENV is forbidden' "${PYTHON_GUARD_PATH}"
+grep -Fq 'Python/root overrides require explicit test mode' "${PYTHON_GUARD_PATH}"
+grep -Fq 'assert_no_python_startup_injection' "${PYTHON_GUARD_PATH}"
+grep -Fq 'capture_venv_distribution_names' "${PYTHON_GUARD_PATH}"
+grep -Fq 'assert_expected_venv_distributions' "${PYTHON_GUARD_PATH}"
+grep -Fq 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1' "${PYTHON_GUARD_PATH}"
+grep -Fq 'configure_private_cargo_home' "${PYTHON_GUARD_PATH}"
+grep -Fq 'privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}" "${PYTHON_BIN}"' \
+  "${PYTHON_GUARD_PATH}"
+grep -Fq 'privacy SDK CI Cargo selector must be absent before wrapper selection' \
+  "${LOCK_HELPER_PATH}"
+grep -Fq 'privacy SDK CI deterministic Cargo environment changed' \
+  "${LOCK_HELPER_PATH}"
+grep -Fq 'exactly for metadata then rustc' "${PYTHON_GUARD_PATH}"
+grep -Fq 'inherited authenticated Cargo home does not match CARGO_HOME' \
+  "${PYTHON_GUARD_PATH}"
+grep -Fq 'validate_repository_cargo_configuration' "${PYTHON_GUARD_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME' "${PYTHON_GUARD_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL' "${PYTHON_GUARD_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON' "${PYTHON_GUARD_PATH}"
+grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_WHEEL_SEAL' "${PYTHON_GUARD_PATH}"
+grep -Fq '"${WHEEL_SEAL}"' "${PYTHON_GUARD_PATH}"
+grep -Fq 'preflight_private_wheel' "${PYTHON_GUARD_PATH}"
+grep -Fq 'preflight_wheel' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'sys.argv[1] == "--preflight"' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'expected_wheel_seal' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq '_canonical_zip_member_name' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq '_assert_contiguous_local_records' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'data descriptor does not exactly cover' \
+  "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'authenticate_dependency_roots' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq '_capture_dependency_tree' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'a bytecode or native loader alias' \
+  "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'sys.dont_write_bytecode = True' \
+  "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'return basename.casefold().endswith(NATIVE_FILE_ENDINGS)' \
+  "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'MAX_TOTAL_UNCOMPRESSED_BYTES' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'DIST_INFO_REQUIRED_FILES' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'scripts, data roots, or other packages' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'reject_preseeded_modules' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'ExtensionFileLoader' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'loader_state' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'verify_installed_files' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'Python.framework' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'libpython' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq '[str(otool), "-L", str(native_path)]' "${PYTHON_WHEEL_VERIFIER_PATH}"
+grep -Fq 'IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1' "${PYTHON_GUARD_PATH}"
+grep -Fq 'site.getsitepackages()' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'sysconfig.get_paths()' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'iroha_python._crypto' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'PathFinder.find_spec' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'ExtensionFileLoader' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'loader_state' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'env.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE") != "1"' \
+  "${PYTHON_IMPORT_FALLBACK_PATH}"
+grep -Fq '"src/**/*.so"' "${PYTHON_PYPROJECT_PATH}"
+grep -Fq '"src/**/*.dylib"' "${PYTHON_PYPROJECT_PATH}"
+grep -Fq '"src/**/*.pyd"' "${PYTHON_PYPROJECT_PATH}"
+for rejected_environment_name in \
+  CARGO_BUILD_TARGET \
+  CARGO_BUILD_RUSTC \
+  CARGO_BUILD_RUSTC_WRAPPER \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
+  CARGO_BUILD_RUSTFLAGS \
+  CARGO_BUILD_RUSTDOC \
+  CARGO_BUILD_RUSTDOCFLAGS \
+  CARGO_BUILD_ \
+  CARGO_ALIAS_ \
+  CARGO_HOST_ \
+  CARGO_HTTP_ \
+  CARGO_NET_ \
+  CARGO_REGISTRIES_ \
+  CARGO_REGISTRY_ \
+  CARGO_SOURCE_ \
+  CARGO_TARGET_ \
+  CARGO_UNSTABLE_ \
+  RUSTFLAGS \
+  RUSTC \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  RUSTDOCFLAGS \
+  RUSTUP_ \
+  CARGO_ENCODED_RUSTFLAGS \
+  PYO3_CONFIG_FILE \
+  PYO3_ \
+  PYTHON_SYS_EXECUTABLE \
+  '"PYTHON"' \
+  IROHA_PYTHON_RUNTIME_PATH \
+  CARGO_PROFILE_; do
+  grep -Fq "${rejected_environment_name}" "${PYTHON_GUARD_PATH}"
+done
+for workflow_path in \
+  .gitignore \
+  .cargo/config \
+  .cargo/config.toml \
+  '**/.cargo/config' \
+  '**/.cargo/config.toml' \
+  Cargo.toml \
+  '**/Cargo.toml' \
+  Cargo.lock \
+  '**/Cargo.lock' \
+  rust-toolchain \
+  rust-toolchain.toml \
+  '**/rust-toolchain' \
+  '**/rust-toolchain.toml' \
+  'crates/**' \
+  'vendor/**' \
+  'crates/iroha_crypto/**' \
+  'crates/iroha_data_model/**' \
+  'crates/iroha_primitives/**' \
+  'crates/iroha_schema/**' \
+  'crates/iroha_version/**' \
+  'crates/iroha_torii_shared/**' \
+  'crates/norito/**' \
+  'crates/ivm/**' \
+  'crates/sorafs_manifest/**' \
+  'crates/iroha_config/**' \
+  'crates/iroha_core/**' \
+  'crates/iroha_zkp_halo2/**' \
+  'crates/zk_ace_prover/**' \
+  'crates/sorafs_car/**' \
+  'crates/sorafs_chunker/**' \
+  'crates/sorafs_orchestrator/**' \
+  ci/verify_privacy_python_wheel.py \
+  python/iroha_python/pyproject.toml \
+  python/iroha_python/iroha_python_rs/build.rs \
+  'python/iroha_python/iroha_python_rs/src/**' \
+  python/iroha_python/requirements-ci.lock \
+  python/iroha_python/tests/conftest.py \
+  python/iroha_python/tests/package_import_fallback_test.py \
+  'python/iroha_python/src/**' \
+  'python/iroha_python/src/**/*.py' \
+  'python/iroha_python/src/**/*.so' \
+  'python/iroha_python/src/**/*.dylib' \
+  'python/iroha_python/src/**/*.pyd' \
+  'python/norito_py/**' \
+  python/norito_py/pyproject.toml \
+  'python/norito_py/src/**/*.py' \
+  'python/iroha_torii_client/**' \
+  python/iroha_torii_client/pyproject.toml \
+  'python/iroha_torii_client/**/*.py'; do
+  grep -Fq "\"${workflow_path}\"" "${WORKFLOW_PATH}"
+done
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-cargo-config-workflow-path' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-native-crates-workflow-path' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-workflow-path' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-workflow-path' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-cargo-manifest-workflow-path' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-vendor-workflow-path' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-install-workflow' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-cargo-fetch-workflow' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-python-setup-cache-workflow' \
+  "${WORKFLOW_PATH}"
+grep -Fq \
+  'ci/check_privacy_sdk_guard.sh --negative-control-python-path-threading-workflow' \
+  "${WORKFLOW_PATH}"
+if grep -Eq "'(pytest|requests|urllib3|maturin)[^']*[<>=]" "${PYTHON_GUARD_PATH}"; then
+  echo "privacy Python SDK guard still installs unpinned dependencies" >&2
+  exit 1
+fi
 "${TEST_PYTHON}" -I - "${WORKFLOW_PATH}" <<'PY'
 import re
 import sys
@@ -630,11 +4584,33 @@ from pathlib import Path
 
 workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
 jobs = {
-    "privacy_native_bridge_tests": (
-        "run: cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1",
-    ),
-    "privacy_python_sdk_tests": ("run: ci/check_privacy_python_sdk.sh",),
-    "privacy-sdk-guard": ("run: ci/check_privacy_sdk_guard.sh",),
+    "privacy_native_bridge_tests": {
+        "consumer": (
+            "run: cargo test -p connect_norito_bridge privacy_ --lib "
+            "-- --test-threads=1"
+        ),
+        "fetch_name": "Prime privacy native Cargo dependencies",
+        "python": False,
+        "python_path_count": 0,
+    },
+    "privacy_python_sdk_tests": {
+        "consumer": (
+            "run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH "
+            "ci/check_privacy_python_sdk.sh"
+        ),
+        "fetch_name": "Prime privacy Python SDK Cargo dependencies",
+        "python": True,
+        "python_path_count": 3,
+    },
+    "privacy-sdk-guard": {
+        "consumer": (
+            "run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH "
+            "ci/check_privacy_sdk_guard.sh"
+        ),
+        "fetch_name": "Prime privacy Python SDK Cargo dependencies",
+        "python": True,
+        "python_path_count": 5,
+    },
 }
 
 
@@ -649,26 +4625,82 @@ def job_match(source: str, job: str) -> re.Match[str]:
 
 
 def validate(source: str) -> None:
+    setup_python_path = "${{ steps.privacy-python.outputs.python-path }}"
     if source.count("ci/privacy_sdk_cargo_lockfile.sh provision-ci") != len(jobs):
         raise AssertionError("every Cargo-using job must provision exactly one corridor")
     if source.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") != 2 * len(jobs):
         raise AssertionError("every Cargo-using job must verify before and after its work")
-    for job, (consumer,) in jobs.items():
+    if source.count("run: cargo fetch --locked") != len(jobs):
+        raise AssertionError("every Cargo job must fetch exactly once")
+    if "Swatinem/rust-cache@" in source:
+        raise AssertionError("privacy jobs must not use rust-cache")
+    if (
+        source.count("id: privacy-python") != 2
+        or source.count("update-environment: false") != 2
+        or "cache: pip" in source
+        or "cache-dependency-path: python/iroha_python/requirements-ci.lock"
+        in source
+    ):
+        raise AssertionError("setup-python must remain private and cache-free")
+    if source.count(setup_python_path) != sum(
+        policy["python_path_count"] for policy in jobs.values()
+    ):
+        raise AssertionError("setup-python output threading is incomplete")
+    for job, policy in jobs.items():
         block = job_match(source, job).group(1)
-        if block.count("provision-ci") != 1 or block.count("verify-ci") != 2:
+        if (
+            block.count("provision-ci") != 1
+            or block.count("verify-ci") != 2
+            or block.count("run: cargo fetch --locked") != 1
+            or block.count('CARGO_NET_OFFLINE: "false"') != 1
+            or block.count(setup_python_path) != policy["python_path_count"]
+        ):
             raise AssertionError(f"{job} has incomplete lock isolation")
-        markers = (
+        markers = [
+            "Install host-qualified privacy SDK Rust toolchain",
             "Provision private privacy SDK Cargo lock",
-            "Swatinem/rust-cache@",
             "Verify privacy SDK Cargo lock isolation",
-            consumer,
+            policy["fetch_name"],
+            'CARGO_NET_OFFLINE: "false"',
+            "run: cargo fetch --locked",
+            policy["consumer"],
             "Verify final privacy SDK Cargo lock isolation",
-        )
+        ]
+        if policy["python"]:
+            markers.insert(1, "uses: actions/setup-python@")
+        if job == "privacy-sdk-guard":
+            markers.insert(2, "Bind the canonical mobile Python")
+            mobile_python_binding = """      - name: Bind the canonical mobile Python
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.privacy-python.outputs.python-path }}
+        run: |
+          mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+"""
+            if block.count(mobile_python_binding) != 1:
+                raise AssertionError(
+                    "privacy-sdk-guard lost the exact canonical mobile Python binding"
+                )
         positions = tuple(block.find(marker) for marker in markers)
         if -1 in positions or positions != tuple(sorted(positions)):
             raise AssertionError(
-                f"{job} must provision before rust-cache and bracket its Cargo work"
+                f"{job} must install, provision, fetch, consume, and reverify in order"
             )
+        install_block = block[: block.find("Provision private privacy SDK Cargo lock")]
+        for exact_install_marker in (
+            "env -i \\",
+            'HOME="${HOME}" \\',
+            'RUSTUP_DIST_SERVER="https://static.rust-lang.org" \\',
+            '"${HOME}/.cargo/bin/rustup" toolchain install \\',
+            '"1.93.1-x86_64-unknown-linux-gnu" \\',
+            "--profile minimal \\",
+            "--no-self-update",
+        ):
+            if install_block.count(exact_install_marker) != 1:
+                raise AssertionError(
+                    f"{job} lost exact authenticated toolchain install policy"
+                )
         if "if: always()" not in block[positions[-1] :]:
             raise AssertionError(f"{job} final lock verification must run on failure")
 
@@ -677,8 +4709,15 @@ validate(workflow)
 for job in jobs:
     match = job_match(workflow, job)
     original_block = match.group(0)
-    for marker in ("provision-ci", "verify-ci"):
-        mutated_block = original_block.replace(marker, f"bypassed-{marker}", 1)
+    for marker in (
+        "provision-ci",
+        "verify-ci",
+        "RUSTUP_DIST_SERVER",
+        "run: cargo fetch --locked",
+    ):
+        mutated_block = original_block.replace(
+            marker, "removed-policy-marker", 1
+        )
         mutated = workflow[: match.start()] + mutated_block + workflow[match.end() :]
         try:
             validate(mutated)
@@ -689,7 +4728,7 @@ for job in jobs:
     last_verify = original_block.rfind("verify-ci")
     mutated_block = (
         original_block[:last_verify]
-        + "bypassed-verify-ci"
+        + "removed-final-verification"
         + original_block[last_verify + len("verify-ci") :]
     )
     mutated = workflow[: match.start()] + mutated_block + workflow[match.end() :]
@@ -699,6 +4738,22 @@ for job in jobs:
         pass
     else:
         raise SystemExit(f"negative control did not reject {job} final verification bypass")
+    if job == "privacy-sdk-guard":
+        mutated_block = original_block.replace(
+            "          SETUP_PYTHON_PATH: "
+            "${{ steps.privacy-python.outputs.python-path }}\n",
+            "          SETUP_PYTHON_PATH: python3\n",
+            1,
+        )
+        mutated = workflow[: match.start()] + mutated_block + workflow[match.end() :]
+        try:
+            validate(mutated)
+        except AssertionError:
+            pass
+        else:
+            raise SystemExit(
+                "negative control did not reject mobile Python binding bypass"
+            )
 PY
 if grep -Eq '(^|[[:space:]])(cp|install)[[:space:]].*Cargo\.lock' "${WORKFLOW_PATH}"; then
   echo "privacy SDK workflow still copies a checkout Cargo.lock" >&2
@@ -710,4 +4765,4 @@ if git -C "${SOURCE_ROOT}" ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; 
   exit 1
 fi
 
-printf '%s\n' "privacy SDK external Cargo.lock guard tests passed"
+printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

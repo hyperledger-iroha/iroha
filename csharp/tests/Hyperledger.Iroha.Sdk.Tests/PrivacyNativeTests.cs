@@ -98,16 +98,121 @@ public sealed class PrivacyNativeTests
     {
         Assert.Equal(256 * 1024, PrivacyNative.PrivacyNativeArchiveMaxBytes);
         Assert.Equal(
+            2 * 1024 * 1024,
+            PrivacyNative.PrivacyExact12FixtureBundleMaxBytes);
+        Assert.Equal(
             Enumerable.Range(0, 9),
             Enum.GetValues<PrivacyCapabilityValidationStatusV1>().Select(value => (int)value));
+        Assert.Equal(
+            Enumerable.Range(0, 9),
+            Enum.GetValues<PrivacyExact12FixtureValidationStatusV1>()
+                .Select(value => (int)value));
         Assert.Empty(
             typeof(PrivacyCapabilitiesArchive).GetConstructors(
+                BindingFlags.Public | BindingFlags.Instance));
+        Assert.Empty(
+            typeof(PrivacyExact12FixtureBundleArchive).GetConstructors(
                 BindingFlags.Public | BindingFlags.Instance));
         var validator = typeof(PrivacyNative).GetMethod(
             "NativeValidateCapabilities",
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(validator);
         Assert.NotNull(validator!.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>());
+        var fixtureQuery = typeof(PrivacyNative).GetMethod(
+            "NativeExact12FixtureBundle",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        var fixtureValidator = typeof(PrivacyNative).GetMethod(
+            "NativeValidateExact12FixtureBundle",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.Equal(
+            "iroha_privacy_exact12_fixture_bundle_v1",
+            fixtureQuery!
+                .GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
+                .EntryPoint);
+        Assert.Equal(
+            "iroha_privacy_validate_exact12_fixture_bundle_v1",
+            fixtureValidator!
+                .GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
+                .EntryPoint);
+    }
+
+    [Fact]
+    public void Exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => PrivacyNative.ValidateExact12FixtureBundleV1(null!));
+        Assert.Equal(
+            PrivacyExact12FixtureValidationStatusV1.Empty,
+            PrivacyNative.ValidateExact12FixtureBundleV1(Array.Empty<byte>()));
+        Assert.Equal(
+            PrivacyExact12FixtureValidationStatusV1.ArchiveTooLarge,
+            PrivacyNative.ValidateExact12FixtureBundleV1(
+                new byte[PrivacyNative.PrivacyExact12FixtureBundleMaxBytes + 1]));
+    }
+
+    [Fact]
+    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable()
+    {
+        if (!PrivacyNative.IsAvailable())
+        {
+            Assert.False(
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"),
+                    "1",
+                    StringComparison.Ordinal),
+                "ABI-21 connect_norito_bridge with exact-12 fixture symbols is required.");
+            return;
+        }
+
+        var bundle = PrivacyNative.Exact12FixtureBundleV1();
+        var canonical = bundle.NoritoBytes;
+        Assert.InRange(
+            canonical.Length,
+            1,
+            PrivacyNative.PrivacyExact12FixtureBundleMaxBytes);
+        Assert.Equal(
+            PrivacyExact12FixtureValidationStatusV1.Valid,
+            PrivacyNative.ValidateExact12FixtureBundleV1(canonical));
+        Assert.Equal(
+            canonical,
+            PrivacyNative.Exact12FixtureBundleV1().NoritoBytes);
+
+        var returnedCopy = bundle.NoritoBytes;
+        returnedCopy[0] ^= 0xff;
+        Assert.Equal(canonical, bundle.NoritoBytes);
+
+        foreach (var truncated in new[]
+        {
+            canonical[..^1],
+            canonical[1..],
+            canonical[..(canonical.Length / 2)],
+        })
+        {
+            Assert.NotEqual(
+                PrivacyExact12FixtureValidationStatusV1.Valid,
+                PrivacyNative.ValidateExact12FixtureBundleV1(truncated));
+        }
+
+        var trailing = canonical.Concat(new byte[] { 0 }).ToArray();
+        Assert.NotEqual(
+            PrivacyExact12FixtureValidationStatusV1.Valid,
+            PrivacyNative.ValidateExact12FixtureBundleV1(trailing));
+
+        foreach (var index in new[] { 0, canonical.Length / 2, canonical.Length - 1 }
+                     .Distinct())
+        {
+            var mutated = (byte[])canonical.Clone();
+            mutated[index] ^= 0x80;
+            Assert.NotEqual(
+                PrivacyExact12FixtureValidationStatusV1.Valid,
+                PrivacyNative.ValidateExact12FixtureBundleV1(mutated));
+        }
+
+        var crossSchemaArchive = PrivacyNative.CapabilitiesV1().NoritoBytes;
+        Assert.NotEqual(
+            PrivacyExact12FixtureValidationStatusV1.Valid,
+            PrivacyNative.ValidateExact12FixtureBundleV1(crossSchemaArchive));
     }
 
     [Fact]

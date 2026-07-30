@@ -8,14 +8,16 @@
 --out-dir /var/tmp/sorafs/reference-sdk-release
 --release-archive-evidence /var/tmp/sorafs/reference-sdk-release/release-archive.json
 --signed-manifest-evidence /var/tmp/sorafs/reference-sdk-release/signed-manifest.json
+--supply-chain-evidence /var/tmp/sorafs/reference-sdk-release/supply-chain.json
 --downstream-bindings-evidence /var/tmp/sorafs/reference-sdk-release/downstream-bindings.json
 --cookbook-smoke-evidence /var/tmp/sorafs/reference-sdk-release/cookbook-smoke.json
 --ffi-header-contract-evidence /var/tmp/sorafs/reference-sdk-release/ffi-header-contract.json
 --governance-approval-evidence /var/tmp/sorafs/reference-sdk-release/governance-approval.json
 --summary-out /var/tmp/sorafs/reference-sdk-release/release-summary.json
---require-kind release_archive,signed_manifest,downstream_bindings,cookbook_smoke,ffi_header_contract,governance_approval
+--require-kind release_archive,signed_manifest,supply_chain,downstream_bindings,cookbook_smoke,ffi_header_contract,governance_approval
 --now-unix 1800400000
 --max-evidence-age-secs 1209600
 --min-release-targets 5
 --min-downstream-packages 6
 --max-smoke-duration-secs 1800
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

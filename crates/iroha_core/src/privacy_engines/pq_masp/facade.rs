@@ -1,7 +1,9 @@
 //! Production proof and wallet facades for first-release PQ-MASP.
 
 use iroha_data_model::privacy::{
-    PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyStatementV1,
+    PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+    PrivacyEncryptedOutputV1, PrivacyNativeConsensusBindingV1,
+    PrivacyNativeConsensusBindingValidationErrorV1, PrivacyStatementV1,
 };
 use rand::{TryCryptoRng, rngs::OsRng};
 use soranet_pq::HedgedRngSeed;
@@ -40,6 +42,13 @@ pub enum PqMaspProofErrorV1 {
     /// ML-DSA authorization material or its complete outer wire was invalid.
     #[error(transparent)]
     Authorization(#[from] PqMaspWireErrorV1),
+    /// The trusted native consensus binding is invalid or does not exactly
+    /// match the public statement context.
+    #[error(transparent)]
+    ConsensusBinding(#[from] PrivacyNativeConsensusBindingValidationErrorV1),
+    /// The validated consensus binding could not be canonically encoded.
+    #[error("PQ-MASP consensus binding encoding failed")]
+    ConsensusBindingEncoding,
     /// Canonical statement encoding failed before authorization.
     #[error("PQ-MASP statement digest encoding failed")]
     StatementEncoding,
@@ -125,8 +134,9 @@ fn statement_digest_v1(
 /// The function preflights the exact one-to-two relation and ML-DSA secret-key
 /// binding before proof allocation. It builds the inner STARK, independently
 /// derives a health-checked authorization hedge from fresh source bytes, signs
-/// the canonical protocol-tagged statement digest and exact inner-proof digest,
-/// then verifies the complete outer wire before returning it.
+/// the canonical protocol-tagged statement digest, native consensus-binding
+/// digest, and exact inner-proof digest, then verifies the complete outer wire
+/// before returning it.
 ///
 /// # Errors
 ///
@@ -134,11 +144,17 @@ fn statement_digest_v1(
 /// failure. A successful result is never returned without final verification.
 pub fn prove_pq_masp_v1_with_rng<R: TryCryptoRng + ?Sized>(
     statement: &PqMaspStarkStatementV1,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
     witness: &PqMaspWitnessV1,
     authorization_secret_key: &[u8],
     randomness: &mut R,
 ) -> Result<Vec<u8>, PqMaspProofErrorV1> {
     validate_pq_masp_relation_v1(statement, witness)?;
+    consensus_binding.validate_against_context(&statement.context, consensus_limits)?;
+    let consensus_binding_digest = consensus_binding
+        .digest()
+        .map_err(|_| PqMaspProofErrorV1::ConsensusBindingEncoding)?;
     validate_pq_masp_authorization_secret_key_v1(
         statement.authorization_key_digest,
         authorization_secret_key,
@@ -146,19 +162,27 @@ pub fn prove_pq_masp_v1_with_rng<R: TryCryptoRng + ?Sized>(
     let statement_digest = statement_digest_v1(statement)?;
     let mut checked_randomness =
         HealthCheckedTryCryptoRngV1::new(randomness).map_err(map_entropy_error_v1)?;
-    let stark_proof = prove_pq_masp_stark_v1_with_rng(statement, witness, &mut checked_randomness)
-        .map_err(map_prover_error_v1)?;
+    let stark_proof = prove_pq_masp_stark_v1_with_rng(
+        statement,
+        consensus_binding,
+        consensus_limits,
+        witness,
+        &mut checked_randomness,
+    )
+    .map_err(map_prover_error_v1)?;
     let authorization_seed = checked_randomness
         .derive_independent_seed_v1(PQ_MASP_AUTHORIZATION_HEDGE_PURPOSE_V1)
         .map_err(map_entropy_error_v1)?;
     let proof = authorize_pq_masp_stark_proof_v1(
         statement_digest,
+        consensus_binding_digest,
         statement.authorization_key_digest,
         authorization_secret_key,
         &stark_proof,
         HedgedRngSeed::from_entropy(*authorization_seed),
     )?;
-    verify_pq_masp_v1(statement, &proof).map_err(|_| PqMaspProofErrorV1::SelfVerification)?;
+    verify_pq_masp_v1(statement, consensus_binding, consensus_limits, &proof)
+        .map_err(|_| PqMaspProofErrorV1::SelfVerification)?;
     Ok(proof)
 }
 
@@ -169,30 +193,53 @@ pub fn prove_pq_masp_v1_with_rng<R: TryCryptoRng + ?Sized>(
 /// Returns the same closed typed failures as [`prove_pq_masp_v1_with_rng`].
 pub fn prove_pq_masp_v1(
     statement: &PqMaspStarkStatementV1,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
     witness: &PqMaspWitnessV1,
     authorization_secret_key: &[u8],
 ) -> Result<Vec<u8>, PqMaspProofErrorV1> {
-    prove_pq_masp_v1_with_rng(statement, witness, authorization_secret_key, &mut OsRng)
+    prove_pq_masp_v1_with_rng(
+        statement,
+        consensus_binding,
+        consensus_limits,
+        witness,
+        authorization_secret_key,
+        &mut OsRng,
+    )
 }
 
 /// Verify one complete first-release PQ-MASP authorization and inner STARK.
 ///
 /// # Errors
 ///
-/// Rejects malformed, oversized, non-canonical, wrong-key,
-/// statement-substituted, signature-invalid, or inner-proof-invalid bytes.
+/// Rejects malformed, oversized, non-canonical, wrong-key, statement- or
+/// consensus-binding-substituted, signature-invalid, or inner-proof-invalid
+/// bytes.
 pub fn verify_pq_masp_v1(
     statement: &PqMaspStarkStatementV1,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
     proof: &[u8],
 ) -> Result<(), PqMaspProofErrorV1> {
     validate_statement_v1(statement)?;
+    consensus_binding.validate_against_context(&statement.context, consensus_limits)?;
+    let consensus_binding_digest = consensus_binding
+        .digest()
+        .map_err(|_| PqMaspProofErrorV1::ConsensusBindingEncoding)?;
     let statement_digest = statement_digest_v1(statement)?;
     let authorization = verify_pq_masp_authorization_v1(
         statement_digest,
+        consensus_binding_digest,
         statement.authorization_key_digest,
         proof,
     )?;
-    verify_pq_masp_stark_v1(statement, authorization.stark_proof).map_err(map_verifier_error_v1)
+    verify_pq_masp_stark_v1(
+        statement,
+        consensus_binding,
+        consensus_limits,
+        authorization.stark_proof,
+    )
+    .map_err(map_verifier_error_v1)
 }
 
 /// Encrypt one PQ-MASP output note with injected, health-checked entropy.
@@ -302,6 +349,15 @@ mod tests {
 
     impl TryCryptoRng for AdversarialRng {}
 
+    fn consensus_material(
+        statement: &PqMaspStarkStatementV1,
+    ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let binding = PrivacyNativeConsensusBindingV1::new(&statement.context, [0xC2; 32], &limits)
+            .expect("valid PQ-MASP consensus binding");
+        (binding, limits)
+    }
+
     fn note() -> PqMaspNotePlaintextV1 {
         let secret = [0x31; 32];
         PqMaspNotePlaintextV1::new(
@@ -392,11 +448,105 @@ mod tests {
         {
             statement.nullifiers.push(duplicate);
         }
+        let (binding, limits) = consensus_material(&statement);
         assert_eq!(
-            verify_pq_masp_v1(&statement, &[]),
+            verify_pq_masp_v1(&statement, &binding, &limits, &[]),
             Err(PqMaspProofErrorV1::Relation(
                 PqMaspRelationErrorV1::InvalidStatement,
             ))
         );
+    }
+
+    #[test]
+    fn verifier_rejects_every_mismatched_consensus_binding_axis_before_wire_parsing() {
+        let (statement, _) = crate::privacy_engines::pq_masp::relation::tests::valid_fixture();
+        let (binding, limits) = consensus_material(&statement);
+        let mut substitutions = Vec::new();
+
+        let mut zero_genesis = binding.clone();
+        zero_genesis.genesis_hash = [0; 32];
+        substitutions.push((
+            "genesis_hash",
+            zero_genesis,
+            PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash,
+        ));
+
+        let mut chain_id = binding.clone();
+        chain_id.chain_id = "pq-masp-other-chain".parse().expect("substituted chain id");
+        substitutions.push((
+            "chain_id",
+            chain_id,
+            PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch,
+        ));
+
+        let mut action_index = binding.clone();
+        action_index.action_index += 1;
+        substitutions.push((
+            "action_index",
+            action_index,
+            PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
+        ));
+
+        let mut transaction_intent = binding.clone();
+        transaction_intent.transaction_intent_digest =
+            iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0xE1; 32]);
+        substitutions.push((
+            "transaction_intent_digest",
+            transaction_intent,
+            PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
+        ));
+
+        let mut parameter_id = binding.clone();
+        parameter_id.parameter_id =
+            iroha_data_model::privacy::PrivacyParameterIdV1::new([0xE2; 32]);
+        substitutions.push((
+            "parameter_id",
+            parameter_id,
+            PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
+        ));
+
+        let mut parameter_digest = binding.clone();
+        parameter_digest.parameter_digest =
+            iroha_data_model::privacy::PrivacyParameterDigestV1::new([0xE3; 32]);
+        substitutions.push((
+            "parameter_digest",
+            parameter_digest,
+            PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
+        ));
+
+        let mut verifier_digest = binding.clone();
+        verifier_digest.verifier_digest =
+            iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0xE4; 32]);
+        substitutions.push((
+            "verifier_digest",
+            verifier_digest,
+            PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
+        ));
+
+        let mut schema_digest = binding.clone();
+        schema_digest.statement_schema_digest =
+            iroha_data_model::privacy::PrivacyStatementSchemaDigestV1::new([0xE5; 32]);
+        substitutions.push((
+            "statement_schema_digest",
+            schema_digest,
+            PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
+        ));
+
+        let mut manifest_digest = binding;
+        manifest_digest.engine_manifest_digest =
+            iroha_data_model::privacy::PrivacyEngineManifestDigestV1::new([0xE6; 32]);
+        substitutions.push((
+            "engine_manifest_digest",
+            manifest_digest,
+            PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
+        ));
+
+        for (axis, substituted, expected) in substitutions {
+            assert_eq!(
+                verify_pq_masp_v1(&statement, &substituted, &limits, &[]),
+                Err(PqMaspProofErrorV1::ConsensusBinding(expected)),
+                "mismatched {axis} reached outer proof parsing"
+            );
+        }
     }
 }

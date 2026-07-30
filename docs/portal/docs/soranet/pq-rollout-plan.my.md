@@ -99,11 +99,11 @@ rollout_phase = "default"
 
 | မျက်နှာပြင် | Canary (Stage A) | အဲလိုမျိုး (Stage B) | ပုံသေ (Stage C) |
 |---------|------------------|------------------------------------------------|
-| `sorafs_cli` အကျိူးဆောင် | `--anonymity-policy stage-a` သို့မဟုတ် အဆင့် | အားကိုး `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` အကျိူးဆောင် | `--anonymity-policy anon-guard-pq` သို့မဟုတ် အဆင့် | အားကိုး `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Orchestrator config JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust client config (`iroha.toml`) | `rollout_phase = "canary"` (မူရင်း) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` လက်မှတ်ရေးထိုးထားသော အမိန့်များ | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`၊ လုပ်နိုင်သော `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`၊ လုပ်နိုင်သော `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`၊ လုပ်နိုင်သော `.ANON_STRICT_PQ` |
+| `iroha_cli` လက်မှတ်ရေးထိုးထားသော အမိန့်များ | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`၊ လုပ်နိုင်သော `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`၊ လုပ်နိုင်သော `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`၊ လုပ်နိုင်သော `.ANON_STRICT_PQ` |
 | JavaScript သံစုံတီးဝိုင်းကူညီသူများ | `rolloutPhase: "canary"` သို့မဟုတ် `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ SDK များအားလုံးသည် သံစုံတီးဝို
 
 3. **Client/SDK Canary (T အပေါင်း 1 ပတ်)**
 
-   - client configs တွင် `rollout_phase = "ramp"` ကိုလှန်ပါ သို့မဟုတ် သတ်မှတ်ထားသော SDK အစုအဝေးများအတွက် `stage-b` ကို ကျော်ဖြတ်ပါ။
+   - client configs တွင် `rollout_phase = "ramp"` ကိုလှန်ပါ သို့မဟုတ် သတ်မှတ်ထားသော SDK အစုအဝေးများအတွက် `anon-majority-pq` ကို ကျော်ဖြတ်ပါ။
    - တယ်လီမီတာ ကွဲပြားမှုများကို ဖမ်းယူပါ (`sorafs_orchestrator_policy_events_total` နှင့် `region` ဖြင့် အုပ်စုဖွဲ့ထားသည်) နှင့် ၎င်းတို့ကို စတင်ထုတ်သည့် ဖြစ်ရပ်မှတ်တမ်းတွင် ပူးတွဲပါရှိသည်။
 
 4. ** မူရင်းပရိုမိုးရှင်း (T နှင့် 3 ပတ်)**
@@ -162,7 +162,7 @@ SDK များအားလုံးသည် သံစုံတီးဝို
 ### ချဉ်းကပ်လမ်း → ကိန္နရီ (အဆင့် B → အဆင့် A)
 
 1. `sorafs_cli guard-directory import --guard-directory guards.json` ဖြင့် ပရိုမိုးရှင်းမပြုလုပ်မီ ရိုက်ကူးထားသော အစောင့်-လမ်းညွှန်လျှပ်တစ်ပြက်ဓာတ်ပုံကို တင်သွင်းပြီး `sorafs_cli guard-directory verify` ကို ပြန်ဖွင့်ပါ ထို့ကြောင့် နှိမ့်ချမှုပက်ကတ်တွင် hashe များပါဝင်ပါသည်။
-2. `rollout_phase = "canary"` (သို့မဟုတ် `anonymity_policy stage-a`) ကို သံစုံတီးဝိုင်းနှင့် ကလိုင်းယင့်ပုံစံများပေါ်တွင် `rollout_phase = "canary"` (သို့မဟုတ် `anonymity_policy stage-a` ဖြင့် အစားထိုးရန်) သတ်မှတ်ပါ၊ ထို့နောက် အဆင့်နှိမ့်ချသည့်ပိုက်လိုင်းကို သက်သေပြရန် [PQ ratchet runbook](./pq-ratchet-runbook.md) မှ PQ ratchet drill ကို ပြန်ဖွင့်ပါ။
+2. `rollout_phase = "canary"` (သို့မဟုတ် `anonymity_policy anon-guard-pq`) ကို သံစုံတီးဝိုင်းနှင့် ကလိုင်းယင့်ပုံစံများပေါ်တွင် `rollout_phase = "canary"` (သို့မဟုတ် `anonymity_policy anon-guard-pq` ဖြင့် အစားထိုးရန်) သတ်မှတ်ပါ၊ ထို့နောက် အဆင့်နှိမ့်ချသည့်ပိုက်လိုင်းကို သက်သေပြရန် [PQ ratchet runbook](./pq-ratchet-runbook.md) မှ PQ ratchet drill ကို ပြန်ဖွင့်ပါ။
 3. အပ်ဒိတ်လုပ်ထားသော PQ Ratchet နှင့် SN16 တယ်လီမီတာစခရင်ပုံများအပြင် အုပ်ချုပ်ရေးကိုအကြောင်းကြားခြင်းမပြုမီ အဖြစ်အပျက်မှတ်တမ်းတွင် သတိပေးချက်ရလဒ်များကို ပူးတွဲပါ။
 
 ### Guardrail သတိပေးချက်များ- အကိုးအကား `docs/source/ops/soranet_transport_rollback.md` နှိမ့်ချမှုတစ်ခုဖြစ်ပေါ်သည့်အခါတိုင်းနှင့် နောက်ဆက်တွဲအလုပ်အတွက် ဖြန့်ချိသည့်ခြေရာခံကိရိယာရှိ `TODO:` တွင် ယာယီလျော့ပါးသွားသည့်အရာတစ်ခုခုကို မှတ်တမ်းတင်ပါ။

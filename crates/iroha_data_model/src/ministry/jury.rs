@@ -48,7 +48,6 @@ impl PolicyJuryVoteChoice {
 }
 
 /// ZK proof references attached to a policy-jury ballot commitment.
-#[cfg(feature = "zk-ballot")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -64,7 +63,6 @@ pub struct PolicyJuryZkEnvelope {
 
 /// Ballot channel used for a juror's vote.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(not(feature = "zk-ballot"), derive(Copy))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -74,7 +72,6 @@ pub enum PolicyJuryBallotMode {
     /// Standard plaintext commit → reveal workflow.
     Plaintext,
     /// Commitments reference a ZK proof artifact.
-    #[cfg(feature = "zk-ballot")]
     ZkEnvelope(PolicyJuryZkEnvelope),
 }
 
@@ -133,15 +130,12 @@ impl PolicyJuryBallotCommitV1 {
                 reveal: reveal.juror_id.clone(),
             });
         }
-        #[cfg(feature = "zk-ballot")]
-        {
-            let expects_zk = matches!(self.mode, PolicyJuryBallotMode::ZkEnvelope(_));
-            if expects_zk && reveal.zk_proof_uris.is_empty() {
-                return Err(PolicyJuryBallotError::MissingZkEvidence);
-            }
-            if !expects_zk && !reveal.zk_proof_uris.is_empty() {
-                return Err(PolicyJuryBallotError::UnexpectedZkEvidence);
-            }
+        let expects_zk = matches!(&self.mode, PolicyJuryBallotMode::ZkEnvelope(_));
+        if expects_zk && reveal.zk_proof_uris.is_empty() {
+            return Err(PolicyJuryBallotError::MissingZkEvidence);
+        }
+        if !expects_zk && !reveal.zk_proof_uris.is_empty() {
+            return Err(PolicyJuryBallotError::UnexpectedZkEvidence);
         }
         let expected = reveal.compute_commitment();
         if expected != self.commitment_blake2b_256 {
@@ -193,7 +187,6 @@ pub struct PolicyJuryBallotRevealV1 {
     /// UTC timestamp (milliseconds) when the reveal was recorded.
     pub revealed_at_unix_ms: u64,
     /// Optional references to ZK proofs that justify the reveal.
-    #[cfg(feature = "zk-ballot")]
     #[norito(default)]
     pub zk_proof_uris: Vec<String>,
 }
@@ -298,11 +291,9 @@ pub enum PolicyJuryBallotError {
     #[error("commitment mismatch for juror reveal")]
     CommitmentMismatch,
     /// ZK proof references missing even though the commit expects them.
-    #[cfg(feature = "zk-ballot")]
     #[error("zk ballot requires proof references in the reveal")]
     MissingZkEvidence,
     /// Reveal unexpectedly contained ZK proof references.
-    #[cfg(feature = "zk-ballot")]
     #[error("plain ballots must not reference zk proofs")]
     UnexpectedZkEvidence,
 }
@@ -569,7 +560,6 @@ mod tests {
             choice,
             nonce: vec![0x42; 32],
             revealed_at_unix_ms: 1_738_000_000_000,
-            #[cfg(feature = "zk-ballot")]
             zk_proof_uris: Vec::new(),
         }
     }
@@ -772,7 +762,6 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[test]
     fn zk_ballot_commit_requires_proof_references() {
         let commit = sample_commit(PolicyJuryBallotMode::ZkEnvelope(PolicyJuryZkEnvelope {
@@ -786,7 +775,6 @@ mod tests {
         assert!(matches!(err, PolicyJuryBallotError::MissingZkEvidence));
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[test]
     fn plain_ballot_rejects_unexpected_proof_references() {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);

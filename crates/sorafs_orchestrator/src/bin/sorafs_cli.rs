@@ -8,7 +8,7 @@ use std::{
     fmt::Write as FmtWrite,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
     io::{self, BufReader, BufWriter, Cursor, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
     str::FromStr,
@@ -23,12 +23,17 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{
+    Engine,
+    engine::general_purpose::{
+        STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
+    },
+};
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer, SigningKey};
 use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
-use iroha_crypto::{PrivateKey, PublicKey};
+use iroha_crypto::{KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
@@ -43,7 +48,7 @@ use iroha_data_model::{
             ModerationSignedScreeningResultV1, ModerationThresholdsV1, ModerationTrustPolicyV1,
         },
         pin_registry::{
-            ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest,
+            ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, ManifestRootCid,
             PinManifestFinalizedRecordV1, PinPolicy as RegistryPinPolicy, PinStatus,
             StorageClass as RegistryStorageClass,
         },
@@ -66,11 +71,12 @@ use norito::{
 use reqwest::{
     StatusCode,
     blocking::Client as HttpClient,
-    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE},
+    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
     redirect::Policy as RedirectPolicy,
 };
 #[cfg(test)]
 use rust_decimal::Decimal;
+use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
@@ -89,6 +95,11 @@ use sorafs_car::{
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
 };
 use sorafs_chunker::ChunkProfile;
+use sorafs_manifest::por::{
+    POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1, decode_por_challenge_status_page_v1,
+    decode_por_weekly_report_v1,
+};
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
@@ -158,6 +169,13 @@ const MODERATION_COMMITTEE_MAX_RESULTS: usize = 64;
 const MODERATION_COMMITTEE_MAX_RESULT_BYTES: u64 = 128 * 1024;
 const MODERATION_COMMITTEE_DEFAULT_LISTEN: &str = "127.0.0.1:9196";
 const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
+const REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES: u64 = 64 * 1024;
+const REPUTATION_PROVIDER_ID_MAX_BYTES: usize = 256;
+const REPUTATION_RESPONSE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const REPUTATION_HEADER_ACCOUNT: &str = "X-Iroha-Account";
+const REPUTATION_HEADER_SIGNATURE: &str = "X-Iroha-Signature";
+const REPUTATION_HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
+const REPUTATION_HEADER_NONCE: &str = "X-Iroha-Nonce";
 
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
@@ -863,12 +881,10 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         "response_path".into(),
         Value::from(register_response_path.display().to_string()),
     );
-    let mut registration_ok = false;
-    let mut paid_pin_fee = Value::Null;
-    match registration {
+    let paid_pin_fee = match registration {
         Ok(response) => {
             write_bytes(&register_response_path, &response.response_bytes)?;
-            registration_ok = response.status.is_success();
+            let registration_ok = response.status.is_success();
             registration_summary.insert(
                 "status".into(),
                 Value::from(response.status.as_u16() as u64),
@@ -883,7 +899,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
                 Value::from(response.submission_mode),
             );
             registration_summary.insert("success".into(), Value::from(registration_ok));
-            paid_pin_fee = paid_pin_fee_from_register_response(&response.response_value);
+            let paid_pin_fee = paid_pin_fee_from_register_response(&response.response_value);
             if !registration_ok {
                 let body = String::from_utf8_lossy(&response.response_bytes);
                 errors.push(format!(
@@ -891,13 +907,15 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
                     response.status
                 ));
             }
+            paid_pin_fee
         }
         Err(err) => {
             registration_summary.insert("success".into(), Value::from(false));
             registration_summary.insert("error".into(), Value::from(err.clone()));
             errors.push(err);
+            Value::Null
         }
-    }
+    };
     receipt.insert("registration".into(), Value::Object(registration_summary));
     receipt.insert("paid_pin_fee".into(), paid_pin_fee);
 
@@ -1586,10 +1604,6 @@ fn sanitize_deploy_name(raw: &str) -> String {
     }
 }
 
-fn normalize_url_for_receipt(raw: &str) -> String {
-    raw.trim().trim_end_matches('/').to_string()
-}
-
 fn encode_content_cid_base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if bytes.is_empty() {
@@ -2212,6 +2226,16 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
+    let effective_limit = match limit {
+        Some(limit) => usize::try_from(limit)
+            .map_err(|_| format!("`--limit={limit}` cannot be represented on this platform"))?,
+        None => POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    };
+    if effective_limit > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
+        return Err(format!(
+            "`--limit={effective_limit}` exceeds the PoR status page maximum of {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
+        ));
+    }
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
@@ -2231,9 +2255,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(status) = status_param {
         serializer.append_pair("status", status.as_str());
     }
-    if let Some(limit) = limit {
-        serializer.append_pair("limit", &limit.to_string());
-    }
+    serializer.append_pair("limit", &effective_limit.to_string());
     if let Some(token) = page_token {
         serializer.append_pair("page_token", token.trim());
     }
@@ -2251,17 +2273,42 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR status from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let body = response
-        .bytes()
+    if response.content_length().is_some_and(|length| {
+        length
+            > u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                .expect("PoR status response bound fits u64")
+    }) {
+        return Err(format!(
+            "PoR status response exceeds the {}-byte canonical limit",
+            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+        ));
+    }
+    let response_read_limit = u64::try_from(
+        POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+            .checked_add(1)
+            .expect("PoR status response bound can be incremented"),
+    )
+    .expect("PoR status response bound fits u64");
+    let mut body = Vec::new();
+    response
+        .take(response_read_limit)
+        .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR status response: {err}"))?;
+    if body.len() > POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 {
+        return Err(format!(
+            "PoR status response exceeds the {}-byte canonical limit",
+            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+        ));
+    }
     if !status.is_success() {
         return Err(format!(
             "Torii responded with status {status} for `por status`: {}",
             body_snippet(&body)
         ));
     }
-    let statuses: Vec<PorChallengeStatusV1> = decode_from_bytes(&body)
-        .map_err(|err| format!("failed to decode PoR status records: {err}"))?;
+    let statuses: Vec<PorChallengeStatusV1> =
+        decode_por_challenge_status_page_v1(&body, effective_limit)
+            .map_err(|err| format!("failed to decode PoR status records: {err}"))?;
 
     match output_format {
         StatusOutputFormat::Table => {
@@ -2418,16 +2465,40 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR report from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let body = response
-        .bytes()
+    if response.content_length().is_some_and(|length| {
+        length
+            > u64::try_from(POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1)
+                .expect("weekly PoR report bound fits u64")
+    }) {
+        return Err(format!(
+            "PoR report response exceeds the {}-byte canonical limit",
+            POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1
+        ));
+    }
+    let response_read_limit = u64::try_from(
+        POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1
+            .checked_add(1)
+            .expect("weekly PoR report bound can be incremented"),
+    )
+    .expect("weekly PoR report bound fits u64");
+    let mut body = Vec::new();
+    response
+        .take(response_read_limit)
+        .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR report response: {err}"))?;
+    if body.len() > POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1 {
+        return Err(format!(
+            "PoR report response exceeds the {}-byte canonical limit",
+            POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1
+        ));
+    }
     if !status.is_success() {
         return Err(format!(
             "PoR report fetch failed with status {status}: {}",
             body_snippet(&body)
         ));
     }
-    let report: PorWeeklyReportV1 = decode_from_bytes(&body)
+    let report: PorWeeklyReportV1 = decode_por_weekly_report_v1(&body)
         .map_err(|err| format!("failed to decode PoR weekly report: {err}"))?;
     report
         .validate()
@@ -2790,12 +2861,12 @@ fn usage() -> String {
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
-  sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
@@ -2837,16 +2908,16 @@ fn usage() -> String {
 
 fn reputation_usage() -> String {
     "Usage:
-  sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]"
         .to_string()
 }
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
         .to_string()
 }
 
@@ -3045,8 +3116,7 @@ fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>)
             .override_label
             .map_or(Value::Null, Value::from),
     );
-    let write_mode_label = input.write_mode.label().replace('_', "-");
-    metadata.insert("write_mode".into(), Value::from(write_mode_label));
+    metadata.insert("write_mode".into(), Value::from(input.write_mode.label()));
     metadata.insert(
         "write_mode_enforces_pq".into(),
         Value::from(input.write_mode.enforces_pq_only()),
@@ -3194,67 +3264,54 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             }
             telemetry_region = Some(trimmed.to_string());
         } else if let Some(rest) = arg.strip_prefix("--rollout-phase=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--rollout-phase` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = RolloutPhase::parse(&normalized).ok_or_else(|| {
-                "`--rollout-phase` must be one of canary|ramp|default (stage-a|stage-b|stage-c aliases accepted)"
-                    .to_string()
+            let parsed = RolloutPhase::parse(rest).ok_or_else(|| {
+                "`--rollout-phase` must be one of canary|ramp|default".to_string()
             })?;
             rollout_phase = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--transport-policy=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--transport-policy` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = TransportPolicy::parse(&normalized).ok_or_else(|| {
+            let parsed = TransportPolicy::parse(rest).ok_or_else(|| {
                 "`--transport-policy` must be one of soranet-first|soranet-strict|direct-only"
                     .to_string()
             })?;
             transport_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--anonymity-policy=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--anonymity-policy` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = AnonymityPolicy::parse(&normalized).ok_or_else(|| {
-                "`--anonymity-policy` must be one of stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq".to_string()
+            let parsed = AnonymityPolicy::parse(rest).ok_or_else(|| {
+                "`--anonymity-policy` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
+                    .to_string()
             })?;
             anonymity_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--write-mode=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--write-mode` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = WriteModeHint::parse(&normalized).ok_or_else(|| {
-                "`--write-mode` must be one of read-only|read_only|upload-pq-only|upload_pq_only"
-                    .to_string()
+            let parsed = WriteModeHint::parse(rest).ok_or_else(|| {
+                "`--write-mode` must be one of read-only|upload-pq-only".to_string()
             })?;
             write_mode = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--transport-policy-override=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--transport-policy-override` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = TransportPolicy::parse(&normalized).ok_or_else(|| {
+            let parsed = TransportPolicy::parse(rest).ok_or_else(|| {
                 "`--transport-policy-override` must be one of soranet-first|soranet-strict|direct-only"
                     .to_string()
             })?;
             transport_policy_override = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--anonymity-policy-override=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--anonymity-policy-override` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = AnonymityPolicy::parse(&normalized).ok_or_else(|| {
-                "`--anonymity-policy-override` must be one of stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq"
+            let parsed = AnonymityPolicy::parse(rest).ok_or_else(|| {
+                "`--anonymity-policy-override` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
             anonymity_policy_override = Some(parsed);
@@ -15708,6 +15765,69 @@ struct StorageFileEntryOwned {
     size: u64,
 }
 
+type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+
+fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
+    let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+        .map_err(|err| format!("manifest root_cid is not canonical: {err}"))?;
+    Ok(hex_encode(root_cid.as_bytes()))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
+    if manifest.chunking.profile_id.0 != 0 {
+        let descriptor =
+            chunker_registry::lookup(sorafs_car::ProfileId(manifest.chunking.profile_id.0))
+                .ok_or_else(|| "manifest chunking profile is not registered".to_string())?;
+        let profile = descriptor.profile;
+        let geometry_matches = u32::try_from(profile.min_size).ok()
+            == Some(manifest.chunking.min_size)
+            && u32::try_from(profile.target_size).ok() == Some(manifest.chunking.target_size)
+            && u32::try_from(profile.max_size).ok() == Some(manifest.chunking.max_size)
+            && u32::try_from(profile.break_mask).ok() == Some(manifest.chunking.break_mask);
+        let identity_matches = manifest.chunking.namespace == descriptor.namespace
+            && manifest.chunking.name == descriptor.name
+            && manifest.chunking.semver == descriptor.semver
+            && manifest.chunking.multihash_code == descriptor.multihash_code;
+        let aliases_match = manifest.chunking.aliases.len() == descriptor.aliases.len()
+            && manifest
+                .chunking
+                .aliases
+                .iter()
+                .zip(descriptor.aliases.iter())
+                .all(|(provided, expected)| provided == *expected);
+        if !geometry_matches || !identity_matches || !aliases_match {
+            return Err(
+                "manifest chunking profile does not match its registered descriptor".to_string(),
+            );
+        }
+        return Ok(profile);
+    }
+
+    if manifest.chunking.namespace != "inline"
+        || manifest.chunking.name != "inline"
+        || manifest.chunking.semver != "0.0.0"
+        || manifest.chunking.aliases.as_slice() != ["inline.inline@0.0.0"]
+    {
+        return Err("manifest inline chunking profile identity is not canonical".to_string());
+    }
+    let profile = ChunkProfile {
+        min_size: manifest.chunking.min_size as usize,
+        target_size: manifest.chunking.target_size as usize,
+        max_size: manifest.chunking.max_size as usize,
+        break_mask: u64::from(manifest.chunking.break_mask),
+    };
+    profile
+        .validate()
+        .map_err(|err| format!("manifest inline chunking profile is invalid: {err}"))?;
+    if profile.max_size > sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES as usize {
+        return Err(format!(
+            "manifest chunking.max_size exceeds the SoraFS limit ({})",
+            sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES
+        ));
+    }
+    Ok(profile)
+}
+
 fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut payload_path: Option<PathBuf> = None;
@@ -16278,15 +16398,537 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+struct ReputationRequestAuth {
+    account_literal: String,
+    key_pair: KeyPair,
+}
+
+struct ReputationRequestHeaders {
+    account_literal: String,
+    signature_base64: String,
+    timestamp_ms: u64,
+    nonce: String,
+}
+
+fn parse_reputation_auth_option(
+    key: &str,
+    value: &str,
+    context: &str,
+    account_literal: &mut Option<String>,
+    private_key_path: &mut Option<PathBuf>,
+) -> Result<bool, String> {
+    match key {
+        "--auth-account" => {
+            if account_literal.replace(value.to_owned()).is_some() {
+                return Err(format!("duplicate `--auth-account` for `{context}`"));
+            }
+            Ok(true)
+        }
+        "--auth-private-key-file" => {
+            if private_key_path.replace(PathBuf::from(value)).is_some() {
+                return Err(format!(
+                    "duplicate `--auth-private-key-file` for `{context}`"
+                ));
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn load_reputation_request_auth(
+    account_literal: Option<String>,
+    private_key_path: Option<PathBuf>,
+    context: &str,
+) -> Result<ReputationRequestAuth, String> {
+    let account_literal = account_literal
+        .ok_or_else(|| format!("missing required `--auth-account=I105` for `{context}`"))?;
+    let private_key_path = private_key_path.ok_or_else(|| {
+        format!("missing required `--auth-private-key-file=PATH` for `{context}`")
+    })?;
+    if private_key_path.as_os_str().is_empty() {
+        return Err(format!(
+            "`--auth-private-key-file` must not be empty for `{context}`"
+        ));
+    }
+
+    let account = parse_reputation_auth_account(&account_literal, context)?;
+    let private_key = load_reputation_auth_private_key(&private_key_path, context)?;
+    let key_pair = KeyPair::from_private_key(private_key).map_err(|_| {
+        format!("failed to derive the reputation authentication key for `{context}`")
+    })?;
+    let signatory = account.try_signatory().ok_or_else(|| {
+        format!("`--auth-account` must identify a single-key account for `{context}`")
+    })?;
+    if signatory != key_pair.public_key() {
+        return Err(format!(
+            "`--auth-private-key-file` does not control `--auth-account` for `{context}`"
+        ));
+    }
+
+    Ok(ReputationRequestAuth {
+        account_literal,
+        key_pair,
+    })
+}
+
+fn parse_reputation_auth_account(raw: &str, context: &str) -> Result<AccountId, String> {
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(format!(
+            "`--auth-account` must be an exact canonical I105 literal without padding for `{context}`"
+        ));
+    }
+    let discriminant = AccountAddress::i105_discriminant(raw).map_err(|_| {
+        format!("`--auth-account` must be an exact canonical I105 literal for `{context}`")
+    })?;
+    let address =
+        AccountAddress::from_i105_for_discriminant(raw, Some(discriminant)).map_err(|_| {
+            format!("`--auth-account` must be an exact canonical I105 literal for `{context}`")
+        })?;
+    let canonical = address
+        .to_i105_for_discriminant(discriminant)
+        .map_err(|_| format!("failed to canonicalise `--auth-account` for `{context}`"))?;
+    if canonical != raw {
+        return Err(format!(
+            "`--auth-account` must be an exact canonical I105 literal for `{context}`"
+        ));
+    }
+    let account = address
+        .to_account_id()
+        .map_err(|_| format!("failed to decode `--auth-account` for `{context}`"))?;
+    if account.try_signatory().is_none() {
+        return Err(format!(
+            "`--auth-account` must identify a single-key account for `{context}`"
+        ));
+    }
+    Ok(account)
+}
+
+#[cfg(unix)]
+type ReputationAuthFileIdentity = (u64, u64);
+#[cfg(windows)]
+type ReputationAuthFileIdentity = (Option<u32>, Option<u64>);
+#[cfg(not(any(unix, windows)))]
+type ReputationAuthFileIdentity = ();
+
+#[cfg(unix)]
+fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
+    use std::os::windows::fs::MetadataExt as _;
+
+    (metadata.volume_serial_number(), metadata.file_index())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn reputation_auth_file_identity(_metadata: &FsMetadata) -> ReputationAuthFileIdentity {}
+
+#[cfg(unix)]
+const fn reputation_auth_file_identity_available(_identity: ReputationAuthFileIdentity) -> bool {
+    true
+}
+
+#[cfg(windows)]
+const fn reputation_auth_file_identity_available(identity: ReputationAuthFileIdentity) -> bool {
+    identity.0.is_some() && identity.1.is_some()
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn reputation_auth_file_identity_available(_identity: ReputationAuthFileIdentity) -> bool {
+    false
+}
+
+fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn reputation_auth_file_is_reparse_point(metadata: &FsMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn reputation_auth_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
+    false
+}
+
+fn reputation_auth_file_is_indirect(metadata: &FsMetadata) -> bool {
+    metadata.file_type().is_symlink() || reputation_auth_file_is_reparse_point(metadata)
+}
+
+fn validate_reputation_auth_file_metadata(metadata: &FsMetadata) -> Result<(), String> {
+    if reputation_auth_file_is_indirect(metadata)
+        || !metadata.file_type().is_file()
+        || !reputation_auth_file_identity_available(reputation_auth_file_identity(metadata))
+    {
+        return Err(
+            "reputation authentication private key must be a regular non-symlink file with a stable identity"
+                .to_owned(),
+        );
+    }
+    if !reputation_auth_file_is_single_link(metadata) {
+        return Err(
+            "reputation authentication private key must have exactly one hard link".to_owned(),
+        );
+    }
+    #[cfg(unix)]
+    if metadata.mode() & 0o077 != 0 {
+        return Err(
+            "reputation authentication private key must not grant group or world permissions"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
+    reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
+        && left.nlink() == 1
+        && right.nlink() == 1
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+}
+
+#[cfg(windows)]
+fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    reputation_auth_file_identity_available(reputation_auth_file_identity(left))
+        && reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
+        && left.number_of_links() == Some(1)
+        && right.number_of_links() == Some(1)
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+        && left.file_attributes() == right.file_attributes()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn reputation_auth_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    options
+        .open(path)
+        .map_err(|_| "failed to securely open reputation authentication private key".to_owned())
+}
+
+#[cfg(windows)]
+fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options
+        .open(path)
+        .map_err(|_| "failed to securely open reputation authentication private key".to_owned())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_reputation_auth_private_key(_path: &Path) -> Result<File, String> {
+    Err(
+        "this platform does not expose the stable file identity required for reputation authentication private keys"
+            .to_owned(),
+    )
+}
+
+fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
+    let before = fs::symlink_metadata(path)
+        .map_err(|_| "failed to inspect reputation authentication private key".to_owned())?;
+    validate_reputation_auth_file_metadata(&before)?;
+    if before.len() == 0 || before.len() > REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES {
+        return Err(format!(
+            "reputation authentication private key must contain between 1 and {REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES} bytes"
+        ));
+    }
+    let expected_len = usize::try_from(before.len()).map_err(|_| {
+        "reputation authentication private key length is not representable on this host".to_owned()
+    })?;
+
+    let mut file = open_reputation_auth_private_key(path)?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "failed to inspect opened reputation authentication private key".to_owned())?;
+    validate_reputation_auth_file_metadata(&opened)?;
+    if !reputation_auth_metadata_unchanged(&before, &opened) {
+        return Err(
+            "reputation authentication private key changed between inspection and open".to_owned(),
+        );
+    }
+
+    let mut bytes = vec![0_u8; expected_len];
+    file.read_exact(&mut bytes).map_err(|error| {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            "reputation authentication private key changed length while being read".to_owned()
+        } else {
+            "failed to read reputation authentication private key".to_owned()
+        }
+    })?;
+    let mut trailing = [0_u8; 1];
+    if file
+        .read(&mut trailing)
+        .map_err(|_| "failed to finish reading reputation authentication private key".to_owned())?
+        != 0
+    {
+        return Err(
+            "reputation authentication private key changed length while being read".to_owned(),
+        );
+    }
+
+    let after_file = file.metadata().map_err(|_| {
+        "failed to re-inspect opened reputation authentication private key".to_owned()
+    })?;
+    let after_path = fs::symlink_metadata(path)
+        .map_err(|_| "failed to re-inspect reputation authentication private key".to_owned())?;
+    validate_reputation_auth_file_metadata(&after_file)?;
+    validate_reputation_auth_file_metadata(&after_path)?;
+    if !reputation_auth_metadata_unchanged(&opened, &after_file)
+        || !reputation_auth_metadata_unchanged(&opened, &after_path)
+        || after_file.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err("reputation authentication private key changed while being read".to_owned());
+    }
+    Ok(bytes)
+}
+
+fn load_reputation_auth_private_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
+    let mut bytes = read_reputation_auth_private_key(path)?;
+    let parsed = (|| {
+        let text = std::str::from_utf8(&bytes).map_err(|_| {
+            format!("reputation authentication private key is not valid UTF-8 for `{context}`")
+        })?;
+        let token = text
+            .strip_suffix("\r\n")
+            .or_else(|| text.strip_suffix('\n'))
+            .unwrap_or(text);
+        if token.is_empty()
+            || token.trim() != token
+            || token
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+        {
+            return Err(format!(
+                "reputation authentication private key file is not canonical text for `{context}`"
+            ));
+        }
+        PrivateKey::from_str(token).map_err(|_| {
+            format!("reputation authentication private key file is malformed for `{context}`")
+        })
+    })();
+    bytes.fill(0);
+    parsed
+}
+
+fn canonical_reputation_query(raw: Option<&str>) -> String {
+    let Some(raw) = raw else {
+        return String::new();
+    };
+    if raw.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    let mut serializer = Serializer::new(String::new());
+    for (key, value) in pairs {
+        serializer.append_pair(&key, &value);
+    }
+    serializer.finish()
+}
+
+fn canonical_reputation_request_message(endpoint: &Url, timestamp_ms: u64, nonce: &str) -> Vec<u8> {
+    let query = canonical_reputation_query(endpoint.query());
+    let body_hash = Sha256::digest([]);
+    format!(
+        "GET\n{}\n{}\n{}\n{}\n{}",
+        endpoint.path(),
+        query,
+        hex_encode(body_hash),
+        timestamp_ms,
+        nonce
+    )
+    .into_bytes()
+}
+
+fn reputation_request_timestamp_ms_at(now: SystemTime) -> Result<u64, String> {
+    let elapsed = now.duration_since(UNIX_EPOCH).map_err(|_| {
+        "system clock is before the Unix epoch; cannot sign reputation request".to_owned()
+    })?;
+    elapsed
+        .as_millis()
+        .try_into()
+        .map_err(|_| "system clock does not fit the reputation timestamp field".to_owned())
+}
+
+fn reputation_request_nonce_with_rng<R>(rng: &mut R) -> Result<String, String>
+where
+    R: rand::rand_core::TryCryptoRng + ?Sized,
+{
+    let mut nonce = [0_u8; 12];
+    rand::rand_core::TryRngCore::try_fill_bytes(rng, &mut nonce)
+        .map_err(|_| "OS RNG failed while signing reputation request".to_owned())?;
+    Ok(BASE64_URL_SAFE_NO_PAD.encode(nonce))
+}
+
+fn reputation_request_headers_with_rng_at<R>(
+    auth: &ReputationRequestAuth,
+    endpoint: &Url,
+    now: SystemTime,
+    rng: &mut R,
+) -> Result<ReputationRequestHeaders, String>
+where
+    R: rand::rand_core::TryCryptoRng + ?Sized,
+{
+    let timestamp_ms = reputation_request_timestamp_ms_at(now)?;
+    let nonce = reputation_request_nonce_with_rng(rng)?;
+    let message = canonical_reputation_request_message(endpoint, timestamp_ms, &nonce);
+    let signature = Signature::try_new(auth.key_pair.private_key(), &message)
+        .map_err(|_| "failed to sign reputation request".to_owned())?;
+    Ok(ReputationRequestHeaders {
+        account_literal: auth.account_literal.clone(),
+        signature_base64: BASE64_STANDARD.encode(signature.payload()),
+        timestamp_ms,
+        nonce,
+    })
+}
+
+fn reputation_request_headers(
+    auth: &ReputationRequestAuth,
+    endpoint: &Url,
+) -> Result<ReputationRequestHeaders, String> {
+    reputation_request_headers_with_rng_at(
+        auth,
+        endpoint,
+        SystemTime::now(),
+        &mut rand::rngs::OsRng,
+    )
+}
+
+fn reputation_http_client() -> Result<HttpClient, String> {
+    HttpClient::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(RedirectPolicy::none())
+        .referer(false)
+        .retry(reqwest::retry::never())
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .no_proxy()
+        .build()
+        .map_err(|err| format!("failed to construct reputation HTTP client: {err}"))
+}
+
+fn send_reputation_request(
+    client: &HttpClient,
+    endpoint: &Url,
+    auth: &ReputationRequestAuth,
+) -> Result<reqwest::blocking::Response, String> {
+    let headers = reputation_request_headers(auth, endpoint)?;
+    client
+        .get(endpoint.clone())
+        .header("Accept", "application/json")
+        .header(ACCEPT_ENCODING, "identity")
+        .header(REPUTATION_HEADER_ACCOUNT, headers.account_literal)
+        .header(REPUTATION_HEADER_SIGNATURE, headers.signature_base64)
+        .header(
+            REPUTATION_HEADER_TIMESTAMP_MS,
+            headers.timestamp_ms.to_string(),
+        )
+        .header(REPUTATION_HEADER_NONCE, headers.nonce)
+        .send()
+        .map_err(|_| "reputation request failed".to_owned())
+}
+
+fn reject_duplicate_reputation_option(
+    seen: &mut BTreeSet<String>,
+    key: &str,
+    context: &str,
+) -> Result<(), String> {
+    if seen.insert(key.to_owned()) {
+        Ok(())
+    } else {
+        Err(format!("duplicate `{key}` for `{context}`"))
+    }
+}
+
+fn parse_reputation_provider_id(raw: &str) -> Result<String, String> {
+    let bytes = raw.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > REPUTATION_PROVIDER_ID_MAX_BYTES
+        || matches!(raw, "." | "..")
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(
+            "`--provider-id` must be canonical 1..=256 byte ASCII [A-Za-z0-9_.:-] and must not be a dot-segment"
+                .to_owned(),
+        );
+    }
+    Ok(raw.to_owned())
+}
+
 fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
+    const CONTEXT: &str = "sorafs_cli reputation snapshot";
+
     let mut torii_url: Option<String> = None;
     let mut output: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
+    let mut auth_account: Option<String> = None;
+    let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut seen_options = BTreeSet::new();
 
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+            .ok_or_else(|| format!("expected key=value argument for `{CONTEXT}`"))?;
+        reject_duplicate_reputation_option(&mut seen_options, key, CONTEXT)?;
+        if parse_reputation_auth_option(
+            key,
+            value,
+            CONTEXT,
+            &mut auth_account,
+            &mut auth_private_key_path,
+        )? {
+            continue;
+        }
         match key {
             "--torii-url" => torii_url = Some(value.to_string()),
             "--output" => output = Some(PathBuf::from(value)),
@@ -16302,31 +16944,41 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation snapshot`".to_string()
     })?;
-    let client = HttpClient::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let client = reputation_http_client()?;
     let endpoint = reputation_endpoint(&torii_url, "v1/sorafs/reputation/latest")?;
-    let response = client
-        .get(endpoint.as_str())
-        .header("Accept", "application/json")
-        .send()
-        .map_err(|err| format!("failed to fetch reputation snapshot from `{endpoint}`: {err}"))?;
-    let value = read_json_response(response, "reputation snapshot", endpoint.as_str())?;
+    let response = send_reputation_request(&client, &endpoint, &auth)
+        .map_err(|_| "failed to fetch reputation snapshot".to_owned())?;
+    let value = read_json_response(response, "reputation snapshot")?;
     let output_path = output.as_deref().or(summary_out.as_deref());
     emit_reputation_json(value, output_path)
 }
 
 fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
+    const CONTEXT: &str = "sorafs_cli reputation fetch";
+
     let mut torii_url: Option<String> = None;
     let mut provider_id: Option<String> = None;
     let mut format = ReputationFetchFormat::Table;
     let mut summary_out: Option<PathBuf> = None;
+    let mut auth_account: Option<String> = None;
+    let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut seen_options = BTreeSet::new();
 
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+            .ok_or_else(|| format!("expected key=value argument for `{CONTEXT}`"))?;
+        reject_duplicate_reputation_option(&mut seen_options, key, CONTEXT)?;
+        if parse_reputation_auth_option(
+            key,
+            value,
+            CONTEXT,
+            &mut auth_account,
+            &mut auth_private_key_path,
+        )? {
+            continue;
+        }
         match key {
             "--torii-url" => torii_url = Some(value.to_string()),
             "--provider-id" => provider_id = Some(value.to_string()),
@@ -16344,25 +16996,17 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--torii-url=URL` for `sorafs_cli reputation fetch`".to_string()
     })?;
     let provider_id = provider_id
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             "missing required `--provider-id=ID` for `sorafs_cli reputation fetch`".to_string()
-        })?;
-    let client = HttpClient::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+        })
+        .and_then(|value| parse_reputation_provider_id(&value))?;
+    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let client = reputation_http_client()?;
     let route = format!("v1/sorafs/reputation/providers/{provider_id}");
     let endpoint = reputation_endpoint(&torii_url, &route)?;
-    let response = client
-        .get(endpoint.as_str())
-        .header("Accept", "application/json")
-        .send()
-        .map_err(|err| {
-            format!("failed to fetch reputation provider `{provider_id}` from `{endpoint}`: {err}")
-        })?;
-    let value = read_json_response(response, "reputation fetch", endpoint.as_str())?;
+    let response = send_reputation_request(&client, &endpoint, &auth)
+        .map_err(|_| "failed to fetch reputation provider".to_owned())?;
+    let value = read_json_response(response, "reputation fetch")?;
     if let Some(path) = summary_out.as_deref() {
         write_reputation_json(path, &value)?;
     }
@@ -16380,17 +17024,32 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
 }
 
 fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
+    const CONTEXT: &str = "sorafs_cli reputation watch";
+
     let mut torii_url: Option<String> = None;
     let mut since: Option<u64> = None;
     let mut limit: Option<u32> = None;
     let mut max_polls: Option<usize> = Some(1);
     let mut poll_interval_ms: u64 = 1_000;
     let mut summary_out: Option<PathBuf> = None;
+    let mut auth_account: Option<String> = None;
+    let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut seen_options = BTreeSet::new();
 
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+            .ok_or_else(|| format!("expected key=value argument for `{CONTEXT}`"))?;
+        reject_duplicate_reputation_option(&mut seen_options, key, CONTEXT)?;
+        if parse_reputation_auth_option(
+            key,
+            value,
+            CONTEXT,
+            &mut auth_account,
+            &mut auth_private_key_path,
+        )? {
+            continue;
+        }
         match key {
             "--torii-url" => torii_url = Some(value.to_string()),
             "--since" => {
@@ -16427,20 +17086,42 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation watch`".to_string()
     })?;
-    let client = HttpClient::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let client = reputation_http_client()?;
+    let final_value = run_reputation_watch(
+        &torii_url,
+        since,
+        limit,
+        max_polls,
+        poll_interval_ms,
+        |endpoint| {
+            let response = send_reputation_request(&client, endpoint, &auth)
+                .map_err(|_| "failed to watch reputation events".to_owned())?;
+            read_json_response(response, "reputation watch")
+        },
+    )?;
+    if let Some(path) = summary_out.as_deref() {
+        write_reputation_json(path, &final_value)?;
+    }
+    Ok(())
+}
+
+fn run_reputation_watch<F>(
+    torii_url: &str,
+    since: Option<u64>,
+    limit: Option<u32>,
+    max_polls: Option<usize>,
+    poll_interval_ms: u64,
+    mut fetch: F,
+) -> Result<Value, String>
+where
+    F: FnMut(&Url) -> Result<Value, String>,
+{
     let mut next_since = since;
     let mut polls = 0_usize;
-    let final_value = loop {
-        let endpoint = reputation_events_endpoint(&torii_url, next_since, limit)?;
-        let response = client
-            .get(endpoint.as_str())
-            .header("Accept", "application/json")
-            .send()
-            .map_err(|err| format!("failed to watch reputation events from `{endpoint}`: {err}"))?;
-        let value = read_json_response(response, "reputation watch", endpoint.as_str())?;
+    loop {
+        let endpoint = reputation_events_endpoint(torii_url, next_since, limit)?;
+        let value = fetch(&endpoint)?;
         if let Some(cursor) = value.get("next_since").and_then(Value::as_u64) {
             next_since = Some(cursor);
         }
@@ -16449,14 +17130,10 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
         println!("{rendered}");
         polls = polls.saturating_add(1);
         if max_polls.is_some_and(|max| polls >= max) {
-            break value;
+            return Ok(value);
         }
         thread::sleep(Duration::from_millis(poll_interval_ms));
-    };
-    if let Some(path) = summary_out.as_deref() {
-        write_reputation_json(path, &final_value)?;
     }
-    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -16470,9 +17147,7 @@ impl ReputationFetchFormat {
         match raw {
             "table" => Ok(Self::Table),
             "json" => Ok(Self::Json),
-            other => Err(format!(
-                "unsupported reputation fetch format `{other}`; expected `table` or `json`"
-            )),
+            _ => Err("unsupported reputation fetch format; expected `table` or `json`".to_owned()),
         }
     }
 }
@@ -16485,18 +17160,52 @@ fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String>
         )
     })?;
     let snapshot: ReputationSnapshotV1 = decode_from_bytes(&snapshot_bytes)
-        .map_err(|err| format!("failed to decode reputation snapshot: {err}"))?;
+        .map_err(|_| "failed to decode reputation snapshot".to_owned())?;
     snapshot
         .validate()
-        .map_err(|err| format!("invalid reputation snapshot: {err}"))?;
+        .map_err(|_| "invalid reputation snapshot".to_owned())?;
     Ok(snapshot)
 }
 
 fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
-    Url::parse(torii_url)
-        .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
+    if torii_url.is_empty() || torii_url.trim() != torii_url {
+        return Err("`--torii-url` must be an exact canonical URL without padding".to_owned());
+    }
+    let parsed =
+        Url::parse(torii_url).map_err(|_| "`--torii-url` must be a valid URL".to_owned())?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "`--torii-url` must include a host".to_owned())?;
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && is_loopback) {
+        return Err(
+            "`--torii-url` must use HTTPS; HTTP is permitted only for loopback fixtures".to_owned(),
+        );
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("`--torii-url` must not include userinfo".to_owned());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("`--torii-url` must not include a query or fragment".to_owned());
+    }
+    if parsed.port() == Some(0) {
+        return Err("`--torii-url` must not use port zero".to_owned());
+    }
+    let canonical_origin = parsed.origin().ascii_serialization();
+    let canonical_origin_with_slash = format!("{canonical_origin}/");
+    if parsed.path() != "/"
+        || (torii_url != canonical_origin && torii_url != canonical_origin_with_slash)
+    {
+        return Err(
+            "`--torii-url` must be an exact canonical bare origin without a path prefix".to_owned(),
+        );
+    }
+    parsed
         .join(route)
-        .map_err(|err| format!("failed to build reputation endpoint URL: {err}"))
+        .map_err(|_| "failed to build reputation endpoint URL".to_owned())
 }
 
 fn reputation_events_endpoint(
@@ -16519,24 +17228,98 @@ fn reputation_events_endpoint(
     Ok(endpoint)
 }
 
+fn read_reputation_response_bounded(
+    response: reqwest::blocking::Response,
+    context: &str,
+) -> Result<(StatusCode, Vec<u8>), String> {
+    let status = response.status();
+    if !status.is_success() {
+        return Ok((status, Vec::new()));
+    }
+    let mut content_types = response.headers().get_all(CONTENT_TYPE).iter();
+    let content_type_is_canonical = content_types
+        .next()
+        .is_some_and(|value| value.as_bytes() == b"application/json")
+        && content_types.next().is_none();
+    if !content_type_is_canonical {
+        return Err(format!(
+            "Torii {context} response must use canonical Content-Type application/json"
+        ));
+    }
+    let content_encoding_headers = response.headers().get_all(CONTENT_ENCODING);
+    let mut content_encodings = content_encoding_headers.iter();
+    let identity_only = match content_encodings.next() {
+        None => true,
+        Some(encoding) => encoding.as_bytes() == b"identity" && content_encodings.next().is_none(),
+    };
+    if !identity_only {
+        return Err(format!(
+            "Torii {context} response must use identity content encoding"
+        ));
+    }
+    let mut content_lengths = response.headers().get_all(CONTENT_LENGTH).iter();
+    let content_length = content_lengths
+        .next()
+        .map(|value| {
+            let raw = value.as_bytes();
+            if raw.is_empty()
+                || !raw.iter().all(u8::is_ascii_digit)
+                || raw.len() > 1 && raw.starts_with(b"0")
+            {
+                return Err(format!(
+                    "Torii {context} response Content-Length must be canonical unsigned decimal"
+                ));
+            }
+            let raw = std::str::from_utf8(raw).map_err(|_| {
+                format!("Torii {context} response Content-Length must be canonical ASCII")
+            })?;
+            raw.parse::<u64>()
+                .map_err(|_| format!("Torii {context} response Content-Length does not fit u64"))
+        })
+        .transpose()?;
+    if content_lengths.next().is_some() {
+        return Err(format!(
+            "Torii {context} response must not contain duplicate Content-Length headers"
+        ));
+    }
+    if content_length.is_some_and(|length| length > REPUTATION_RESPONSE_MAX_BYTES) {
+        return Err(format!(
+            "Torii {context} response declared more than {REPUTATION_RESPONSE_MAX_BYTES} bytes"
+        ));
+    }
+    let initial_capacity = content_length.unwrap_or(0);
+    let initial_capacity = usize::try_from(initial_capacity)
+        .map_err(|_| format!("Torii {context} response length does not fit usize"))?;
+    let mut body = Vec::new();
+    body.try_reserve_exact(initial_capacity)
+        .map_err(|_| format!("failed to reserve bounded Torii {context} response"))?;
+    response
+        .take(REPUTATION_RESPONSE_MAX_BYTES + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| format!("failed to read Torii {context} response body"))?;
+    let body_len = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    if body_len > REPUTATION_RESPONSE_MAX_BYTES {
+        return Err(format!(
+            "Torii {context} response exceeded {REPUTATION_RESPONSE_MAX_BYTES} bytes"
+        ));
+    }
+    if content_length.is_some_and(|length| length != body_len) {
+        return Err(format!(
+            "Torii {context} response body length did not match Content-Length"
+        ));
+    }
+    Ok((status, body))
+}
+
 fn read_json_response(
     response: reqwest::blocking::Response,
     context: &str,
-    endpoint: &str,
 ) -> Result<Value, String> {
-    let status = response.status();
-    let body = response
-        .bytes()
-        .map_err(|err| format!("failed to read {context} response from `{endpoint}`: {err}"))?
-        .to_vec();
+    let (status, body) = read_reputation_response_bounded(response, context)?;
     if !status.is_success() {
-        return Err(format!(
-            "Torii {context} endpoint `{endpoint}` returned {status}: {}",
-            String::from_utf8_lossy(&body)
-        ));
+        return Err(format!("Torii {context} endpoint returned {status}"));
     }
-    from_slice(&body)
-        .map_err(|err| format!("failed to decode {context} JSON from `{endpoint}`: {err}"))
+    from_slice(&body).map_err(|_| format!("failed to decode Torii {context} JSON"))
 }
 
 fn emit_reputation_json(value: Value, output: Option<&Path>) -> Result<(), String> {
@@ -16601,15 +17384,19 @@ fn reputation_provider_table(value: &Value) -> Result<String, String> {
 }
 
 fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
+    const CONTEXT: &str = "sorafs_cli reputation verify";
+
     let mut snapshot_path: Option<PathBuf> = None;
     let mut provider_id: Option<String> = None;
     let mut proof_path: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
+    let mut seen_options = BTreeSet::new();
 
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+            .ok_or_else(|| format!("expected key=value argument for `{CONTEXT}`"))?;
+        reject_duplicate_reputation_option(&mut seen_options, key, CONTEXT)?;
         match key {
             "--snapshot" => snapshot_path = Some(PathBuf::from(value)),
             "--provider-id" => provider_id = Some(value.to_string()),
@@ -16626,6 +17413,9 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
     let snapshot_path = snapshot_path.ok_or_else(|| {
         "missing required `--snapshot=PATH` for `sorafs_cli reputation verify`".to_string()
     })?;
+    let provider_id = provider_id
+        .map(|value| parse_reputation_provider_id(&value))
+        .transpose()?;
     if provider_id.is_some() != proof_path.is_some() {
         return Err(
             "`--provider-id=ID` and `--proof=PATH` must be supplied together for reputation proof verification"
@@ -16678,7 +17468,7 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
             .iter()
             .find(|entry| entry.provider_id == provider_id)
             .ok_or_else(|| {
-                format!("provider `{provider_id}` was not found in the reputation snapshot")
+                "requested provider was not found in the reputation snapshot".to_owned()
             })?;
         let proof_bytes = fs::read(&proof_path).map_err(|err| {
             format!(
@@ -16687,10 +17477,10 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
             )
         })?;
         let proof: ReputationMerkleProofV1 = decode_from_bytes(&proof_bytes)
-            .map_err(|err| format!("failed to decode reputation proof: {err}"))?;
+            .map_err(|_| "failed to decode reputation proof".to_owned())?;
         proof
             .verify(provider, snapshot.merkle_root)
-            .map_err(|err| format!("invalid reputation proof: {err}"))?;
+            .map_err(|_| "invalid reputation proof".to_owned())?;
 
         summary.insert(
             "provider_id".into(),
@@ -16732,7 +17522,7 @@ const PROOF_STREAM_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 const PROOF_STREAM_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROOF_STREAM_BEARER_TOKEN_MAX_BYTES: usize = 8 * 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ValidatedPinManifestV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
@@ -20447,7 +21237,6 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
         GovernanceLogPayloadV1::PorChallengePublication(_) => "por_challenge_publication",
-        GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
         GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
@@ -20461,6 +21250,7 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         GovernanceLogPayloadV1::OrderbookSettlementReceipt(_) => "orderbook_settlement_receipt",
         GovernanceLogPayloadV1::ExternalPayload(_) => "external_payload",
         GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot",
+        GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
     }
 }
 
@@ -21152,7 +21942,7 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 mod tests {
     use std::{fs, path::Path};
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
         sorafs::pin_registry::{
@@ -21200,6 +21990,782 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    fn fixture_reputation_auth(seed: u8, discriminant: u16) -> ReputationRequestAuth {
+        let key_pair = fixture_keypair(seed);
+        let account_literal = AccountId::new(key_pair.public_key().clone())
+            .to_i105_for_discriminant(discriminant)
+            .expect("encode reputation authentication account");
+        ReputationRequestAuth {
+            account_literal,
+            key_pair,
+        }
+    }
+
+    fn write_reputation_private_key(path: &Path, key_pair: &KeyPair) {
+        let exposed = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+        fs::write(path, format!("{exposed}\n")).expect("write private key fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("secure private key permissions");
+        }
+    }
+
+    fn reputation_response_fixture(
+        status: &str,
+        content_type: Option<&str>,
+        content_length: Option<u64>,
+        content_encoding: Option<&str>,
+        extra_headers: &str,
+        body: Vec<u8>,
+    ) -> (SocketAddr, thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind reputation fixture server");
+        let address = listener.local_addr().expect("reputation fixture address");
+        let status = status.to_owned();
+        let content_type = content_type.map(str::to_owned);
+        let content_encoding = content_encoding.map(str::to_owned);
+        let extra_headers = extra_headers.to_owned();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener
+                .accept()
+                .expect("accept reputation fixture request");
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream
+                    .read(&mut chunk)
+                    .expect("read reputation fixture request");
+                assert!(read > 0, "fixture request ended before its headers");
+                request.extend_from_slice(&chunk[..read]);
+                assert!(
+                    request.len() <= 16 * 1024,
+                    "fixture request headers exceeded their test bound"
+                );
+            }
+            let length_header = content_length
+                .map(|length| format!("Content-Length: {length}\r\n"))
+                .unwrap_or_default();
+            let encoding_header = content_encoding
+                .map(|encoding| format!("Content-Encoding: {encoding}\r\n"))
+                .unwrap_or_default();
+            let type_header = content_type
+                .map(|content_type| format!("Content-Type: {content_type}\r\n"))
+                .unwrap_or_default();
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\n{type_header}{length_header}{encoding_header}{extra_headers}Connection: close\r\n\r\n"
+            )
+            .expect("write reputation fixture headers");
+            let _ = stream.write_all(&body);
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (address, handle)
+    }
+
+    #[derive(Debug)]
+    struct ReputationTestRngError;
+
+    impl std::fmt::Display for ReputationTestRngError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("reputation test RNG failure")
+        }
+    }
+
+    impl std::error::Error for ReputationTestRngError {}
+
+    struct IncrementingReputationRng {
+        next: u8,
+    }
+
+    impl rand::rand_core::TryRngCore for IncrementingReputationRng {
+        type Error = ReputationTestRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            let value = self.next;
+            self.next = self.next.wrapping_add(1);
+            Ok(u32::from(value))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            let value = self.next;
+            self.next = self.next.wrapping_add(1);
+            Ok(u64::from(value))
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            destination.fill(self.next);
+            self.next = self.next.wrapping_add(1);
+            Ok(())
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for IncrementingReputationRng {}
+
+    struct FailingReputationRng;
+
+    impl rand::rand_core::TryRngCore for FailingReputationRng {
+        type Error = ReputationTestRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(ReputationTestRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(ReputationTestRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(ReputationTestRngError)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingReputationRng {}
+
+    #[test]
+    fn reputation_auth_headers_match_the_exact_canonical_preimage() {
+        let auth = fixture_reputation_auth(0x31, 369);
+        let endpoint = Url::parse(
+            "http://127.0.0.1/v1/sorafs/reputation/events?z=%2B&b=two+words&a=%7E&a=first",
+        )
+        .expect("endpoint");
+        let now = UNIX_EPOCH + Duration::from_millis(1_725_000_000_123);
+        let mut rng = IncrementingReputationRng { next: 0x11 };
+
+        let headers = reputation_request_headers_with_rng_at(&auth, &endpoint, now, &mut rng)
+            .expect("signed headers");
+        let expected_nonce = BASE64_URL_SAFE_NO_PAD.encode([0x11_u8; 12]);
+        let expected_message = format!(
+            "GET\n/v1/sorafs/reputation/events\na=first&a=%7E&b=two+words&z=%2B\n{}\n1725000000123\n{expected_nonce}",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        )
+        .into_bytes();
+
+        assert_eq!(headers.account_literal, auth.account_literal);
+        assert_eq!(headers.timestamp_ms, 1_725_000_000_123);
+        assert_eq!(headers.nonce, expected_nonce);
+        assert_eq!(
+            canonical_reputation_request_message(&endpoint, headers.timestamp_ms, &headers.nonce),
+            expected_message
+        );
+        let signature_bytes = BASE64_STANDARD
+            .decode(&headers.signature_base64)
+            .expect("standard base64 signature");
+        assert_eq!(
+            BASE64_STANDARD.encode(&signature_bytes),
+            headers.signature_base64
+        );
+        let signature =
+            Signature::try_from_bytes(&signature_bytes).expect("admissible signature payload");
+        signature
+            .verify(auth.key_pair.public_key(), &expected_message)
+            .expect("signature verifies exact canonical request");
+
+        let mutated_path =
+            Url::parse("http://127.0.0.1/v1/sorafs/reputation/latest").expect("mutated path");
+        let mutated_query = Url::parse("http://127.0.0.1/v1/sorafs/reputation/events?limit=2")
+            .expect("mutated query");
+        for mutated in [
+            canonical_reputation_request_message(
+                &mutated_path,
+                headers.timestamp_ms,
+                &headers.nonce,
+            ),
+            canonical_reputation_request_message(
+                &mutated_query,
+                headers.timestamp_ms,
+                &headers.nonce,
+            ),
+            canonical_reputation_request_message(
+                &endpoint,
+                headers.timestamp_ms + 1,
+                &headers.nonce,
+            ),
+            canonical_reputation_request_message(&endpoint, headers.timestamp_ms, "mutated-nonce"),
+        ] {
+            assert!(
+                signature
+                    .verify(auth.key_pair.public_key(), &mutated)
+                    .is_err(),
+                "signature must bind every canonical request component"
+            );
+        }
+    }
+
+    #[test]
+    fn reputation_provider_id_parser_matches_the_exact_route_contract() {
+        let valid = [
+            "a".to_owned(),
+            "provider-a".to_owned(),
+            "provider_a".to_owned(),
+            "provider.a".to_owned(),
+            "provider:a".to_owned(),
+            "provider..a".to_owned(),
+            "A0".to_owned(),
+            "p".repeat(REPUTATION_PROVIDER_ID_MAX_BYTES),
+        ];
+        for provider_id in valid {
+            assert_eq!(
+                parse_reputation_provider_id(&provider_id).expect("canonical provider id"),
+                provider_id
+            );
+        }
+
+        let secret_marker = "provider-private-key-marker";
+        let invalid = [
+            String::new(),
+            ".".to_owned(),
+            "..".to_owned(),
+            " provider-a".to_owned(),
+            "provider-a ".to_owned(),
+            "provider/a".to_owned(),
+            "provider%2Fa".to_owned(),
+            "provider?query".to_owned(),
+            "provider#fragment".to_owned(),
+            "provider=alias".to_owned(),
+            "provideré".to_owned(),
+            "p".repeat(REPUTATION_PROVIDER_ID_MAX_BYTES + 1),
+            secret_marker.to_owned() + "/",
+        ];
+        for provider_id in invalid {
+            let error = parse_reputation_provider_id(&provider_id)
+                .expect_err("noncanonical provider id must fail");
+            assert_eq!(
+                error,
+                "`--provider-id` must be canonical 1..=256 byte ASCII [A-Za-z0-9_.:-] and must not be a dot-segment"
+            );
+            assert!(!error.contains(secret_marker));
+        }
+    }
+
+    #[test]
+    fn reputation_commands_reject_duplicate_scalar_options_without_values() {
+        let secret_first = "provider-private-key-first";
+        let secret_second = "provider-private-key-second";
+        let errors = [
+            reputation_snapshot(vec![
+                "--torii-url=http://first.invalid".to_owned(),
+                "--torii-url=http://second.invalid".to_owned(),
+            ])
+            .expect_err("snapshot duplicate must fail"),
+            reputation_fetch(vec![
+                format!("--provider-id={secret_first}"),
+                format!("--provider-id={secret_second}"),
+            ])
+            .expect_err("fetch duplicate must fail"),
+            reputation_watch(vec!["--limit=1".to_owned(), "--limit=2".to_owned()])
+                .expect_err("watch duplicate must fail"),
+            reputation_verify(vec![
+                format!("--provider-id={secret_first}"),
+                format!("--provider-id={secret_second}"),
+            ])
+            .expect_err("verify duplicate must fail"),
+        ];
+        for error in errors {
+            assert!(error.contains("duplicate `--"));
+            assert!(!error.contains(secret_first));
+            assert!(!error.contains(secret_second));
+        }
+    }
+
+    #[test]
+    fn reputation_response_reader_enforces_identity_and_exact_size_cap() {
+        let client = reputation_http_client().expect("hardened reputation client");
+
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            Some(REPUTATION_RESPONSE_MAX_BYTES + 1),
+            None,
+            "",
+            Vec::new(),
+        );
+        let response = client
+            .get(format!("http://{address}/declared-oversize"))
+            .send()
+            .expect("declared-size fixture response");
+        let error = read_reputation_response_bounded(response, "reputation test")
+            .expect_err("oversized declared response must fail");
+        handle.join().expect("declared-size fixture exits");
+        assert!(error.contains("declared more than"));
+
+        let streamed_size = usize::try_from(REPUTATION_RESPONSE_MAX_BYTES + 1)
+            .expect("reputation response cap fits usize");
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            None,
+            None,
+            "",
+            vec![b' '; streamed_size],
+        );
+        let response = client
+            .get(format!("http://{address}/streamed-oversize"))
+            .send()
+            .expect("streamed-size fixture response");
+        let error = read_reputation_response_bounded(response, "reputation test")
+            .expect_err("oversized streamed response must fail");
+        handle.join().expect("streamed-size fixture exits");
+        assert!(error.contains("response exceeded"));
+
+        let exact_size = usize::try_from(REPUTATION_RESPONSE_MAX_BYTES)
+            .expect("reputation response cap fits usize");
+        let mut exact_success = vec![b' '; exact_size];
+        exact_success[..2].copy_from_slice(b"{}");
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            Some(REPUTATION_RESPONSE_MAX_BYTES),
+            Some("identity"),
+            "",
+            exact_success,
+        );
+        let response = client
+            .get(format!("http://{address}/exact-success"))
+            .send()
+            .expect("exact-size success response");
+        let value =
+            read_json_response(response, "reputation test").expect("exact cap must be accepted");
+        handle.join().expect("exact success fixture exits");
+        assert!(value.as_object().is_some());
+
+        let secret_provider = "provider-private-key-error-body";
+        let mut exact_error = vec![b'x'; exact_size];
+        exact_error[..secret_provider.len()].copy_from_slice(secret_provider.as_bytes());
+        let (address, handle) = reputation_response_fixture(
+            "500 Internal Server Error",
+            None,
+            Some(REPUTATION_RESPONSE_MAX_BYTES),
+            None,
+            "",
+            exact_error,
+        );
+        let response = client
+            .get(format!("http://{address}/exact-error"))
+            .send()
+            .expect("exact-size error response");
+        let error = read_json_response(response, "reputation test")
+            .expect_err("error status must remain an error");
+        handle.join().expect("exact error fixture exits");
+        assert!(error.contains("500 Internal Server Error"));
+        assert!(!error.contains(secret_provider));
+
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            Some(2),
+            Some("gzip"),
+            "",
+            b"{}".to_vec(),
+        );
+        let response = client
+            .get(format!("http://{address}/encoded"))
+            .send()
+            .expect("encoded fixture response");
+        let error = read_json_response(response, "reputation test")
+            .expect_err("non-identity response must fail");
+        handle.join().expect("encoded fixture exits");
+        assert!(error.contains("identity content encoding"));
+    }
+
+    #[test]
+    fn reputation_response_reader_requires_canonical_http_metadata() {
+        let client = reputation_http_client().expect("hardened reputation client");
+        let fixtures = [
+            (None, Some(2), "", "canonical Content-Type application/json"),
+            (
+                Some("application/json; charset=utf-8"),
+                Some(2),
+                "",
+                "canonical Content-Type application/json",
+            ),
+            (
+                Some("application/json"),
+                None,
+                "Content-Length: 02\r\n",
+                "canonical unsigned decimal",
+            ),
+            (
+                Some("application/json"),
+                Some(2),
+                "Content-Length: 2\r\n",
+                "duplicate Content-Length",
+            ),
+        ];
+        for (content_type, content_length, extra_headers, expected_error) in fixtures {
+            let (address, handle) = reputation_response_fixture(
+                "200 OK",
+                content_type,
+                content_length,
+                None,
+                extra_headers,
+                b"{}".to_vec(),
+            );
+            let response = client
+                .get(format!("http://{address}/malformed-metadata"))
+                .send()
+                .expect("malformed-metadata fixture response");
+            let error = read_json_response(response, "reputation test")
+                .expect_err("noncanonical response metadata must fail");
+            handle.join().expect("malformed-metadata fixture exits");
+            assert!(
+                error.contains(expected_error),
+                "unexpected error for malformed metadata: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn reputation_endpoint_requires_a_canonical_secure_origin() {
+        let secure = reputation_endpoint("https://torii.example/", "v1/sorafs/reputation/latest")
+            .expect("canonical HTTPS origin");
+        assert_eq!(
+            secure.as_str(),
+            "https://torii.example/v1/sorafs/reputation/latest"
+        );
+        let loopback = reputation_endpoint("http://127.0.0.1:8080", "v1/sorafs/reputation/latest")
+            .expect("loopback HTTP fixture origin");
+        assert_eq!(
+            loopback.as_str(),
+            "http://127.0.0.1:8080/v1/sorafs/reputation/latest"
+        );
+
+        let secret_marker = "runtime-private-marker";
+        for invalid in [
+            "http://torii.example",
+            "https://torii.example/path",
+            "https://torii.example/?query=1",
+            "https://torii.example/#fragment",
+            "https://runtime-private-marker@torii.example",
+            " https://torii.example",
+            "https://torii.example:0",
+            "HTTPS://torii.example",
+        ] {
+            let error = reputation_endpoint(invalid, "v1/sorafs/reputation/latest")
+                .expect_err("noncanonical reputation origin must fail");
+            assert!(!error.contains(invalid));
+            assert!(!error.contains(secret_marker));
+        }
+    }
+
+    #[test]
+    fn reputation_requests_advertise_identity_encoding_only() {
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            Some(2),
+            None,
+            "",
+            b"{}".to_vec(),
+        );
+        let endpoint = Url::parse(&format!("http://{address}/v1/sorafs/reputation/latest"))
+            .expect("fixture endpoint");
+        let client = reputation_http_client().expect("hardened reputation client");
+        let auth = fixture_reputation_auth(0x36, 369);
+
+        let response =
+            send_reputation_request(&client, &endpoint, &auth).expect("signed fixture request");
+        read_json_response(response, "reputation test").expect("fixture JSON");
+        let request = handle.join().expect("identity fixture exits");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("\r\naccept-encoding: identity\r\n")
+        );
+    }
+
+    #[test]
+    fn reputation_reqwest_header_preserves_kana_i105_utf8_bytes() {
+        let literal = fixture_account(0x34)
+            .to_i105_for_discriminant(753)
+            .expect("Kana-bearing canonical I105");
+        assert!(
+            !literal.is_ascii(),
+            "fixture must exercise I105 Kana bytes: {literal}"
+        );
+
+        let client = reputation_http_client().expect("hardened reputation client");
+        let request = client
+            .get("http://127.0.0.1/v1/sorafs/reputation/latest")
+            .header(REPUTATION_HEADER_ACCOUNT, literal.clone())
+            .build()
+            .expect("reqwest accepts the canonical I105 header");
+        let header = request
+            .headers()
+            .get(REPUTATION_HEADER_ACCOUNT)
+            .expect("account header");
+
+        assert_eq!(header.as_bytes(), literal.as_bytes());
+        assert_eq!(
+            std::str::from_utf8(header.as_bytes()).expect("header remains exact UTF-8"),
+            literal
+        );
+    }
+
+    #[test]
+    fn reputation_auth_uses_fresh_nonce_and_signature_for_each_poll() {
+        let auth = fixture_reputation_auth(0x32, 369);
+        let first_endpoint =
+            Url::parse("http://127.0.0.1/v1/sorafs/reputation/events?since=1&limit=10")
+                .expect("first endpoint");
+        let second_endpoint =
+            Url::parse("http://127.0.0.1/v1/sorafs/reputation/events?since=2&limit=10")
+                .expect("second endpoint");
+        let now = UNIX_EPOCH + Duration::from_millis(1_725_000_000_123);
+        let mut rng = IncrementingReputationRng { next: 0x21 };
+
+        let first = reputation_request_headers_with_rng_at(&auth, &first_endpoint, now, &mut rng)
+            .expect("first signed poll");
+        let second = reputation_request_headers_with_rng_at(&auth, &second_endpoint, now, &mut rng)
+            .expect("second signed poll");
+
+        assert_ne!(first.nonce, second.nonce);
+        assert_ne!(first.signature_base64, second.signature_base64);
+        assert_eq!(first.account_literal, auth.account_literal);
+        assert_eq!(second.account_literal, auth.account_literal);
+    }
+
+    #[test]
+    fn reputation_auth_fails_closed_on_rng_and_clock_failures() {
+        let auth = fixture_reputation_auth(0x33, 369);
+        let endpoint =
+            Url::parse("http://127.0.0.1/v1/sorafs/reputation/latest").expect("endpoint");
+        let rng_error = reputation_request_headers_with_rng_at(
+            &auth,
+            &endpoint,
+            UNIX_EPOCH,
+            &mut FailingReputationRng,
+        )
+        .err()
+        .expect("RNG failure must abort signing");
+        assert!(rng_error.contains("OS RNG failed"));
+
+        let clock_error = reputation_request_timestamp_ms_at(
+            UNIX_EPOCH
+                .checked_sub(Duration::from_millis(1))
+                .expect("pre-epoch fixture"),
+        )
+        .expect_err("pre-epoch time must fail");
+        assert!(clock_error.contains("before the Unix epoch"));
+    }
+
+    #[test]
+    fn reputation_watch_issues_exactly_one_fetch_per_poll() {
+        let mut endpoints = Vec::new();
+        let mut next_cursor = 8_u64;
+        let final_value = run_reputation_watch(
+            "http://127.0.0.1:9/",
+            Some(7),
+            Some(12),
+            Some(3),
+            0,
+            |endpoint| {
+                endpoints.push(endpoint.clone());
+                let mut response = Map::new();
+                response.insert("events".to_owned(), Value::Array(Vec::new()));
+                response.insert("next_since".to_owned(), Value::from(next_cursor));
+                next_cursor += 1;
+                Ok(Value::Object(response))
+            },
+        )
+        .expect("bounded watch");
+
+        assert_eq!(endpoints.len(), 3);
+        assert_eq!(endpoints[0].query(), Some("since=7&limit=12"));
+        assert_eq!(endpoints[1].query(), Some("since=8&limit=12"));
+        assert_eq!(endpoints[2].query(), Some("since=9&limit=12"));
+        assert_eq!(
+            final_value.get("next_since").and_then(Value::as_u64),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn reputation_http_client_never_follows_redirects() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect listener");
+        let redirect_address = redirect_listener.local_addr().expect("redirect address");
+        let target_listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+        let target_address = target_listener.local_addr().expect("target address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirect_listener.accept().expect("accept one request");
+            write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: http://{target_address}/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .expect("write redirect");
+        });
+
+        let client = reputation_http_client().expect("hardened reputation client");
+        let response = client
+            .get(format!("http://{redirect_address}/initial"))
+            .send()
+            .expect("receive redirect without following it");
+        assert_eq!(response.status(), StatusCode::FOUND);
+        server.join().expect("redirect server");
+
+        target_listener
+            .set_nonblocking(true)
+            .expect("nonblocking target listener");
+        let target_error = target_listener
+            .accept()
+            .expect_err("redirect target must not receive a request");
+        assert_eq!(target_error.kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn reputation_live_reads_require_only_the_hard_cut_auth_flags() {
+        for error in [
+            reputation_snapshot(vec!["--torii-url=http://127.0.0.1:9/".to_owned()])
+                .expect_err("snapshot auth is mandatory"),
+            reputation_fetch(vec![
+                "--torii-url=http://127.0.0.1:9/".to_owned(),
+                "--provider-id=provider-a".to_owned(),
+            ])
+            .expect_err("fetch auth is mandatory"),
+            reputation_watch(vec!["--torii-url=http://127.0.0.1:9/".to_owned()])
+                .expect_err("watch auth is mandatory"),
+        ] {
+            assert!(error.contains("missing required `--auth-account=I105`"));
+        }
+
+        let account_literal = fixture_account(0x35)
+            .to_i105_for_discriminant(369)
+            .expect("canonical auth account");
+        let error = reputation_snapshot(vec![
+            "--torii-url=http://127.0.0.1:9/".to_owned(),
+            format!("--auth-account={account_literal}"),
+        ])
+        .expect_err("private key file is mandatory");
+        assert!(error.contains("missing required `--auth-private-key-file=PATH`"));
+
+        let inline_secret = "secret-inline-value";
+        let error = reputation_snapshot(vec![
+            "--torii-url=http://127.0.0.1:9/".to_owned(),
+            format!("--auth-private-key={inline_secret}"),
+        ])
+        .expect_err("inline authentication secrets are retired");
+        assert!(error.contains("unrecognised option `--auth-private-key`"));
+        assert!(!error.contains(inline_secret));
+
+        let witness_secret = "secret-witness-value";
+        let error = reputation_snapshot(vec![
+            "--torii-url=http://127.0.0.1:9/".to_owned(),
+            format!("--auth-witness={witness_secret}"),
+        ])
+        .expect_err("witness compatibility is retired");
+        assert!(error.contains("unrecognised option `--auth-witness`"));
+        assert!(!error.contains(witness_secret));
+
+        let error = reputation_snapshot(vec![
+            "--torii-url=http://127.0.0.1:9/".to_owned(),
+            "--auth-account=merchant@paynet".to_owned(),
+            "--auth-private-key-file=/does/not/matter".to_owned(),
+        ])
+        .expect_err("account aliases are retired");
+        assert!(error.contains("exact canonical I105 literal"));
+    }
+
+    #[test]
+    fn reputation_auth_private_key_must_match_the_account() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("reputation.key");
+        let account_key = fixture_keypair(0x41);
+        let wrong_key = fixture_keypair(0x42);
+        write_reputation_private_key(&path, &wrong_key);
+        let account_literal = AccountId::new(account_key.public_key().clone())
+            .to_i105_for_discriminant(369)
+            .expect("account literal");
+
+        let error = load_reputation_request_auth(
+            Some(account_literal),
+            Some(path),
+            "sorafs_cli reputation snapshot",
+        )
+        .err()
+        .expect("mismatched private key must fail");
+
+        assert!(error.contains("does not control"));
+    }
+
+    #[test]
+    fn reputation_auth_private_key_rejects_malformed_oversize_and_leaking_errors() {
+        let directory = tempdir().expect("tempdir");
+        let malformed_path = directory.path().join("malformed.key");
+        let secret = "secret-material-that-must-not-appear";
+        fs::write(&malformed_path, secret).expect("write malformed key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&malformed_path, fs::Permissions::from_mode(0o600))
+                .expect("secure malformed fixture");
+        }
+        let error =
+            load_reputation_auth_private_key(&malformed_path, "test").expect_err("malformed key");
+        assert!(error.contains("malformed"));
+        assert!(!error.contains(secret));
+
+        let utf8_path = directory.path().join("invalid-utf8.key");
+        fs::write(&utf8_path, [0xff_u8]).expect("write invalid UTF-8 key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&utf8_path, fs::Permissions::from_mode(0o600))
+                .expect("secure UTF-8 fixture");
+        }
+        let error =
+            load_reputation_auth_private_key(&utf8_path, "test").expect_err("invalid UTF-8 key");
+        assert!(error.contains("not valid UTF-8"));
+
+        let oversize_path = directory.path().join("oversize.key");
+        fs::write(
+            &oversize_path,
+            vec![b'a'; REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES as usize + 1],
+        )
+        .expect("write oversize key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&oversize_path, fs::Permissions::from_mode(0o600))
+                .expect("secure oversize fixture");
+        }
+        let error =
+            load_reputation_auth_private_key(&oversize_path, "test").expect_err("oversize key");
+        assert!(error.contains("between 1 and"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reputation_auth_private_key_rejects_symlinks_hardlinks_and_open_permissions() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let directory = tempdir().expect("tempdir");
+        let key_pair = fixture_keypair(0x43);
+        let target = directory.path().join("target.key");
+        write_reputation_private_key(&target, &key_pair);
+
+        let symlink_path = directory.path().join("symlink.key");
+        symlink(&target, &symlink_path).expect("create symlink fixture");
+        let error =
+            load_reputation_auth_private_key(&symlink_path, "test").expect_err("symlink key");
+        assert!(error.contains("non-symlink"));
+
+        let hardlink = directory.path().join("hardlink.key");
+        fs::hard_link(&target, &hardlink).expect("create hardlink fixture");
+        let error = load_reputation_auth_private_key(&target, "test").expect_err("hardlinked key");
+        assert!(error.contains("exactly one hard link"));
+        fs::remove_file(hardlink).expect("remove hardlink fixture");
+
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640))
+            .expect("make key group-readable");
+        let error =
+            load_reputation_auth_private_key(&target, "test").expect_err("insecure key mode");
+        assert!(error.contains("group or world permissions"));
     }
 
     #[test]
@@ -21790,6 +23356,27 @@ mod tests {
     }
 
     #[test]
+    fn storage_manifest_helpers_reject_noncanonical_commitments() {
+        let manifest = sample_manifest();
+        assert_eq!(
+            manifest_root_cid_hex(&manifest).expect("canonical manifest root CID"),
+            hex_encode(&manifest.root_cid)
+        );
+        assert_eq!(
+            chunk_profile_from_manifest(&manifest).expect("registered chunk profile"),
+            sorafs_manifest::chunker_registry::default_descriptor().profile
+        );
+
+        let mut invalid_cid = manifest.clone();
+        invalid_cid.root_cid[0] = 0;
+        assert!(manifest_root_cid_hex(&invalid_cid).is_err());
+
+        let mut substituted_profile = manifest;
+        substituted_profile.chunking.max_size -= 1;
+        assert!(chunk_profile_from_manifest(&substituted_profile).is_err());
+    }
+
+    #[test]
     fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
         let account = fixture_account(0x5A);
         let encoded = account
@@ -22285,8 +23872,7 @@ fn build_fetch_summary(
         "rollout_phase".into(),
         Value::from(options.rollout_phase.label()),
     );
-    let write_mode_label = options.write_mode.label().replace('_', "-");
-    root.insert("write_mode".into(), Value::from(write_mode_label));
+    root.insert("write_mode".into(), Value::from(options.write_mode.label()));
     root.insert(
         "write_mode_enforces_pq".into(),
         Value::from(options.write_mode.enforces_pq_only()),

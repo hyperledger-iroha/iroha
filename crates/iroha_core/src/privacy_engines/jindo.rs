@@ -84,6 +84,63 @@ pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
 /// Maximum polynomial count in one first-release batched opening.
 pub const JINDO_MAX_BATCH_SIZE_V1: usize = 4;
 
+/// Internal reason why one coefficient vector is not the unique first-release
+/// encoding of a Jindo polynomial.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JindoCanonicalPolynomialErrorV1 {
+    Empty {
+        polynomial_index: usize,
+    },
+    TooLarge {
+        polynomial_index: usize,
+        count: usize,
+    },
+    NonCanonicalCoefficient {
+        polynomial_index: usize,
+        coefficient_index: usize,
+    },
+    TrailingZeroCoefficient {
+        polynomial_index: usize,
+    },
+}
+
+/// Enforce the one accepted variable-length encoding of a degree-bounded
+/// polynomial before padding it to the native fixed-width representation.
+///
+/// The zero polynomial is `[0]`. Every other polynomial is a non-empty vector
+/// of canonical field elements whose final coefficient is non-zero. This
+/// rejects all alternate encodings that would become equal after zero-padding.
+fn validate_canonical_polynomial_v1(
+    coefficients: &[PrivacyJindoFieldElementV1],
+    polynomial_index: usize,
+) -> Result<(), JindoCanonicalPolynomialErrorV1> {
+    if coefficients.is_empty() {
+        return Err(JindoCanonicalPolynomialErrorV1::Empty { polynomial_index });
+    }
+    if coefficients.len() > JINDO_MAX_COEFFICIENTS_V1 {
+        return Err(JindoCanonicalPolynomialErrorV1::TooLarge {
+            polynomial_index,
+            count: coefficients.len(),
+        });
+    }
+    for (coefficient_index, coefficient) in coefficients.iter().enumerate() {
+        if field::JindoFieldElementV1::from_canonical_bytes(coefficient.encoding).is_none() {
+            return Err(JindoCanonicalPolynomialErrorV1::NonCanonicalCoefficient {
+                polynomial_index,
+                coefficient_index,
+            });
+        }
+    }
+    if coefficients.len() > 1
+        && coefficients
+            .last()
+            .is_some_and(|coefficient| coefficient.encoding == [0; 32])
+    {
+        return Err(JindoCanonicalPolynomialErrorV1::TrailingZeroCoefficient { polynomial_index });
+    }
+    Ok(())
+}
+
 /// Secret witness accepted by the canonical first-release Jindo action builder.
 ///
 /// This type intentionally implements neither `Debug`, `Clone`, nor a
@@ -126,34 +183,8 @@ impl JindoPrivacyActionWitnessV1 {
             });
         }
         for (polynomial_index, polynomial) in self.polynomials.iter().enumerate() {
-            if polynomial.is_empty() {
-                return Err(JindoPrivacyActionWitnessErrorV1::EmptyPolynomial { polynomial_index });
-            }
-            if polynomial.len() > JINDO_MAX_COEFFICIENTS_V1 {
-                return Err(JindoPrivacyActionWitnessErrorV1::PolynomialTooLarge {
-                    polynomial_index,
-                    count: polynomial.len(),
-                    max: JINDO_MAX_COEFFICIENTS_V1,
-                });
-            }
-            for (coefficient_index, coefficient) in polynomial.iter().enumerate() {
-                if field::JindoFieldElementV1::from_canonical_bytes(coefficient.encoding).is_none()
-                {
-                    return Err(JindoPrivacyActionWitnessErrorV1::NonCanonicalCoefficient {
-                        polynomial_index,
-                        coefficient_index,
-                    });
-                }
-            }
-            if polynomial.len() > 1
-                && polynomial
-                    .last()
-                    .is_some_and(|coefficient| coefficient.encoding == [0; 32])
-            {
-                return Err(JindoPrivacyActionWitnessErrorV1::TrailingZeroCoefficient {
-                    polynomial_index,
-                });
-            }
+            validate_canonical_polynomial_v1(polynomial, polynomial_index)
+                .map_err(JindoPrivacyActionWitnessErrorV1::from)?;
             if self.polynomials[..polynomial_index]
                 .iter()
                 .any(|earlier| earlier == polynomial)
@@ -237,6 +268,34 @@ pub enum JindoPrivacyActionWitnessErrorV1 {
     /// The evaluation point is not a canonical coefficient-field element.
     #[error("Jindo witness evaluation point is non-canonical")]
     NonCanonicalEvaluationPoint,
+}
+
+impl From<JindoCanonicalPolynomialErrorV1> for JindoPrivacyActionWitnessErrorV1 {
+    fn from(error: JindoCanonicalPolynomialErrorV1) -> Self {
+        match error {
+            JindoCanonicalPolynomialErrorV1::Empty { polynomial_index } => {
+                Self::EmptyPolynomial { polynomial_index }
+            }
+            JindoCanonicalPolynomialErrorV1::TooLarge {
+                polynomial_index,
+                count,
+            } => Self::PolynomialTooLarge {
+                polynomial_index,
+                count,
+                max: JINDO_MAX_COEFFICIENTS_V1,
+            },
+            JindoCanonicalPolynomialErrorV1::NonCanonicalCoefficient {
+                polynomial_index,
+                coefficient_index,
+            } => Self::NonCanonicalCoefficient {
+                polynomial_index,
+                coefficient_index,
+            },
+            JindoCanonicalPolynomialErrorV1::TrailingZeroCoefficient { polynomial_index } => {
+                Self::TrailingZeroCoefficient { polynomial_index }
+            }
+        }
+    }
 }
 
 /// Exact signature-bound transaction fields for one direct Jindo action.
@@ -1023,6 +1082,14 @@ mod tests {
         PrivacyJindoFieldElementV1::new(encoding)
     }
 
+    fn field_modulus_plus_one() -> PrivacyJindoFieldElementV1 {
+        let mut value = field_modulus();
+        value.encoding[0] = value.encoding[0]
+            .checked_add(1)
+            .expect("Jindo modulus low byte leaves room for one");
+        value
+    }
+
     fn authority() -> AccountId {
         AccountId::new(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -1113,7 +1180,22 @@ mod tests {
             }
         );
         assert_eq!(
+            witness_error(vec![vec![field_modulus_plus_one()]], field(1)),
+            JindoPrivacyActionWitnessErrorV1::NonCanonicalCoefficient {
+                polynomial_index: 0,
+                coefficient_index: 0,
+            }
+        );
+        assert_eq!(
             witness_error(vec![vec![field(1), field(0)]], field(1)),
+            JindoPrivacyActionWitnessErrorV1::TrailingZeroCoefficient {
+                polynomial_index: 0,
+            }
+        );
+        let mut trailing_zero_at_cap = vec![field(1); JINDO_MAX_COEFFICIENTS_V1];
+        trailing_zero_at_cap[JINDO_MAX_COEFFICIENTS_V1 - 1] = field(0);
+        assert_eq!(
+            witness_error(vec![trailing_zero_at_cap], field(1)),
             JindoPrivacyActionWitnessErrorV1::TrailingZeroCoefficient {
                 polynomial_index: 0,
             }
@@ -1131,6 +1213,14 @@ mod tests {
         assert!(
             JindoPrivacyActionWitnessV1::try_new(vec![vec![field(0)]], field(0)).is_ok(),
             "the uniquely encoded zero polynomial and zero point remain valid"
+        );
+        assert!(
+            JindoPrivacyActionWitnessV1::try_new(
+                vec![vec![field(1); JINDO_MAX_COEFFICIENTS_V1]],
+                field(0),
+            )
+            .is_ok(),
+            "the exact coefficient cap remains valid when its leading coefficient is non-zero"
         );
     }
 
@@ -1269,10 +1359,9 @@ mod tests {
                 "the proof-empty intent projection must never escape as a prepared action"
             );
             let mut proof_empty_escape = envelope.clone();
-            proof_empty_escape.proof =
-                PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
-                    Vec::new(),
-                ));
+            proof_empty_escape.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(
+                PrivacyProofBytesV1::new(Vec::new()),
+            );
             assert!(
                 proof_empty_escape
                     .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())

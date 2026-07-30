@@ -230,20 +230,27 @@ pub(crate) const ZK_X509_LOGICAL_REGISTRATIONS_V1: usize = 49;
 /// Their native logarithms are `[5, 8, 15, 16, 18, 19]`.
 pub(crate) const ZK_X509_TRACE_GROUPS_V1: usize = 6;
 /// Exact 64-column physical commitment chunks in the canonical X5S1 aggregate.
-pub(crate) const ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1: usize = 79;
+pub(crate) const ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1: usize = 80;
 /// Column width of one independently committed physical chunk.
 pub(crate) const ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1: u16 = 64;
 /// Maximum columns transformed in one streaming LDE batch.
 pub(crate) const ZK_X509_LDE_COLUMN_BATCH_V1: u16 = 8;
 /// Hard peak-memory envelope for the native prover.
 ///
-/// The implementation bound is approximately 8.85 GiB. Twelve GiB leaves
-/// explicit allocator and stack overhead under the fixed release benchmark.
+/// The degree-seven DER composition stage has a 10.13 GiB retained-allocation
+/// lower bound before allocator and stack overhead. Twelve GiB remains the
+/// release ceiling, not a claimed measurement; activation stays closed until
+/// the optimized prover is measured below it on the release benchmark.
 pub(crate) const ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1: u64 = 12 * 1024 * 1024 * 1024;
 /// Hard wall-clock target for one proof on the release benchmark machine.
 pub(crate) const ZK_X509_PROVER_TARGET_SECONDS_V1: u64 = 300;
 /// Maximum algebraic constraint degree before quotienting.
-pub(crate) const ZK_X509_MAX_CONSTRAINT_DEGREE_V1: u8 = 4;
+///
+/// The complete strict-DER evaluator attains degree seven.  This is measured
+/// independently over affine row samples; registering the former degree-four
+/// ceiling truncated genuine DER quotients and made proof construction fail
+/// closed.
+pub(crate) const ZK_X509_MAX_CONSTRAINT_DEGREE_V1: u8 = 7;
 /// Low-degree-extension blow-up factor.
 pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 64;
 /// Sole common MAIN LDE logarithm.
@@ -263,10 +270,14 @@ pub(crate) const ZK_X509_FRI_FOLDING_ARITY_V1: u8 = 2;
 pub(crate) const ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1: u16 = 1_024;
 /// Maximum degree of the terminal FRI polynomial.
 pub(crate) const ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 31;
-/// Coefficient chunks used to normalize the degree-four quotient.
+/// Coefficient chunks used to normalize the maximum degree-seven quotient.
 pub(crate) const ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
 /// Inclusive degree of each trace zero-knowledge mask multiplier.
-pub(crate) const ZK_X509_TRACE_MASK_DEGREE_V1: u16 = 429;
+///
+/// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension
+/// degree four, one DEEP point, and 58 FRI queries, requires 802 randomizer
+/// coefficients.
+pub(crate) const ZK_X509_TRACE_MASK_DEGREE_V1: u16 = 801;
 /// Exact common-domain FRI rounds at the maximum native trace size.
 pub(crate) const ZK_X509_FRI_ROUNDS_V1: u8 = 15;
 /// Exclusive common FRI degree cap.
@@ -296,15 +307,15 @@ pub(crate) const ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 3;
 /// Compact-CA trace mask degree for `h = 5q + 16 = 306`.
 pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 305;
 /// Exact maximum of the main aggregate proof before DEEP openings.
-pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 6_661_368;
+pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 6_812_632;
 /// Exact maximum of the compact-CA aggregate proof before DEEP openings.
 pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 984_216;
 /// Exact X5C1 claim-envelope bytes around the compact-CA aggregate proof.
 pub(crate) const ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1: u32 = 1_310;
 /// Exact X5M1 fixed framing plus DER, RFC, SHA, and P-256 terminal frames.
-pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 10_788;
-/// Exact maximum canonical reduced SHA fixed-oracle X5F1 sidecar.
-pub(crate) const ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1: u32 = 383_196;
+pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 11_956;
+/// Exact maximum canonical two-oracle SHA plus P-256 log19 X5F1 sidecar.
+pub(crate) const ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1: u32 = 825_776;
 /// Exact main plus compact-CA current/next Fp4 DEEP openings and composition claims.
 pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 402_336;
 /// Fiat-Shamir proof-of-work grinding bits.
@@ -318,13 +329,13 @@ pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 /// Consensus proof-byte ceiling inherited by this engine.
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
-pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_443_306;
+pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_038_318;
 /// Provisional first-release transparent-proof envelope descriptor.
 ///
 /// Its algebraic and wire bounds are fixed for implementation, but it is not
 /// activatable until the full credential constructor/verifier, combined CA
 /// envelope, KATs, and measured resource run exist.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=79|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-oracle-independent-width=340-reconstruct-full472|max-sha-fixed-sidecar=383196|shared-x5b1-challenges=main-six-base-roots+ca-base-root+main-and-ca-public-profile|main-trace-hiding-coefficients=430|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=4|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8443306|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|resource-measurement=pending|full-credential-verifier=pending|activation=false";
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-oracle-independent-width=340-reconstruct-full472|p256-log19-fixed-oracle-independent-width=404-six-role-schedules-alias-fifteen-registrations|max-two-oracle-fixed-sidecar=825776|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9038318|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|resource-measurement=pending|full-credential-verifier=pending|activation=false";
 /// Whether the implementation-derived full credential soundness analysis is fixed.
 pub(crate) const ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1: bool = false;
 /// Whether release-machine row, time, and peak-memory measurements are fixed.
@@ -583,8 +594,8 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         || ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1 != 1_024
         || ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1 != 31
         || ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 != 4
-        || ZK_X509_TRACE_MASK_DEGREE_V1 != 429
-        || main_mask.minimum_mask_coefficients != 430
+        || ZK_X509_TRACE_MASK_DEGREE_V1 != 801
+        || main_mask.minimum_mask_coefficients != 802
         || main_mask.minimum_mask_degree != usize::from(ZK_X509_TRACE_MASK_DEGREE_V1)
         || ca_mask.minimum_mask_coefficients != 306
         || ca_mask.minimum_mask_degree != usize::from(ZK_X509_CA_TRACE_MASK_DEGREE_V1)
@@ -662,19 +673,21 @@ mod tests {
         validate_profile_v1().expect("fixed zk-X509 profile");
         assert_eq!(ZK_X509_LOGICAL_REGISTRATIONS_V1, 49);
         assert_eq!(ZK_X509_TRACE_GROUPS_V1, 6);
-        assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1, 79);
+        assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1, 80);
         assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1, 64);
         assert_eq!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, 19);
         assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 25);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 8_443_306);
-        assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 10_788);
-        assert_eq!(ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1, 383_196);
+        assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 6_812_632);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_038_318);
+        assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 11_956);
+        assert_eq!(ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1, 825_776);
         assert_eq!(
             ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            993_878
+            398_866
         );
         assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 58);
-        assert_eq!(ZK_X509_TRACE_MASK_DEGREE_V1, 429);
+        assert_eq!(ZK_X509_MAX_CONSTRAINT_DEGREE_V1, 7);
+        assert_eq!(ZK_X509_TRACE_MASK_DEGREE_V1, 801);
         assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 305);
         assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1);
         assert_eq!(ZK_X509_TARGET_SOUNDNESS_BITS_V1, 128);

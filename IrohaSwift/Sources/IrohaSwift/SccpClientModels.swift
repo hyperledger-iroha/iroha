@@ -337,7 +337,7 @@ enum SccpSubmitValidation {
     static let maximumTransactionPayloadBytes = 16 * 1024 * 1024
     static let maximumArtifactBytes = maximumDestinationArtifactBytes
 
-    /// Require the canonical compact eight-field `TransactionPayload` layout used by SCCP.
+    /// Require the canonical compact nine-field `TransactionPayload` layout used by SCCP.
     static func canonicalTransactionPayload(
         _ payload: Data,
         creationTimeMs: UInt64?,
@@ -353,10 +353,11 @@ enum SccpSubmitValidation {
         let nonce = try transaction.takeField("nonce")
         let feePayment = try transaction.takeField("fee_payment")
         let metadata = try transaction.takeField("metadata")
+        let attachments = try transaction.takeField("attachments")
         guard transaction.isFinished, !chain.isEmpty, !authority.isEmpty, !executable.isEmpty,
               creation.count == MemoryLayout<UInt64>.size else {
             throw SccpV1Error.invalid(
-                "transaction_payload_b64 must contain exactly one canonical eight-field TransactionPayload"
+                "transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload"
             )
         }
         let exactCreation = creation.withUnsafeBytes { bytes in
@@ -380,6 +381,7 @@ enum SccpSubmitValidation {
         }
         try requireAbsentCompactOption(timeToLive, field: "time_to_live_ms")
         try requireAbsentCompactOption(nonce, field: "nonce")
+        try requireAbsentCompactOption(attachments, field: "attachments")
         let payloadFeeBinding = try requireCanonicalSccpFeePayment(feePayment)
         if let expectedFeePayment {
             let requestFeeBinding = try requireCanonicalSccpFeePayment(
@@ -466,7 +468,9 @@ enum SccpSubmitValidation {
 
     private static func requireCanonicalChargeLimits(_ payload: Data) throws {
         var limits = SccpCompactTransactionCursor(payload)
-        let count = try limits.takeLength("fee_payment.charge_limits.count")
+        // Norito's compact-length flag applies to enclosing fields and
+        // elements, while sequence counts remain fixed-width little-endian.
+        let count = try limits.takeUInt64("fee_payment.charge_limits.count")
         guard count <= UInt64(FeeChargeKind.allCases.count) else {
             throw SccpV1Error.invalid(
                 "fee_payment.charge_limits contains duplicate or unknown charge kinds"

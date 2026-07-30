@@ -100,7 +100,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: SoraFS pin-register Python SDK tests
         run: bash ci/check_sorafs_pin_register_python_sdk.sh
 
@@ -168,6 +168,7 @@ jobs:
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-major-script
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-venv-rebuild-script
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-bytecode-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-lock-script
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-script-workflow
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-needs-workflow
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-source-endpoint

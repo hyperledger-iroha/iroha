@@ -1111,6 +1111,8 @@ mod app {
             | SorafsCommand::Transparency(_)
             | SorafsCommand::Moderation(_)
             | SorafsCommand::Repair(_)
+            | SorafsCommand::Billing(_)
+            | SorafsCommand::Hedging(_)
             | SorafsCommand::Gc(_)
             | SorafsCommand::Fetch(_) => false,
         }

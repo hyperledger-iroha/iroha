@@ -115,6 +115,7 @@ fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_sorafs_proof_outcome(FindSorafsProofOutcome),
         visit_find_sorafs_proof_outcome_events(FindSorafsProofOutcomeEvents),
         visit_find_sorafs_reputation_journal_authority_policy(FindSorafsReputationJournalAuthorityPolicy),
+        visit_find_sorafs_reputation_journal_event_by_source_id(FindSorafsReputationJournalEventBySourceId),
         visit_find_sorafs_reputation_journal_events(FindSorafsReputationJournalEvents),
         visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy),
         visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal),
@@ -382,6 +383,9 @@ macro_rules! query_visitors {
             visit_find_sorafs_reputation_journal_authority_policy(
                 &$crate::query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy
             ),
+            visit_find_sorafs_reputation_journal_event_by_source_id(
+                &$crate::query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId
+            ),
             visit_find_sorafs_reputation_journal_events(
                 &$crate::query::sorafs::prelude::FindSorafsReputationJournalEvents
             ),
@@ -575,6 +579,7 @@ mod tests {
             SingularQueryBox::FindSorafsProofOutcome(_) => {}
             SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {}
             SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_) => {}
+            SingularQueryBox::FindSorafsReputationJournalEventBySourceId(_) => {}
             SingularQueryBox::FindSorafsReputationJournalEvents(_) => {}
             SingularQueryBox::FindSorafsModerationPolicy(_) => {}
             SingularQueryBox::FindSorafsModerationAppeal(_) => {}
@@ -735,6 +740,12 @@ mod tests {
             SingularQueryBox::FindSorafsPinManifest(
                 crate::query::sorafs::prelude::FindSorafsPinManifest::new(
                     crate::sorafs::pin_registry::ManifestDigest::new([0x52; 32]),
+                    None,
+                ),
+            ),
+            SingularQueryBox::FindSorafsReputationJournalEventBySourceId(
+                crate::query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId::new(
+                    crate::sorafs::reputation::ReputationJournalSourceIdV1([0x53; 32]),
                     None,
                 ),
             ),

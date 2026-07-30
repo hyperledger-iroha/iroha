@@ -12,3 +12,4 @@
 --min-providers 3
 --min-challenges 3
 --min-proofs 3
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

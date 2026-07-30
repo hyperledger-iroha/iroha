@@ -88,7 +88,6 @@ impl Iroha {
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
-    #[expect(clippy::unused_self)]
     #[allow(clippy::result_large_err)]
     pub fn submit_all<'isi, I: BuiltInInstruction + NoritoSerialize + 'isi>(
         &self,

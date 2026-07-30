@@ -41,3 +41,4 @@ policy_config,quote_matrix,ledger_digest,lifecycle_service,signed_routes,reserve
 /runtime/sorafs/reserve/provider-bake.json
 --governance-approval-evidence
 /runtime/sorafs/reserve/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

@@ -3,6 +3,8 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 
+pub mod privacy_wallet_worker;
+
 use core::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     time::Duration,
@@ -113,6 +115,7 @@ use iroha_data_model::{
             SettlementLeg, SettlementPlan,
         },
         smart_contract_code::CommitContractDeployment,
+        sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
         zk::{
             AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAsset, Shield, Unshield,
             VerifyProof, ZkAssetMode, ZkTransfer,
@@ -167,6 +170,13 @@ use iroha_data_model::{
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
+    sorafs::{
+        capacity::ProviderId,
+        pin_registry::{
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+        },
+    },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
         TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
@@ -238,12 +248,13 @@ use sorafs_manifest::{
         SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
@@ -518,6 +529,205 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
         Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+}
+
+fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
+    require_non_blank_unpadded(value, field)?;
+    if value.chars().any(char::is_whitespace)
+        || value.contains('@')
+        || value.contains('#')
+        || value.contains('$')
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be an exact canonical I105 account id"
+        )));
+    }
+    let address = AccountAddress::parse_encoded(value, None).map_err(|err| {
+        PyValueError::new_err(format!(
+            "{field} must be an exact canonical I105 account id: {err}"
+        ))
+    })?;
+    address.to_account_id().map_err(|err| {
+        PyValueError::new_err(format!(
+            "{field} must be an exact canonical I105 account id: {err}"
+        ))
+    })
+}
+
+fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must contain exactly 64 lowercase hexadecimal characters"
+        )));
+    }
+    let decoded = hex::decode(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid {field}: {err}")))?;
+    let bytes: [u8; 32] = decoded
+        .try_into()
+        .map_err(|_| PyValueError::new_err(format!("{field} must contain exactly 32 bytes")))?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(PyValueError::new_err(format!(
+            "{field} must not be the zero identifier"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn require_exact_dict_fields(
+    value: &Bound<'_, PyDict>,
+    fields: &[&str],
+    context: &str,
+) -> PyResult<()> {
+    if value.len() != fields.len() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must contain exactly [{}]",
+            fields.join(", ")
+        )));
+    }
+    for key in value.keys().iter() {
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyTypeError::new_err(format!("{context} field names must be strings")))?;
+        if !fields.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{context} must contain exactly [{}]",
+                fields.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn required_dict_field<'py>(
+    value: &Bound<'py, PyDict>,
+    field: &str,
+    context: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    value
+        .get_item(field)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{field} is required")))
+}
+
+fn required_dict_string(value: &Bound<'_, PyDict>, field: &str, context: &str) -> PyResult<String> {
+    required_dict_field(value, field, context)?
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.{field} must be a string")))
+}
+
+fn required_dict_u64(value: &Bound<'_, PyDict>, field: &str, context: &str) -> PyResult<u64> {
+    let field_value = required_dict_field(value, field, context)?;
+    if field_value.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context}.{field} must be an integer"
+        )));
+    }
+    field_value
+        .extract::<u64>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.{field} must be a non-negative u64")))
+}
+
+fn parse_provider_ingest_completion_authority(
+    value: &Bound<'_, PyDict>,
+) -> PyResult<ProviderIngestCompletionAuthorityV1> {
+    const CONTEXT: &str = "expected_authority";
+    require_exact_dict_fields(value, &["provider_owner", "signer_policy"], CONTEXT)?;
+    let provider_owner = required_dict_string(value, "provider_owner", CONTEXT)?;
+    let signer_policy_value = required_dict_field(value, "signer_policy", CONTEXT)?;
+    let signer_policy = signer_policy_value
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err("expected_authority.signer_policy must be a mapping"))?;
+    const POLICY_CONTEXT: &str = "expected_authority.signer_policy";
+    require_exact_dict_fields(
+        signer_policy,
+        &[
+            "policy_id",
+            "revision",
+            "predecessor_digest",
+            "policy_digest",
+        ],
+        POLICY_CONTEXT,
+    )?;
+
+    let revision = required_dict_u64(signer_policy, "revision", POLICY_CONTEXT)?;
+    if revision == 0 {
+        return Err(PyValueError::new_err(
+            "expected_authority.signer_policy.revision must be greater than zero",
+        ));
+    }
+    let predecessor_value =
+        required_dict_field(signer_policy, "predecessor_digest", POLICY_CONTEXT)?;
+    let predecessor_digest = if predecessor_value.is_none() {
+        None
+    } else {
+        let predecessor = predecessor_value.extract::<String>().map_err(|_| {
+            PyTypeError::new_err(
+                "expected_authority.signer_policy.predecessor_digest must be a string or null",
+            )
+        })?;
+        Some(parse_nonzero_lower_hex_32(
+            &predecessor,
+            "expected_authority.signer_policy.predecessor_digest",
+        )?)
+    };
+    match (revision, predecessor_digest) {
+        (1, Some(_)) => {
+            return Err(PyValueError::new_err(
+                "expected_authority.signer_policy.predecessor_digest must be absent at revision one",
+            ));
+        }
+        (2.., None) => {
+            return Err(PyValueError::new_err(
+                "expected_authority.signer_policy.predecessor_digest is required after revision one",
+            ));
+        }
+        _ => {}
+    }
+
+    let signer_policy = ProviderIngestCompletionSignerPolicyV1 {
+        policy_id: parse_nonzero_lower_hex_32(
+            &required_dict_string(signer_policy, "policy_id", POLICY_CONTEXT)?,
+            "expected_authority.signer_policy.policy_id",
+        )?,
+        revision,
+        predecessor_digest,
+        policy_digest: parse_nonzero_lower_hex_32(
+            &required_dict_string(signer_policy, "policy_digest", POLICY_CONTEXT)?,
+            "expected_authority.signer_policy.policy_digest",
+        )?,
+    };
+    if !signer_policy.is_valid() {
+        return Err(PyValueError::new_err(
+            "expected_authority.signer_policy is not canonical",
+        ));
+    }
+    Ok(ProviderIngestCompletionAuthorityV1::new(
+        parse_exact_i105_account_id(&provider_owner, "expected_authority.provider_owner")?,
+        signer_policy,
+    ))
+}
+
+fn parse_provider_ingest_finalized_anchor(
+    value: &Bound<'_, PyDict>,
+) -> PyResult<ProviderIngestFinalizedAnchorV1> {
+    const CONTEXT: &str = "finalized_anchor";
+    require_exact_dict_fields(value, &["height", "block_hash"], CONTEXT)?;
+    let height = required_dict_u64(value, "height", CONTEXT)?;
+    if height == 0 {
+        return Err(PyValueError::new_err(
+            "finalized_anchor.height must be greater than zero",
+        ));
+    }
+    Ok(ProviderIngestFinalizedAnchorV1 {
+        height,
+        block_hash: parse_nonzero_lower_hex_32(
+            &required_dict_string(value, "block_hash", CONTEXT)?,
+            "finalized_anchor.block_hash",
+        )?,
+    })
 }
 
 fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
@@ -3539,6 +3749,37 @@ fn sorafs_multi_fetch_local_py(
     Ok(result.unbind())
 }
 
+fn parse_gateway_transport_policy_v1(raw: &str) -> PyResult<TransportPolicy> {
+    if raw.is_empty() {
+        return Err(PyValueError::new_err("transport_policy must not be empty"));
+    }
+    TransportPolicy::parse(raw).ok_or_else(|| {
+        PyValueError::new_err(
+            "transport_policy must be one of 'soranet-first', 'soranet-strict', or 'direct-only'",
+        )
+    })
+}
+
+fn parse_gateway_rollout_phase_v1(raw: &str) -> PyResult<RolloutPhase> {
+    if raw.is_empty() {
+        return Err(PyValueError::new_err("rollout_phase must not be empty"));
+    }
+    RolloutPhase::parse(raw).ok_or_else(|| {
+        PyValueError::new_err("rollout_phase must be one of 'canary', 'ramp', or 'default'")
+    })
+}
+
+fn parse_gateway_anonymity_policy_v1(raw: &str) -> PyResult<AnonymityPolicy> {
+    if raw.is_empty() {
+        return Err(PyValueError::new_err("anonymity_policy must not be empty"));
+    }
+    AnonymityPolicy::parse(raw).ok_or_else(|| {
+        PyValueError::new_err(
+            "anonymity_policy must be one of 'anon-guard-pq', 'anon-majority-pq', or 'anon-strict-pq'",
+        )
+    })
+}
+
 #[pyfunction]
 #[pyo3(
     name = "sorafs_gateway_fetch",
@@ -3710,39 +3951,14 @@ fn sorafs_gateway_fetch_py(
         );
     }
     if let Some(raw) = options.transport_policy.as_ref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err("transport_policy must not be empty"));
-        }
-        let policy = TransportPolicy::parse(trimmed).ok_or_else(|| {
-            PyValueError::new_err(
-                "transport_policy must be one of 'soranet-first', 'soranet-strict', or 'direct-only'",
-            )
-        })?;
-        orchestrator_config.transport_policy = policy;
+        orchestrator_config.transport_policy = parse_gateway_transport_policy_v1(raw)?;
     }
     if let Some(raw) = options.rollout_phase.as_ref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err("rollout_phase must not be empty"));
-        }
-        let phase = RolloutPhase::parse(trimmed).ok_or_else(|| {
-            PyValueError::new_err(
-                "rollout_phase must be one of 'canary', 'ramp', 'default', or stage_a/stage_b/stage_c aliases",
-            )
-        })?;
-        orchestrator_config = orchestrator_config.with_rollout_phase(phase);
+        orchestrator_config =
+            orchestrator_config.with_rollout_phase(parse_gateway_rollout_phase_v1(raw)?);
     }
     if let Some(raw) = options.anonymity_policy.as_ref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err("anonymity_policy must not be empty"));
-        }
-        let policy = AnonymityPolicy::parse(trimmed).ok_or_else(|| {
-            PyValueError::new_err(
-                "anonymity_policy must be one of 'stage-a', 'anon-guard-pq', 'stage-b', 'anon-majority-pq', 'stage-c', or 'anon-strict-pq'",
-            )
-        })?;
+        let policy = parse_gateway_anonymity_policy_v1(raw)?;
         orchestrator_config.anonymity_policy = policy;
         orchestrator_config.anonymity_policy_override = Some(policy);
     }
@@ -4343,6 +4559,21 @@ fn sorafs_fixed32_from_bytes_py(value: &[u8], context: &str) -> PyResult<[u8; 32
     fixed_array::<32>(value, context)
 }
 
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_appeal_finance_cancel_asset_lock_json")]
+fn sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+    norito_bytes: &[u8],
+    label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let outcome = validate_appeal_finance_cancel_asset_lock_bytes(
+        norito_bytes,
+        label.to_owned(),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsPdpPayloadKind {
     Commitment,
@@ -4886,6 +5117,42 @@ mod sorafs_reference_validation_py_tests {
         assert_eq!(outcome.status.as_str(), "Ok");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
+    }
+
+    #[test]
+    fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
+        let canonical = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to"
+        );
+        let zero = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
+        );
+
+        let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+            canonical,
+            "cancel_asset_lock_v1.to",
+            41,
+        )
+        .expect("validate canonical CancelAssetLock");
+        let accepted: norito::json::Value =
+            norito::json::from_json(&accepted).expect("accepted outcome JSON");
+        assert_eq!(
+            accepted.get("code").and_then(norito::json::Value::as_str),
+            Some("SFS-OK-000")
+        );
+
+        let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+            zero,
+            "cancel_asset_lock_zero_expected_v1.to",
+            42,
+        )
+        .expect("validate zero-quantity CancelAssetLock");
+        let rejected: norito::json::Value =
+            norito::json::from_json(&rejected).expect("rejected outcome JSON");
+        assert_eq!(
+            rejected.get("code").and_then(norito::json::Value::as_str),
+            Some("SFS-VAL-001")
+        );
     }
 
     #[test]
@@ -7614,6 +7881,11 @@ mod tests {
     }
 
     #[test]
+    fn native_sdk_bridge_abi_version_is_exactly_twenty_one() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 21);
+    }
+
+    #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
         ensure_python();
         let signing = SigningKey::from_bytes(&[0x11u8; 32]);
@@ -7821,6 +8093,91 @@ mod tests {
             map.get("anonymity_policy_override_label")
                 .is_some_and(json::Value::is_null)
         );
+    }
+
+    #[test]
+    fn python_gateway_policy_parsers_accept_only_exact_v1_labels() {
+        ensure_python();
+        for (label, expected) in [
+            ("soranet-first", TransportPolicy::SoranetPreferred),
+            ("soranet-strict", TransportPolicy::SoranetStrict),
+            ("direct-only", TransportPolicy::DirectOnly),
+        ] {
+            assert_eq!(
+                parse_gateway_transport_policy_v1(label).expect("canonical transport policy"),
+                expected
+            );
+        }
+        for rejected in [
+            "",
+            " soranet-first",
+            "soranet-first ",
+            "SORANET-FIRST",
+            "soranet_first",
+            "soranet_strict",
+            "direct_only",
+            "soranet-only",
+            "soranet_only",
+        ] {
+            assert!(
+                parse_gateway_transport_policy_v1(rejected).is_err(),
+                "noncanonical transport label `{rejected}` must fail"
+            );
+        }
+
+        for (label, expected) in [
+            ("canary", RolloutPhase::Canary),
+            ("ramp", RolloutPhase::Ramp),
+            ("default", RolloutPhase::Default),
+        ] {
+            assert_eq!(
+                parse_gateway_rollout_phase_v1(label).expect("canonical rollout phase"),
+                expected
+            );
+        }
+        for rejected in [
+            "", " canary", "canary ", "CANARY", "stage_a", "stage-a", "stagea", "stage_b",
+            "stage-b", "stageb", "stage_c", "stage-c", "stagec", "ga",
+        ] {
+            assert!(
+                parse_gateway_rollout_phase_v1(rejected).is_err(),
+                "noncanonical rollout label `{rejected}` must fail"
+            );
+        }
+
+        for (label, expected) in [
+            ("anon-guard-pq", AnonymityPolicy::GuardPq),
+            ("anon-majority-pq", AnonymityPolicy::MajorityPq),
+            ("anon-strict-pq", AnonymityPolicy::StrictPq),
+        ] {
+            assert_eq!(
+                parse_gateway_anonymity_policy_v1(label).expect("canonical anonymity policy"),
+                expected
+            );
+        }
+        for rejected in [
+            "",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "ANON-GUARD-PQ",
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+        ] {
+            assert!(
+                parse_gateway_anonymity_policy_v1(rejected).is_err(),
+                "noncanonical anonymity label `{rejected}` must fail"
+            );
+        }
     }
 
     #[test]
@@ -10791,6 +11148,121 @@ impl Instruction {
         let instruction = json::from_str::<InstructionBox>(payload)
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
         Ok(Instruction::new(instruction))
+    }
+
+    /// Construct one canonical native SoraFS replication-order issue.
+    #[classmethod]
+    fn issue_replication_order(
+        _cls: &Bound<'_, PyType>,
+        order_id: &str,
+        order_payload_base64: &str,
+        issued_epoch: u64,
+        deadline_epoch: u64,
+    ) -> PyResult<Self> {
+        let order_id = parse_nonzero_lower_hex_32(order_id, "order_id")?;
+        if deadline_epoch <= issued_epoch {
+            return Err(PyValueError::new_err(
+                "deadline_epoch must be greater than issued_epoch",
+            ));
+        }
+        if order_payload_base64.is_empty()
+            || order_payload_base64.trim() != order_payload_base64
+            || order_payload_base64.chars().any(char::is_whitespace)
+        {
+            return Err(PyValueError::new_err(
+                "order_payload must be exact canonical standard base64",
+            ));
+        }
+        let order_payload = BASE64.decode(order_payload_base64).map_err(|err| {
+            PyValueError::new_err(format!(
+                "order_payload must be exact canonical standard base64: {err}"
+            ))
+        })?;
+        if order_payload.is_empty()
+            || order_payload.len() > 1_048_576
+            || BASE64.encode(&order_payload) != order_payload_base64
+        {
+            return Err(PyValueError::new_err(
+                "order_payload must be 1..=1048576 bytes of exact canonical standard base64",
+            ));
+        }
+        let decoded: ReplicationOrderV1 = decode_from_bytes(&order_payload).map_err(|err| {
+            PyValueError::new_err(format!(
+                "order_payload must be a canonical ReplicationOrderV1 archive: {err}"
+            ))
+        })?;
+        decoded.validate().map_err(|err| {
+            PyValueError::new_err(format!("invalid ReplicationOrderV1 policy: {err}"))
+        })?;
+        if decoded.order_id != order_id {
+            return Err(PyValueError::new_err(
+                "order_id must match ReplicationOrderV1.order_id",
+            ));
+        }
+        let canonical = norito::to_bytes(&decoded).map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to re-encode canonical ReplicationOrderV1: {err}"
+            ))
+        })?;
+        if canonical != order_payload {
+            return Err(PyValueError::new_err(
+                "order_payload must use the canonical ReplicationOrderV1 encoding",
+            ));
+        }
+        Ok(Self::new(
+            IssueReplicationOrder::new(
+                ReplicationOrderId::new(order_id),
+                order_payload,
+                issued_epoch,
+                deadline_epoch,
+            )
+            .into(),
+        ))
+    }
+
+    /// Construct one exact six-field SoraFS provider completion.
+    #[classmethod]
+    fn complete_replication_order(
+        _cls: &Bound<'_, PyType>,
+        order_id: &str,
+        provider_id: &str,
+        completion_epoch: u64,
+        expected_authority: &Bound<'_, PyDict>,
+        expected_assignment_revision: u64,
+        finalized_anchor: &Bound<'_, PyDict>,
+    ) -> PyResult<Self> {
+        if expected_assignment_revision == 0 {
+            return Err(PyValueError::new_err(
+                "expected_assignment_revision must be greater than zero",
+            ));
+        }
+        Ok(Self::new(
+            CompleteReplicationOrder::new(
+                ReplicationOrderId::new(parse_nonzero_lower_hex_32(order_id, "order_id")?),
+                ProviderId(parse_nonzero_lower_hex_32(provider_id, "provider_id")?),
+                completion_epoch,
+                parse_provider_ingest_completion_authority(expected_authority)?,
+                expected_assignment_revision,
+                parse_provider_ingest_finalized_anchor(finalized_anchor)?,
+            )
+            .into(),
+        ))
+    }
+
+    /// Construct one canonical native SoraFS replication-order expiration.
+    #[classmethod]
+    fn expire_replication_order(
+        _cls: &Bound<'_, PyType>,
+        order_id: &str,
+        expiration_epoch: u64,
+    ) -> PyResult<Self> {
+        Ok(Self::new(
+            ExpireReplicationOrder::new(
+                ReplicationOrderId::new(parse_nonzero_lower_hex_32(order_id, "order_id")?),
+                expiration_epoch,
+            )
+            .into(),
+        ))
     }
 
     /// Construct the atomic smart-contract deployment commit instruction.
@@ -18453,6 +18925,12 @@ fn privacy_bridge_abi_version_py() -> u32 {
 }
 
 #[pyfunction]
+#[pyo3(name = "connect_norito_bridge_abi_version")]
+fn connect_norito_bridge_abi_version_py() -> u32 {
+    21
+}
+
+#[pyfunction]
 #[pyo3(name = "canonical_genesis_header_hash_v1")]
 fn canonical_genesis_header_hash_v1_py(
     py: Python<'_>,
@@ -18635,6 +19113,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         sorafs_validate_orderbook_payload_json_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_appeal_finance_cancel_asset_lock_json_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(sorafs_sign_orderbook_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_derive_orderbook_order_id_py,
@@ -18731,6 +19213,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        connect_norito_bridge_abi_version_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(privacy_capabilities_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         privacy_validate_capabilities_v1_py,

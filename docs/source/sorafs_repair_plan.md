@@ -30,7 +30,9 @@ exact finalized cursor and requires the current lease owner, generation,
 revision, provider binding, and expiry before any storage I/O. GC and
 reconciliation consume one complete, bounded task projection collected from a
 single immutable finalized query view; a truncated, drifting, malformed, or
-unbound projection fails closed. Remaining work is deployed four-validator
+unbound projection fails closed. A clean repair namespace with no status or
+events returns a finalized-anchor-bound empty event page, while statusless
+orphaned repair state still fails closed. Remaining work is deployed four-validator
 proof of cross-peer exactly-once execution and restart reconciliation.
 Operators must archive a production PoR/PoTR failure, repair, escalation,
 appeal, and governance handoff from that reviewed deployment.

@@ -55,6 +55,13 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
 }
 
 fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    visit_core_setup_instruction(visitor, isi)
+        || visit_core_box_instruction(visitor, isi)
+        || visit_privacy_instruction(visitor, isi)
+        || visit_integrated_instruction(visitor, isi)
+}
+
+fn visit_core_setup_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<SetParameter>() {
         visitor.visit_set_parameter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExecuteTrigger>() {
@@ -94,7 +101,14 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::domain_link::SetAccountAliasBinding>()
     {
         visitor.visit_set_account_alias_binding(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
         visitor.visit_burn(v);
@@ -118,7 +132,14 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_upgrade(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<CustomInstruction>() {
         visitor.visit_custom_instruction(v);
-    } else if let Some(v) = isi
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::RegisterPrivacyProtocolActivationV1>()
     {
@@ -266,7 +287,14 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_publish_poseidon_params(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SetPoseidonParamsLifecycle>() {
         visitor.visit_set_poseidon_params_lifecycle(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<ClaimTwitterFollowReward>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_integrated_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<ClaimTwitterFollowReward>() {
         visitor.visit_claim_twitter_follow_reward(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SendToTwitter>() {
         visitor.visit_send_to_twitter(v);
@@ -877,14 +905,14 @@ mod tests {
             BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
             BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
             BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
-            PrivacyCredentialDocumentTypeV1, PrivacyP256PointV1,
+            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCredentialDocumentTypeV1,
+            PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
             PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
-            PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDigestAlgorithmV1,
-            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
-            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
-            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509CrlDerDigestV1,
+            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
+            PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
             PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
             PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
         },
@@ -1107,24 +1135,15 @@ mod tests {
         }
 
         impl Visit for VegaVisitor {
-            fn visit_register_privacy_vega_issuer_v1(
-                &mut self,
-                _: &RegisterPrivacyVegaIssuerV1,
-            ) {
+            fn visit_register_privacy_vega_issuer_v1(&mut self, _: &RegisterPrivacyVegaIssuerV1) {
                 self.calls.push("register");
             }
 
-            fn visit_rotate_privacy_vega_issuer_v1(
-                &mut self,
-                _: &RotatePrivacyVegaIssuerV1,
-            ) {
+            fn visit_rotate_privacy_vega_issuer_v1(&mut self, _: &RotatePrivacyVegaIssuerV1) {
                 self.calls.push("rotate");
             }
 
-            fn visit_revoke_privacy_vega_issuer_v1(
-                &mut self,
-                _: &RevokePrivacyVegaIssuerV1,
-            ) {
+            fn visit_revoke_privacy_vega_issuer_v1(&mut self, _: &RevokePrivacyVegaIssuerV1) {
                 self.calls.push("revoke");
             }
         }
@@ -1236,10 +1255,10 @@ mod tests {
             1,
             PrivacyPolicyDigestV1::new([0x15; 32]),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
             },
             vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
             vec![0],

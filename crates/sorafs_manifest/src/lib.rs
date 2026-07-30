@@ -219,9 +219,11 @@ pub use gateway::{
     HostPattern,
 };
 pub use governance::{
+    GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1, GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
     GOVERNANCE_DAG_CID_BYTES_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
-    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1, GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1,
+    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1, GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1,
+    GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1, GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1,
     GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1, GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1,
     GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1, GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1,
     GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1, GOVERNANCE_LOG_VERSION_V1,
@@ -252,6 +254,7 @@ pub use governance::{
     SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1, governance_dag_block_cid_v1,
     governance_log_node_cid_v1, validate_governance_dag_chain_v1,
     validate_governance_dag_head_against_chain_v1,
+    validate_governance_dag_head_against_rotatable_chain_v1,
 };
 pub use hedging::signed::{
     GOVERNED_BILLING_STATEMENT_VERSION_V1, GOVERNED_HEDGING_REFERENCE_PRICE_VERSION_V1,
@@ -395,12 +398,14 @@ pub use provider_admission::{
 pub use provider_advert::{
     AdvertEndpoint, AdvertSignature, AdvertSignatureError, AdvertValidationError, AvailabilityTier,
     CapabilityTlv, CapabilityType, EndpointKind, EndpointMetadata, EndpointMetadataKey,
-    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1, PROVIDER_ADVERT_VERSION_V1,
-    PathDiversityPolicy, PotrMldsaCapabilityError, ProviderAdvertBodyV1, ProviderAdvertBuildError,
+    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
+    PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy,
+    PotrMldsaCapabilityError, ProviderAdvertBodyV1, ProviderAdvertBuildError,
     ProviderAdvertBuilder, ProviderAdvertSignaturePayloadV1, ProviderAdvertV1,
     ProviderCapabilityRangeV1, QosHints, REFRESH_RECOMMENDATION_SECS, RangeCapabilityError,
     RendezvousTopic, SignatureAlgorithm, StakePointer, StreamBudgetError, StreamBudgetV1,
-    TransportHintError, TransportHintV1, TransportProtocol, validate_potr_mldsa_capability,
+    TransportHintError, TransportHintV1, TransportProtocol, decode_provider_advert_v1,
+    validate_potr_mldsa_capability,
 };
 pub use reconciliation::{
     AppealFinanceReconciliationSummaryV1, ReconciliationValidationError,
@@ -415,10 +420,10 @@ pub use reference::{
     ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
-    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_hedging_payload_bytes,
-    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_hedging_payload_bytes, validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
     validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
     validate_pdp_proof_bytes, validate_pop_payload_bytes, validate_por_challenge_proof_bytes,
@@ -450,18 +455,18 @@ pub use reputation::signed::{
 };
 pub use reputation::{
     DEFAULT_CURRENT_SCORE_WEIGHT_BPS, DEFAULT_EIGENTRUST_ALPHA_BPS, LOW_REPUTATION_SCORE_FLAG_BPS,
-    MAX_REPUTATION_MERKLE_PROOF_LEN, MAX_REPUTATION_PROVIDERS, MAX_REPUTATION_SCORE_BPS,
-    MAX_REPUTATION_TRUST_EDGES, MIN_REPUTATION_SCORE_BPS, PROVIDER_REPUTATION_VERSION_V1,
-    ProviderReputationV1, REPUTATION_BASIS_POINTS, REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS,
-    REPUTATION_EIGENTRUST_MAX_ITERATIONS, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SNAPSHOT_EVENT_VERSION_V1,
-    REPUTATION_SNAPSHOT_VERSION_V1, REPUTATION_TRUST_EDGE_VERSION_V1,
-    REPUTATION_WEIGHTS_VERSION_V1, ReputationDegradationFlagV1, ReputationMerkleProofV1,
-    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationSnapshotEventV1, ReputationSnapshotV1, ReputationTrustEdgeV1,
-    ReputationValidationError, ReputationWeightsV1, build_reputation_snapshot,
-    build_reputation_snapshot_with_trust_edges, compute_reputation_merkle_root,
-    score_provider_reputation,
+    MAX_REPUTATION_DEGRADATION_FLAGS, MAX_REPUTATION_MERKLE_PROOF_LEN, MAX_REPUTATION_PROVIDERS,
+    MAX_REPUTATION_SCORE_BPS, MAX_REPUTATION_TRUST_EDGES, MIN_REPUTATION_SCORE_BPS,
+    PROVIDER_REPUTATION_VERSION_V1, ProviderReputationV1, REPUTATION_BASIS_POINTS,
+    REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS, REPUTATION_EIGENTRUST_MAX_ITERATIONS,
+    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+    REPUTATION_SNAPSHOT_EVENT_VERSION_V1, REPUTATION_SNAPSHOT_VERSION_V1,
+    REPUTATION_TRUST_EDGE_VERSION_V1, REPUTATION_WEIGHTS_VERSION_V1, ReputationDegradationFlagV1,
+    ReputationMerkleProofV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotEventV1, ReputationSnapshotV1,
+    ReputationTrustEdgeV1, ReputationValidationError, ReputationWeightsV1,
+    build_reputation_snapshot, build_reputation_snapshot_with_trust_edges,
+    compute_reputation_merkle_root, score_provider_reputation,
 };
 pub use token::{
     STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
@@ -490,7 +495,8 @@ pub use validation::{
     MAX_MANIFEST_ALIAS_CLAIMS, MAX_MANIFEST_ALIAS_PROOF_BYTES, MAX_MANIFEST_COUNCIL_SIGNATURES,
     MAX_MANIFEST_ENCODED_BYTES, MAX_MANIFEST_METADATA_BYTES, MAX_MANIFEST_METADATA_ENTRIES,
     MAX_MANIFEST_ROOT_CID_BYTES, ManifestDecodeError, ManifestValidationError,
-    PinPolicyConstraints, decode_manifest_v1_canonical, validate_chunker_handle, validate_manifest,
+    PinPolicyConstraints, decode_manifest_v1_base64_canonical, decode_manifest_v1_canonical,
+    encode_manifest_v1_base64_canonical, validate_chunker_handle, validate_manifest,
     validate_manifest_root_cid, validate_pin_policy, validate_registered_chunker_profile,
 };
 
@@ -540,8 +546,14 @@ pub struct ManifestV1 {
     pub chunk_digest_sha3_256: [u8; 32],
     /// Merkle root of the Proof-of-Retrievability tree for this exact payload.
     pub por_root: [u8; 32],
+    /// Total bytes in the exact unchunked payload represented by the DAG.
     pub content_length: u64,
+    /// BLAKE3-256 of the entire canonical CARv2 archive.
+    ///
+    /// The digest covers the pragma, CARv2 header, embedded CARv1 payload, and
+    /// MultihashIndexSorted index. It is never the raw payload digest.
     pub car_digest: [u8; 32],
+    /// Complete canonical CARv2 archive length in bytes.
     pub car_size: u64,
     pub pin_policy: PinPolicy,
     pub governance: GovernanceProofs,
@@ -638,18 +650,24 @@ impl ManifestBuilder {
         self
     }
 
+    /// Set the exact unchunked payload length represented by the DAG.
     #[must_use]
     pub fn content_length(mut self, len: u64) -> Self {
         self.content_length = Some(len);
         self
     }
 
+    /// Set the BLAKE3-256 digest of the entire canonical CARv2 archive.
+    ///
+    /// This commits the pragma, CARv2 header, embedded CARv1 payload, and
+    /// MultihashIndexSorted index. Callers must not pass the raw payload digest.
     #[must_use]
     pub fn car_digest(mut self, digest: [u8; 32]) -> Self {
         self.car_digest = Some(digest);
         self
     }
 
+    /// Set the complete canonical CARv2 archive length in bytes.
     #[must_use]
     pub fn car_size(mut self, size: u64) -> Self {
         self.car_size = Some(size);
@@ -1043,6 +1061,28 @@ mod tests {
         assert_ne!(
             manifest.digest().expect("original digest"),
             substituted.digest().expect("substituted digest")
+        );
+    }
+
+    #[test]
+    fn digest_binds_the_complete_car_archive_commitments() {
+        let manifest = sample_manifest();
+        let mut substituted_digest = manifest.clone();
+        substituted_digest.car_digest[0] ^= 1;
+        assert_ne!(
+            manifest.digest().expect("original digest"),
+            substituted_digest
+                .digest()
+                .expect("substituted CAR archive digest")
+        );
+
+        let mut substituted_size = manifest.clone();
+        substituted_size.car_size = substituted_size.car_size.saturating_add(1);
+        assert_ne!(
+            manifest.digest().expect("original digest"),
+            substituted_size
+                .digest()
+                .expect("substituted CAR archive size")
         );
     }
 

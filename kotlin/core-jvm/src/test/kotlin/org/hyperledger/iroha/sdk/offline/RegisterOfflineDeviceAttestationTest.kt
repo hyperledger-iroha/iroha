@@ -7,6 +7,8 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.FixtureGeneratorRunner
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -154,6 +156,18 @@ class RegisterOfflineDeviceAttestationTest {
         )
         assertFailsWith<IllegalArgumentException> {
             request.validateExactPayload(extraInstructionPayload)
+        }
+        val attachedPayload = request.transactionPayload().copy(
+            attachments = listOf(
+                ProofAttachment(
+                    "halo2",
+                    byteArrayOf(0x01),
+                    ProofVerifierKeyRef("halo2", "vk1"),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            request.validateExactPayload(attachedPayload)
         }
         assertFailsWith<IllegalArgumentException> {
             RegisterOfflineDeviceAttestation(

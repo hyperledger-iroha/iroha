@@ -456,10 +456,8 @@ fn discover_metal_device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MT
     warm_up_core_graphics_display();
 
     // Prefer the system default device once the CoreGraphics session is ready.
-    if !force_enumeration {
-        if let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() {
-            return Some(device);
-        }
+    if !force_enumeration && let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() {
+        return Some(device);
     }
 
     let devices = objc2_metal::MTLCopyAllDevices();
@@ -507,16 +505,14 @@ fn discover_metal_device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MT
         // headless shells load the Metal drivers lazily and only expose the
         // default device once CG establishes a session, so retrying here lets
         // CLI captures use GPU acceleration even when MTLCopyAllDevices fails.
-        if !force_enumeration {
-            if let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() {
-                if debug_enum {
-                    eprintln!(
-                        "ivm: MTLCopyAllDevices returned zero devices; using MTLCreateSystemDefaultDevice fallback"
-                    );
-                }
-                set_metal_status_message(None);
-                return Some(device);
+        if !force_enumeration && let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() {
+            if debug_enum {
+                eprintln!(
+                    "ivm: MTLCopyAllDevices returned zero devices; using MTLCreateSystemDefaultDevice fallback"
+                );
             }
+            set_metal_status_message(None);
+            return Some(device);
         }
         return None;
     };
@@ -1280,10 +1276,7 @@ impl MetalState {
 
                 use objc2_metal::*;
 
-                let a = [
-                    (0x0000_0000u64 << 32) | 0xffff_ffff,
-                    (0x8000_0000u64 << 32) | 0x0000_0001,
-                ];
+                let a = [0x0000_0000_ffff_ffff, (0x8000_0000u64 << 32) | 0x0000_0001];
                 let b = [
                     (0x0000_0001u64 << 32) | 0x0000_0001,
                     (0x7fff_ffffu64 << 32) | 0xffff_ffff,
@@ -1958,8 +1951,8 @@ impl MetalState {
 
                 use objc2_metal::*;
                 let mut init = [0u64; 25];
-                for i in 0..25 {
-                    init[i] = (i as u64) * 0x0101_0101_0101_0101u64;
+                for (i, value) in init.iter_mut().enumerate() {
+                    *value = (i as u64) * 0x0101_0101_0101_0101u64;
                 }
                 let mut cpu_state = init;
                 crate::sha3::keccak_f1600_impl(&mut cpu_state);
@@ -2299,7 +2292,9 @@ impl MetalState {
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 thread_local! {
-    static METAL_STATE: std::cell::RefCell<OnceCell<MetalState>> = std::cell::RefCell::new(OnceCell::new());
+    static METAL_STATE: std::cell::RefCell<OnceCell<MetalState>> = const {
+        std::cell::RefCell::new(OnceCell::new())
+    };
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -2943,9 +2938,7 @@ pub(crate) fn metal_ed25519_verify_batch(
             }
             let count_buf = [n as u32];
 
-            let Some(pipeline) = ctx.ed25519_signature.as_ref() else {
-                return None;
-            };
+            let pipeline = ctx.ed25519_signature.as_ref()?;
 
             let buf_sigs = unsafe {
                 ctx.device.newBufferWithBytes_length_options(
@@ -5864,7 +5857,7 @@ mod tests {
                 round_keys
                     .iter()
                     .copied()
-                    .fold(state, |block, rk| crate::aes::aesenc_impl(block, rk))
+                    .fold(state, crate::aes::aesenc_impl)
             })
             .collect();
         let expected_dec: Vec<[u8; 16]> = states
@@ -5874,7 +5867,7 @@ mod tests {
                 round_keys
                     .iter()
                     .copied()
-                    .fold(state, |block, rk| crate::aes::aesdec_impl(block, rk))
+                    .fold(state, crate::aes::aesdec_impl)
             })
             .collect();
 
