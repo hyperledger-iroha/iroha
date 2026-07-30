@@ -11675,9 +11675,13 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_commitments_in_tx: u32,
     /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
     pub(crate) native_anonymous_escrow_transfer_depth: u32,
+    /// Number of synchronously nested trigger entrypoints currently executing.
+    active_trigger_execution_depth: u8,
     /// Active multisig proposals whose deferred instructions are executing in this transaction.
-    pub(crate) multisig_deferred_execution_stack:
-        Vec<(AccountId, HashOf<Vec<iroha_data_model::isi::InstructionBox>>)>,
+    pub(crate) multisig_deferred_execution_stack: Vec<(
+        AccountId,
+        HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+    )>,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -48353,6 +48357,7 @@ impl<'state> StateBlock<'state> {
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             native_anonymous_escrow_transfer_depth: 0,
+            active_trigger_execution_depth: 0,
             multisig_deferred_execution_stack: Vec::new(),
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
@@ -51220,26 +51225,29 @@ impl<'state> StateBlock<'state> {
         let current_block_height = self._curr_block.height().get();
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
+        let max_time_trigger_invocations_u64 = self
+            .world
+            .parameters
+            .get()
+            .block()
+            .max_transactions()
+            .get()
+            .min(u64::from(u32::MAX));
+        let max_time_trigger_invocations =
+            usize::try_from(max_time_trigger_invocations_u64).unwrap_or(usize::MAX);
 
-        // Match time triggers against the event, but exclude any trigger that was registered during this block.
+        // Match time triggers against the event. The trigger set excludes
+        // current-block registrations and bounds materialisation before any
+        // repeated ids are allocated.
         let matched: Vec<_> = self
             .world
             .triggers
-            .match_time_event(time_event, current_block_height, current_block_time_ms)
-            .filter(|(_id, action)| {
-                // Reserved internal metadata keys set at registration time
-                let key_h = match "__registered_block_height".parse::<Name>() {
-                    Ok(k) => k,
-                    Err(_) => return true,
-                };
-                // Skip triggers registered in the current block (by height).
-                let registered_height = action
-                    .metadata()
-                    .get(&key_h)
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
-            })
-            .map(|(id, _)| id)
+            .match_time_event(
+                time_event,
+                current_block_height,
+                current_block_time_ms,
+                max_time_trigger_invocations,
+            )
             .collect();
         let matched_count = matched.len();
         if matched_count > 0 {
@@ -62826,9 +62834,37 @@ impl StateTransaction<'_, '_> {
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
+    fn execute_trigger(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: EventBox,
+        step_index: u32,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        let max_depth = self.world.parameters.smart_contract().execution_depth();
+        if self.active_trigger_execution_depth >= max_depth {
+            return Err(TriggerExecutionFail::MaxDepthExceeded.into());
+        }
+
+        self.active_trigger_execution_depth += 1;
+        let result = self.execute_trigger_within_depth_budget(
+            id,
+            authority,
+            executable,
+            event,
+            step_index,
+            nft_seq_base_override,
+        );
+        self.active_trigger_execution_depth -= 1;
+        result
+    }
+
+    /// Execute a trigger after the shared synchronous depth budget has been reserved.
     #[allow(clippy::needless_pass_by_value)]
     #[allow(clippy::too_many_lines)]
-    fn execute_trigger(
+    fn execute_trigger_within_depth_budget(
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
@@ -119102,6 +119138,79 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn self_calling_trigger_stops_at_synchronous_execution_depth() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.smart_contract.execution_depth = 3;
+            parameters.commit();
+        }
+
+        let trigger_id: TriggerId = "bounded_self_call".parse().expect("valid trigger id");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+        ))
+        .execute(&ALICE_ID, &mut transaction)
+        .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register account");
+
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                [InstructionBox::from(ExecuteTrigger::new(
+                    trigger_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            ),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register self-calling trigger");
+
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let error = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("self-call must stop at the configured trigger depth");
+
+        assert!(
+            format!("{error:?}").contains("MaxDepthExceeded"),
+            "unexpected self-call rejection: {error:?}"
+        );
+        assert_eq!(
+            transaction.active_trigger_execution_depth, 0,
+            "the synchronous depth reservation must unwind after rejection"
+        );
+        assert_eq!(
+            transaction
+                .world
+                .triggers
+                .by_call_triggers()
+                .get(&trigger_id)
+                .expect("trigger remains staged")
+                .repeats,
+            Repeats::Exactly(1),
+            "a rejected recursive execution must not consume the repeat budget"
+        );
+    }
+
+    #[test]
     fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -127785,6 +127894,11 @@ seiyaku IdentitylessRawCallback {
             [],
         );
         let state = State::new(world, kura.clone(), query_handle);
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.block_cadence_ms = nonzero!(1_u64);
+            parameters.commit();
+        }
 
         let block1 = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(1).unwrap());

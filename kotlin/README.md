@@ -30,6 +30,16 @@ implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
 ```
 
+### Transaction identity
+
+`SignedTransactionHasher` computes the first-release external transaction ID
+from `TransactionEntrypoint::External` plus the canonical signed
+`TransactionPayload`. Authorization signatures and multisig proofs remain in
+the submitted `SignedTransaction` wire but do not create alternate IDs for the
+same intent. Proof attachments are carried by `TransactionPayload.attachments`,
+so adding, removing, or replacing an attachment changes the signature preimage
+and transaction ID.
+
 ### Offline peer transports
 
 `core-jvm` owns the portable IPM1 wire, bounded multi-stream IQR1 scanner,

@@ -18,8 +18,6 @@ object SignedTransactionEncoder {
     private const val SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1"
     private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
     private val SIGNATURE_ADAPTER: TypeAdapter<ByteArray> = TransactionSignatureAdapter()
-    private val ATTACHMENTS_OPTION_ADAPTER: TypeAdapter<Optional<ByteArray>> =
-        NoritoAdapters.option(BYTE_VECTOR_ADAPTER)
     private val MULTISIG_SIGNATURE_ADAPTER: TypeAdapter<MultisigSignature> =
         MultisigSignatureNoritoAdapter()
     private val MULTISIG_SIGNATURE_LIST_ADAPTER: TypeAdapter<List<MultisigSignature>> =
@@ -99,15 +97,12 @@ object SignedTransactionEncoder {
         override fun encode(encoder: NoritoEncoder, value: SignedRecord) {
             encodeSizedField(encoder, SIGNATURE_ADAPTER, value.signature)
             encodeSizedRawField(encoder, value.payloadBytes)
-            encodeSizedField(encoder, ATTACHMENTS_OPTION_ADAPTER, Optional.empty())
             encodeSizedField(encoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, value.multisigSignatures)
         }
 
         override fun decode(decoder: NoritoDecoder): SignedRecord {
             val signature = decodeSizedField(decoder, SIGNATURE_ADAPTER, "signature")
             val payloadBytes = decodeSizedRawField(decoder, "payload")
-            val attachments = decodeSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER, "attachments")
-            require(!attachments.isPresent) { "Signed transaction attachments are not supported" }
             val multisigSignatures = decodeSizedField(
                 decoder,
                 MULTISIG_SIGNATURES_OPTION_ADAPTER,

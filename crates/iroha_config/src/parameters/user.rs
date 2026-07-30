@@ -6490,14 +6490,58 @@ impl SoranetHandshakePuzzle {
             time_cost,
             lanes,
         } = self;
-        let memory = NonZeroU32::new(memory_kib.max(4_096)).unwrap();
-        let time_cost = NonZeroU32::new(time_cost.max(1)).unwrap();
-        let lanes = NonZeroU32::new(lanes.clamp(1, 16)).unwrap();
+        let memory = NonZeroU32::new(memory_kib.clamp(
+            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB,
+            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB,
+        ))
+        .expect("bounded SoraNet puzzle memory is non-zero");
+        let time_cost =
+            NonZeroU32::new(time_cost.clamp(1, iroha_crypto::soranet::puzzle::MAX_TIME_COST))
+                .expect("bounded SoraNet puzzle time cost is non-zero");
+        let lanes = NonZeroU32::new(lanes.clamp(1, iroha_crypto::soranet::puzzle::MAX_LANES))
+            .expect("bounded SoraNet puzzle lane count is non-zero");
         actual::SoranetPuzzle {
             memory_kib: memory,
             time_cost,
             lanes,
         }
+    }
+}
+
+#[cfg(test)]
+mod soranet_handshake_puzzle_tests {
+    use super::*;
+
+    #[test]
+    fn parse_bounds_argon2_resource_costs() {
+        let upper = SoranetHandshakePuzzle {
+            memory_kib: u32::MAX,
+            time_cost: u32::MAX,
+            lanes: u32::MAX,
+        }
+        .parse();
+        assert_eq!(
+            upper.memory_kib.get(),
+            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
+        );
+        assert_eq!(
+            upper.time_cost.get(),
+            iroha_crypto::soranet::puzzle::MAX_TIME_COST
+        );
+        assert_eq!(upper.lanes.get(), iroha_crypto::soranet::puzzle::MAX_LANES);
+
+        let lower = SoranetHandshakePuzzle {
+            memory_kib: 0,
+            time_cost: 0,
+            lanes: 0,
+        }
+        .parse();
+        assert_eq!(
+            lower.memory_kib.get(),
+            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+        );
+        assert_eq!(lower.time_cost.get(), 1);
+        assert_eq!(lower.lanes.get(), 1);
     }
 }
 
@@ -7064,7 +7108,7 @@ pub struct Network {
     /// Debug-only outbound P2P application-frame loss percentage used by fault harnesses.
     #[config(default)]
     pub debug_packet_loss_outbound_percent: u8,
-    /// Maximum number of transactions gossiped per batch.
+    /// Maximum number of transactions sent or accepted per gossip batch.
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_SIZE")]
     pub transaction_gossip_size: NonZeroU32,
     /// Interval between transaction gossip batches in milliseconds (clamped to >= 100ms).
@@ -14073,9 +14117,9 @@ pub struct Torii {
     pub preauth_scheme_limits: Option<Vec<PreauthSchemeLimit>>,
     /// Optional high-load threshold (# queued txs) to enable rate limiting.
     pub api_high_load_tx_threshold: Option<usize>,
-    /// Optional high-load threshold for streaming endpoints (queued txs).
+    /// Optional queued-transaction threshold for rejecting new stream admissions.
     pub api_high_load_stream_threshold: Option<usize>,
-    /// Optional high-load threshold for subscription WS endpoint.
+    /// Optional queued-transaction threshold for rejecting new subscription WebSockets.
     pub api_high_load_subscription_threshold: Option<usize>,
     /// Enable app-facing webhook routes and workers.
     #[config(
@@ -17052,9 +17096,7 @@ impl ToriiRamLfeProgram {
         }
         let hidden_program: iroha_crypto::HiddenRamFheProgram =
             norito::decode_from_bytes(hidden_program_bytes.as_slice()).unwrap_or_else(|err| {
-                panic!(
-                    "invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}"
-                )
+                panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}")
             });
         iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program).unwrap_or_else(|err| {
             panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}")
@@ -17558,6 +17600,9 @@ pub struct DaIngest {
     /// Replay cache capacity per `(lane, epoch)` window.
     #[config(default = "defaults::torii::DA_REPLAY_CACHE_CAPACITY")]
     pub replay_cache_capacity: NonZeroUsize,
+    /// Maximum number of distinct `(lane, epoch)` replay windows retained globally.
+    #[config(default = "defaults::torii::DA_REPLAY_CACHE_MAX_LANE_EPOCHS")]
+    pub replay_cache_max_lane_epochs: NonZeroUsize,
     /// Replay cache TTL (seconds).
     #[config(default = "defaults::torii::DA_REPLAY_CACHE_TTL_SECS")]
     pub replay_cache_ttl_secs: u64,
@@ -17596,6 +17641,7 @@ impl Default for DaIngest {
     fn default() -> Self {
         Self {
             replay_cache_capacity: defaults::torii::DA_REPLAY_CACHE_CAPACITY,
+            replay_cache_max_lane_epochs: defaults::torii::DA_REPLAY_CACHE_MAX_LANE_EPOCHS,
             replay_cache_ttl_secs: defaults::torii::DA_REPLAY_CACHE_TTL_SECS,
             replay_cache_max_sequence_lag: defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: defaults::torii::da_replay_cache_store_dir(),
@@ -17626,6 +17672,7 @@ impl DaIngest {
         });
         actual::DaIngest {
             replay_cache_capacity: self.replay_cache_capacity,
+            replay_cache_max_lane_epochs: self.replay_cache_max_lane_epochs,
             replay_cache_ttl: Duration::from_secs(self.replay_cache_ttl_secs),
             replay_cache_max_sequence_lag: self.replay_cache_max_sequence_lag,
             replay_cache_store_dir: self.replay_cache_store_dir,

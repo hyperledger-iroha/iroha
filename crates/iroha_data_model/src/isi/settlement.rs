@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -351,7 +351,10 @@ impl SettlementLeg {
 
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-    /// Delivery-versus-payment settlement instruction ensuring atomic exchange between asset and payment legs.
+    /// Delivery-versus-payment settlement instruction requiring exact counterparty consent.
+    ///
+    /// Core accepts this instruction only with `AllOrNothing` atomicity and a
+    /// counterparty-issued permission bound to [`DvpIsi::intent_hash`].
     pub struct DvpIsi {
         /// Stable identifier shared across the delivery lifecycle.
         pub settlement_id: SettlementId,
@@ -368,7 +371,10 @@ isi! {
 
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-    /// Payment-versus-payment settlement instruction covering cross-currency exchanges.
+    /// Payment-versus-payment settlement instruction requiring exact counterparty consent.
+    ///
+    /// Core accepts this instruction only with `AllOrNothing` atomicity and a
+    /// counterparty-issued permission bound to [`PvpIsi::intent_hash`].
     pub struct PvpIsi {
         /// Stable identifier associated with this FX settlement lifecycle.
         pub settlement_id: SettlementId,
@@ -386,6 +392,8 @@ isi! {
 impl DvpIsi {
     /// Stable wire identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.settlement.dvp";
+    /// Domain separator for the complete counterparty-authorized DvP intent.
+    pub const INTENT_HASH_DOMAIN: &'static [u8] = b"iroha:settlement:dvp-intent:v1\0";
 
     /// Construct a `DvP` instruction enforcing basic invariants.
     pub fn new(
@@ -402,11 +410,23 @@ impl DvpIsi {
             metadata: Metadata::default(),
         }
     }
+
+    /// Return the domain-separated commitment that a counterparty authorizes.
+    ///
+    /// The commitment covers the complete canonical instruction, including both
+    /// legs, execution plan, settlement identifier, and metadata.
+    #[must_use]
+    pub fn intent_hash(&self) -> Hash {
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[Self::INTENT_HASH_DOMAIN, encoded.as_slice()])
+    }
 }
 
 impl PvpIsi {
     /// Stable wire identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.settlement.pvp";
+    /// Domain separator for the complete counterparty-authorized PvP intent.
+    pub const INTENT_HASH_DOMAIN: &'static [u8] = b"iroha:settlement:pvp-intent:v1\0";
 
     /// Construct a `PvP` instruction enforcing basic invariants.
     pub fn new(
@@ -422,6 +442,16 @@ impl PvpIsi {
             plan,
             metadata: Metadata::default(),
         }
+    }
+
+    /// Return the domain-separated commitment that a counterparty authorizes.
+    ///
+    /// The commitment covers the complete canonical instruction, including both
+    /// legs, execution plan, settlement identifier, and metadata.
+    #[must_use]
+    pub fn intent_hash(&self) -> Hash {
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[Self::INTENT_HASH_DOMAIN, encoded.as_slice()])
     }
 }
 
@@ -1078,6 +1108,18 @@ mod tests {
         assert!(formatted.contains("pvp_fx_1"));
         assert!(formatted.contains("PaymentThenDelivery"));
         assert!(formatted.contains("CommitSecondLeg"));
+    }
+
+    #[test]
+    fn bilateral_intent_hash_binds_complete_instruction() {
+        let dvp = dvp_instruction();
+        let same = dvp.clone();
+        let mut changed = dvp.clone();
+        changed.payment_leg.quantity = Quantity::from(1_006_u32);
+
+        assert_eq!(dvp.intent_hash(), same.intent_hash());
+        assert_ne!(dvp.intent_hash(), changed.intent_hash());
+        assert_ne!(dvp.intent_hash(), pvp_instruction().intent_hash());
     }
 
     #[test]

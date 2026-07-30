@@ -1356,9 +1356,9 @@ pub(crate) mod tests {
                 sha256_hex(authorization),
             ),
             (
-                "26608cec06e9f35580e5cf54eccbab1572b817d39aba56416e5f3bc690970528".to_owned(),
-                "dcc1e9b3328009a55a8b6b0ba07cc63342a80e0f6c6e09128f91daba029d65b8".to_owned(),
-                "d5468c1031aee6e4692cd046a408fd18c0f283829eb40be657f513d8c4b2cc30".to_owned(),
+                "4c1b400e89426ebf404d853e32c9b7d4c8f494506c070585aef5f43fbc9ab6d9".to_owned(),
+                "d8f1bca69f01398f20da001f38adf9c3157f75ffa1d9f84372f0e7e6360be436".to_owned(),
+                "aae632f1e6f959eb3dd994dcec0f30c7a03313eb960f1e4d2f11746202bec0c6".to_owned(),
             )
         );
     }

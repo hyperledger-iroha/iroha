@@ -1328,6 +1328,12 @@ pub mod isi {
         FeeSponsorCustody,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NumericAssetTransferScopePolicy {
+        Ambient,
+        ExplicitBilateral,
+    }
+
     fn sccp_registry_references_custody_asset(
         registry: &iroha_data_model::bridge::SccpRegistryV1,
         asset_id: &AssetId,
@@ -1422,6 +1428,41 @@ pub mod isi {
             event_destination_id: AssetId,
             amount: Quantity,
         ) -> Result<Self, Error> {
+            Self::prepare(
+                state_transaction,
+                authority,
+                event_source_id,
+                event_destination_id,
+                amount,
+                NumericAssetTransferScopePolicy::Ambient,
+            )
+        }
+
+        fn prepare_explicit_bilateral(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            event_source_id: AssetId,
+            event_destination_id: AssetId,
+            amount: Quantity,
+        ) -> Result<Self, Error> {
+            Self::prepare(
+                state_transaction,
+                authority,
+                event_source_id,
+                event_destination_id,
+                amount,
+                NumericAssetTransferScopePolicy::ExplicitBilateral,
+            )
+        }
+
+        fn prepare(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            event_source_id: AssetId,
+            event_destination_id: AssetId,
+            amount: Quantity,
+            scope_policy: NumericAssetTransferScopePolicy,
+        ) -> Result<Self, Error> {
             // Reject no-op transfers before account admission, control usage, transcripts,
             // balances, or events can be staged.
             if amount.is_zero() {
@@ -1446,12 +1487,13 @@ pub mod isi {
                 Some((event_destination_id.definition(), &amount)),
                 state_transaction,
             )?;
-            let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+            let (source_id, destination_id) = ensure_numeric_asset_transfer_policies_with_scope(
                 state_transaction,
                 &event_source_id,
                 &event_destination_id,
                 &amount,
                 NumericAssetTransferSourcePolicy::User,
+                scope_policy,
             )?;
             let numeric_spec = state_transaction
                 .numeric_spec_for(source_id.definition())
@@ -1551,9 +1593,46 @@ pub mod isi {
         }
     }
 
-    struct PreparedNativeFxTransferPair {
+    struct PreparedNumericTransferPair {
         source: PreparedNumericTransferPlan,
         destination: PreparedNumericTransferPlan,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_authorized_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        source_destination_id: AssetId,
+        source_amount: Quantity,
+        destination_source_id: AssetId,
+        destination_id: AssetId,
+        destination_amount: Quantity,
+    ) -> Result<PreparedNumericTransferPair, Error> {
+        let source = PreparedNumericTransferPlan::prepare_explicit_bilateral(
+            state_transaction,
+            submitting_authority,
+            source_id,
+            source_destination_id,
+            source_amount,
+        )?;
+        let destination = PreparedNumericTransferPlan::prepare_explicit_bilateral(
+            state_transaction,
+            submitting_authority,
+            destination_source_id,
+            destination_id,
+            destination_amount,
+        )?;
+
+        if source.source_id.definition() == destination.source_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "atomic bilateral transfer legs must use distinct asset definitions".into(),
+            ));
+        }
+        Ok(PreparedNumericTransferPair {
+            source,
+            destination,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1566,7 +1645,7 @@ pub mod isi {
         destination_source_id: AssetId,
         destination_id: AssetId,
         destination_amount: Quantity,
-    ) -> Result<PreparedNativeFxTransferPair, Error> {
+    ) -> Result<PreparedNumericTransferPair, Error> {
         if source_id.scope() != source_destination_id.scope()
             || destination_source_id.scope() != destination_id.scope()
         {
@@ -1583,30 +1662,89 @@ pub mod isi {
             ));
         }
 
-        let source = PreparedNumericTransferPlan::prepare_user(
+        prepare_authorized_numeric_asset_pair(
             state_transaction,
             submitting_authority,
             source_id,
             source_destination_id,
             source_amount,
-        )?;
-        let destination = PreparedNumericTransferPlan::prepare_user(
-            state_transaction,
-            submitting_authority,
             destination_source_id,
             destination_id,
             destination_amount,
+        )
+    }
+
+    /// Validate two explicitly authorized bilateral legs through the ordinary
+    /// transfer policy and transfer-control pipeline without mutating state.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_authorized_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        first_source_id: AssetId,
+        first_destination_id: AssetId,
+        first_amount: Quantity,
+        second_source_id: AssetId,
+        second_destination_id: AssetId,
+        second_amount: Quantity,
+    ) -> Result<(), Error> {
+        prepare_authorized_numeric_asset_pair(
+            state_transaction,
+            submitting_authority,
+            first_source_id,
+            first_destination_id,
+            first_amount,
+            second_source_id,
+            second_destination_id,
+            second_amount,
+        )?;
+        Ok(())
+    }
+
+    /// Atomically apply two explicitly authorized bilateral legs through the
+    /// ordinary transfer policy, transfer-control, transcript, and event pipeline.
+    ///
+    /// Both legs are fully prepared before either balance changes. Distinct
+    /// asset definitions make the two prechecked deltas independent.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_authorized_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        first_source_id: AssetId,
+        first_destination_id: AssetId,
+        first_amount: Quantity,
+        second_source_id: AssetId,
+        second_destination_id: AssetId,
+        second_amount: Quantity,
+    ) -> Result<(), Error> {
+        state_transaction.require_transfer_transcript_identity("bilateral settlement transfer")?;
+        let prepared = prepare_authorized_numeric_asset_pair(
+            state_transaction,
+            submitting_authority,
+            first_source_id,
+            first_destination_id,
+            first_amount,
+            second_source_id,
+            second_destination_id,
+            second_amount,
         )?;
 
-        if source.source_id.definition() == destination.source_id.definition() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "native FX transfer legs must use distinct asset definitions".into(),
-            ));
-        }
-        Ok(PreparedNativeFxTransferPair {
-            source,
-            destination,
-        })
+        let first = prepared.source.apply(state_transaction)?;
+        let second = prepared.destination.apply(state_transaction)?;
+        state_transaction
+            .record_transfer_transcripts(submitting_authority, vec![first.delta, second.delta])?;
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            first.source_id,
+            first.destination_id,
+            first.amount,
+        );
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            second.source_id,
+            second.destination_id,
+            second.amount,
+        );
+        Ok(())
     }
 
     /// Validate both native FX legs through the ordinary transparent-transfer pipeline without
@@ -1652,6 +1790,7 @@ pub mod isi {
         destination_id: AssetId,
         destination_amount: Quantity,
     ) -> Result<(), Error> {
+        state_transaction.require_transfer_transcript_identity("native FX transfer")?;
         let prepared = prepare_native_fx_numeric_asset_pair(
             state_transaction,
             submitting_authority,
@@ -1667,8 +1806,10 @@ pub mod isi {
         // delta cannot invalidate the second delta prepared from the same state snapshot.
         let source = prepared.source.apply(state_transaction)?;
         let destination = prepared.destination.apply(state_transaction)?;
-        state_transaction.record_transfer_transcript(submitting_authority, source.delta)?;
-        state_transaction.record_transfer_transcript(submitting_authority, destination.delta)?;
+        state_transaction.record_transfer_transcripts(
+            submitting_authority,
+            vec![source.delta, destination.delta],
+        )?;
         let source_amount = source.amount;
         let destination_amount = destination.amount;
 
@@ -1723,38 +1864,98 @@ pub mod isi {
         amount: &Quantity,
         source_policy: NumericAssetTransferSourcePolicy,
     ) -> Result<(AssetId, AssetId), Error> {
+        ensure_numeric_asset_transfer_policies_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            source_policy,
+            NumericAssetTransferScopePolicy::Ambient,
+        )
+    }
+
+    fn ensure_numeric_asset_transfer_policies_with_scope(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Quantity,
+        source_policy: NumericAssetTransferSourcePolicy,
+        scope_policy: NumericAssetTransferScopePolicy,
+    ) -> Result<(AssetId, AssetId), Error> {
         ensure_global_asset_write_on_authoritative_route(
             state_transaction,
             source_id.definition(),
             "transfer",
         )?;
-        let source_dataspace = transfer_source_dataspace_hint(state_transaction, source_id)?;
-        let source_id = state_transaction
-            .world
-            .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
-        let destination_dataspace = match source_id.scope() {
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace)
-                if *dataspace == DataSpaceId::UNIVERSAL =>
-            {
-                Some(DataSpaceId::UNIVERSAL)
+        let (source_id, destination_id) = match scope_policy {
+            NumericAssetTransferScopePolicy::Ambient => {
+                let source_dataspace =
+                    transfer_source_dataspace_hint(state_transaction, source_id)?;
+                let source_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
+                let destination_dataspace = match source_id.scope() {
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace)
+                        if *dataspace == DataSpaceId::UNIVERSAL =>
+                    {
+                        Some(DataSpaceId::UNIVERSAL)
+                    }
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
+                        let hint =
+                            transfer_destination_dataspace_hint(state_transaction, destination_id)?;
+                        if matches!(
+                            destination_id.scope(),
+                            iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
+                        ) || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
+                        {
+                            hint
+                        } else {
+                            Some(*dataspace)
+                        }
+                    }
+                    _ => transfer_destination_dataspace_hint(state_transaction, destination_id)?,
+                };
+                let destination_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
+                (source_id, destination_id)
             }
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
-                let hint = transfer_destination_dataspace_hint(state_transaction, destination_id)?;
-                if matches!(
-                    destination_id.scope(),
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
-                ) || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
-                {
-                    hint
-                } else {
-                    Some(*dataspace)
-                }
+            NumericAssetTransferScopePolicy::ExplicitBilateral => {
+                let definition = state_transaction
+                    .world
+                    .asset_definition(source_id.definition())
+                    .map_err(Error::from)?;
+                let explicit_dataspace = match definition.balance_scope_policy() {
+                    AssetBalancePolicy::Global => None,
+                    AssetBalancePolicy::DataspaceRestricted => {
+                        let (
+                            AssetBalanceScope::Dataspace(source_dataspace),
+                            AssetBalanceScope::Dataspace(destination_dataspace),
+                        ) = (source_id.scope(), destination_id.scope())
+                        else {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "bilateral settlement requires explicit dataspace scopes for restricted assets"
+                                    .into(),
+                            ));
+                        };
+                        if source_dataspace != destination_dataspace {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "each bilateral settlement leg must preserve one exact balance scope"
+                                    .into(),
+                            ));
+                        }
+                        Some(*source_dataspace)
+                    }
+                };
+                let source_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(source_id, explicit_dataspace)?;
+                let destination_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(destination_id, explicit_dataspace)?;
+                (source_id, destination_id)
             }
-            _ => transfer_destination_dataspace_hint(state_transaction, destination_id)?,
         };
-        let destination_id = state_transaction
-            .world
-            .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
         if source_id.definition() != destination_id.definition() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(

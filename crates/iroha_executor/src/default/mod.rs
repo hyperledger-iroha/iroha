@@ -1424,10 +1424,10 @@ pub mod settlement {
                     "FX corridor policy updates require an exact typed policy permission"
                 );
             }
-            // Core resolves the governed corridor source and applies the source-specific
-            // authorization rule. In particular, transaction-authority corridors are
-            // intentionally self-service, while fixed-account corridors require the exact
-            // typed settlement permission and source-account match.
+            // Core resolves governed sources and applies the source-specific authorization.
+            // Bilateral DvP/PvP requires an exact counterparty-issued consent token bound to
+            // the complete intent; transaction-authority FX corridors are self-service while
+            // fixed-account corridors require their exact typed permission.
             SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
                 execute!(executor, isi);
@@ -3302,6 +3302,7 @@ pub mod domain {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -3619,6 +3620,7 @@ pub mod account {
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -3929,6 +3931,7 @@ pub mod asset_definition {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -5434,6 +5437,7 @@ pub mod trigger {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)

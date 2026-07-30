@@ -485,9 +485,9 @@ pub(crate) fn decode_bfv_public_parameters(
                 .map_err(|err| IdentifierResolutionError::InvalidFheParameters(err.to_string()))?;
             Ok(public_parameters)
         }
-        RamLfeBackend::HkdfSha3_512PrfV1 => Err(
-            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::HkdfSha3_512PrfV1),
-        ),
+        RamLfeBackend::HkdfSha3_512PrfV1 => Err(IdentifierResolutionError::UnsupportedBackend(
+            RamLfeBackend::HkdfSha3_512PrfV1,
+        )),
     }
 }
 
@@ -1449,6 +1449,30 @@ mod tests {
         assert!(matches!(
             err,
             IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::BfvAffineSha3_256V1)
+        ));
+    }
+
+    #[test]
+    fn hkdf_metadata_is_never_decoded_as_bfv_parameters() {
+        let resolver = checked_fixture_ed25519_keypair(0xA1);
+        let policy = RamLfeProgramPolicy::new(
+            "hkdf_metadata".parse().expect("program id"),
+            checked_fixture_account(0xA0),
+            RamLfeBackend::HkdfSha3_512PrfV1,
+            RamLfeVerificationMode::Signed,
+            PolicyCommitment {
+                backend: RamLfeBackend::HkdfSha3_512PrfV1,
+                policy_hash: Hash::new(b"hkdf-metadata-policy"),
+                public_parameters: vec![0xFF, 0x00, 0x7F],
+            },
+            resolver.public_key().clone(),
+        );
+
+        let error = decode_bfv_public_parameters(&policy)
+            .expect_err("HKDF metadata is opaque and must not enter the BFV decoder");
+        assert!(matches!(
+            error,
+            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::HkdfSha3_512PrfV1)
         ));
     }
 

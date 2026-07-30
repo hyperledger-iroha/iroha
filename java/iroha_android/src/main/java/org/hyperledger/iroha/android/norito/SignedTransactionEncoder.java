@@ -19,8 +19,6 @@ public final class SignedTransactionEncoder {
   private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> SIGNATURE_ADAPTER = new TransactionSignatureAdapter();
-  private static final TypeAdapter<Optional<byte[]>> EMPTY_OPTION_ADAPTER =
-      NoritoAdapters.option(BYTE_VECTOR_ADAPTER);
   private static final TypeAdapter<MultisigSignature> MULTISIG_SIGNATURE_ADAPTER =
       new MultisigSignatureAdapter();
   private static final TypeAdapter<List<MultisigSignature>> MULTISIG_SIGNATURE_LIST_ADAPTER =
@@ -121,7 +119,6 @@ public final class SignedTransactionEncoder {
     public void encode(final NoritoEncoder encoder, final SignedRecord value) {
       encodeSizedField(encoder, SIGNATURE_ADAPTER, value.signature());
       encodeSizedRawField(encoder, value.payloadBytes());
-      encodeSizedField(encoder, EMPTY_OPTION_ADAPTER, Optional.empty());
       encodeSizedField(encoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, value.multisigSignatures());
     }
 
@@ -129,11 +126,6 @@ public final class SignedTransactionEncoder {
     public SignedRecord decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
       final byte[] signature = decodeSizedField(decoder, SIGNATURE_ADAPTER, "signature");
       final byte[] payloadBytes = decodeSizedRawField(decoder, "payload");
-      final Optional<byte[]> attachments =
-          decodeSizedField(decoder, EMPTY_OPTION_ADAPTER, "attachments");
-      if (attachments.isPresent()) {
-        throw new IllegalArgumentException("Signed transaction attachments are not supported");
-      }
       final Optional<MultisigSignatures> multisigSignatures =
           decodeSizedField(
               decoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, "multisig_signatures");

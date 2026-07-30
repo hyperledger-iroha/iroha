@@ -5545,21 +5545,6 @@ fn normalize_storage_ticket_hex(value: &str) -> Result<String> {
     Ok(trimmed.to_ascii_lowercase())
 }
 
-fn normalize_block_hash_hex(value: &str) -> Result<String> {
-    let trimmed = value
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if trimmed.len() != 64 {
-        return Err(eyre!(
-            "block hash must contain 64 hexadecimal characters (got {})",
-            trimmed.len()
-        ));
-    }
-    Hash::from_str(trimmed).map_err(|err| eyre!("invalid block hash: {err}"))?;
-    Ok(trimmed.to_ascii_lowercase())
-}
-
 fn normalize_message_id_hex(value: &str) -> Result<String> {
     let value = value
         .strip_prefix("0x")
@@ -16919,7 +16904,7 @@ impl Client {
     ) -> Result<(JsonValue, DaProofConfig)> {
         let payload = session.outcome.assemble_payload();
         let manifest = bundle.decode_manifest()?;
-        let applied = Self::apply_sampling_plan(bundle, &manifest, proof);
+        let applied = proof.clone();
         let summary = generate_da_proof_summary(&manifest, &payload, &applied)?;
         Ok((summary, applied))
     }
@@ -16934,32 +16919,8 @@ impl Client {
     /// Returns an error if the storage ticket is malformed, the HTTP request fails, or the response
     /// payload cannot be decoded.
     pub fn get_da_manifest_bundle(&self, storage_ticket_hex: &str) -> Result<DaManifestBundle> {
-        self.get_da_manifest_bundle_with_block_hash(storage_ticket_hex, None)
-    }
-
-    /// Fetch the canonical DA manifest bundle and apply a deterministic sampling seed.
-    ///
-    /// When `block_hash_hex` is provided the request appends `?block_hash=<hash>` so Torii returns a
-    /// deterministic sampling plan rooted in `block_hash || client_blob_id`. Callers that do not need
-    /// the sampling plan can use [`Self::get_da_manifest_bundle`] for the default behaviour.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the storage ticket or block hash are malformed, the HTTP request fails,
-    /// or the response payload cannot be decoded.
-    pub fn get_da_manifest_bundle_with_block_hash(
-        &self,
-        storage_ticket_hex: &str,
-        block_hash_hex: Option<&str>,
-    ) -> Result<DaManifestBundle> {
         let normalized = normalize_storage_ticket_hex(storage_ticket_hex)?;
-        let query = if let Some(block_hash) = block_hash_hex {
-            let normalized_hash = normalize_block_hash_hex(block_hash)?;
-            format!("?block_hash={normalized_hash}")
-        } else {
-            String::new()
-        };
-        let path = format!("v1/da/manifests/{normalized}{query}");
+        let path = format!("v1/da/manifests/{normalized}");
         let url = join_torii_url(&self.torii_url, &path);
         let response = self
             .default_request(HttpMethod::GET, url)
@@ -17237,35 +17198,6 @@ impl Client {
         build_car_plan_from_manifest(&manifest)
     }
 
-    fn apply_sampling_plan(
-        bundle: &DaManifestBundle,
-        manifest: &DaManifestV1,
-        config: &DaProofConfig,
-    ) -> DaProofConfig {
-        let default_sample_count = DaProofConfig::default().sample_count;
-        if config.leaf_indexes.is_empty()
-            && config.sample_count == default_sample_count
-            && let Some(plan) = &bundle.sampling_plan
-        {
-            let mut leaf_indexes: Vec<usize> = plan
-                .samples
-                .iter()
-                .filter_map(|sample| usize::try_from(sample.index).ok())
-                .filter(|idx| *idx < manifest.chunks.len())
-                .collect();
-            leaf_indexes.sort_unstable();
-            leaf_indexes.dedup();
-            if !leaf_indexes.is_empty() {
-                return DaProofConfig {
-                    sample_count: 0,
-                    sample_seed: config.sample_seed,
-                    leaf_indexes,
-                };
-            }
-        }
-        config.clone()
-    }
-
     /// Generate a `PoR` summary for the provided payload using the supplied manifest bundle.
     ///
     /// This mirrors the `iroha da prove --json-out` output so SDK consumers can attach the same
@@ -17281,8 +17213,7 @@ impl Client {
         proof: &DaProofConfig,
     ) -> Result<JsonValue> {
         let manifest = bundle.decode_manifest()?;
-        let applied = Self::apply_sampling_plan(bundle, &manifest, proof);
-        generate_da_proof_summary(&manifest, payload, &applied)
+        generate_da_proof_summary(&manifest, payload, proof)
     }
 
     /// Build a CLI-compatible DA proof artefact with manifest/payload annotations.
@@ -17300,8 +17231,7 @@ impl Client {
         metadata: &DaProofArtifactMetadata,
     ) -> Result<JsonValue> {
         let manifest = bundle.decode_manifest()?;
-        let applied = Self::apply_sampling_plan(bundle, &manifest, proof);
-        generate_da_proof_artifact(&manifest, payload, &applied, metadata)
+        generate_da_proof_artifact(&manifest, payload, proof, metadata)
     }
 
     /// Persist a DA proof artefact to disk (defaults to pretty JSON + newline).
@@ -24963,7 +24893,7 @@ mod tests {
     use crate::http_default::RequestSnapshot;
     use crate::{
         config::{BasicAuth, Config},
-        da::{DaSampledChunk, DaSamplingPlan, PDP_COMMITMENT_HEADER},
+        da::PDP_COMMITMENT_HEADER,
         http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
         secrecy::SecretString,
     };
@@ -27816,32 +27746,6 @@ mod tests {
     }
 
     #[test]
-    fn build_da_proof_summary_prefers_sampling_plan_indices() {
-        let payload = vec![0x11, 0x22, 0x33, 0x44];
-        let mut bundle = manifest_bundle_from_payload(&payload);
-        bundle.sampling_plan = Some(DaSamplingPlan {
-            assignment_hash: BlobDigest::new([0xCC; 32]),
-            sample_window: 4,
-            sample_seed: None,
-            samples: vec![DaSampledChunk {
-                index: 0,
-                role: ChunkRole::Data,
-                group: 0,
-            }],
-        });
-        let session = sample_fetch_session(&payload);
-        let (summary, applied) = Client::build_da_proof_summary_from_session(
-            &bundle,
-            &session,
-            &DaProofConfig::default(),
-        )
-        .expect("proof summary with sampling plan");
-        assert_eq!(applied.sample_count, 0);
-        assert_eq!(applied.leaf_indexes, vec![0]);
-        assert!(summary.get("proofs").is_some());
-    }
-
-    #[test]
     fn build_da_car_plan_matches_manifest() {
         let (bundle, payload) = sample_da_manifest_bundle();
         let manifest = bundle.decode_manifest().expect("manifest decode");
@@ -27896,29 +27800,14 @@ mod tests {
     }
 
     #[test]
-    fn get_da_manifest_bundle_with_block_hash_appends_query_and_parses_sampling() {
+    fn get_da_manifest_bundle_fetches_without_query_parameters() {
         let (mut bundle, _) = sample_da_manifest_bundle();
-        let assignment_hash = BlobDigest::new([0xBB; 32]);
-        bundle.sampling_plan = Some(DaSamplingPlan {
-            assignment_hash,
-            sample_window: 3,
-            sample_seed: None,
-            samples: vec![DaSampledChunk {
-                index: 4,
-                role: ChunkRole::GlobalParity,
-                group: 2,
-            }],
-        });
         let response = manifest_bundle_response(&mut bundle);
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let block_hash_hex = hex::encode(Hash::new(b"block-seed").as_ref());
 
         let fetched = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_da_manifest_bundle_with_block_hash(
-                &bundle.storage_ticket_hex,
-                Some(&block_hash_hex),
-            )
+            client.get_da_manifest_bundle(&bundle.storage_ticket_hex)
         })
         .expect("fetch manifest");
 
@@ -27928,21 +27817,12 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        let expected_query = format!("block_hash={block_hash_hex}");
         assert_eq!(
             snapshot.url.path(),
             format!("/v1/da/manifests/{}", bundle.storage_ticket_hex)
         );
-        assert_eq!(snapshot.url.query(), Some(expected_query.as_str()));
-
-        let sampling = fetched.sampling_plan.expect("sampling plan");
-        assert_eq!(sampling.assignment_hash, assignment_hash);
-        assert_eq!(sampling.sample_window, 3);
-        assert_eq!(sampling.samples.len(), 1);
-        let sample = &sampling.samples[0];
-        assert_eq!(sample.index, 4);
-        assert_eq!(sample.role, ChunkRole::GlobalParity);
-        assert_eq!(sample.group, 2);
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(fetched.storage_ticket_hex, bundle.storage_ticket_hex);
     }
 
     fn sample_gateway_fetch_inputs(
@@ -33987,7 +33867,6 @@ mod tests {
             manifest_bytes,
             manifest_json: JsonValue::Null,
             chunk_plan,
-            sampling_plan: None,
         }
     }
 
@@ -36202,45 +36081,6 @@ mod tests {
             )
             .expect("render canonical chunk fetch plan");
         }
-        let sampling_plan_value = bundle.sampling_plan.as_ref().map(|plan| {
-            let role_label = |role: ChunkRole| match role {
-                ChunkRole::Data => "data",
-                ChunkRole::LocalParity => "local_parity",
-                ChunkRole::GlobalParity => "global_parity",
-                ChunkRole::StripeParity => "stripe_parity",
-            };
-            let mut map = JsonMap::new();
-            map.insert(
-                "assignment_hash".into(),
-                JsonValue::String(hex::encode(plan.assignment_hash.as_bytes())),
-            );
-            map.insert(
-                "sample_window".into(),
-                JsonValue::from(u64::from(plan.sample_window)),
-            );
-            if let Some(seed) = plan.sample_seed {
-                map.insert("sample_seed".into(), JsonValue::String(hex::encode(seed)));
-            }
-            map.insert(
-                "samples".into(),
-                JsonValue::Array(
-                    plan.samples
-                        .iter()
-                        .map(|sample| {
-                            JsonValue::Object(JsonMap::from_iter([
-                                ("index".into(), JsonValue::from(u64::from(sample.index))),
-                                (
-                                    "role".into(),
-                                    JsonValue::String(role_label(sample.role).to_owned()),
-                                ),
-                                ("group".into(), JsonValue::from(u64::from(sample.group))),
-                            ]))
-                        })
-                        .collect(),
-                ),
-            );
-            JsonValue::Object(map)
-        });
         let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(&bundle.manifest_bytes);
         let mut response_map = JsonMap::from_iter([
             (
@@ -36270,9 +36110,6 @@ mod tests {
             ("manifest".into(), bundle.manifest_json.clone()),
             ("chunk_plan".into(), bundle.chunk_plan.clone()),
         ]);
-        if let Some(plan_value) = sampling_plan_value {
-            response_map.insert("sampling_plan".into(), plan_value);
-        }
         let response_value = JsonValue::Object(response_map);
         HttpResponse::builder()
             .status(StatusCode::OK)

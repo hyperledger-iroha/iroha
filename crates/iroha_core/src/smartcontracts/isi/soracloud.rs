@@ -318,6 +318,14 @@ fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     ))
 }
 
+fn single_signatory_authority(
+    authority: &AccountId,
+) -> Result<&PublicKey, InstructionExecutionError> {
+    authority.try_signatory().ok_or_else(|| {
+        invalid_parameter("Soracloud provenance requires a single-signatory transaction authority")
+    })
+}
+
 fn invalid_quantity_arithmetic(
     context: &str,
     error: iroha_primitives::numeric::NumericOperationError,
@@ -639,7 +647,7 @@ fn verify_bundle_provenance(
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "bundle provenance signer must match the transaction authority",
         ));
@@ -660,7 +668,7 @@ fn verify_app_infra_provenance(
     manifest: &SoraAppInfraManifestV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "app infra provenance signer must match the transaction authority",
         ));
@@ -679,7 +687,7 @@ fn verify_rollback_provenance(
     target_version: Option<&str>,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "rollback provenance signer must match the transaction authority",
         ));
@@ -704,7 +712,7 @@ fn verify_service_config_set_provenance(
     value_json: &Json,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service config provenance signer must match the transaction authority",
         ));
@@ -729,7 +737,7 @@ fn verify_service_config_delete_provenance(
     config_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service config delete provenance signer must match the transaction authority",
         ));
@@ -754,7 +762,7 @@ fn verify_service_secret_set_provenance(
     secret: &SecretEnvelopeV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service secret provenance signer must match the transaction authority",
         ));
@@ -776,7 +784,7 @@ fn verify_service_secret_delete_provenance(
     secret_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service secret delete provenance signer must match the transaction authority",
         ));
@@ -803,7 +811,7 @@ fn verify_rollout_provenance(
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "rollout provenance signer must match the transaction authority",
         ));
@@ -834,7 +842,7 @@ fn verify_state_mutation_provenance(
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "state mutation provenance signer must match the transaction authority",
         ));
@@ -5351,7 +5359,7 @@ fn verify_fhe_job_run_provenance(
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "fhe job provenance signer must match the transaction authority",
         ));
@@ -5384,7 +5392,7 @@ fn verify_decryption_request_provenance(
     request: DecryptionRequestV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "decryption request provenance signer must match the transaction authority",
         ));
@@ -5414,7 +5422,7 @@ fn verify_training_job_start_provenance(
     storage_budget_bytes: u64,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "training job start provenance signer must match the transaction authority",
         ));
@@ -5449,7 +5457,7 @@ fn verify_training_job_checkpoint_provenance(
     metrics_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "training checkpoint provenance signer must match the transaction authority",
         ));
@@ -5479,7 +5487,7 @@ fn verify_training_job_retry_provenance(
     reason: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "training retry provenance signer must match the transaction authority",
         ));
@@ -5508,7 +5516,7 @@ fn verify_model_artifact_register_provenance(
     provenance_attestation_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model artifact provenance signer must match the transaction authority",
         ));
@@ -5547,7 +5555,7 @@ fn verify_model_weight_register_provenance(
     provenance_attestation_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model weight provenance signer must match the transaction authority",
         ));
@@ -5580,7 +5588,7 @@ fn verify_model_weight_promote_provenance(
     gate_report_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model weight promotion provenance signer must match the transaction authority",
         ));
@@ -5611,7 +5619,7 @@ fn verify_model_weight_rollback_provenance(
     reason: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model weight rollback provenance signer must match the transaction authority",
         ));
@@ -5638,7 +5646,7 @@ fn verify_uploaded_model_bundle_register_provenance(
     bundle: &SoraUploadedModelBundleV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "uploaded model bundle provenance signer must match the transaction authority",
         ));
@@ -5671,7 +5679,7 @@ fn verify_uploaded_model_finalize_provenance(
     provenance_attestation_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "uploaded model finalize provenance signer must match the transaction authority",
         ));
@@ -6035,7 +6043,7 @@ fn verify_provenance_payload(
     signer_mismatch: &'static str,
     verification_failed: &'static str,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(signer_mismatch));
     }
     verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
@@ -15174,7 +15182,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 lease_expires_sequence: record.lease_expires_sequence,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
-                signer: authority.signatory().clone(),
+                signer: single_signatory_authority(authority)?.clone(),
                 request_id: Some(normalized_run_id.to_owned()),
                 asset_definition: None,
                 amount: None,
@@ -18481,6 +18489,29 @@ mod tests {
 
         let other_call_site = checked_keypair();
         assert_ne!(first.public_key(), other_call_site.public_key());
+    }
+
+    #[test]
+    fn soracloud_provenance_rejects_multisig_authority_without_panicking() {
+        let member_key = checked_keypair();
+        let member =
+            iroha_data_model::account::MultisigMember::new(member_key.public_key().clone(), 1)
+                .expect("multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("multisig policy");
+        let authority = AccountId::new_multisig(policy);
+
+        let error = single_signatory_authority(&authority)
+            .expect_err("multisig authority must fail provenance admission");
+        assert!(
+            matches!(
+                &error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("single-signatory transaction authority")
+            ),
+            "unexpected multisig provenance rejection: {error:?}"
+        );
     }
 
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {

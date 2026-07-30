@@ -903,6 +903,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
+                | iroha_core::queue::Error::UnregisteredAuthority { .. }
                 | iroha_core::queue::Error::Governance(_)
                 | iroha_core::queue::Error::GovernanceNotPermitted { .. }
                 | iroha_core::queue::Error::LaneComplianceDenied { .. }

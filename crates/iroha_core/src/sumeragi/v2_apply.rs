@@ -1629,8 +1629,8 @@ impl V2ApplyService {
         self.queue.remove_committed_hashes(
             committed_block
                 .as_ref()
-                .external_transactions()
-                .map(|transaction| transaction.hash()),
+                .external_entrypoints_cloned()
+                .map(|entrypoint| HashOf::from_untyped_unchecked(Hash::from(entrypoint.hash()))),
             None,
         );
         let nexus = self.state.nexus_snapshot();

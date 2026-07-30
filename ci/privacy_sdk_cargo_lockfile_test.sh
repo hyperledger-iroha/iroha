@@ -4300,7 +4300,9 @@ grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=absent' "${LOCK
 grep -Fq 'privacy_sdk_validate_repository_cargo_configuration' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_prepare_private_cargo_home' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_assert_ci_executable_path_order' "${LOCK_HELPER_PATH}"
-grep -Fq 'toolchain_bin_directory}" >>"${github_path_path}"' "${LOCK_HELPER_PATH}"
+grep -Fq 'printf '\''%s\n'\'' "${toolchain_bin_directory}" \' "${LOCK_HELPER_PATH}"
+grep -Fq 'printf '\''%s\n'\'' "${cargo_wrapper_directory}" \' "${LOCK_HELPER_PATH}"
+[[ "$(grep -Fc '>>"${github_path_path}" || return 1' "${LOCK_HELPER_PATH}")" -eq 2 ]]
 grep -Fq 'CARGO_ENCODED_RUSTDOCFLAGS' "${LOCK_HELPER_PATH}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL' "${LOCK_HELPER_PATH}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME' "${LOCK_HELPER_PATH}"

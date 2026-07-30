@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { blake3 } from "@noble/hashes/blake3";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { publicKeyFromPrivate, signEd25519 } from "./crypto.js";
 import { getNativeBinding } from "./native.js";
@@ -9,6 +10,7 @@ const DEFAULT_CHUNK_SIZE = 262_144;
 const DEFAULT_ERASURE_PROFILE = {
   dataShards: 10,
   parityShards: 4,
+  rowParityStripes: 0,
   chunkAlignment: 10,
   fecScheme: "Rs12_10",
 };
@@ -22,6 +24,10 @@ const DEFAULT_RETENTION_POLICY = {
 const ED25519_FUNCTION_CODE = 0xed;
 const MAX_SAFE_UINT = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_UINT_BIGINT = BigInt(MAX_SAFE_UINT);
+const DA_INGEST_REQUEST_SIGNING_DOMAIN_V1 = Buffer.from(
+  "iroha:da-ingest-request:v1\0",
+  "utf8",
+);
 
 export function buildDaIngestRequest(options = {}) {
   const payloadBuffer = toBuffer(options.payload, "payload");
@@ -47,8 +53,6 @@ export function buildDaIngestRequest(options = {}) {
   const metadata = encodeMetadata(options.metadata);
 
   const { digestTuple, digestHex } = resolveClientBlobId(options.clientBlobId, payloadBuffer);
-  const signatureInfo = resolveSignature(options, payloadBuffer);
-
   const request = {
     client_blob_id: digestTuple,
     lane_id: laneId,
@@ -62,8 +66,6 @@ export function buildDaIngestRequest(options = {}) {
     total_size: payloadBuffer.length,
     payload: payloadBuffer.toString("base64"),
     metadata,
-    submitter: signatureInfo.submitterPublicKey,
-    signature: signatureInfo.signatureHex,
   };
 
   if (options.compression !== undefined) {
@@ -78,15 +80,158 @@ export function buildDaIngestRequest(options = {}) {
     request.norito_manifest = toBuffer(options.noritoManifest, "noritoManifest").toString("base64");
   }
 
+  const signingDigest = computeDaIngestSigningDigest(request);
+  const signatureInfo = resolveSignature(options, signingDigest);
+  request.submitter = signatureInfo.submitterPublicKey;
+  request.signature = signatureInfo.signatureHex;
+
   return {
     request,
     artifacts: {
       clientBlobIdHex: digestHex,
       submitterPublicKey: signatureInfo.submitterPublicKey,
       signatureHex: signatureInfo.signatureHex,
+      signingDigestHex: bufferToHex(signingDigest),
       payloadLength: payloadBuffer.length,
     },
   };
+}
+
+/**
+ * Compute the version-one domain-separated DA request signing digest.
+ *
+ * The input is the normalized request object returned by
+ * {@link buildDaIngestRequest}, excluding `submitter` and `signature`.
+ */
+export function computeDaIngestSigningDigest(requestInput) {
+  const request = ensureRecord(requestInput, "DA ingest signing request");
+  const parts = [DA_INGEST_REQUEST_SIGNING_DOMAIN_V1];
+
+  parts.push(
+    fixedDigestFromTuple(request.client_blob_id, "client_blob_id"),
+    encodeUnsignedLe(request.lane_id, 4, "lane_id"),
+    encodeUnsignedLe(request.epoch, 8, "epoch"),
+    encodeUnsignedLe(request.sequence, 8, "sequence"),
+  );
+
+  const blobClass = ensureRecord(request.blob_class, "blob_class");
+  const blobClassTags = {
+    TaikaiSegment: 0,
+    NexusLaneSidecar: 1,
+    GovernanceArtifact: 2,
+    Custom: 3,
+  };
+  const blobClassName = requireEnumKey(blobClass.class, blobClassTags, "blob_class.class");
+  parts.push(
+    Buffer.of(blobClassTags[blobClassName]),
+    encodeUnsignedLe(blobClassName === "Custom" ? blobClass.value : 0, 2, "blob_class.value"),
+  );
+  parts.push(encodeLengthPrefixedUtf8(unwrapTupleString(request.codec, "codec")));
+
+  const erasure = ensureRecord(request.erasure_profile, "erasure_profile");
+  parts.push(
+    encodeUnsignedLe(erasure.data_shards, 2, "erasure_profile.data_shards"),
+    encodeUnsignedLe(erasure.parity_shards, 2, "erasure_profile.parity_shards"),
+    encodeUnsignedLe(erasure.row_parity_stripes ?? 0, 2, "erasure_profile.row_parity_stripes"),
+    encodeUnsignedLe(erasure.chunk_alignment, 2, "erasure_profile.chunk_alignment"),
+  );
+  const fec = ensureRecord(erasure.fec_scheme, "erasure_profile.fec_scheme");
+  const fecTags = { Rs12_10: 0, RsWin14_10: 1, Rs18_14: 2, Custom: 3 };
+  const fecName = requireEnumKey(fec.scheme, fecTags, "erasure_profile.fec_scheme.scheme");
+  parts.push(
+    Buffer.of(fecTags[fecName]),
+    encodeUnsignedLe(fecName === "Custom" ? fec.value : 0, 2, "erasure_profile.fec_scheme.value"),
+  );
+
+  const retention = ensureRecord(request.retention_policy, "retention_policy");
+  parts.push(
+    encodeUnsignedLe(retention.hot_retention_secs, 8, "retention_policy.hot_retention_secs"),
+    encodeUnsignedLe(retention.cold_retention_secs, 8, "retention_policy.cold_retention_secs"),
+    encodeUnsignedLe(retention.required_replicas, 2, "retention_policy.required_replicas"),
+  );
+  const storage = ensureRecord(retention.storage_class, "retention_policy.storage_class");
+  const storageTags = { Hot: 0, Warm: 1, Cold: 2 };
+  const storageName = requireEnumKey(
+    storage.type,
+    storageTags,
+    "retention_policy.storage_class.type",
+  );
+  parts.push(
+    Buffer.of(storageTags[storageName]),
+    encodeLengthPrefixedUtf8(unwrapTupleString(retention.governance_tag, "governance_tag")),
+    encodeUnsignedLe(request.chunk_size, 4, "chunk_size"),
+    encodeUnsignedLe(request.total_size, 8, "total_size"),
+  );
+
+  const compressionTags = { Identity: 0, Gzip: 1, Deflate: 2, Zstd: 3 };
+  const compressionName = requireEnumKey(
+    request.compression ?? "Identity",
+    compressionTags,
+    "compression",
+  );
+  parts.push(Buffer.of(compressionTags[compressionName]));
+
+  if (request.norito_manifest === undefined || request.norito_manifest === null) {
+    parts.push(Buffer.of(0));
+  } else {
+    parts.push(
+      Buffer.of(1),
+      encodeLengthPrefixedBytes(
+        Buffer.from(request.norito_manifest, "base64"),
+        "norito_manifest",
+      ),
+    );
+  }
+  parts.push(
+    encodeLengthPrefixedBytes(Buffer.from(request.payload, "base64"), "payload"),
+  );
+
+  const metadata = ensureRecord(request.metadata, "metadata");
+  const items = Array.isArray(metadata.items) ? metadata.items : [];
+  parts.push(encodeUnsignedLe(items.length, 8, "metadata.items.length"));
+  items.forEach((entryInput, index) => {
+    const entry = ensureRecord(entryInput, `metadata.items[${index}]`);
+    parts.push(
+      encodeLengthPrefixedUtf8(entry.key),
+      encodeLengthPrefixedBytes(
+        Buffer.from(entry.value, "base64"),
+        `metadata.items[${index}].value`,
+      ),
+    );
+    const visibility = ensureRecord(
+      entry.visibility,
+      `metadata.items[${index}].visibility`,
+    );
+    const visibilityTags = { Public: 0, GovernanceOnly: 1 };
+    const visibilityName = requireEnumKey(
+      visibility.visibility,
+      visibilityTags,
+      `metadata.items[${index}].visibility.visibility`,
+    );
+    parts.push(Buffer.of(visibilityTags[visibilityName]));
+
+    const encryption = ensureRecord(
+      entry.encryption,
+      `metadata.items[${index}].encryption`,
+    );
+    if (encryption.cipher === "None") {
+      parts.push(Buffer.of(0));
+    } else if (encryption.cipher === "ChaCha20Poly1305") {
+      parts.push(Buffer.of(1));
+      const label = encryption.params?.key_label;
+      if (label === undefined || label === null) {
+        parts.push(Buffer.of(0));
+      } else {
+        parts.push(Buffer.of(1), encodeLengthPrefixedUtf8(String(label)));
+      }
+    } else {
+      throw new TypeError(
+        `metadata.items[${index}].encryption.cipher is not supported`,
+      );
+    }
+  });
+
+  return Buffer.from(blake3(Buffer.concat(parts)));
 }
 
 export function deriveDaChunkerHandle(manifestBytes, options = {}) {
@@ -242,7 +387,7 @@ function resolveClientBlobId(explicit, payloadBuffer) {
   };
 }
 
-function resolveSignature(options, payloadBuffer) {
+function resolveSignature(options, signingDigest) {
   const submitter = options.submitterPublicKey
     ? canonicalizePublicKey(options.submitterPublicKey, "submitterPublicKey")
     : null;
@@ -260,11 +405,75 @@ function resolveSignature(options, payloadBuffer) {
   }
 
   const privateKey = normalizePrivateKey(options);
-  const signature = signEd25519(payloadBuffer, privateKey);
+  const signature = signEd25519(signingDigest, privateKey);
   const signatureHex = bufferToHex(signature);
   const submitterPublicKey =
     submitter ?? encodeEd25519Multihash(publicKeyFromPrivate(privateKey));
   return { signatureHex, submitterPublicKey };
+}
+
+function fixedDigestFromTuple(value, name) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    !Array.isArray(value[0])
+  ) {
+    throw new TypeError(`${name} must be a single fixed-byte tuple`);
+  }
+  const bytes = normalizeByteArray(value[0], name);
+  if (bytes.length !== 32) {
+    throw new RangeError(`${name} must contain exactly 32 bytes`);
+  }
+  return bytes;
+}
+
+function encodeUnsignedLe(value, width, name) {
+  const normalized = normalizeUnsignedInteger(value, name);
+  const integer = BigInt(normalized);
+  const limit = 1n << BigInt(width * 8);
+  if (integer >= limit) {
+    throw new RangeError(`${name} does not fit in ${width} bytes`);
+  }
+  const bytes = Buffer.alloc(width);
+  let remaining = integer;
+  for (let index = 0; index < width; index += 1) {
+    bytes[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return bytes;
+}
+
+function encodeLengthPrefixedUtf8(value) {
+  if (typeof value !== "string") {
+    throw new TypeError("signing string must be a string");
+  }
+  return encodeLengthPrefixedBytes(
+    Buffer.from(value, "utf8"),
+    "signing string",
+  );
+}
+
+function encodeLengthPrefixedBytes(bytes, name) {
+  const normalized = toBuffer(bytes, name);
+  return Buffer.concat([
+    encodeUnsignedLe(normalized.length, 8, `${name}.length`),
+    normalized,
+  ]);
+}
+
+function unwrapTupleString(value, name) {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new TypeError(`${name} must be a single-value tuple`);
+  }
+  return requireNonEmptyString(value[0], name);
+}
+
+function requireEnumKey(value, tags, name) {
+  const key = requireNonEmptyString(value, name);
+  if (!Object.prototype.hasOwnProperty.call(tags, key)) {
+    throw new TypeError(`${name} contains unsupported variant ${key}`);
+  }
+  return key;
 }
 
 function normalizePrivateKey(options) {
@@ -353,6 +562,10 @@ function encodeErasureProfile(profile = {}) {
   return {
     data_shards: normalizeUnsignedInteger(merged.dataShards, "erasureProfile.dataShards", { allowZero: false }),
     parity_shards: normalizeUnsignedInteger(merged.parityShards, "erasureProfile.parityShards", { allowZero: false }),
+    row_parity_stripes: normalizeUnsignedInteger(
+      merged.rowParityStripes,
+      "erasureProfile.rowParityStripes",
+    ),
     chunk_alignment: normalizeUnsignedInteger(merged.chunkAlignment, "erasureProfile.chunkAlignment", { allowZero: false }),
     fec_scheme: encodeFecScheme(merged.fecScheme),
   };

@@ -68,10 +68,7 @@ use std::{
     fs,
     future::Future,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
 
@@ -2153,10 +2150,6 @@ struct NetworkRelay {
     peers_gossiper: PeersGossiperHandle,
     network: IrohaNetwork,
     streaming: iroha_core::streaming::StreamingHandle,
-    kiso: KisoHandle,
-    #[allow(dead_code)]
-    suppress_pow_broadcast: Arc<AtomicBool>,
-    pow_update_version: Arc<AtomicU64>,
     consensus_ingress: ConsensusIngressLimiter,
     low_priority_ingress: LowPriorityIngressLimiter,
     #[cfg(feature = "test-network-message-control")]
@@ -2175,9 +2168,6 @@ struct NetworkRelayShared {
     peers_gossiper: PeersGossiperHandle,
     network: IrohaNetwork,
     streaming: iroha_core::streaming::StreamingHandle,
-    kiso: KisoHandle,
-    suppress_pow_broadcast: Arc<AtomicBool>,
-    pow_update_version: Arc<AtomicU64>,
     consensus_ingress: Mutex<ConsensusIngressLimiter>,
     low_priority_ingress: Mutex<LowPriorityIngressLimiter>,
     #[cfg(feature = "test-network-message-control")]
@@ -5076,9 +5066,6 @@ impl NetworkRelay {
             peers_gossiper: self.peers_gossiper,
             network: self.network,
             streaming: self.streaming,
-            kiso: self.kiso,
-            suppress_pow_broadcast: self.suppress_pow_broadcast,
-            pow_update_version: self.pow_update_version,
             consensus_ingress: Mutex::new(self.consensus_ingress),
             low_priority_ingress: Mutex::new(self.low_priority_ingress),
             #[cfg(feature = "test-network-message-control")]
@@ -5583,9 +5570,6 @@ impl NetworkRelayShared {
             }
             PeersGossiper(data) => self.peers_gossiper.gossip(*data, peer),
             PeerTrustGossip(data) => self.peers_gossiper.gossip_trust(*data, peer),
-            SoranetPowConfig(bytes) => {
-                self.apply_remote_pow_update(&bytes).await;
-            }
             msg @ (SoracloudLocalReadProxyRequest(_)
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
@@ -5980,192 +5964,14 @@ impl NetworkRelayShared {
             Evidence(_) => ("Evidence", None, None),
         }
     }
-
-    fn pow_summary_matches_broadcast(
-        current: &iroha_config::client_api::SoranetHandshakePowSummary,
-        update: &iroha_core::SoranetPowConfigBroadcast,
-    ) -> bool {
-        let puzzle_matches = match (current.puzzle, update.puzzle) {
-            (None, None) => true,
-            (Some(current), Some(update)) => {
-                current.memory_kib == update.memory_kib
-                    && current.time_cost == update.time_cost
-                    && current.lanes == update.lanes
-            }
-            _ => false,
-        };
-        current.required == update.required
-            && current.difficulty == update.difficulty
-            && current.max_future_skew_secs == update.max_future_skew_secs
-            && current.min_ticket_ttl_secs == update.min_ticket_ttl_secs
-            && current.ticket_ttl_secs == update.ticket_ttl_secs
-            && puzzle_matches
-    }
-
-    async fn current_pow_context(
-        &self,
-        update: &iroha_core::SoranetPowConfigBroadcast,
-    ) -> (iroha_config::client_api::Logger, bool) {
-        match self.kiso.get_dto().await {
-            Ok(dto) => (
-                dto.logger,
-                Self::pow_summary_matches_broadcast(&dto.network.soranet_handshake.pow, update),
-            ),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    "Falling back to INFO logger while applying remote PoW update"
-                );
-                (
-                    iroha_config::client_api::Logger {
-                        level: iroha_logger::Level::INFO,
-                        filter: None,
-                    },
-                    false,
-                )
-            }
-        }
-    }
-
-    fn remote_pow_update_dto(
-        logger: iroha_config::client_api::Logger,
-        update: &iroha_core::SoranetPowConfigBroadcast,
-    ) -> iroha_config::client_api::ConfigUpdateDTO {
-        let puzzle = Some(update.puzzle.map_or(
-            iroha_config::client_api::SoranetHandshakePuzzleUpdate {
-                enabled: Some(false),
-                memory_kib: None,
-                time_cost: None,
-                lanes: None,
-            },
-            |puzzle| iroha_config::client_api::SoranetHandshakePuzzleUpdate {
-                enabled: Some(true),
-                memory_kib: Some(puzzle.memory_kib),
-                time_cost: Some(puzzle.time_cost),
-                lanes: Some(puzzle.lanes),
-            },
-        ));
-        iroha_config::client_api::ConfigUpdateDTO {
-            logger,
-            network_acl: None,
-            network: None,
-            confidential_gas: None,
-            soranet_handshake: Some(iroha_config::client_api::SoranetHandshakeUpdate {
-                descriptor_commit_hex: None,
-                client_capabilities_hex: None,
-                relay_capabilities_hex: None,
-                kem_id: None,
-                sig_id: None,
-                resume_hash_hex: None,
-                pow: Some(iroha_config::client_api::SoranetHandshakePowUpdate {
-                    required: Some(update.required),
-                    difficulty: Some(update.difficulty),
-                    max_future_skew_secs: Some(update.max_future_skew_secs),
-                    min_ticket_ttl_secs: Some(update.min_ticket_ttl_secs),
-                    ticket_ttl_secs: Some(update.ticket_ttl_secs),
-                    puzzle,
-                    signed_ticket_public_key_hex: None,
-                }),
-            }),
-            transport: None,
-            compute_pricing: None,
-        }
-    }
-
-    async fn apply_remote_pow_update(&self, bytes: &[u8]) {
-        iroha_logger::debug!(payload_len = bytes.len(), "Received PoW update payload");
-        let Ok(update) = norito::json::from_slice::<iroha_core::SoranetPowConfigBroadcast>(bytes)
-        else {
-            iroha_logger::warn!("Failed to decode SoraNet PoW config broadcast; ignoring");
-            return;
-        };
-        let (logger, matches_current) = self.current_pow_context(&update).await;
-
-        let observed_version = self.pow_update_version.load(Ordering::SeqCst);
-        if update.version < observed_version {
-            iroha_logger::debug!(
-                incoming_version = update.version,
-                local_version = observed_version,
-                "Ignoring stale PoW update version"
-            );
-            return;
-        }
-        if update.version == observed_version {
-            if !matches_current {
-                iroha_logger::warn!(
-                    incoming_version = update.version,
-                    local_version = observed_version,
-                    "Ignoring conflicting PoW update with equal version"
-                );
-            }
-            iroha_logger::debug!(
-                incoming_version = update.version,
-                local_version = observed_version,
-                "PoW update version already applied; skipping"
-            );
-            return;
-        }
-        if matches_current {
-            let _ = self.pow_update_version.compare_exchange(
-                observed_version,
-                update.version,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
-            iroha_logger::debug!(
-                incoming_version = update.version,
-                local_version = observed_version,
-                "PoW config already matches; advancing version only"
-            );
-            return;
-        }
-        if self
-            .pow_update_version
-            .compare_exchange(
-                observed_version,
-                update.version,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            iroha_logger::debug!(
-                incoming_version = update.version,
-                local_version = self.pow_update_version.load(Ordering::SeqCst),
-                "Skipping PoW update after local version changed concurrently"
-            );
-            return;
-        }
-
-        // Remote updates should not trigger another rebroadcast from this peer.
-        self.suppress_pow_broadcast.store(true, Ordering::SeqCst);
-        if let Err(err) = self
-            .kiso
-            .update_with_dto(Self::remote_pow_update_dto(logger, &update))
-            .await
-        {
-            self.suppress_pow_broadcast.store(false, Ordering::SeqCst);
-            let _ = self.pow_update_version.compare_exchange(
-                update.version,
-                observed_version,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
-            iroha_logger::warn!(?err, "Failed to apply remote PoW configuration update");
-        }
-    }
 }
 
 #[cfg(test)]
 mod network_relay_tests {
     use std::{num::NonZeroU64, time::Duration};
 
-    use iroha_config::{
-        client_api::{SoranetHandshakePowSummary, SoranetHandshakePuzzleSummary},
-        parameters::actual::{SoranetPow, SoranetPuzzle},
-    };
     use iroha_core::{
-        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
+        MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
         lane_consensus::{
             LaneBlockNewViewBodyV1, LaneBlockNewViewCertificateV1, LaneBlockNewViewVoteV1,
             LaneDrainVoteV1, LaneExecutablePayloadV1,
@@ -6199,7 +6005,7 @@ mod network_relay_tests {
     use super::{
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
         LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta, pow_update_payload,
+        SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
     };
 
     #[cfg(feature = "test-network-message-control")]
@@ -6817,107 +6623,6 @@ mod network_relay_tests {
             NetworkRelayShared::block_message_meta(&request),
             ("SumeragiV2CommitCertificateRequest", Some(9), None)
         );
-    }
-
-    #[test]
-    fn pow_broadcast_match_detects_exact_match() {
-        let summary = SoranetHandshakePowSummary {
-            required: true,
-            difficulty: 7,
-            max_future_skew_secs: 900,
-            min_ticket_ttl_secs: 120,
-            ticket_ttl_secs: 240,
-            puzzle: Some(SoranetHandshakePuzzleSummary {
-                memory_kib: 131_072,
-                time_cost: 3,
-                lanes: 2,
-            }),
-            signed_ticket_public_key_hex: None,
-        };
-        let broadcast = SoranetPowConfigBroadcast {
-            version: 1,
-            required: true,
-            difficulty: 7,
-            max_future_skew_secs: 900,
-            min_ticket_ttl_secs: 120,
-            ticket_ttl_secs: 240,
-            puzzle: Some(SoranetPuzzleConfigBroadcast {
-                memory_kib: 131_072,
-                time_cost: 3,
-                lanes: 2,
-            }),
-        };
-
-        assert!(NetworkRelayShared::pow_summary_matches_broadcast(
-            &summary, &broadcast
-        ));
-    }
-
-    #[test]
-    fn pow_broadcast_match_rejects_puzzle_mismatch() {
-        let summary = SoranetHandshakePowSummary {
-            required: true,
-            difficulty: 7,
-            max_future_skew_secs: 900,
-            min_ticket_ttl_secs: 120,
-            ticket_ttl_secs: 240,
-            puzzle: Some(SoranetHandshakePuzzleSummary {
-                memory_kib: 131_072,
-                time_cost: 3,
-                lanes: 2,
-            }),
-            signed_ticket_public_key_hex: None,
-        };
-        let broadcast = SoranetPowConfigBroadcast {
-            version: 1,
-            required: true,
-            difficulty: 7,
-            max_future_skew_secs: 900,
-            min_ticket_ttl_secs: 120,
-            ticket_ttl_secs: 240,
-            puzzle: None,
-        };
-
-        assert!(!NetworkRelayShared::pow_summary_matches_broadcast(
-            &summary, &broadcast
-        ));
-    }
-
-    #[test]
-    fn pow_update_payload_skips_when_pow_disabled() {
-        let pow = SoranetPow {
-            required: false,
-            ..SoranetPow::default()
-        };
-        assert!(pow_update_payload(&pow, 1).is_none());
-    }
-
-    #[test]
-    fn pow_update_payload_encodes_expected_fields() {
-        let pow = SoranetPow {
-            required: true,
-            difficulty: 7,
-            max_future_skew: Duration::from_secs(900),
-            min_ticket_ttl: Duration::from_secs(120),
-            ticket_ttl: Duration::from_secs(240),
-            puzzle: Some(SoranetPuzzle::new(nz_u32(131_072), nz_u32(3), nz_u32(2))),
-            ..SoranetPow::default()
-        };
-
-        let payload = pow_update_payload(&pow, 42).expect("payload");
-        let decoded: SoranetPowConfigBroadcast =
-            norito::json::from_slice(&payload).expect("decode payload");
-
-        assert_eq!(decoded.version, 42);
-        assert!(decoded.required);
-        assert_eq!(decoded.difficulty, 7);
-        assert_eq!(decoded.max_future_skew_secs, 900);
-        assert_eq!(decoded.min_ticket_ttl_secs, 120);
-        assert_eq!(decoded.ticket_ttl_secs, 240);
-        let puzzle = decoded.puzzle.expect("puzzle included");
-        assert_eq!(puzzle.memory_kib, 131_072);
-        assert_eq!(puzzle.time_cost, 3);
-        assert_eq!(puzzle.lanes, 2);
     }
 
     pub fn sample_peer() -> Peer {
@@ -11485,8 +11190,6 @@ impl Iroha {
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
 
-        let suppress_pow_broadcast = Arc::new(AtomicBool::new(false));
-        let pow_update_version = Arc::new(AtomicU64::new(1));
         supervisor.monitor(task::spawn(
             NetworkRelay {
                 sumeragi,
@@ -11494,9 +11197,6 @@ impl Iroha {
                 peers_gossiper,
                 network: network.clone(),
                 streaming: streaming.clone(),
-                kiso: kiso.clone(),
-                suppress_pow_broadcast: Arc::clone(&suppress_pow_broadcast),
-                pow_update_version: Arc::clone(&pow_update_version),
                 consensus_ingress: ConsensusIngressLimiter::from_config(
                     &config.network,
                     Duration::from_millis(signed_block_cadence_ms),
@@ -11520,18 +11220,8 @@ impl Iroha {
         // serve queries without proposing or voting. Validators retain the full duties.
 
         let net_for_relay = network.clone();
-        let suppress_pow_broadcast_for_relay = suppress_pow_broadcast.clone();
-        let pow_update_version_for_relay = pow_update_version.clone();
         supervisor.monitor(tokio::task::spawn(async move {
-            if let Err(err) = config_updates_relay(
-                kiso,
-                logger,
-                net_for_relay,
-                suppress_pow_broadcast_for_relay,
-                pow_update_version_for_relay,
-            )
-            .await
-            {
+            if let Err(err) = config_updates_relay(kiso, logger, net_for_relay).await {
                 iroha_logger::error!(?err, "Config updates relay exited");
             }
         }));
@@ -11754,26 +11444,20 @@ async fn start_telemetry(
     }
 }
 
-/// Spawns a task which subscribes on updates from the configuration actor
-/// and broadcasts them further to interested actors. This way, neither the config actor nor other ones know
-/// about each other, achieving loose coupling of code and system.
+/// Relays local configuration-actor updates to local runtime components.
+///
+/// Security-sensitive handshake policy is never accepted from, or propagated
+/// to, remote peers. Every node derives it exclusively from its own
+/// operator-controlled configuration.
 #[allow(clippy::too_many_lines)]
 async fn config_updates_relay(
     kiso: KisoHandle,
     logger: LoggerHandle,
     network: iroha_core::IrohaNetwork,
-    suppress_pow_broadcast: Arc<AtomicBool>,
-    pow_update_version: Arc<AtomicU64>,
 ) -> EyreResult<()> {
     let mut log_level_update = kiso.subscribe_on_logger_updates().await?;
     let mut acl_update = kiso.subscribe_on_network_acl_updates().await?;
     let mut handshake_update = kiso.subscribe_on_soranet_handshake_updates().await?;
-    let mut online_peers_update = network.online_peers_receiver();
-    let mut known_peers: HashSet<PeerId> = online_peers_update
-        .borrow()
-        .iter()
-        .map(|peer| peer.id().clone())
-        .collect();
     #[cfg(feature = "telemetry")]
     let mut confidential_gas_update = kiso.subscribe_on_confidential_gas_updates().await?;
     #[cfg(feature = "telemetry")]
@@ -11791,16 +11475,7 @@ async fn config_updates_relay(
         metrics.set_ivm_gas_schedule_hash(digest.as_ref());
     }
     // Emit the current handshake configuration immediately so runtime components inherit puzzle settings.
-    let initial_handshake = handshake_update.borrow().clone();
-    network.update_soranet_handshake(initial_handshake.clone());
-    // Broadcast the baseline PoW/puzzle policy before any runtime updates so new peers inherit
-    // the consensus-backed guard rails even if they join before the first config change.
-    let initial_pow_version = pow_update_version.load(Ordering::SeqCst);
-    let mut pow_payload = pow_update_payload(&initial_handshake.pow, initial_pow_version);
-    let pow_broadcast_generation = Arc::new(AtomicU64::new(0));
-    if let Some(payload) = pow_payload.clone() {
-        broadcast_pow_payload(payload, &network, &pow_broadcast_generation);
-    }
+    network.update_soranet_handshake(handshake_update.borrow().clone());
 
     // See https://github.com/tokio-rs/tokio/issues/5616 and
     // https://github.com/rust-lang/rust-clippy/issues/10636
@@ -11838,53 +11513,9 @@ async fn config_updates_relay(
             result = handshake_update.changed() => {
                 if let Ok(()) = result {
                     let value = handshake_update.borrow_and_update().clone();
-                    network.update_soranet_handshake(value.clone());
-                    let was_suppressed =
-                        suppress_pow_broadcast.swap(false, Ordering::SeqCst);
-                    let next_version = if was_suppressed {
-                        pow_update_version.load(Ordering::SeqCst)
-                    } else {
-                        pow_update_version
-                            .fetch_add(1, Ordering::SeqCst)
-                            .saturating_add(1)
-                    };
-                    pow_payload = pow_update_payload(&value.pow, next_version);
-                    if was_suppressed {
-                        // A fresh config landed from a remote peer; stop stale retry loops.
-                        bump_pow_broadcast_generation(&pow_broadcast_generation);
-                    } else if let Some(payload) = pow_payload.clone() {
-                        broadcast_pow_payload(payload, &network, &pow_broadcast_generation);
-                    } else {
-                        // PoW disabled: cancel any in-flight retries of older payloads.
-                        bump_pow_broadcast_generation(&pow_broadcast_generation);
-                    }
+                    network.update_soranet_handshake(value);
                 } else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
-                    break;
-                }
-            },
-            result = online_peers_update.changed() => {
-                if let Ok(()) = result {
-                    let snapshot = online_peers_update.borrow();
-                    let mut current = HashSet::with_capacity(snapshot.len());
-                    for peer in snapshot.iter() {
-                        let peer_id = peer.id().clone();
-                        if !known_peers.contains(&peer_id)
-                            && let Some(payload) = pow_payload.as_ref()
-                        {
-                            network.post(iroha_p2p::Post {
-                                data: iroha_core::NetworkMessage::SoranetPowConfig(payload.clone()),
-                                peer_id: peer_id.clone(),
-                                priority: iroha_p2p::Priority::High,
-                            });
-                        }
-                        current.insert(peer_id);
-                    }
-                    known_peers = current;
-                } else {
-                    iroha_logger::debug!(
-                        "Exiting config updates relay (online peers channel closed)"
-                    );
                     break;
                 }
             },
@@ -11936,108 +11567,16 @@ async fn config_updates_relay(
             result = handshake_update.changed() => {
                 if let Ok(()) = result {
                     let value = handshake_update.borrow_and_update().clone();
-                    network.update_soranet_handshake(value.clone());
-                    let was_suppressed =
-                        suppress_pow_broadcast.swap(false, Ordering::SeqCst);
-                    let next_version = if was_suppressed {
-                        pow_update_version.load(Ordering::SeqCst)
-                    } else {
-                        pow_update_version
-                            .fetch_add(1, Ordering::SeqCst)
-                            .saturating_add(1)
-                    };
-                    pow_payload = pow_update_payload(&value.pow, next_version);
-                    if was_suppressed {
-                        // A fresh config landed from a remote peer; stop stale retry loops.
-                        bump_pow_broadcast_generation(&pow_broadcast_generation);
-                    } else if let Some(payload) = pow_payload.clone() {
-                        broadcast_pow_payload(payload, &network, &pow_broadcast_generation);
-                    } else {
-                        // PoW disabled: cancel any in-flight retries of older payloads.
-                        bump_pow_broadcast_generation(&pow_broadcast_generation);
-                    }
+                    network.update_soranet_handshake(value);
                 } else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
                     break;
                 }
             },
-            result = online_peers_update.changed() => {
-                if let Ok(()) = result {
-                    let snapshot = online_peers_update.borrow();
-                    let mut current = HashSet::with_capacity(snapshot.len());
-                    for peer in snapshot.iter() {
-                        let peer_id = peer.id().clone();
-                        if !known_peers.contains(&peer_id) {
-                            if let Some(payload) = pow_payload.as_ref() {
-                                network.post(iroha_p2p::Post {
-                                    data: iroha_core::NetworkMessage::SoranetPowConfig(
-                                        payload.clone()
-                                    ),
-                                    peer_id: peer_id.clone(),
-                                    priority: iroha_p2p::Priority::High,
-                                });
-                            }
-                        }
-                        current.insert(peer_id);
-                    }
-                    known_peers = current;
-                } else {
-                    iroha_logger::debug!(
-                        "Exiting config updates relay (online peers channel closed)"
-                    );
-                    break;
-                }
-            }
         };
     }
 
     Ok(())
-}
-
-fn pow_update_payload(
-    pow: &iroha_config::parameters::actual::SoranetPow,
-    version: u64,
-) -> Option<Vec<u8>> {
-    if !pow.required {
-        return None;
-    }
-    let broadcast = iroha_core::SoranetPowConfigBroadcast {
-        version,
-        required: pow.required,
-        difficulty: pow.difficulty,
-        max_future_skew_secs: pow.max_future_skew.as_secs(),
-        min_ticket_ttl_secs: pow.min_ticket_ttl.as_secs(),
-        ticket_ttl_secs: pow.ticket_ttl.as_secs(),
-        puzzle: pow
-            .puzzle
-            .map(|p| iroha_core::SoranetPuzzleConfigBroadcast {
-                memory_kib: p.memory_kib.get(),
-                time_cost: p.time_cost.get(),
-                lanes: p.lanes.get(),
-            }),
-    };
-    let payload = norito::json::to_json(&broadcast)
-        .expect("broadcast is serializable")
-        .into_bytes();
-    Some(payload)
-}
-
-fn bump_pow_broadcast_generation(generation: &AtomicU64) {
-    generation.fetch_add(1, Ordering::SeqCst);
-}
-
-fn broadcast_pow_payload(
-    payload: Vec<u8>,
-    network: &iroha_core::IrohaNetwork,
-    generation: &Arc<AtomicU64>,
-) {
-    // Bump generation so any in-flight payload attempt is considered stale.
-    generation.fetch_add(1, Ordering::SeqCst);
-
-    network.broadcast(iroha_p2p::Broadcast {
-        data: iroha_core::NetworkMessage::SoranetPowConfig(payload),
-        priority: iroha_p2p::Priority::High,
-    });
 }
 
 fn read_stored_genesis_block(

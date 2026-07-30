@@ -8917,6 +8917,10 @@ fn initial_permission_resource_authority(
                 })
                 || authority_has_permission(&state_transaction.world, authority, &registrar)?
         }
+        "CanExecuteSettlement" => {
+            let token = decode!(executor_permission::settlement::CanExecuteSettlement);
+            token.debited_asset.account() == authority
+        }
         "CanSetFxCorridorPolicy" | "CanSettleFxCorridor" => {
             if permission.name() == "CanSetFxCorridorPolicy" {
                 let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
@@ -10615,6 +10619,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
     "CanInvokeContractEntrypoint",
+    "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",
     "CanSettleFxCorridor",

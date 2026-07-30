@@ -21548,10 +21548,8 @@ fn signed_transaction_hash_for_entrypoint(
     entrypoint: &TransactionEntrypoint,
 ) -> Option<HashOf<SignedTransaction>> {
     match entrypoint {
-        TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
-        TransactionEntrypoint::SealedReveal(reveal) => {
-            Some(HashOf::new(reveal.signed_transaction()))
-        }
+        TransactionEntrypoint::External(signed) => Some(signed.hash()),
+        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
         TransactionEntrypoint::SealedCommitment(_)
         | TransactionEntrypoint::PrivateKaigi(_)
         | TransactionEntrypoint::Time(_) => None,
@@ -38373,6 +38371,18 @@ fn canonical_stream_rate_limit_key(
 }
 
 #[cfg(feature = "app_api")]
+fn canonical_stream_high_load_threshold(
+    app: &SharedAppState,
+    route: iroha_torii_shared::route_catalog::RouteDescriptor,
+) -> usize {
+    if route.stable_route_id() == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id() {
+        app.high_load_subscription_tx_threshold
+    } else {
+        app.high_load_stream_tx_threshold
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn enforce_canonical_stream_admission(
     State(admission): State<CanonicalStreamAdmission>,
     req: axum::http::Request<Body>,
@@ -38387,6 +38397,14 @@ async fn enforce_canonical_stream_admission(
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|connect_info| connect_info.0.ip());
     if !limits::is_allowed_by_cidr(req.headers(), remote_ip, &admission.app.allow_nets) {
+        let high_load_threshold =
+            canonical_stream_high_load_threshold(&admission.app, admission.route);
+        if admission.app.queue.active_len() >= high_load_threshold {
+            return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+            .into_response());
+        }
         let key = canonical_stream_rate_limit_key(
             req.headers(),
             remote_ip,
@@ -38799,6 +38817,51 @@ mod canonical_stream_handshake_tests {
             );
         }
         assert_eq!(limited_app.events.receiver_count(), receivers_before);
+    }
+
+    #[tokio::test]
+    async fn stream_high_load_thresholds_shed_before_syntax_or_subscription_creation() {
+        let mut stream_app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut stream_app).expect("unique app state");
+        state.high_load_stream_tx_threshold = 0;
+        state.high_load_subscription_tx_threshold = usize::MAX;
+        let syntax_calls = Arc::new(AtomicUsize::new(0));
+        let response = gated_syntax_router(
+            Arc::clone(&stream_app),
+            route_catalog::streaming::EVENTS_SSE,
+        )
+        .oneshot(stream_syntax_request(
+            route_catalog::streaming::EVENTS_SSE,
+            &syntax_calls,
+            None,
+            None,
+        ))
+        .await
+        .expect("high-load stream response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
+
+        let mut subscription_app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut subscription_app).expect("unique app state");
+        state.high_load_stream_tx_threshold = usize::MAX;
+        state.high_load_subscription_tx_threshold = 0;
+        let receivers_before = subscription_app.events.receiver_count();
+        let syntax_calls = Arc::new(AtomicUsize::new(0));
+        let response = gated_syntax_router(
+            Arc::clone(&subscription_app),
+            route_catalog::streaming::SUBSCRIPTION_WS,
+        )
+        .oneshot(stream_syntax_request(
+            route_catalog::streaming::SUBSCRIPTION_WS,
+            &syntax_calls,
+            None,
+            None,
+        ))
+        .await
+        .expect("high-load subscription response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(subscription_app.events.receiver_count(), receivers_before);
     }
 
     #[tokio::test]
@@ -47103,22 +47166,30 @@ async fn handler_policy(
         );
         let fees_enabled = fee_policy.is_enabled();
         let enforced = true;
-        let stream_enforced = fees_enabled || (queue_len as usize) >= stream_th;
-        let sub_enforced = fees_enabled || (queue_len as usize) >= sub_th;
+        let stream_shed = (queue_len as usize) >= stream_th;
+        let sub_shed = (queue_len as usize) >= sub_th;
         obj.insert(
             "rate_limit_enforced".into(),
             norito::json::Value::from(enforced),
         );
         obj.insert(
             "stream_rate_limit_enforced".into(),
-            norito::json::Value::from(stream_enforced),
+            norito::json::Value::from(true),
         );
         obj.insert(
             "subscription_rate_limit_enforced".into(),
-            norito::json::Value::from(sub_enforced),
+            norito::json::Value::from(true),
+        );
+        obj.insert(
+            "stream_admission_shed".into(),
+            norito::json::Value::from(stream_shed),
+        );
+        obj.insert(
+            "subscription_admission_shed".into(),
+            norito::json::Value::from(sub_shed),
         );
         let explain = format!(
-            "tx_rate_limit_always_on=true, fees_enabled={}, queue_len={}, thresholds(normal={}, stream={}, subscription={})",
+            "rate_limits_always_on=true, fees_enabled={}, queue_len={}, high_load_admission_shed_thresholds(normal={}, stream={}, subscription={})",
             fees_enabled, queue_len, normal_th, stream_th, sub_th
         );
         obj.insert("explain".into(), norito::json::Value::from(explain));
@@ -48445,6 +48516,7 @@ async fn handler_alias_setup_plan(
         nonce: None,
         fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata: iroha_data_model::metadata::Metadata::default(),
+        attachments: None,
     };
     let canonical_unsigned_payload_bytes =
         norito::codec::encode_adaptive(&canonical_unsigned_payload).len();
@@ -57998,9 +58070,24 @@ impl Torii {
             },
             _ => FeePolicy::Disabled,
         };
-        // Default threshold if not provided
-        let default_high_load_tx_threshold =
-            std::cmp::max(1, queue.current_backpressure().capacity().get() / 2);
+        // Trigger before either configured count capacity or the retained-byte budget becomes
+        // dominant. A quarter of the minimum-charge byte capacity leaves headroom for canonical
+        // payload bytes and decoded expansion while remaining reachable under default settings.
+        let count_based_high_load_threshold = queue.current_backpressure().capacity().get() / 2;
+        let retained_floor = Queue::retained_byte_cost_floor_for_transactions(1);
+        let byte_based_high_load_threshold = usize::try_from(
+            queue
+                .max_retained_bytes()
+                .get()
+                .checked_div(retained_floor)
+                .unwrap_or(0)
+                / 4,
+        )
+        .unwrap_or(usize::MAX);
+        let default_high_load_tx_threshold = std::cmp::max(
+            1,
+            count_based_high_load_threshold.min(byte_based_high_load_threshold),
+        );
         let high_load_tx_threshold = config
             .api_high_load_tx_threshold
             .unwrap_or(default_high_load_tx_threshold);
@@ -59045,34 +59132,26 @@ impl Torii {
 
     fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
-        let replay_cursor_store = match da::ReplayCursorStore::open(replay_store_dir.clone()) {
-            Ok(store) => store,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    dir = ?replay_store_dir,
-                    "failed to load DA replay cursor snapshot; starting with empty cache"
-                );
-                match da::ReplayCursorStore::empty(replay_store_dir.clone()) {
-                    Ok(store) => store,
-                    Err(io_err) => {
-                        iroha_logger::error!(
-                            ?io_err,
-                            dir = ?replay_store_dir,
-                            "failed to prepare DA replay cursor directory; DA replay persistence disabled"
-                        );
-                        da::ReplayCursorStore::in_memory()
-                    }
-                }
-            }
-        };
+        let replay_cursor_store = da::ReplayCursorStore::open_with_max_lane_epochs(
+            replay_store_dir.clone(),
+            self.da_ingest.replay_cache_max_lane_epochs,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to open bounded DA replay cursor store at {}: {err:?}",
+                replay_store_dir.display()
+            )
+        });
         let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
             .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
+            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
             .with_ttl(self.da_ingest.replay_cache_ttl)
             .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
         let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
         for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
-            replay_cache.prime_lane_epoch(lane_epoch, highest);
+            replay_cache
+                .prime_lane_epoch(lane_epoch, highest)
+                .expect("bounded replay cursor store must fit the matching replay cache capacity");
         }
         let replay_store = Arc::new(replay_cursor_store);
         let receipt_log = match da::DaReceiptLog::open(
@@ -86909,6 +86988,7 @@ impl Error {
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
+            queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
             queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
             queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
@@ -86949,6 +87029,10 @@ impl Error {
             queue::Error::IsInQueue => (
                 "already_enqueued",
                 "transaction already present in the queue",
+            ),
+            queue::Error::UnregisteredAuthority { .. } => (
+                "unregistered_authority",
+                "transaction authority is not registered",
             ),
             queue::Error::Governance(_) => (
                 "queue_governance_invalid",
@@ -87108,6 +87192,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::IsInQueue => (
             "PRTRY:ALREADY_ENQUEUED",
             "transaction already present in the queue".to_owned(),
+        ),
+        queue::Error::UnregisteredAuthority { authority } => (
+            "PRTRY:UNREGISTERED_AUTHORITY",
+            format!("transaction authority is not registered: {authority}"),
         ),
         queue::Error::Governance(err) => (
             "PRTRY:QUEUE_GOVERNANCE_INVALID",

@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -7,6 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 
 /**
  * Representation of a transaction payload prior to Norito encoding.
@@ -14,6 +16,8 @@ import org.hyperledger.iroha.android.address.AccountIdLiteral;
  * <p>The structure mirrors the Rust data model for encoding and signing native instructions,
  * deployed-contract calls, flat mixed batches, and IVM bytecode. The optional nonce uses a
  * {@link Long} carrier so the full nonzero unsigned 32-bit wire range remains representable.
+ * Proof attachments are part of the signed payload and therefore affect both authorization
+ * signatures and the canonical transaction identifier.
  */
 public final class TransactionPayload {
 
@@ -25,6 +29,7 @@ public final class TransactionPayload {
   private final Optional<Long> nonce;
   private final FeePaymentIntent feePayment;
   private final Map<String, JsonValue> metadata;
+  private final Optional<List<ProofAttachment>> attachments;
 
   private TransactionPayload(final Builder builder) {
     this.chainId = builder.chainId;
@@ -35,6 +40,9 @@ public final class TransactionPayload {
     this.nonce = builder.nonce;
     this.feePayment = Objects.requireNonNull(builder.feePayment, "feePayment");
     this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(builder.metadata));
+    this.attachments =
+        builder.attachments.map(
+            value -> Collections.unmodifiableList(new ArrayList<>(value)));
   }
 
   public String chainId() {
@@ -69,6 +77,11 @@ public final class TransactionPayload {
     return metadata;
   }
 
+  /** Returns ordered execution proof attachments included in the signed transaction intent. */
+  public Optional<List<ProofAttachment>> attachments() {
+    return attachments;
+  }
+
   public Builder toBuilder() {
     return builder()
         .setChainId(chainId)
@@ -78,7 +91,8 @@ public final class TransactionPayload {
         .setTimeToLiveMs(timeToLiveMs.orElse(null))
         .setNonce(nonce.orElse(null))
         .setFeePayment(feePayment)
-        .setMetadata(metadata);
+        .setMetadata(metadata)
+        .setAttachments(attachments.orElse(null));
   }
 
   public static Builder builder() {
@@ -96,6 +110,7 @@ public final class TransactionPayload {
     private Optional<Long> nonce = Optional.empty();
     private FeePaymentIntent feePayment;
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
+    private Optional<List<ProofAttachment>> attachments = Optional.empty();
 
     public Builder setChainId(final String chainId) {
       this.chainId = normalizeExact(chainId, "chainId");
@@ -182,6 +197,25 @@ public final class TransactionPayload {
       this.metadata.clear();
       if (metadata != null) {
         metadata.forEach((key, value) -> putMetadata(key, metadataValue(value)));
+      }
+      return this;
+    }
+
+    /**
+     * Sets the ordered proof attachments that form part of the signed transaction intent.
+     *
+     * <p>Passing {@code null} encodes Rust {@code Option::None}; an empty list encodes
+     * {@code Some(ProofAttachmentList([]))}.
+     */
+    public Builder setAttachments(final List<ProofAttachment> attachments) {
+      if (attachments == null) {
+        this.attachments = Optional.empty();
+      } else {
+        final List<ProofAttachment> snapshot = new ArrayList<>(attachments.size());
+        for (final ProofAttachment attachment : attachments) {
+          snapshot.add(Objects.requireNonNull(attachment, "attachments must not contain null"));
+        }
+        this.attachments = Optional.of(Collections.unmodifiableList(snapshot));
       }
       return this;
     }

@@ -47,7 +47,7 @@ object SignedTransactionHasher {
             require(snapshot.contentEquals(reencoded)) {
                 "signed transaction bytes are not the exact canonical bare encoding"
             }
-            return wrapExternalEntrypoint(snapshot)
+            return wrapExternalEntrypoint(decoded.encodedPayload())
         } catch (ex: NoritoException) {
             throw IllegalArgumentException(
                 "signed transaction bytes are not a valid canonical bare encoding",
@@ -59,15 +59,16 @@ object SignedTransactionHasher {
     /**
      * Returns the canonical Norito bytes for the signed transaction.
      *
-     * Iroha hashes the `TransactionEntrypoint::External` enum wrapper around the signed
-     * transaction, not the signed transaction directly. The encoding is:
+     * Iroha hashes the `TransactionEntrypoint::External` discriminant and the signed transaction
+     * payload, excluding the authorization proof. The encoding is:
      * `u32_LE(0) + COMPACT_LEN(payload.length) + payload`.
      */
     @JvmStatic
     fun canonicalBytes(transaction: SignedTransaction): ByteArray {
         try {
-            val encoded = SignedTransactionEncoder.encode(transaction)
-            return canonicalBytesFromBare(encoded)
+            // Encoding validates the exact signed-transaction wire shape and the nested payload.
+            SignedTransactionEncoder.encode(transaction)
+            return wrapExternalEntrypoint(transaction.encodedPayload())
         } catch (ex: NoritoException) {
             throw IllegalStateException("Failed to encode signed transaction", ex)
         } catch (ex: IllegalArgumentException) {
@@ -75,17 +76,17 @@ object SignedTransactionHasher {
         }
     }
 
-    private fun wrapExternalEntrypoint(canonicalBareSignedTransaction: ByteArray): ByteArray {
-        val lengthPrefix = encodeCompactLength(canonicalBareSignedTransaction.size.toLong())
-        val result = ByteArray(4 + lengthPrefix.size + canonicalBareSignedTransaction.size)
+    private fun wrapExternalEntrypoint(canonicalTransactionPayload: ByteArray): ByteArray {
+        val lengthPrefix = encodeCompactLength(canonicalTransactionPayload.size.toLong())
+        val result = ByteArray(4 + lengthPrefix.size + canonicalTransactionPayload.size)
         // u32 LE discriminant = 0 (External variant) -- result[0..3] already zeroed
         System.arraycopy(lengthPrefix, 0, result, 4, lengthPrefix.size)
         System.arraycopy(
-            canonicalBareSignedTransaction,
+            canonicalTransactionPayload,
             0,
             result,
             4 + lengthPrefix.size,
-            canonicalBareSignedTransaction.size,
+            canonicalTransactionPayload.size,
         )
         return result
     }

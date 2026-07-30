@@ -7026,7 +7026,7 @@ impl Default for DataspaceGossip {
 pub struct TransactionGossiper {
     /// Transaction gossip interval.
     pub gossip_period: Duration,
-    /// Number of transactions per gossip message.
+    /// Maximum number of transactions sent or accepted per gossip message.
     pub gossip_size: NonZeroU32,
     /// Number of gossip periods to wait before re-sending the same transactions.
     pub gossip_resend_ticks: NonZeroU32,
@@ -7285,11 +7285,11 @@ pub struct Torii {
     /// Optional high-load threshold (queued txs) to enable rate limiting.
     /// When `None`, Torii uses an internal default.
     pub api_high_load_tx_threshold: Option<usize>,
-    /// Optional high-load threshold for streaming endpoints (queued txs).
-    /// When `None`, Torii uses a higher internal default.
+    /// Optional queued-transaction threshold above which Torii rejects new stream admissions.
+    /// When `None`, Torii uses its internal stream default.
     pub api_high_load_stream_threshold: Option<usize>,
-    /// Optional high-load threshold for subscription WS endpoint specifically.
-    /// When `None`, Torii uses the streaming default.
+    /// Optional queued-transaction threshold above which Torii rejects new subscription WebSockets.
+    /// When `None`, Torii uses the streaming threshold.
     pub api_high_load_subscription_threshold: Option<usize>,
     /// Capacity of the broadcast channel used for events/SSE/webhooks.
     pub events_buffer_capacity: NonZeroUsize,
@@ -8229,6 +8229,8 @@ impl Default for DaReplicationPolicy {
 pub struct DaIngest {
     /// Maximum cached manifests tracked per `(lane, epoch)` window.
     pub replay_cache_capacity: NonZeroUsize,
+    /// Maximum number of distinct `(lane, epoch)` windows retained globally.
+    pub replay_cache_max_lane_epochs: NonZeroUsize,
     /// TTL applied to replay cache entries.
     pub replay_cache_ttl: Duration,
     /// Maximum sequence lag tolerated before rejecting manifests.
@@ -8270,6 +8272,7 @@ impl Default for DaIngest {
     fn default() -> Self {
         Self {
             replay_cache_capacity: super::defaults::torii::DA_REPLAY_CACHE_CAPACITY,
+            replay_cache_max_lane_epochs: super::defaults::torii::DA_REPLAY_CACHE_MAX_LANE_EPOCHS,
             replay_cache_ttl: Duration::from_secs(super::defaults::torii::DA_REPLAY_CACHE_TTL_SECS),
             replay_cache_max_sequence_lag: super::defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: super::defaults::torii::da_replay_cache_store_dir(),

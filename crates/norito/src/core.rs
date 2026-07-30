@@ -9821,6 +9821,26 @@ mod tests {
     }
 
     #[test]
+    fn decode_archived_field_contains_deserializer_panics() {
+        #[derive(Debug)]
+        struct PanicDuringArchivedFieldDecode;
+
+        impl<'de> NoritoDeserialize<'de> for PanicDuringArchivedFieldDecode {
+            fn deserialize(_archived: &'de Archived<Self>) -> Self {
+                panic!("intentional archived-field panic")
+            }
+        }
+
+        let error = decode_archived_field::<PanicDuringArchivedFieldDecode>(&[])
+            .expect_err("strict-safe archived-field decoding must contain panics");
+        assert!(matches!(
+            error,
+            Error::DecodePanic { context }
+                if context == core::any::type_name::<PanicDuringArchivedFieldDecode>()
+        ));
+    }
+
+    #[test]
     fn decode_vec_from_slice_serial_reports_prefix_used() {
         reset_decode_state();
         let value = vec![3_u16, 5, 8, 13];
@@ -10310,6 +10330,30 @@ mod tests {
         let bytes = encode_adaptive(&value);
         let decoded: BadExactEnum = codec::decode_adaptive(&bytes).expect("decode enum");
         assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn truncated_derived_enum_tag_is_a_length_error() {
+        let error = decode_archived_field::<BadExactEnum>(&[])
+            .expect_err("an enum archive without its four-byte tag must be rejected");
+        assert!(matches!(error, Error::LengthMismatch));
+    }
+
+    #[test]
+    fn truncated_derived_struct_bitset_is_a_length_error() {
+        #[derive(Clone, Debug, PartialEq, Eq, crate::Encode, crate::Decode)]
+        struct BitsetRecord {
+            code: u8,
+            digest: [u8; 32],
+        }
+
+        let flags = header_flags::PACKED_STRUCT
+            | header_flags::FIELD_BITSET
+            | header_flags::COMPACT_LEN;
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let error = decode_archived_field::<BitsetRecord>(&[])
+            .expect_err("a packed struct archive without its bitset must be rejected");
+        assert!(matches!(error, Error::LengthMismatch));
     }
 
     #[test]

@@ -41,11 +41,11 @@ public sealed class SignedTransactionEnvelope
                 nameof(noritoBytes));
         }
 
-        var expectedTransactionHash = ComputeTransactionHash(this.signedTransactionBytes);
+        var expectedTransactionHash = ComputeTransactionHash(this.payloadBytes);
         if (!this.transactionHash.AsSpan().SequenceEqual(expectedTransactionHash))
         {
             throw new ArgumentException(
-                "Transaction hash must match the signed transaction bytes.",
+                "Transaction hash must match the signed transaction intent.",
                 nameof(transactionHash));
         }
 
@@ -72,11 +72,11 @@ public sealed class SignedTransactionEnvelope
         return value.ToArray();
     }
 
-    private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> signedTransactionBytes)
+    private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> payloadBytes)
     {
         var entrypoint = new OfflineNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
-        entrypoint.WriteField(signedTransactionBytes);
+        entrypoint.WriteField(payloadBytes);
         return IrohaHash.Hash(entrypoint.ToArray());
     }
 
@@ -85,12 +85,11 @@ public sealed class SignedTransactionEnvelope
         var offset = 0;
         var signatureField = ReadField(signedTransactionBytes, ref offset);
         var payloadField = ReadField(signedTransactionBytes, ref offset);
-        var attachmentsField = ReadField(signedTransactionBytes, ref offset);
         var multisigField = ReadField(signedTransactionBytes, ref offset);
         if (offset != signedTransactionBytes.Length)
         {
             throw new ArgumentException(
-                "Signed transaction bytes must contain exactly signature, payload, attachments, and multisig fields.",
+                "Signed transaction bytes must contain exactly signature, payload, and multisig fields.",
                 SignedTransactionBytesParameterName);
         }
 
@@ -100,10 +99,10 @@ public sealed class SignedTransactionEnvelope
             throw new ArgumentException("Payload bytes must match the signed transaction body.", nameof(payloadBytes));
         }
 
-        if (!attachmentsField.SequenceEqual(new byte[] { 0 }) || !multisigField.SequenceEqual(new byte[] { 0 }))
+        if (!multisigField.SequenceEqual(new byte[] { 0 }))
         {
             throw new ArgumentException(
-                "Signed transaction bytes must use empty attachments and multisig fields in the current wire format.",
+                "Signed transaction bytes must use an empty multisig field in the single-signature wire format.",
                 SignedTransactionBytesParameterName);
         }
     }

@@ -326,12 +326,30 @@ pub mod isi {
         if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
             new_trigger.action().filter()
         {
-            if schedule.period_ms.is_some_and(|period| period == 0) {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Time trigger period must be greater than zero".into(),
-                    ),
-                ));
+            if let Some(period_ms) = schedule.period_ms {
+                if period_ms == 0 {
+                    return Err(Error::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "Time trigger period must be greater than zero".into(),
+                        ),
+                    ));
+                }
+                let min_period_ms = state_transaction
+                    .world
+                    .parameters
+                    .sumeragi()
+                    .block_cadence_ms()
+                    .get();
+                if period_ms < min_period_ms {
+                    return Err(Error::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            format!(
+                                "Time trigger period must be at least the signed block cadence of {min_period_ms} ms"
+                            )
+                            .into(),
+                        ),
+                    ));
+                }
             }
         }
 
@@ -2545,6 +2563,53 @@ mod tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn time_trigger_period_shorter_than_block_cadence_is_rejected() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "time_sub_cadence".parse().unwrap();
+        let schedule = ExecutionTime::Schedule(
+            Schedule::starting_at(Duration::ZERO).with_period(Duration::from_millis(1)),
+        );
+        let trigger = Trigger::new(
+            trigger_id,
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                TimeEventFilter(schedule),
+            ),
+        );
+
+        let err = Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("sub-cadence time trigger must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(ref message)
+                ) if message.contains("at least the signed block cadence")
+            ),
+            "unexpected registration error: {err:?}"
+        );
     }
 
     #[test]

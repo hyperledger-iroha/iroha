@@ -5180,7 +5180,7 @@ mod tests {
         assert!(
             matches!(
                 error,
-                PrivacyVerificationErrorV1::NativeOrchard(detail)
+                PrivacyVerificationErrorV1::NativeOrchard(ref detail)
                     if matches!(
                         detail.source,
                         OrchardNativeErrorV1::SpendAuthorizationSignature { index: 0 }
@@ -5948,7 +5948,7 @@ mod tests {
         assert!(
             matches!(
                 changed_genesis_error,
-                PrivacyVerificationErrorV1::NativePqMasp(detail)
+                PrivacyVerificationErrorV1::NativePqMasp(ref detail)
                 if matches!(
                     detail.source,
                     PrivacyPqMaspNativeFailureSourceV1::Authorization(

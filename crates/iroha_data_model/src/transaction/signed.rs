@@ -1,6 +1,6 @@
 //! Transaction structures and related implementations.
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     convert::TryFrom,
     iter::IntoIterator,
     num::{NonZeroU32, NonZeroU64},
@@ -184,6 +184,14 @@ mod model {
         pub fee_payment: FeePaymentIntent,
         /// Store for additional information.
         pub metadata: Metadata,
+        /// Proof attachments whose exact contents affect transaction execution.
+        ///
+        /// Attachments are part of the signed intent. Relays cannot add,
+        /// remove, or replace them without invalidating every authorization
+        /// signature and changing the transaction identifier.
+        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(default)]
+        pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
 
     /// Signature of transaction
@@ -230,9 +238,27 @@ mod model {
     }
 
     impl MultisigSignatures {
-        /// Construct a new bundle of multisig signatures.
-        pub fn new(signatures: Vec<MultisigSignature>) -> Self {
+        /// Construct a bundle in canonical signer order.
+        pub fn new(mut signatures: Vec<MultisigSignature>) -> Self {
+            signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
             Self { signatures }
+        }
+
+        /// Validate the unique canonical signer ordering required on the wire.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when a signer occurs more than once or entries are
+        /// not strictly ordered by public key.
+        pub fn validate_canonical(&self) -> Result<(), TransactionSignatureError> {
+            if self
+                .signatures
+                .windows(2)
+                .any(|pair| pair[0].signer >= pair[1].signer)
+            {
+                return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
+            }
+            Ok(())
         }
     }
 
@@ -293,7 +319,7 @@ mod model {
         pub salt: [u8; 32],
     }
 
-    /// Transaction containing a payload, signature, and optional proof attachments.
+    /// Transaction containing a signed intent and its authorization proof.
     ///
     /// `Iroha` and its clients use [`Self`] to send transactions over the network.
     /// After a transaction is signed and before it can be processed any further,
@@ -311,8 +337,6 @@ mod model {
         pub(super) signature: TransactionSignature,
         /// Payload of the transaction.
         pub(super) payload: TransactionPayload,
-        /// Optional proof attachments associated with this transaction.
-        pub(super) attachments: Option<crate::proof::ProofAttachmentList>,
         /// Optional bundle of multisig signatures when the authority uses a multisig controller.
         pub(super) multisig_signatures: Option<MultisigSignatures>,
     }
@@ -323,8 +347,6 @@ mod model {
     pub struct TransactionBuilder {
         /// [`Transaction`] payload.
         pub(super) payload: TransactionPayload,
-        /// Optional proof attachments to include upon signing.
-        pub(super) attachments: Option<crate::proof::ProofAttachmentList>,
         /// Optional multisig signature bundle to include upon signing.
         pub(super) multisig_signatures: Option<MultisigSignatures>,
     }
@@ -502,6 +524,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         )?;
         let metadata =
             decode_canonical_field::<Metadata>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -516,6 +542,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
                 nonce,
                 fee_payment,
                 metadata,
+                attachments,
             },
             offset,
         ))
@@ -537,10 +564,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
-            read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
         let multisig_signatures = decode_slice_field::<Option<MultisigSignatures>>(
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -553,7 +576,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
             Self {
                 signature,
                 payload,
-                attachments,
                 multisig_signatures,
             },
             offset,
@@ -618,9 +640,15 @@ pub enum TransactionSignatureError {
     /// Multisig signature bundle is missing.
     #[error("missing multisig signatures for multisig authority")]
     MissingMultisigSignatures,
+    /// A single-controller transaction carried an unrelated multisig proof.
+    #[error("single-controller transaction must not carry multisig signatures")]
+    UnexpectedMultisigSignatures,
     /// Transaction contains a signature from a non-member.
     #[error("multisig signature from unknown member")]
     UnknownMultisigSigner,
+    /// Multisig signatures are duplicated or not ordered by signer.
+    #[error("multisig signatures are not in canonical distinct signer order")]
+    NonCanonicalMultisigSignatures,
     /// The signature-bound fee payment intent is malformed or ambiguous.
     #[error("invalid fee payment intent: {0}")]
     InvalidFeePaymentIntent(String),
@@ -1233,11 +1261,10 @@ impl TransactionPayload {
 }
 
 impl SignedTransaction {
-    /// Derive the privacy intent from the canonical unsigned payload.
+    /// Derive the privacy intent from the canonical signed payload.
     ///
-    /// Signatures, multisig bundles, and proof attachments are deliberately not
-    /// part of the intent preimage; the complete signed transaction hash remains
-    /// independently bound by ordinary transaction admission.
+    /// Authorization signatures are excluded from the intent preimage, while
+    /// execution-affecting proof attachments are included.
     ///
     /// # Errors
     ///
@@ -1375,7 +1402,7 @@ impl SignedTransaction {
     /// Optional proof attachments carried alongside the payload.
     #[inline]
     pub fn attachments(&self) -> Option<&crate::proof::ProofAttachmentList> {
-        self.attachments.as_ref()
+        self.payload.attachments.as_ref()
     }
 
     /// Height-based TTL advertised via transaction metadata.
@@ -1406,11 +1433,11 @@ impl SignedTransaction {
             .transpose()
     }
 
-    /// Canonical hash for this external transaction.
+    /// Canonical identifier for this external transaction.
     ///
-    /// The canonical hash is defined as the hash of the corresponding
-    /// `TransactionEntrypoint::External` wrapper so it matches the entrypoint
-    /// hash used in blocks and proofs.
+    /// The identifier commits to the exact signed intent and excludes the
+    /// authorization proof. Adding or replacing a signature therefore cannot
+    /// create a second identity for the same authorized action.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
         let entry_hash = self.hash_as_entrypoint();
@@ -1499,6 +1526,9 @@ impl SignedTransaction {
         let TransactionSignature(signature) = &self.signature;
         match self.payload.authority.controller() {
             AccountController::Single(signatory) => {
+                if self.multisig_signatures.is_some() {
+                    return Err(TransactionSignatureError::UnexpectedMultisigSignatures);
+                }
                 verify_typed_signature_for_signer(signature, signatory, &self.payload)
                     .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))
             }
@@ -1687,21 +1717,22 @@ impl SignedTransaction {
         if bundle.signatures.is_empty() {
             return Err(TransactionSignatureError::NoSignatures);
         }
+        bundle.validate_canonical()?;
+        let TransactionSignature(primary_signature) = &self.signature;
+        if &bundle.signatures[0].signature != primary_signature {
+            return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
+        }
 
         let mut weights = BTreeMap::new();
         for member in policy.members() {
             weights.insert(member.public_key().clone(), member.weight());
         }
 
-        let mut seen = BTreeSet::new();
         let mut collected: u32 = 0;
         for entry in &bundle.signatures {
             let Some(weight) = weights.get(&entry.signer) else {
                 return Err(TransactionSignatureError::UnknownMultisigSigner);
             };
-            if !seen.insert(entry.signer.clone()) {
-                continue;
-            }
             verify_typed_signature_for_signer(&entry.signature, &entry.signer, &self.payload)
                 .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
             collected = collected.saturating_add(u32::from(*weight));
@@ -2000,18 +2031,19 @@ impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
     fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&0_u32, &mut writer)?;
         let mut tmp = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(&mut writer, self.0, &mut tmp)?;
+        norito::core::write_len_prefixed(&mut writer, self.0.payload(), &mut tmp)?;
         Ok(())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0
+            .payload()
             .encoded_len_hint()
             .map(|len| 4_usize.saturating_add(8).saturating_add(len))
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let len = self.0.encoded_len_exact()?;
+        let len = self.0.payload().encoded_len_exact()?;
         Some(
             4_usize
                 .saturating_add(norito::core::len_prefix_len(len))
@@ -2037,8 +2069,8 @@ impl TransactionBuilder {
                 instructions: Vec::<InstructionBox>::new().into(),
                 fee_payment,
                 metadata: Metadata::default(),
+                attachments: None,
             },
-            attachments: None,
             multisig_signatures: None,
         }
     }
@@ -2081,8 +2113,8 @@ impl TransactionBuilder {
 
     /// Reconstruct a transaction builder from one exact unsigned payload.
     ///
-    /// Envelope-only proof attachments and multisig signatures are initially
-    /// empty and may be added explicitly before signing.
+    /// The payload retains its signature-bound proof attachments. Only the
+    /// authorization-proof bundle starts empty.
     ///
     /// # Errors
     ///
@@ -2092,15 +2124,14 @@ impl TransactionBuilder {
         Self::validate_payload_fee_payment(&payload)?;
         Ok(Self {
             payload,
-            attachments: None,
             multisig_signatures: None,
         })
     }
 
     /// Consume the builder and return its exact unsigned payload.
     ///
-    /// Proof attachments and multisig signatures are envelope data and are not
-    /// part of the returned signature preimage.
+    /// Proof attachments are part of the returned signature preimage.
+    /// Multisig authorization proofs remain outside it.
     ///
     /// # Errors
     ///
@@ -2174,7 +2205,7 @@ impl TransactionBuilder {
 
     /// Attach proof payloads to this transaction before signing.
     pub fn with_attachments(mut self, attachments: crate::proof::ProofAttachmentList) -> Self {
-        self.attachments = Some(attachments);
+        self.payload.attachments = Some(attachments);
         self
     }
 
@@ -2242,7 +2273,6 @@ impl TransactionBuilder {
         }
         let builder = Self {
             payload,
-            attachments: None,
             multisig_signatures: None,
         };
         if builder.encode_payload() != bytes {
@@ -2273,7 +2303,6 @@ impl TransactionBuilder {
         SignedTransaction {
             signature: TransactionSignature(SignatureOf::from_signature(signature)),
             payload: self.payload,
-            attachments: self.attachments,
             multisig_signatures: self.multisig_signatures,
         }
     }
@@ -2311,7 +2340,6 @@ impl TransactionBuilder {
         Ok(SignedTransaction {
             signature,
             payload,
-            attachments: self.attachments,
             multisig_signatures: self.multisig_signatures,
         })
     }
@@ -2325,9 +2353,8 @@ impl TransactionBuilder {
 
     /// Try to sign a transaction whose authority uses a multisig controller.
     ///
-    /// The provided signer keys are used to produce a multisig signature bundle;
-    /// duplicate signers are retained here and later deduplicated during
-    /// verification.
+    /// The provided signer keys are used to produce a canonical multisig
+    /// signature bundle. Duplicate signers are rejected.
     ///
     /// # Errors
     ///
@@ -2346,6 +2373,8 @@ impl TransactionBuilder {
 
         let produced = MultisigSignatures::from_signers(&payload, signers)?;
         bundle.signatures.extend(produced.signatures);
+        bundle = MultisigSignatures::new(bundle.signatures);
+        bundle.validate_canonical()?;
 
         let primary_signature = bundle
             .signatures
@@ -2357,16 +2386,14 @@ impl TransactionBuilder {
         Ok(SignedTransaction {
             signature: TransactionSignature(primary_signature),
             payload,
-            attachments: self.attachments,
             multisig_signatures: Some(bundle),
         })
     }
 
     /// Sign a transaction whose authority uses a multisig controller.
     ///
-    /// The provided signer keys are used to produce a multisig signature bundle;
-    /// duplicate signers are retained here and later deduplicated during
-    /// verification.
+    /// The provided signer keys are used to produce a canonical multisig
+    /// signature bundle. Duplicate signers are rejected.
     ///
     /// # Panics
     ///
@@ -3477,10 +3504,10 @@ mod tests {
 
         let mut altered_signature = transaction.clone();
         altered_signature.signature = sample_signed_transaction().signature().clone();
-        assert_ne!(
+        assert_eq!(
             altered_signature.hash(),
             transaction.hash(),
-            "the full signed hash commits to the signature envelope"
+            "transaction identity must exclude replaceable authorization proof"
         );
         assert_eq!(
             altered_signature
@@ -4447,7 +4474,11 @@ mod tests {
         )
         .sign(&private_key);
         let entry = TransactionEntrypoint::External(tx.clone());
-        assert_eq!(HashOf::new(&entry), entry.hash());
+        assert_ne!(
+            HashOf::new(&entry),
+            entry.hash(),
+            "raw envelope hashing must not define external transaction identity"
+        );
         assert_eq!(tx.hash_as_entrypoint(), entry.hash());
         assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
 
@@ -4481,6 +4512,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             signer.private_key(),
@@ -4489,7 +4521,6 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: None,
         };
 
@@ -4527,6 +4558,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let member_sig = checked_transaction_payload_signature(signer.private_key(), &payload);
         let signature = TransactionSignature(member_sig.clone());
@@ -4537,16 +4569,28 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
         tx.verify_signature()
             .expect("multisig with quorum must verify");
+
+        let mut noncanonical = tx;
+        let unrelated = checked_random_keypair();
+        noncanonical.signature = TransactionSignature(checked_transaction_payload_signature(
+            unrelated.private_key(),
+            noncanonical.payload(),
+        ));
+        assert_eq!(
+            noncanonical
+                .verify_signature()
+                .expect_err("the primary signature must duplicate the first canonical bundle item"),
+            TransactionSignatureError::NonCanonicalMultisigSignatures
+        );
     }
 
     #[test]
-    fn verify_signature_ignores_multisig_bundle_for_single_controller() {
+    fn verify_signature_rejects_multisig_bundle_for_single_controller() {
         let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = checked_random_keypair();
@@ -4559,8 +4603,8 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "single authority".into())])
         .sign(keypair.private_key());
 
-        // Attach a multisig bundle that does not correspond to the authority; single controllers
-        // should ignore these entries during verification.
+        // A proof bundle for a different controller shape must not create an
+        // alternate accepted envelope for the same signed intent.
         let payload = tx.payload().clone();
         let extraneous_signer = checked_random_keypair();
         let stray_signature =
@@ -4575,8 +4619,11 @@ mod tests {
             1,
             "single controller counts only its own signature"
         );
-        tx.verify_signature()
-            .expect("single authority verification should ignore multisig bundle");
+        assert_eq!(
+            tx.verify_signature()
+                .expect_err("single authority must reject multisig proof data"),
+            TransactionSignatureError::UnexpectedMultisigSignatures
+        );
     }
 
     #[test]
@@ -4621,6 +4668,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             signer.private_key(),
@@ -4629,7 +4677,6 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(MultisigSignatures::new(Vec::new())),
         };
 
@@ -4663,6 +4710,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             member_key.private_key(),
@@ -4676,7 +4724,6 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
@@ -4712,6 +4759,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             signer.private_key(),
@@ -4727,20 +4775,13 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
-        let err = tx
-            .verify_signature()
-            .expect_err("duplicate signatures should not satisfy threshold");
-        assert!(
-            matches!(
-                err,
-                TransactionSignatureError::InsufficientMultisigWeight { collected, required }
-                if collected == 1 && required == 2
-            ),
-            "expected InsufficientMultisigWeight, got {err:?}"
+        assert_eq!(
+            tx.verify_signature()
+                .expect_err("duplicate signatures are a non-canonical proof"),
+            TransactionSignatureError::NonCanonicalMultisigSignatures
         );
     }
 
@@ -4790,6 +4831,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = checked_transaction_payload_signature(signer.private_key(), &payload);
         let multisig_signatures = MultisigSignatures::new(vec![
@@ -4801,13 +4843,15 @@ mod tests {
         let tx = SignedTransaction {
             signature: TransactionSignature(signature),
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
         assert_eq!(tx.signature_count(), 3);
-        tx.verify_signature()
-            .expect("duplicate multisig entries still satisfy threshold");
+        assert_eq!(
+            tx.verify_signature()
+                .expect_err("duplicate multisig entries must fail closed"),
+            TransactionSignatureError::NonCanonicalMultisigSignatures
+        );
     }
 
     #[test]
@@ -5204,6 +5248,27 @@ mod attachments_tests {
         let archived = norito::from_bytes::<SignedTransaction>(&bytes).expect("archived");
         let decoded: SignedTransaction = norito::core::NoritoDeserialize::deserialize(archived);
         assert!(decoded.attachments().is_some());
+        decoded
+            .verify_signature()
+            .expect("round-tripped attachment remains signature-bound");
+
+        let original_hash = decoded.hash();
+        let mut tampered = decoded;
+        tampered.payload.attachments = Some(crate::proof::ProofAttachmentList(vec![
+            crate::proof::ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                crate::proof::ProofBox::new("halo2/ipa".into(), vec![9, 9, 9]),
+                crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
+            ),
+        ]));
+        assert_ne!(
+            tampered.hash(),
+            original_hash,
+            "execution-affecting attachments must change transaction identity"
+        );
+        tampered
+            .verify_signature()
+            .expect_err("an attachment mutation must invalidate authorization");
     }
 }
 
@@ -5274,7 +5339,13 @@ impl TransactionEntrypoint {
     /// Hash for this transaction entrypoint.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
-        HashOf::new(self)
+        match self {
+            Self::External(transaction) => transaction.hash_as_entrypoint(),
+            Self::SealedCommitment(_)
+            | Self::SealedReveal(_)
+            | Self::PrivateKaigi(_)
+            | Self::Time(_) => HashOf::new(self),
+        }
     }
 }
 
@@ -5579,24 +5650,17 @@ mod norito_rpc_fixture_tests {
                 "{name}: payload_hash mismatch"
             );
 
-            let mut signed_entrypoint = Vec::with_capacity(
-                4 + norito::core::len_prefix_len(signed_bytes.len()) + signed_bytes.len(),
-            );
-            signed_entrypoint.extend_from_slice(&0_u32.to_le_bytes());
-            norito::core::write_len_to_vec(&mut signed_entrypoint, signed_bytes.len() as u64);
-            signed_entrypoint.extend_from_slice(&signed_bytes);
-            let computed_signed_hash = Hash::new(signed_entrypoint).to_string();
-            assert_eq!(
-                computed_signed_hash, signed_hash,
-                "{name}: signed_hash mismatch"
-            );
-
             let (signed_tx, used) = SignedTransaction::decode_from_slice(&signed_bytes)
                 .unwrap_or_else(|err| panic!("{name}: signed transaction decode failed: {err}"));
             assert_eq!(
                 used,
                 signed_bytes.len(),
                 "{name}: signed transaction has trailing bytes"
+            );
+            assert_eq!(
+                signed_tx.hash_as_entrypoint().to_string(),
+                signed_hash,
+                "{name}: signed_hash mismatch"
             );
             assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
             let expected_authority = AccountId::parse_encoded(authority).map_or_else(

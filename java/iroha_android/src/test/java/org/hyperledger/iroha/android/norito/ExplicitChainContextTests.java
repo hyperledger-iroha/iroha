@@ -298,7 +298,7 @@ public final class ExplicitChainContextTests {
   }
 
   private static byte[] swapMetadataEntries(final byte[] canonicalPayload) {
-    final byte[][] fields = decodeSizedFields(canonicalPayload, 8);
+    final byte[][] fields = decodeSizedFields(canonicalPayload, 9);
     final NoritoDecoder metadata =
         new NoritoDecoder(fields[7], NoritoCodec.DEFAULT_FLAGS);
     assertEquals(2L, metadata.readLength(false));
@@ -316,7 +316,7 @@ public final class ExplicitChainContextTests {
 
   private static byte[] replaceSizedField(
       final byte[] encoded, final int fieldIndex, final byte[] replacement) {
-    final byte[][] fields = decodeSizedFields(encoded, 4);
+    final byte[][] fields = decodeSizedFields(encoded, 3);
     fields[fieldIndex] = replacement.clone();
     return encodeSizedFields(fields);
   }

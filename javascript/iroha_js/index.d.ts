@@ -8688,6 +8688,7 @@ export interface DaIngestRequestInput {
   erasureProfile?: {
     dataShards?: number;
     parityShards?: number;
+    rowParityStripes?: number;
     chunkAlignment?: number;
     fecScheme?:
       | "Rs12_10"
@@ -8755,6 +8756,7 @@ export interface DaIngestArtifacts {
   clientBlobIdHex: string;
   submitterPublicKey: string;
   signatureHex: string;
+  signingDigestHex: string;
   payloadLength: number;
 }
 
@@ -8781,6 +8783,10 @@ export interface DaIngestBuildRequestResult {
 export function buildDaIngestRequest(
   options?: DaIngestRequestInput,
 ): DaIngestBuildRequestResult;
+
+export function computeDaIngestSigningDigest(
+  request: Record<string, unknown>,
+): Buffer;
 
 export interface SorafsPorStatusOptions {
   manifestHex?: string | null;

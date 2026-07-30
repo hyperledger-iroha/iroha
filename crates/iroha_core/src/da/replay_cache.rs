@@ -13,6 +13,7 @@ use std::{
 
 use iroha_data_model::nexus::LaneId;
 use parking_lot::Mutex;
+use thiserror::Error;
 
 /// Identifier for a `(lane, epoch)` pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -98,6 +99,8 @@ impl ReplayKey {
 pub struct ReplayCacheConfig {
     /// Maximum number of manifests tracked per `(lane, epoch)` window.
     pub max_entries_per_lane: NonZeroUsize,
+    /// Maximum number of distinct `(lane, epoch)` windows retained globally.
+    pub max_lane_epochs: NonZeroUsize,
     /// How long a manifest stays live in the cache after its last observation.
     pub ttl: Duration,
     /// Maximum allowed distance from the highest observed sequence number before a new
@@ -110,6 +113,8 @@ impl ReplayCacheConfig {
     pub const DEFAULT_TTL: Duration = Duration::from_mins(15);
     /// Default capacity per `(lane, epoch)` window (4096 entries).
     pub const DEFAULT_CAPACITY: usize = 4096;
+    /// Default global `(lane, epoch)` capacity (1024 windows).
+    pub const DEFAULT_LANE_EPOCH_CAPACITY: usize = 1024;
     /// Default sequence lag tolerance (4096 slots behind the high-water mark).
     pub const DEFAULT_SEQUENCE_LAG: u64 = 4096;
 
@@ -118,6 +123,7 @@ impl ReplayCacheConfig {
     pub fn new() -> Self {
         Self {
             max_entries_per_lane: Self::default_capacity(),
+            max_lane_epochs: Self::default_lane_epoch_capacity(),
             ttl: Self::DEFAULT_TTL,
             max_sequence_lag: Self::DEFAULT_SEQUENCE_LAG,
         }
@@ -130,10 +136,24 @@ impl ReplayCacheConfig {
         }
     }
 
+    fn default_lane_epoch_capacity() -> NonZeroUsize {
+        match NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY) {
+            Some(capacity) => capacity,
+            None => NonZeroUsize::MIN,
+        }
+    }
+
     /// Override the per-lane capacity.
     #[must_use]
     pub fn with_max_entries_per_lane(mut self, capacity: NonZeroUsize) -> Self {
         self.max_entries_per_lane = capacity;
+        self
+    }
+
+    /// Override the global `(lane, epoch)` capacity.
+    #[must_use]
+    pub fn with_max_lane_epochs(mut self, capacity: NonZeroUsize) -> Self {
+        self.max_lane_epochs = capacity;
         self
     }
 
@@ -190,6 +210,22 @@ pub enum ReplayInsertOutcome {
         /// Fingerprint that the caller attempted to insert.
         observed: ReplayFingerprint,
     },
+    /// The global `(lane, epoch)` capacity is full.
+    LaneEpochCapacityExceeded {
+        /// Configured maximum number of distinct `(lane, epoch)` windows.
+        capacity: usize,
+    },
+}
+
+/// Failure returned when persisted replay state cannot be primed safely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum ReplayPrimeError {
+    /// Priming another distinct `(lane, epoch)` would exceed the global capacity.
+    #[error("DA replay lane/epoch capacity {capacity} is exhausted")]
+    LaneEpochCapacityExceeded {
+        /// Configured maximum number of distinct `(lane, epoch)` windows.
+        capacity: usize,
+    },
 }
 
 /// Snapshot describing the state of a cached manifest.
@@ -228,6 +264,13 @@ impl ReplayCache {
         let mut guard = self.inner.lock();
         guard.prune(now, &self.config);
 
+        if !guard.lanes.contains_key(&key.lane_epoch)
+            && guard.lanes.len() >= self.config.max_lane_epochs.get()
+        {
+            return ReplayInsertOutcome::LaneEpochCapacityExceeded {
+                capacity: self.config.max_lane_epochs.get(),
+            };
+        }
         let lane_state = guard.lanes.entry(key.lane_epoch).or_default();
 
         if let Some(floor) = lane_state.stale_floor {
@@ -294,12 +337,24 @@ impl ReplayCache {
 
     /// Prime the replay cache with a known highest sequence for a `(lane, epoch)` window.
     /// This is useful when restoring state from persisted cursors after a restart.
-    pub fn prime_lane_epoch(&self, lane_epoch: LaneEpoch, highest_sequence: u64) {
+    pub fn prime_lane_epoch(
+        &self,
+        lane_epoch: LaneEpoch,
+        highest_sequence: u64,
+    ) -> Result<(), ReplayPrimeError> {
         let mut guard = self.inner.lock();
+        if !guard.lanes.contains_key(&lane_epoch)
+            && guard.lanes.len() >= self.config.max_lane_epochs.get()
+        {
+            return Err(ReplayPrimeError::LaneEpochCapacityExceeded {
+                capacity: self.config.max_lane_epochs.get(),
+            });
+        }
         let lane_state = guard.lanes.entry(lane_epoch).or_default();
         let primed = lane_state.highest_sequence.max(highest_sequence);
         lane_state.highest_sequence = primed;
         lane_state.stale_floor = Some(primed);
+        Ok(())
     }
 
     /// Drop cached manifests for a `(lane, epoch)` window. This is useful during epoch
@@ -319,6 +374,12 @@ impl ReplayCache {
             .get(&lane_epoch)
             .map(|state| state.entries.len())
             .unwrap_or_default()
+    }
+
+    /// Inspect the number of distinct `(lane, epoch)` windows retained globally.
+    #[must_use]
+    pub fn lane_epoch_count(&self) -> usize {
+        self.inner.lock().lanes.len()
     }
 }
 
@@ -466,7 +527,12 @@ mod tests {
             config.max_entries_per_lane.get(),
             ReplayCacheConfig::DEFAULT_CAPACITY
         );
+        assert_eq!(
+            config.max_lane_epochs.get(),
+            ReplayCacheConfig::DEFAULT_LANE_EPOCH_CAPACITY
+        );
         assert!(ReplayCacheConfig::DEFAULT_CAPACITY > 0);
+        assert!(ReplayCacheConfig::DEFAULT_LANE_EPOCH_CAPACITY > 0);
     }
 
     #[test]
@@ -545,7 +611,9 @@ mod tests {
     fn primed_lane_rejects_forward_sequence_gap() {
         let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_sequence_lag(u64::MAX));
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 43);
-        cache.prime_lane_epoch(lane_epoch, 50);
+        cache
+            .prime_lane_epoch(lane_epoch, 50)
+            .expect("priming within capacity succeeds");
 
         let outcome = cache.insert(
             ReplayKey::new(lane_epoch, 52, fingerprint(52)),
@@ -815,7 +883,9 @@ mod tests {
     fn prime_restores_highest_sequence() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 5);
-        cache.prime_lane_epoch(lane_epoch, 10);
+        cache
+            .prime_lane_epoch(lane_epoch, 10)
+            .expect("priming within capacity succeeds");
 
         let outcome = cache.insert(
             ReplayKey::new(lane_epoch, 4, fingerprint(1)),
@@ -834,7 +904,9 @@ mod tests {
     fn prime_enforces_floor_even_when_within_lag() {
         let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_sequence_lag(4096));
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 7);
-        cache.prime_lane_epoch(lane_epoch, 50);
+        cache
+            .prime_lane_epoch(lane_epoch, 50)
+            .expect("priming within capacity succeeds");
 
         let outcome = cache.insert(
             ReplayKey::new(lane_epoch, 49, fingerprint(2)),
@@ -857,7 +929,9 @@ mod tests {
         let cache = ReplayCache::new(config);
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 8);
         let base = Instant::now();
-        cache.prime_lane_epoch(lane_epoch, 50);
+        cache
+            .prime_lane_epoch(lane_epoch, 50)
+            .expect("priming within capacity succeeds");
 
         assert!(matches!(
             cache.insert(
@@ -878,5 +952,74 @@ mod tests {
             }
             other => panic!("expected primed floor to survive TTL pruning, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn global_lane_epoch_capacity_rejects_new_windows_without_mutation() {
+        let capacity = NonZeroUsize::new(2).unwrap();
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_lane_epochs(capacity)
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let base = Instant::now();
+        let first = LaneEpoch::new(LaneId::new(1), 1);
+        let second = LaneEpoch::new(LaneId::new(1), 2);
+        let rejected = LaneEpoch::new(LaneId::new(1), 3);
+
+        for (index, lane_epoch) in [first, second].into_iter().enumerate() {
+            assert!(matches!(
+                cache.insert(
+                    ReplayKey::new(lane_epoch, 0, fingerprint(index as u8)),
+                    base + Duration::from_millis(index as u64),
+                ),
+                ReplayInsertOutcome::Fresh { .. }
+            ));
+        }
+
+        assert_eq!(
+            cache.insert(
+                ReplayKey::new(rejected, 0, fingerprint(3)),
+                base + Duration::from_millis(3),
+            ),
+            ReplayInsertOutcome::LaneEpochCapacityExceeded { capacity: 2 }
+        );
+        assert_eq!(cache.lane_epoch_count(), 2);
+        assert_eq!(cache.len_for_lane_epoch(rejected), 0);
+
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(first, 1, fingerprint(4)),
+                base + Duration::from_millis(4),
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+    }
+
+    #[test]
+    fn priming_fails_closed_at_global_lane_epoch_capacity() {
+        let capacity = NonZeroUsize::new(1).unwrap();
+        let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_lane_epochs(capacity));
+        let retained = LaneEpoch::new(LaneId::new(2), 10);
+        let rejected = LaneEpoch::new(LaneId::new(2), 11);
+
+        cache
+            .prime_lane_epoch(retained, 7)
+            .expect("first lane/epoch fits");
+        assert_eq!(
+            cache.prime_lane_epoch(rejected, 9),
+            Err(ReplayPrimeError::LaneEpochCapacityExceeded { capacity: 1 })
+        );
+        assert_eq!(cache.lane_epoch_count(), 1);
+
+        cache
+            .prime_lane_epoch(retained, 8)
+            .expect("updating an existing primed window remains allowed");
+        assert!(matches!(
+            cache.insert(ReplayKey::new(retained, 8, fingerprint(8)), Instant::now(),),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 8
+            }
+        ));
     }
 }

@@ -434,6 +434,7 @@ export {
 } from "./config.js";
 export {
   buildDaIngestRequest,
+  computeDaIngestSigningDigest,
   deriveDaChunkerHandle,
   generateDaProofSummary,
   buildDaProofSummaryArtifact,

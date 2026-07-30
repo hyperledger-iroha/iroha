@@ -34,7 +34,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NoritoJavaCodecAdapterParityTest {
@@ -213,9 +212,7 @@ class NoritoJavaCodecAdapterParityTest {
         val signedDecoder = canonicalDecoder(encodedSigned)
         readField(signedDecoder, "signed.signature")
         readField(signedDecoder, "signed.payload")
-        val attachmentsField = readField(signedDecoder, "signed.attachments")
         val multisigField = readField(signedDecoder, "signed.multisig_signatures")
-        assertNull(decodeOptionPayload(attachmentsField, "signed.attachments"))
         val multisigPayload = assertNotNull(decodeOptionPayload(multisigField, "signed.multisig_signatures"))
         assertEquals(0, signedDecoder.remaining())
 
@@ -392,6 +389,8 @@ class NoritoJavaCodecAdapterParityTest {
         readField(ivmDecoder, "payload.nonce")
         readField(ivmDecoder, "payload.fee_payment")
         readField(ivmDecoder, "payload.metadata")
+        val ivmAttachments = readField(ivmDecoder, "payload.attachments")
+        assertEquals(null, decodeOptionPayload(ivmAttachments, "payload.attachments"))
         assertEquals(0, ivmDecoder.remaining())
 
         val executableDecoder = canonicalDecoder(ivmExecutableField)
@@ -432,6 +431,11 @@ class NoritoJavaCodecAdapterParityTest {
         readField(instructionDecoder, "payload.nonce")
         readField(instructionDecoder, "payload.fee_payment")
         readField(instructionDecoder, "payload.metadata")
+        val instructionAttachments = readField(instructionDecoder, "payload.attachments")
+        assertEquals(
+            null,
+            decodeOptionPayload(instructionAttachments, "payload.attachments"),
+        )
         assertEquals(0, instructionDecoder.remaining())
 
         val listFieldDecoder = canonicalDecoder(instructionExecutableField)

@@ -3677,6 +3677,14 @@ mod deserialize_codegen_tests {
                 "full-consumption validation must remain shared"
             );
         }
+        assert!(
+            struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len)"),
+            "packed-struct bitsets must use the bounded payload helper"
+        );
+        assert!(
+            enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
+            "enum tags must use the bounded payload helper"
+        );
     }
 }
 

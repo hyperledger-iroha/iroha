@@ -59,9 +59,10 @@ final class TransactionParityFixturesTests: XCTestCase {
                 Data(base64Encoded: entry.signedBase64),
                 "invalid signed_base64 for \(name)"
             )
+            let payloadBytes = try canonicalSignedTransactionPayload(signedBytes)
             var compact = CompactNoritoWriter()
             compact.writeUInt32LE(0)
-            compact.writeField(signedBytes)
+            compact.writeField(payloadBytes)
             XCTAssertEqual(
                 IrohaHash.hash(compact.data).hexEncodedString(),
                 entry.signedHash,

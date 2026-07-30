@@ -65,7 +65,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u32)]
     pub enum TriggerExecutionFail {
-        /// Exceeded maximum depth for chained data triggers.
+        /// Exceeded maximum depth for synchronous trigger execution or chained data triggers.
         MaxDepthExceeded,
     }
 

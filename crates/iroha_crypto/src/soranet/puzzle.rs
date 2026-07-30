@@ -65,9 +65,53 @@ pub struct Parameters {
     min_ticket_ttl: Duration,
 }
 
+/// Smallest supported Argon2 puzzle memory cost, in KiB.
+pub const MIN_MEMORY_KIB: u32 = 4 * 1024;
+/// Largest supported Argon2 puzzle memory cost, in KiB.
+///
+/// This hard ceiling keeps a single verification within a bounded 128 MiB
+/// working set even if an operator supplies a malformed runtime update.
+pub const MAX_MEMORY_KIB: u32 = 128 * 1024;
+/// Largest supported Argon2 iteration count.
+pub const MAX_TIME_COST: u32 = 8;
+/// Largest supported Argon2 lane count.
+pub const MAX_LANES: u32 = 16;
+/// Largest supported proof-of-work difficulty.
+///
+/// Higher values are operationally indistinguishable from disabling inbound
+/// connectivity and therefore are rejected instead of silently partitioning a
+/// node.
+pub const MAX_DIFFICULTY: u8 = 32;
+
 /// Errors surfaced while constructing Argon2 puzzle policy parameters.
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
 pub enum ParameterError {
+    /// The memory cost is outside the supported resource corridor.
+    #[error(
+        "puzzle memory_kib {configured} is outside the supported range {MIN_MEMORY_KIB}..={MAX_MEMORY_KIB}"
+    )]
+    MemoryOutOfRange {
+        /// Configured memory cost in KiB.
+        configured: u32,
+    },
+    /// The iteration count exceeds the supported resource corridor.
+    #[error("puzzle time_cost {configured} exceeds the supported maximum {MAX_TIME_COST}")]
+    TimeCostTooHigh {
+        /// Configured iteration count.
+        configured: u32,
+    },
+    /// The lane count exceeds the supported resource corridor.
+    #[error("puzzle lanes {configured} exceeds the supported maximum {MAX_LANES}")]
+    LanesTooHigh {
+        /// Configured lane count.
+        configured: u32,
+    },
+    /// The difficulty exceeds the operational connectivity corridor.
+    #[error("puzzle difficulty {configured} exceeds the supported maximum {MAX_DIFFICULTY}")]
+    DifficultyTooHigh {
+        /// Configured difficulty.
+        configured: u8,
+    },
     /// The minimum ticket TTL must be non-zero.
     #[error("puzzle min_ticket_ttl must be greater than zero")]
     MinTicketTtlZero,
@@ -117,10 +161,13 @@ impl Parameters {
         difficulty: u8,
     ) -> Self {
         Self {
-            memory_kib,
-            time_cost,
-            lanes,
-            difficulty,
+            memory_kib: NonZeroU32::new(memory_kib.get().clamp(MIN_MEMORY_KIB, MAX_MEMORY_KIB))
+                .expect("bounded puzzle memory is non-zero"),
+            time_cost: NonZeroU32::new(time_cost.get().min(MAX_TIME_COST))
+                .expect("bounded puzzle time cost is non-zero"),
+            lanes: NonZeroU32::new(lanes.get().min(MAX_LANES))
+                .expect("bounded puzzle lanes are non-zero"),
+            difficulty: difficulty.min(MAX_DIFFICULTY),
             max_future_skew: Duration::ZERO,
             min_ticket_ttl: Duration::MAX,
         }
@@ -129,8 +176,8 @@ impl Parameters {
     /// Construct a new parameter set.
     ///
     /// # Errors
-    /// Returns [`ParameterError`] if the minimum ticket TTL is zero or if the
-    /// maximum future skew is shorter than the minimum ticket TTL.
+    /// Returns [`ParameterError`] if a computational resource bound, the
+    /// difficulty, or the ticket timing corridor is invalid.
     pub fn try_new(
         memory_kib: NonZeroU32,
         time_cost: NonZeroU32,
@@ -139,6 +186,26 @@ impl Parameters {
         max_future_skew: Duration,
         min_ticket_ttl: Duration,
     ) -> Result<Self, ParameterError> {
+        if !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&memory_kib.get()) {
+            return Err(ParameterError::MemoryOutOfRange {
+                configured: memory_kib.get(),
+            });
+        }
+        if time_cost.get() > MAX_TIME_COST {
+            return Err(ParameterError::TimeCostTooHigh {
+                configured: time_cost.get(),
+            });
+        }
+        if lanes.get() > MAX_LANES {
+            return Err(ParameterError::LanesTooHigh {
+                configured: lanes.get(),
+            });
+        }
+        if difficulty > MAX_DIFFICULTY {
+            return Err(ParameterError::DifficultyTooHigh {
+                configured: difficulty,
+            });
+        }
         if min_ticket_ttl.is_zero() {
             return Err(ParameterError::MinTicketTtlZero);
         }
@@ -633,6 +700,61 @@ mod tests {
         .expect("valid bounds");
         assert_eq!(valid.difficulty(), 4);
 
+        for configured in [MIN_MEMORY_KIB - 1, MAX_MEMORY_KIB + 1] {
+            let error = Parameters::try_new(
+                NonZeroU32::new(configured).expect("non-zero memory"),
+                time,
+                lanes,
+                4,
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+            )
+            .expect_err("out-of-range memory must fail");
+            assert_eq!(error, ParameterError::MemoryOutOfRange { configured });
+        }
+        assert_eq!(
+            Parameters::try_new(
+                memory,
+                NonZeroU32::new(MAX_TIME_COST + 1).expect("non-zero time"),
+                lanes,
+                4,
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+            )
+            .expect_err("excessive time cost must fail"),
+            ParameterError::TimeCostTooHigh {
+                configured: MAX_TIME_COST + 1,
+            }
+        );
+        assert_eq!(
+            Parameters::try_new(
+                memory,
+                time,
+                NonZeroU32::new(MAX_LANES + 1).expect("non-zero lanes"),
+                4,
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+            )
+            .expect_err("excessive lane count must fail"),
+            ParameterError::LanesTooHigh {
+                configured: MAX_LANES + 1,
+            }
+        );
+        assert_eq!(
+            Parameters::try_new(
+                memory,
+                time,
+                lanes,
+                MAX_DIFFICULTY + 1,
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+            )
+            .expect_err("excessive difficulty must fail"),
+            ParameterError::DifficultyTooHigh {
+                configured: MAX_DIFFICULTY + 1,
+            }
+        );
+
         let zero_ttl = Parameters::try_new(
             memory,
             time,
@@ -690,6 +812,21 @@ mod tests {
         );
         assert_eq!(inverted.max_future_skew(), Duration::ZERO);
         assert_eq!(inverted.min_ticket_ttl(), Duration::MAX);
+
+        let excessive = Parameters::new(
+            NonZeroU32::new(u32::MAX).expect("non-zero memory"),
+            NonZeroU32::new(u32::MAX).expect("non-zero time"),
+            NonZeroU32::new(u32::MAX).expect("non-zero lanes"),
+            u8::MAX,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        );
+        assert_eq!(excessive.memory_kib().get(), MAX_MEMORY_KIB);
+        assert_eq!(excessive.time_cost().get(), MAX_TIME_COST);
+        assert_eq!(excessive.lanes().get(), MAX_LANES);
+        assert_eq!(excessive.difficulty(), MAX_DIFFICULTY);
+        assert_eq!(excessive.max_future_skew(), Duration::ZERO);
+        assert_eq!(excessive.min_ticket_ttl(), Duration::MAX);
 
         let mut rng = ChaCha20Rng::seed_from_u64(99);
         let mint_err = mint_ticket(&zero_ttl, &binding(), Duration::from_secs(5), &mut rng)

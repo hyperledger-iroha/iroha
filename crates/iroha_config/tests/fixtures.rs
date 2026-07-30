@@ -764,6 +764,7 @@ fn minimal_config_snapshot() {
                 },
                 da_ingest: DaIngest {
                     replay_cache_capacity: 4096,
+                    replay_cache_max_lane_epochs: 1024,
                     replay_cache_ttl: 900s,
                     replay_cache_max_sequence_lag: 4096,
                     replay_cache_store_dir: "./storage/da_replay",

@@ -548,8 +548,6 @@ pub enum NetworkMessage {
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
     StreamingControl(Box<ControlFrame>),
-    /// Gossip for `SoraNet` `PoW`/puzzle runtime configuration (Norito-encoded bytes).
-    SoranetPowConfig(Vec<u8>),
 }
 
 impl NetworkMessage {
@@ -669,7 +667,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 gossiper::GossipPlane::Restricted => T::TxGossipRestricted,
             },
             NetworkMessage::PeersGossiper(_) => T::PeerGossip,
-            NetworkMessage::SoranetPowConfig(_) => T::Control,
             NetworkMessage::PeerTrustGossip(_) => T::TrustGossip,
             NetworkMessage::Health
             | NetworkMessage::TimePing(_)
@@ -792,56 +789,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             _ => true,
         }
     }
-}
-
-/// Compact wire representation of the PoW/puzzle runtime settings.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-pub struct SoranetPowConfigBroadcast {
-    /// Monotonic version for ordering PoW policy updates.
-    pub version: u64,
-    /// Whether `PoW` is required for inbound circuits.
-    pub required: bool,
-    /// Leading zero bits required.
-    pub difficulty: u8,
-    /// Maximum allowed ticket future skew (seconds).
-    pub max_future_skew_secs: u64,
-    /// Minimum ticket TTL (seconds).
-    pub min_ticket_ttl_secs: u64,
-    /// Target ticket TTL (seconds).
-    pub ticket_ttl_secs: u64,
-    /// Optional Argon2 puzzle parameters.
-    pub puzzle: Option<SoranetPuzzleConfigBroadcast>,
-}
-
-/// Compact wire representation of the Argon2 puzzle gate.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-pub struct SoranetPuzzleConfigBroadcast {
-    /// Memory cost expressed in kibibytes.
-    pub memory_kib: u32,
-    /// Time cost (iterations).
-    pub time_cost: u32,
-    /// Argon2 lanes.
-    pub lanes: u32,
 }
 
 pub mod role {
@@ -984,12 +931,10 @@ mod tests {
         network::message::{SubscriberRoute, Topic as NetworkTopic},
     };
     use iroha_test_samples::gen_account_in;
-    use norito::json;
     use norito::{codec::Encode, core as ncore};
 
     use crate::{
-        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast,
-        SoranetPuzzleConfigBroadcast,
+        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, NetworkMessage, PeerTrustGossip,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
@@ -1091,43 +1036,6 @@ mod tests {
         let decoded: RoleIdWithOwner = encoded.parse().expect("roundtrip");
         assert_eq!(decoded.account.subject_id(), account.subject_id());
         assert_eq!(decoded.id, role);
-    }
-
-    #[test]
-    fn soranet_pow_broadcast_roundtrip_and_topic() {
-        let broadcast = SoranetPowConfigBroadcast {
-            version: 1,
-            required: true,
-            difficulty: 6,
-            max_future_skew_secs: 900,
-            min_ticket_ttl_secs: 120,
-            ticket_ttl_secs: 300,
-            puzzle: Some(SoranetPuzzleConfigBroadcast {
-                memory_kib: 64 * 1024,
-                time_cost: 3,
-                lanes: 2,
-            }),
-        };
-        let expected_puzzle = broadcast
-            .puzzle
-            .expect("baseline broadcast includes puzzle");
-
-        let json = json::to_json(&broadcast).expect("serialize broadcast");
-        let decoded: SoranetPowConfigBroadcast =
-            json::from_slice(json.as_bytes()).expect("decode broadcast");
-
-        assert_eq!(decoded.version, broadcast.version);
-        assert_eq!(decoded.required, broadcast.required);
-        assert_eq!(decoded.difficulty, broadcast.difficulty);
-        assert_eq!(decoded.ticket_ttl_secs, broadcast.ticket_ttl_secs);
-        assert_eq!(decoded.puzzle.expect("puzzle decoded"), expected_puzzle);
-
-        let topic = NetworkMessage::SoranetPowConfig(json.into_bytes()).topic();
-        assert_eq!(topic, NetworkTopic::Control);
-        assert_eq!(
-            raw_network_topic(&NetworkMessage::SoranetPowConfig(Vec::new())),
-            NetworkTopic::Control
-        );
     }
 
     #[test]

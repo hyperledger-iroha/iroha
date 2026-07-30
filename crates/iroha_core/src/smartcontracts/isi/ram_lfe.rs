@@ -501,6 +501,31 @@ mod tests {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
+    #[test]
+    fn malformed_bfv_parameters_are_rejected_without_panicking() {
+        let resolver = checked_keypair();
+        let mut policy = RamLfeProgramPolicy::new(
+            RamLfeProgramId::from_str("malformed_bfv").expect("program id"),
+            checked_account_id(),
+            RamLfeBackend::BfvAffineSha3_256V1,
+            RamLfeVerificationMode::Signed,
+            PolicyCommitment {
+                backend: RamLfeBackend::BfvAffineSha3_256V1,
+                policy_hash: Hash::new(b"malformed-bfv-policy"),
+                public_parameters: vec![0xFF, 0x00, 0x7F],
+            },
+            resolver.public_key().clone(),
+        );
+        policy.active = true;
+
+        let error = validate_program_policy(&policy)
+            .expect_err("malformed BFV parameters must fail policy admission");
+        assert!(
+            error.to_string().contains("invalid BFV public parameters"),
+            "unexpected error: {error}"
+        );
+    }
+
     fn sample_policy() -> RamLfeProgramPolicy {
         let owner = checked_account_id();
         let resolver = checked_keypair();

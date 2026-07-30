@@ -315,8 +315,9 @@ pub mod queue {
 
     /// Maximum number of transactions the global queue holds concurrently.
     pub const CAPACITY: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
-    /// Maximum number of transactions accepted per authority (prevents flooding).
-    pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
+    /// Maximum number of transactions accepted per authority (prevents one authority from
+    /// exhausting the retained-byte budget before other registered authorities can make progress).
+    pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(2_usize.pow(14));
     /// Estimated maximum retained queue memory budget in bytes.
     pub const MAX_RETAINED_BYTES: NonZeroU64 = nonzero!(128_u64 * 1024 * 1024);
     /// Time-to-live for queued transactions before automatic eviction.
@@ -864,7 +865,7 @@ pub mod network {
     pub const TRANSACTION_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
     /// Number of gossip ticks to wait before re-sending the same transactions.
     pub const TRANSACTION_GOSSIP_RESEND_TICKS: NonZeroU32 = nonzero!(3u32);
-    /// Number of transactions gossiped per batch.
+    /// Maximum number of transactions sent or accepted in one gossip batch.
     pub const TRANSACTION_GOSSIP_SIZE: NonZeroU32 = nonzero!(500u32);
     /// Drop transaction gossip for dataspaces that are missing from the lane catalog instead of
     /// falling back to restricted targeting.
@@ -2595,6 +2596,8 @@ pub mod torii {
     pub const DEBUG_MATCH_FILTERS: bool = false;
     /// Replay cache capacity per `(lane, epoch)` window.
     pub const DA_REPLAY_CACHE_CAPACITY: NonZeroUsize = nonzero!(4096usize);
+    /// Maximum number of distinct `(lane, epoch)` replay windows retained globally.
+    pub const DA_REPLAY_CACHE_MAX_LANE_EPOCHS: NonZeroUsize = nonzero!(1024usize);
     /// Replay cache TTL (seconds) applied to observed manifests.
     pub const DA_REPLAY_CACHE_TTL_SECS: u64 = 15 * 60;
     /// Maximum sequence lag tolerated before rejecting manifests.
@@ -4783,7 +4786,8 @@ mod tests {
     #[test]
     fn queue_defaults_allow_two_times_legacy_soak_capacity() {
         assert_eq!(queue::CAPACITY.get(), 262_144);
-        assert_eq!(queue::CAPACITY_PER_USER.get(), queue::CAPACITY.get());
+        assert_eq!(queue::CAPACITY_PER_USER.get(), 16_384);
+        assert!(queue::CAPACITY_PER_USER < queue::CAPACITY);
         assert_eq!(queue::MAX_RETAINED_BYTES.get(), 128 * 1024 * 1024);
     }
 
