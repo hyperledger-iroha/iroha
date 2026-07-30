@@ -90,6 +90,48 @@ echo "[tlc] exact queued-envelope coalescing closes that lasso"
 set +e
 (
   cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/global-blocker-same-rank-swap" \
+    -config adequate_leader_global_blocker_same_rank_swap_bug.cfg \
+    SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla
+) >"$run_dir/global-blocker-same-rank-swap.log" 2>&1
+global_blocker_same_rank_swap_status=$?
+set -e
+
+[[ $global_blocker_same_rank_swap_status -eq 13 ]] || {
+  echo "same-rank global-blocker cell swap did not fail with TLC status 13" >&2
+  cat "$run_dir/global-blocker-same-rank-swap.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  'selectedCell = "Replacement"' \
+  "Back to state 2"; do
+  grep -Fq "$marker" "$run_dir/global-blocker-same-rank-swap.log" || {
+    echo "same-rank global-blocker cell swap missed expected marker: $marker" >&2
+    cat "$run_dir/global-blocker-same-rank-swap.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/global-blocker-exact-cell" \
+    -config adequate_leader_global_blocker_exact_cell.cfg \
+    SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla
+) >"$run_dir/global-blocker-exact-cell.log" 2>&1
+grep -Fq "Model checking completed. No error has been found." \
+  "$run_dir/global-blocker-exact-cell.log" || {
+  cat "$run_dir/global-blocker-exact-cell.log" >&2
+  exit 1
+}
+
+echo "[tlc] rank-only selection can service an unrelated equal-rank blocker forever"
+echo "[tlc] exact frozen-cell selection releases the original blocker before replenishment"
+
+set +e
+(
+  cd "$FORMAL_DIR"
   "${common[@]}" -metadir "$run_dir/deferred-old" \
     -config service_rank_deferred_replacement_bug.cfg \
     SumeragiV2ServiceRankMutation.tla

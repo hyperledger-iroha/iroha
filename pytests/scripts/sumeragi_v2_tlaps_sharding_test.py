@@ -35,9 +35,47 @@ def test_checked_in_shards_are_bounded_ordered_and_uniquely_resolved() -> None:
     assert providers["ApplicationCompletionProgressObligation"] == (
         "SumeragiV2AsyncDecisionApplicationProofs"
     )
-    assert providers["TimeoutViewProgressObligation"] == (
-        checker.ASYNC_LIVENESS_DEBT_SHARD
+    assert providers["ApplicationLivenessObligation"] == (
+        "SumeragiV2AsyncDecisionApplicationProofs"
     )
+    assert "TimeoutViewProgressObligation" not in providers
+    assert "RotatingLeaderProgressObligation" not in providers
+    assert "LockedBodyReproposalProgressObligation" not in providers
+    assert providers["HistoricalRecoveryFramePreservesType"] == (
+        "SumeragiV2AsyncRankAndInitContinuationProofs"
+    )
+    assert providers["IngressAdmissionRunnerPreservesSchedulerType"] == (
+        "SumeragiV2AsyncRuntimeAdmissionTypeContinuationProofs"
+    )
+    assert providers["AsyncSpecAlwaysKeepsFrozenContext"] == (
+        "SumeragiV2AsyncInstallRunnerContinuationProofs"
+    )
+    assert providers["HistoricalLockedBodyRecoveryProperty"] == (
+        "SumeragiV2AsyncRecoveryVoteEpochContinuationProofs"
+    )
+
+
+def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
+    deadlock = "SumeragiV2AsyncDeadlockProofs"
+    finite_runner = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
+    sources = _sources()
+
+    assert checker._module_extends(sources[deadlock]) == (finite_runner,)
+    assert checker.ASYNC_LIVENESS_EXTENDS_OVERRIDES[deadlock] == (finite_runner,)
+
+    def reaches(module: str, target: str, seen: set[str]) -> bool:
+        if module == target:
+            return True
+        if module in seen:
+            return False
+        seen.add(module)
+        path = checker.FORMAL_DIR / f"{module}.tla"
+        if not path.is_file():
+            return False
+        source = path.read_text(encoding="utf-8")
+        return any(reaches(dependency, target, seen) for dependency in checker._module_extends(source))
+
+    assert not reaches(finite_runner, deadlock, set())
 
 
 def test_shard_contract_rejects_missing_reordered_and_duplicate_sources() -> None:
@@ -55,6 +93,17 @@ def test_shard_contract_rejects_missing_reordered_and_duplicate_sources() -> Non
         1,
     )
     errors, _ = checker._async_liveness_shard_contract(reordered)
+    assert any("must EXTEND exactly" in error for error in errors)
+
+    obsolete_deadlock = _sources()
+    obsolete_deadlock["SumeragiV2AsyncDeadlockProofs"] = obsolete_deadlock[
+        "SumeragiV2AsyncDeadlockProofs"
+    ].replace(
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs",
+        "EXTENDS SumeragiV2AsyncStage2Proofs",
+        1,
+    )
+    errors, _ = checker._async_liveness_shard_contract(obsolete_deadlock)
     assert any("must EXTEND exactly" in error for error in errors)
 
     duplicated = _sources()
@@ -94,14 +143,17 @@ def test_shard_contract_rejects_facade_declarations_caps_and_forward_references(
         "SumeragiV2AsyncRankAndInitProofs"
     ].replace(
         "=============================================================================",
-        "ForwardReferenceProbe == OneHeightCompletionObligation\n\n"
+        "ForwardReferenceProbe == ApplicationLivenessObligation\n\n"
         "=============================================================================",
     )
     errors, _ = checker._async_liveness_shard_contract(forward)
-    assert any("forward async-family reference OneHeightCompletionObligation" in error for error in errors)
+    assert any(
+        "forward async-family reference ApplicationLivenessObligation" in error
+        for error in errors
+    )
 
 
-def test_debt_shard_allows_exactly_three_named_proofless_theorems() -> None:
+def test_debt_shard_rejects_every_proofless_theorem() -> None:
     sources = _sources()
     sources[checker.ASYNC_LIVENESS_DEBT_SHARD] = sources[
         checker.ASYNC_LIVENESS_DEBT_SHARD
@@ -184,8 +236,4 @@ def test_facade_evidence_maps_symbols_to_provider_logs() -> None:
             "SumeragiV2AsyncProtectedSlotProofs.log"
         ),
     }
-    assert by_symbol["TimeoutViewProgressObligation"] == {
-        "symbol": "TimeoutViewProgressObligation",
-        "module": checker.ASYNC_LIVENESS_DEBT_SHARD,
-        "log": None,
-    }
+    assert "TimeoutViewProgressObligation" not in by_symbol

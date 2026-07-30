@@ -286,29 +286,29 @@
     {
       "id": "timeout-view-liveness",
       "requirement": "After GST, a nondeciding responsive validator advances by TC or decides",
-      "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "TimeoutViewProgressObligation",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
+      "symbol": "AsyncTemporalClosureTimeoutViewProgressObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "rotating-leader-liveness",
+      "requirement": "Under AsyncLiveSpecAt(initialContext), which is exactly the asynchronous transition and fairness specification with no finite-counter premise, every post-GST undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide. The live model uses Nat generations, bounded TLC exhaustion is diagnostic only, and production physical nonexhaustion follows from strict same-view Prepare-rank ascent",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
+      "symbol": "AsyncTemporalClosureRotatingLeaderProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "locked-body-reproposal",
       "requirement": "After GST, every stable available retained lock at a responsive validator eventually commits in its original round, is reproposed unchanged in a later round, or is legitimately decided or superseded by a higher certified Prepare lock",
-      "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "LockedBodyReproposalProgressObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "rotating-leader-liveness",
-      "requirement": "Under AsyncLiveSpecAt(initialContext), which is exactly the asynchronous transition and fairness specification with no finite-counter premise, every post-GST undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide. Checked install-generation exhaustion remains explicit liveness debt",
-      "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "RotatingLeaderProgressObligation",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
+      "symbol": "AsyncTemporalClosureLockedBodyReproposalProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "application-liveness",
-      "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, it eventually recovers, validates, and applies the certified body without waiting for all other validators to decide",
-      "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "ApplicationCompletionProgressObligation",
+      "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, the exact Decision-stage service lifecycle eventually recovers, validates, and applies the certified body without waiting for all other validators to decide. The release theorem consumes the five exact off-scheduler Decision leaves and protected finite-runner service; it may not fall back to an aggregate application facade",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
+      "symbol": "AsyncTemporalClosureApplicationCompletionProgressObligation",
       "status": "specified_unproved"
     },
     {
@@ -327,14 +327,14 @@
     },
     {
       "id": "genesis-height-successor-handoff",
-      "requirement": "Under AsyncLiveChainSpec, which is exactly the concrete genesis asynchronous chain product with no finite-counter premise, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous and checked install-generation exhaustion remains explicit liveness debt",
+      "requirement": "Under AsyncLiveChainSpec, which is exactly the concrete genesis asynchronous chain product with no finite-counter premise, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous. The live model uses Nat generations, bounded TLC exhaustion is diagnostic only, and production physical nonexhaustion follows from strict same-view Prepare-rank ascent",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "GenesisHeightSuccessorHandoffObligation",
       "status": "specified_unproved"
     },
     {
       "id": "height-liveness",
-      "requirement": "Under IndexedLiveChainSpec, which is exactly the indexed chain product with no per-context finite-counter premise, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal; checked install-generation exhaustion remains explicit liveness debt",
+      "requirement": "Under IndexedLiveChainSpec plus the explicit environmental IndexedGstEventuallyCondition, with no per-context finite-counter or restart-exhaustion premise, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal. IndexedGstEventuallyCondition is the sole environmental premise in this dimension; the live model uses Nat generations, bounded TLC exhaustion is diagnostic only, and production physical nonexhaustion follows from strict same-view Prepare-rank ascent",
       "module": "SumeragiV2ChainLivenessProofs",
       "symbol": "HeightLivenessObligation",
       "status": "specified_unproved"

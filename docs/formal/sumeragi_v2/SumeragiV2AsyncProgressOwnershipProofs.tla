@@ -5205,6 +5205,18 @@ PROOF
                 AsyncProgressOwnershipInvariant,
                 RunNodeWork(node)
          PROVE AsyncProgressOwnershipInvariant'
+    <2>1r. CASE
+              AsyncCandidateProducerContinuationResolutionRequired(node)
+      <3>1. ResolveRunNodeCandidateProducerContinuation(node)
+        BY <1>1, <2>1r DEF RunNodeWork
+      <3>2. UNCHANGED AsyncProgressOwnershipVars
+        BY <3>1, Isa
+           DEF ResolveRunNodeCandidateProducerContinuation,
+               AsyncSchedulerExceptCausalControlAndNodeService,
+               AsyncProgressOwnershipVars,
+               AsyncProgressOwnershipCoreVars,
+               AsyncProgressOwnershipSchedulerVars, vars
+      <3> QED BY <1>1, <3>2, AsyncProgressOwnershipStutter
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, LocalAdmissionPreservesProgressOwnership
     <2>2. CASE IngressDrainStep(node)
@@ -5226,7 +5238,7 @@ PROOF
     <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>5,
          SerializedLocalPredecessorPreservesProgressOwnership
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>1r, <2>1, <2>2, <2>3, <2>4, <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 

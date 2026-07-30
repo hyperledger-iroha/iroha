@@ -473,14 +473,9 @@ PROOF
 
 THEOREM ApplicationCompletionProgressObligation ==
   \A initialContext:
-    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-      AsyncSpecAt(initialContext))
-      => ApplicationCompletionProgressProperty(
-           AsyncSpecAt(initialContext))
+    ApplicationCompletionProgressProperty(AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext,
-                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-                  AsyncSpecAt(initialContext))
+  <1>1. ASSUME NEW initialContext
          PROVE ApplicationCompletionProgressProperty(
                  AsyncSpecAt(initialContext))
     <2>1. StarvationFreedomProperty(AsyncSpecAt(initialContext))
@@ -506,13 +501,9 @@ PROOF
 
 THEOREM ApplicationLivenessObligation ==
   \A initialContext:
-    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-      AsyncSpecAt(initialContext))
-      => ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+    ApplicationLivenessProperty(AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext,
-                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-                  AsyncSpecAt(initialContext))
+  <1>1. ASSUME NEW initialContext
          PROVE ApplicationLivenessProperty(AsyncSpecAt(initialContext))
     <2>1. ApplicationCompletionProgressProperty(
              AsyncSpecAt(initialContext))
@@ -523,26 +514,6 @@ PROOF
     <2> QED BY <2>1, <2>2, PTL
          DEF ApplicationCompletionProgressProperty,
              ApplicationLivenessProperty
-  <1> QED BY <1>1
-
-THEOREM OneHeightCompletionObligation ==
-  \A initialContext:
-    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-      AsyncSpecAt(initialContext))
-      => OneHeightCompletionLiveness(initialContext)
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-                  AsyncSpecAt(initialContext))
-         PROVE OneHeightCompletionLiveness(initialContext)
-    <2>1. RotatingLeaderProgressProperty(
-             AsyncLiveSpecAt(initialContext))
-      BY RotatingLeaderProgressObligation
-    <2>2. ApplicationLivenessProperty(AsyncSpecAt(initialContext))
-      BY ApplicationLivenessObligation
-    <2> QED BY <2>1, <2>2,
-         OneHeightCompletionFromProgressProperties, PTL
-         DEF OneHeightCompletionLiveness
   <1> QED BY <1>1
 
 =============================================================================

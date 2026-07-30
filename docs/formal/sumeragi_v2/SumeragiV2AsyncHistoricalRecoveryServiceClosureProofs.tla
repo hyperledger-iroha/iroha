@@ -753,7 +753,8 @@ HistoricalDiscoveryPacketCandidateOwners(packet) ==
   LET recipient == packet.item.envelope.recipient
   IN {candidate \in ActiveScheduledCandidates:
         /\ candidate.node = recipient
-        /\ HistoricalProtectedCandidateOwned(candidate)
+        /\ candidate.node \in AsyncTimedServiceNodes
+        /\ ProtectedCandidateOwned(candidate)
         /\ HistoricalDiscoveryPacketCandidateInCausalLineage(
              packet, candidate)}
 
@@ -847,8 +848,12 @@ HistoricalDiscoveryPacketServeDebtWitness(packet) ==
          = HistoricalDiscoveryPacketServeDebtRank(packet)
 
 HistoricalDiscoveryPacketCandidateDebtFairAction(packet) ==
-  PostGstRunHistoricalRecoveryNode(
-    packet.item.envelope.recipient)
+  LET recipient == packet.item.envelope.recipient
+  IN IF recipient \in AsyncResponsiveAppliedArchiveServers
+     THEN PostGstRunHistoricalServer(recipient)
+     ELSE IF HistoricalRecoveryTarget(recipient)
+          THEN PostGstRunHistoricalRecoveryNode(recipient)
+          ELSE PostGstRunNode(recipient)
 
 HistoricalDiscoveryPacketServeDebtFairAction(packet) ==
   LET recipient == packet.item.envelope.recipient
@@ -863,7 +868,7 @@ HistoricalDiscoveryPacketDependencyRank(packet) ==
          <<TimeoutVoteByteOwnerDebt(packet.item),
            <<TransportCompletionOwnerDebt(packet.item),
              <<BoundedTransportServiceRank(
-                  recipient, packet.item.source),
+                  packet.item.envelope.recipient, packet.item.source),
                <<ResetAwareIngressReachRank(recipient),
                  <<ReadyRunAuxRank(recipient),
                    <<Stage4CapacityRank(recipient),
@@ -1198,7 +1203,6 @@ BY AsyncStrongTypeProjectsAsyncType,
    ScheduledCandidateServiceRankInCarrier, Isa
    DEF HistoricalDiscoveryPacketCandidateRanks,
        HistoricalDiscoveryPacketCandidateOwners,
-       HistoricalProtectedCandidateOwned,
        ProtectedCandidateOwned
 
 THEOREM HistoricalDiscoveryPacketServeOwnerRankInCarrier ==
@@ -1276,7 +1280,7 @@ THEOREM HistoricalDiscoveryLiveCandidateDebtHasExactFairOwner ==
            recipient == packet.item.envelope.recipient
        IN /\ candidate
                \in HistoricalDiscoveryPacketCandidateOwners(packet)
-          /\ HistoricalProtectedCandidateOwned(candidate)
+          /\ ProtectedCandidateOwned(candidate)
           /\ CandidateServiceRank(candidate) = rank
           /\ rank \in OwnedServiceRankCarrier
           /\ \A other
@@ -1285,18 +1289,37 @@ THEOREM HistoricalDiscoveryLiveCandidateDebtHasExactFairOwner ==
                  \notin OwnedServiceRankOrdering
           /\ candidate.node = recipient
           /\ recipient \in Responsive
-          /\ HistoricalRecoveryTarget(recipient)
-          /\ HistoricalDiscoveryPacketCandidateDebtFairAction(packet)
-               = PostGstRunHistoricalRecoveryNode(recipient)
+          /\ recipient \in AsyncTimedServiceNodes
+          /\ \/ /\ recipient
+                        \in AsyncResponsiveAppliedArchiveServers
+                    /\ HistoricalDiscoveryPacketCandidateDebtFairAction(
+                         packet) = PostGstRunHistoricalServer(recipient)
+             \/ /\ HistoricalRecoveryTarget(recipient)
+                    /\ recipient
+                         \notin AsyncResponsiveAppliedArchiveServers
+                    /\ HistoricalDiscoveryPacketCandidateDebtFairAction(
+                         packet) =
+                         PostGstRunHistoricalRecoveryNode(recipient)
+             \/ /\ recipient \in AsyncCurrentResponsiveVoters
+                    /\ ~HistoricalRecoveryTarget(recipient)
+                    /\ recipient
+                         \notin AsyncResponsiveAppliedArchiveServers
+                    /\ HistoricalDiscoveryPacketCandidateDebtFairAction(
+                         packet) = PostGstRunNode(recipient)
 BY HistoricalDiscoveryPacketCandidateRanksInCarrier,
    HistoricalDiscoveryPacketDebtRanksInCarrier,
-   HistoricalDiscoveryOwnedRankMinimumFacts, Isa
+   HistoricalDiscoveryOwnedRankMinimumFacts,
+   AsyncStrongTypeProjectsAsyncType, Isa
    DEF HistoricalDiscoveryPacketCandidateDebtWitness,
        HistoricalDiscoveryPacketCandidateDebtRank,
        HistoricalDiscoveryPacketCandidateRanks,
        HistoricalDiscoveryPacketCandidateOwners,
        HistoricalDiscoveryPacketCandidateDebtFairAction,
-       HistoricalProtectedCandidateOwned
+       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+       AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers,
+       ProtectedCandidateOwned
 
 THEOREM HistoricalDiscoveryLiveServeDebtHasExactFairOwner ==
   \A packet \in OverdueResponsivePackets:

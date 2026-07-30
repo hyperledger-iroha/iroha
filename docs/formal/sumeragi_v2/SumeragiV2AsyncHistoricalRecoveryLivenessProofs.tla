@@ -362,6 +362,7 @@ BY IsaT(600)
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, ExecuteCommand, ExecuteApply,
+       ApplyDecision, NodeHasApplication,
        OpenHistoricalRecovery, PreGstCrash,
        PreGstResponsiveCrash, PreGstResponsiveRestart,
        PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
@@ -1087,6 +1088,8 @@ BY HistoricalRuntimeCreatesDecisionOnlyForRunner, IsaT(90)
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AdmitProducerCompletion, AdmitCausalHead,
        UpdateLocalAdmissionMetadata, DrainFairIngressSelected, vars
 

@@ -27,7 +27,13 @@ use thiserror::Error;
 
 use super::{
     safety_wal::{SafetyWal, SafetyWalError},
-    serviced_candidate_store::{ServicedCandidateKey, ServicedCandidateStore},
+    serviced_candidate_store::{
+        LeaderWireRecoveryAuthority, ProducerContinuationAddress, ProducerContinuationHandoffToken,
+        ProducerContinuationIdentity, ProducerContinuationRecord, ProducerContinuationReservation,
+        ProducerContinuationStatus, ProducerContinuationTerminalToken,
+        SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, ServicedCandidateKey, ServicedCandidateStore,
+        serviced_candidate_stage_for_kind_code,
+    },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
 };
 
@@ -570,6 +576,7 @@ pub(crate) struct AdapterOutcome {
     disposition: reducer::StepDisposition,
     effects: Vec<AdapterEffect>,
     deferred_admission_ordinal: Option<u128>,
+    producer_handoff: Option<ProducerContinuationHandoffToken>,
 }
 
 /// Post-finality cleanup result for a reducer height already durable in Kura.
@@ -1646,52 +1653,122 @@ impl ServicedCandidateStage {
         Self::ApplicationCompleted,
     ];
     const COUNT: usize = Self::ALL.len();
+
+    const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::LocalProposalReady),
+            1 => Some(Self::ProposalReceived),
+            2 => Some(Self::VoteReceived),
+            3 => Some(Self::QuorumCertificateReceived),
+            4 => Some(Self::TimeoutVoteReceived),
+            5 => Some(Self::TimeoutCertificateReceived),
+            6 => Some(Self::TimeoutElapsed),
+            7 => Some(Self::BodyAvailable),
+            8 => Some(Self::BodyStored),
+            9 => Some(Self::ValidationCompleted),
+            10 => Some(Self::ApplicationCompleted),
+            _ => None,
+        }
+    }
+}
+
+/// Physical source which makes a volatile producer parent replayable after a
+/// same-height crash.
+///
+/// This is an internal proof/refinement classifier, not a wire field or
+/// configuration knob. Active continuation hashes are never persisted. Only
+/// the classes backed by an independently owned local durable source may
+/// reserve a continuation; conditional transport and pre-store body results
+/// deliberately remain continuation-free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProducerParentReplaySource {
+    /// Authenticated ingress is useful only under the explicit responsive-peer
+    /// retransmission assumption. A receiver cannot infer that assumption
+    /// from a signature, so this class never authorizes a local continuation.
+    ConditionalResponsiveTransport,
+    /// A reconstructed body has not crossed the durable store boundary yet.
+    /// Its manifest is not a reconstruction source for the body bytes.
+    VolatileBodyReconstruction,
+    /// Exact manifest and non-forgeable receipt retained by the body pipeline.
+    DurableBodyPipeline,
+    /// Durable reducer view/intent deterministically recreates this local root.
+    SafetyWal,
+    /// Durable Decision recreates Apply until the matching completion arrives.
+    DurableDecision,
+}
+
+const fn producer_parent_replay_source_for_stage(
+    stage: ServicedCandidateStage,
+) -> ProducerParentReplaySource {
+    match stage {
+        ServicedCandidateStage::ProposalReceived
+        | ServicedCandidateStage::VoteReceived
+        | ServicedCandidateStage::QuorumCertificateReceived
+        | ServicedCandidateStage::TimeoutVoteReceived
+        | ServicedCandidateStage::TimeoutCertificateReceived => {
+            ProducerParentReplaySource::ConditionalResponsiveTransport
+        }
+        ServicedCandidateStage::BodyAvailable => {
+            ProducerParentReplaySource::VolatileBodyReconstruction
+        }
+        ServicedCandidateStage::LocalProposalReady
+        | ServicedCandidateStage::BodyStored
+        | ServicedCandidateStage::ValidationCompleted => {
+            ProducerParentReplaySource::DurableBodyPipeline
+        }
+        ServicedCandidateStage::TimeoutElapsed => ProducerParentReplaySource::SafetyWal,
+        ServicedCandidateStage::ApplicationCompleted => ProducerParentReplaySource::DurableDecision,
+    }
+}
+
+const fn producer_parent_is_locally_reconstructible(stage: ServicedCandidateStage) -> bool {
+    matches!(
+        producer_parent_replay_source_for_stage(stage),
+        ProducerParentReplaySource::DurableBodyPipeline
+            | ProducerParentReplaySource::SafetyWal
+            | ProducerParentReplaySource::DurableDecision
+    )
+}
+
+fn producer_parent_has_exact_local_replay_binding(
+    event: &reducer::Event,
+    completion_evidence: Option<&BodyPipelineCompletionEvidence>,
+    durable_decision: bool,
+) -> bool {
+    let Some(stage) = serviced_candidate_stage(event) else {
+        return true;
+    };
+    match producer_parent_replay_source_for_stage(stage) {
+        ProducerParentReplaySource::ConditionalResponsiveTransport => false,
+        ProducerParentReplaySource::VolatileBodyReconstruction => false,
+        ProducerParentReplaySource::DurableBodyPipeline => matches!(
+            (event, completion_evidence),
+            (
+                reducer::Event::LocalProposalReady { .. },
+                Some(BodyPipelineCompletionEvidence::LocalProposalReady { .. })
+            ) | (
+                reducer::Event::BodyStored { .. },
+                Some(BodyPipelineCompletionEvidence::BodyStored { .. })
+            ) | (
+                reducer::Event::ValidationCompleted { valid: true, .. },
+                Some(BodyPipelineCompletionEvidence::ValidationSucceeded { .. })
+            ) | (
+                reducer::Event::ValidationCompleted { valid: false, .. },
+                Some(BodyPipelineCompletionEvidence::ValidationFailed { .. })
+            )
+        ),
+        ProducerParentReplaySource::SafetyWal => {
+            matches!(event, reducer::Event::TimeoutElapsed { .. })
+        }
+        ProducerParentReplaySource::DurableDecision => {
+            durable_decision && matches!(event, reducer::Event::ApplicationCompleted { .. })
+        }
+    }
 }
 
 fn serviced_candidate_stage(event: &reducer::Event) -> Option<ServicedCandidateStage> {
-    match event {
-        // Replay and retransmission are control triggers, not final candidate
-        // service. Their concrete spawned/replayed occurrences receive their
-        // own semantic marker; recording the trigger itself would consume the
-        // bounded table while still requiring the trigger to execute again.
-        reducer::Event::ResumeAfterReplay { .. }
-        | reducer::Event::RetransmitElapsed { .. }
-        // These are internal outcomes of the safety-WAL seam, not candidate
-        // admissions. A failed append closes the adapter independently.
-        | reducer::Event::Persisted { .. }
-        | reducer::Event::PersistenceFailed { .. }
-        // A durable intent reissues its deterministic Sign request after a
-        // restart. Retaining the prior process's callback tombstone would
-        // suppress that replay callback and leave `awaiting_signature` Busy
-        // forever. Within one process the reducer's exact EventTag and
-        // signature fence already reject duplicate or stale callbacks.
-        | reducer::Event::Signed { .. } => None,
-        reducer::Event::LocalProposalReady { .. } => {
-            Some(ServicedCandidateStage::LocalProposalReady)
-        }
-        reducer::Event::ProposalReceived { .. } => {
-            Some(ServicedCandidateStage::ProposalReceived)
-        }
-        reducer::Event::VoteReceived { .. } => Some(ServicedCandidateStage::VoteReceived),
-        reducer::Event::QuorumCertificateReceived { .. } => {
-            Some(ServicedCandidateStage::QuorumCertificateReceived)
-        }
-        reducer::Event::TimeoutVoteReceived { .. } => {
-            Some(ServicedCandidateStage::TimeoutVoteReceived)
-        }
-        reducer::Event::TimeoutCertificateReceived { .. } => {
-            Some(ServicedCandidateStage::TimeoutCertificateReceived)
-        }
-        reducer::Event::TimeoutElapsed { .. } => Some(ServicedCandidateStage::TimeoutElapsed),
-        reducer::Event::BodyAvailable { .. } => Some(ServicedCandidateStage::BodyAvailable),
-        reducer::Event::BodyStored { .. } => Some(ServicedCandidateStage::BodyStored),
-        reducer::Event::ValidationCompleted { .. } => {
-            Some(ServicedCandidateStage::ValidationCompleted)
-        }
-        reducer::Event::ApplicationCompleted { .. } => {
-            Some(ServicedCandidateStage::ApplicationCompleted)
-        }
-    }
+    let stage = serviced_candidate_stage_for_kind_code(deferred_event_kind(event).code())?;
+    ServicedCandidateStage::from_code(stage)
 }
 
 fn serviced_candidate_policy(event: &reducer::Event) -> Option<ServicedCandidatePolicy> {
@@ -1716,6 +1793,60 @@ enum ServicedCandidateRecordKind {
     Transient,
     /// Restart-stable memory for an exact internal lifecycle which drained
     /// after its asynchronous owner disappeared.
+    DurableTerminal,
+}
+
+/// Exact process-local lifecycle owner supplied by the serialized runtime.
+///
+/// This carrier is deliberately not serialized. The causal key and immutable
+/// admission ordinal are sufficient to coalesce retries while the process is
+/// alive, but not to reconstruct a command after restart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectedProducerLifecycle {
+    causal_lifecycle_key: Hash,
+    admission_ordinal: u128,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProducerReservationChange {
+    Unchanged,
+    Inserted,
+    ClaimedDormant,
+    ReplacedTerminal {
+        process_previous: ProducerContinuationRecord,
+        durable_previous: Option<ProducerContinuationRecord>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProducerReservationToken {
+    address: ProducerContinuationAddress,
+    change: ProducerReservationChange,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingProducerHandoff {
+    token: ProducerContinuationHandoffToken,
+    service_view: wire::View,
+    durable_store_terminal: bool,
+    durable_terminal_evidence: bool,
+    durable_previous: Option<ProducerContinuationRecord>,
+}
+
+/// Exact evidence consumed when a runtime-owned producer reservation retires.
+///
+/// A concrete successor is acknowledged only after the runtime has installed
+/// the returned non-empty effect batch in its ownership sidecar. A durable
+/// terminal is accepted only when the adapter retained exact terminal evidence
+/// for the same opaque token before returning from the reducer transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProducerContinuationHandoffEvidence {
+    /// An inherited or fresh causal successor is now physically owned.
+    ConcreteSuccessor,
+    /// The drained producer reached a process-local last consumer without an
+    /// independently durable terminal. Same-height restart must reopen it.
+    VolatileTerminal,
+    /// Exact durable terminal evidence replaces the drained producer.
     DurableTerminal,
 }
 
@@ -2152,7 +2283,7 @@ const fn semantic_ingress_capacity(roster_len: usize) -> usize {
 /// This is mechanically derived from the closed reducer-event projection
 /// accepted by [`serviced_candidate_policy`], not duplicated as a magic
 /// number. It is neither a wire field nor a deployment knob.
-const SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE: usize = ServicedCandidateStage::COUNT;
+const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == ServicedCandidateStage::COUNT);
 const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == 11);
 
 /// Dormant restart/historical roots in the reviewed lifecycle geometry.
@@ -2448,6 +2579,12 @@ impl AdapterOutcome {
         self.effects
     }
 
+    /// Exact producer reservation which the serialized runtime must
+    /// acknowledge only after installing its replacement owner.
+    pub(crate) const fn producer_handoff(&self) -> Option<ProducerContinuationHandoffToken> {
+        self.producer_handoff
+    }
+
     /// Actor-global owner retained when this exact input crossed into the
     /// adapter's Busy-deferred queue.
     pub(crate) const fn deferred_admission_ordinal(&self) -> Option<u128> {
@@ -2672,6 +2809,33 @@ pub(crate) struct SumeragiV2Adapter {
     durable_serviced_candidates: BTreeMap<ServicedCandidateKey, wire::View>,
     /// Source-derived bound frozen with the adjacent durable store.
     serviced_candidate_capacity: usize,
+    /// Process-local exact producer ownership, including live reservations.
+    producer_continuations: BTreeMap<ProducerContinuationAddress, ProducerContinuationRecord>,
+    /// Restart-safe producer lifecycle metadata published in the same atomic
+    /// snapshot. Active records preserve their exact slot and ordinal, then
+    /// reopen as `Reserved`; only terminal records suppress replay.
+    durable_producer_continuations:
+        BTreeMap<ProducerContinuationAddress, ProducerContinuationRecord>,
+    /// Active records restored before this process reconstructed their exact
+    /// runtime owner. The first matching retry must reuse the persisted causal
+    /// key and first-admission ordinal; this set is only the process-local
+    /// unclaimed marker and never authorizes identity replacement.
+    restored_dormant_producer_continuations: BTreeSet<ProducerContinuationAddress>,
+    /// Largest validated admission ordinal present in the snapshot as opened.
+    ///
+    /// Reclamation may immediately remove an older terminal record, so the
+    /// runner must seed its actor-global source from this immutable opening
+    /// watermark rather than recomputing it from the post-replay table.
+    restored_producer_continuation_ordinal_high_watermark: Option<u128>,
+    /// Number of bounded lifecycle slots frozen from runtime capacity geometry.
+    producer_continuation_lifecycle_capacity: u64,
+    /// Runtime-selected lifecycle being serviced by the next adapter step.
+    selected_producer_lifecycle: Option<SelectedProducerLifecycle>,
+    /// Busy-deferred adapter ordinal to its complete speculative reservation.
+    deferred_producer_continuations: BTreeMap<u128, ProducerReservationToken>,
+    /// Exact reservations returned across the runtime ownership cut but not
+    /// yet acknowledged by a concrete successor or durable terminal.
+    pending_producer_handoffs: BTreeMap<ProducerContinuationAddress, PendingProducerHandoff>,
     serviced_candidates_decision_reclaimed: bool,
     registry: WireRegistry,
     fingerprints: AdapterFingerprints,
@@ -2925,15 +3089,28 @@ impl SumeragiV2Adapter {
             .transpose()?;
         let chain_hash: [u8; 32] = Hash::new(wire_context.chain_id.encode()).into();
         let serviced_candidate_owner: [u8; 32] = fingerprints.node.into();
-        let serviced_candidate_capacity =
-            serviced_candidate_capacity_with_geometry(wire_context.roster.len(), capacity_geometry);
+        let candidate_lifecycle_capacity =
+            candidate_lifecycle_capacity(wire_context.roster.len(), capacity_geometry);
+        let serviced_candidate_capacity = candidate_lifecycle_capacity
+            .checked_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
+            .ok_or_else(|| {
+                AdapterError::ServicedCandidateStore(
+                    "serviced-candidate lifecycle-stage capacity overflowed".to_owned(),
+                )
+            })?;
+        let producer_continuation_lifecycle_capacity = u64::try_from(candidate_lifecycle_capacity)
+            .map_err(|_| {
+                AdapterError::ServicedCandidateStore(
+                    "producer-continuation lifecycle capacity is not representable".to_owned(),
+                )
+            })?;
         let (serviced_candidate_store, restored_serviced_candidates) =
             ServicedCandidateStore::open(
                 &wal_path,
                 wire_context.id(),
                 wire_context.height,
                 serviced_candidate_owner,
-                serviced_candidate_capacity,
+                candidate_lifecycle_capacity,
             )
             .map_err(AdapterError::ServicedCandidateStore)?;
         let wal = SafetyWal::open(
@@ -2980,6 +3157,18 @@ impl SumeragiV2Adapter {
             .decision()
             .or_else(|| reducer.durable_state().locked())
             .map(|certificate| (certificate.proposal_round(), certificate.subject()));
+        let restored_records = restored_serviced_candidates.records;
+        let restored_producer_continuations = restored_serviced_candidates.producer_continuations;
+        let restored_dormant_producer_continuations = restored_producer_continuations
+            .iter()
+            .filter_map(|(address, record)| {
+                (record.status() != ProducerContinuationStatus::Terminal).then_some(*address)
+            })
+            .collect();
+        let restored_producer_continuation_ordinal_high_watermark = restored_producer_continuations
+            .values()
+            .map(|record| record.identity().admission_ordinal())
+            .max();
         let mut adapter = Self {
             wire_context,
             proofs_of_possession,
@@ -2987,9 +3176,17 @@ impl SumeragiV2Adapter {
             reducer,
             wal,
             serviced_candidate_store,
-            serviced_candidates: restored_serviced_candidates.records.clone(),
-            durable_serviced_candidates: restored_serviced_candidates.records,
+            serviced_candidates: restored_records.clone(),
+            durable_serviced_candidates: restored_records,
             serviced_candidate_capacity,
+            producer_continuations: restored_producer_continuations.clone(),
+            durable_producer_continuations: restored_producer_continuations,
+            restored_dormant_producer_continuations,
+            restored_producer_continuation_ordinal_high_watermark,
+            producer_continuation_lifecycle_capacity,
+            selected_producer_lifecycle: None,
+            deferred_producer_continuations: BTreeMap::new(),
+            pending_producer_handoffs: BTreeMap::new(),
             serviced_candidates_decision_reclaimed: restored_serviced_candidates.decision_reclaimed,
             registry,
             fingerprints,
@@ -3033,6 +3230,51 @@ impl SumeragiV2Adapter {
         &self,
     ) -> &DeferredAdmissionOrdinalSource {
         &self.deferred_admission_ordinals
+    }
+
+    /// Largest producer lifecycle ordinal validated while opening this height.
+    ///
+    /// This remains the opening value even if strict-view or Decision
+    /// reclamation removes the corresponding tombstone before the serialized
+    /// runtime is constructed.
+    pub(crate) const fn restored_producer_continuation_ordinal_high_watermark(
+        &self,
+    ) -> Option<u128> {
+        self.restored_producer_continuation_ordinal_high_watermark
+    }
+
+    /// Resolve one restart-dormant deterministic runtime root by its exact
+    /// persisted causal key. Every stage in one lifecycle must agree on the
+    /// immutable first-admission ordinal.
+    pub(crate) fn dormant_producer_lifecycle(
+        &self,
+        causal_lifecycle_key: &Hash,
+    ) -> super::v2_runtime::RuntimeDormantProducerLifecycle {
+        use super::v2_runtime::RuntimeDormantProducerLifecycle as Dormant;
+
+        let mut admission_ordinal = None;
+        for address in &self.restored_dormant_producer_continuations {
+            let Some(record) = self.producer_continuations.get(address) else {
+                return Dormant::Conflict;
+            };
+            if record.identity().causal_lifecycle_key() != *causal_lifecycle_key {
+                continue;
+            }
+            if record.status() != ProducerContinuationStatus::Reserved
+                || self.durable_producer_continuations.get(address) != Some(record)
+            {
+                return Dormant::Conflict;
+            }
+            let candidate = record.identity().admission_ordinal();
+            match admission_ordinal {
+                Some(existing) if existing != candidate => return Dormant::Conflict,
+                Some(_) => {}
+                None => admission_ordinal = Some(candidate),
+            }
+        }
+        admission_ordinal.map_or(Dormant::Absent, |admission_ordinal| Dormant::Exact {
+            admission_ordinal,
+        })
     }
 
     /// Snapshot the exact reducer-owned facts which constrain local proposal
@@ -3675,6 +3917,7 @@ impl SumeragiV2Adapter {
                         kind,
                     }],
                     deferred_admission_ordinal: None,
+                    producer_handoff: None,
                 }),
                 None,
             ));
@@ -3782,6 +4025,7 @@ impl SumeragiV2Adapter {
             disposition: reducer::StepDisposition::Ignored(reason),
             effects: Vec::new(),
             deferred_admission_ordinal: None,
+            producer_handoff: None,
         }
     }
 
@@ -4128,7 +4372,9 @@ impl SumeragiV2Adapter {
                 } if *queued_tag == tag && *queued_round == round && *queued_subject == subject
             )
         });
-        before.saturating_sub(self.deferred_completions.len())
+        let retired = before.saturating_sub(self.deferred_completions.len());
+        self.retire_unowned_deferred_producer_continuations();
+        retired
     }
 
     /// Count every Busy-deferred completion stage for one exact body pipeline.
@@ -4200,6 +4446,7 @@ impl SumeragiV2Adapter {
         };
         retire(&mut self.deferred_completions);
         retire(&mut self.deferred_inputs);
+        self.retire_unowned_deferred_producer_continuations();
         retired
     }
 
@@ -4390,6 +4637,7 @@ impl SumeragiV2Adapter {
         }) {
             self.active_subject = None;
         }
+        self.retire_unowned_deferred_producer_continuations();
     }
 
     /// Retire deferred proposals made unsafe by an installed durable lock.
@@ -4433,6 +4681,7 @@ impl SumeragiV2Adapter {
         });
         let retired = before.saturating_sub(self.deferred_inputs.len());
         self.active_subject = Some((locked_round, locked_subject));
+        self.retire_unowned_deferred_producer_continuations();
         retired
     }
 
@@ -4656,6 +4905,7 @@ impl SumeragiV2Adapter {
         }
 
         self.deferred_inputs.retain(|input| !owns_conflict(input));
+        self.retire_unowned_deferred_producer_continuations();
         let removed_proposal = self.registry.proposals.remove(&key);
         let removed_manifest = self.registry.manifests.remove(&key);
         let removed_equivocation = self.ingress_equivocations.remove(&admission_key);
@@ -5022,16 +5272,49 @@ impl SumeragiV2Adapter {
             return Preflight::Coalesce;
         }
 
-        if self
-            .serviced_candidate(
-                &event,
-                DeferredPriority::Completion,
-                completion_evidence.as_ref(),
-                None,
-            )
-            .is_some_and(|(key, _, _)| self.serviced_candidates.contains_key(&key))
-        {
-            return Preflight::Coalesce;
+        let serviced_candidate = self.serviced_candidate(
+            &event,
+            DeferredPriority::Completion,
+            completion_evidence.as_ref(),
+            None,
+        );
+        if let Some((key, _, _)) = serviced_candidate {
+            if self.serviced_candidates.contains_key(&key) {
+                return Preflight::Coalesce;
+            }
+            let matching = self
+                .producer_continuations
+                .iter()
+                .filter(|(_, record)| record.identity().candidate() == key)
+                .collect::<Vec<_>>();
+            match matching.len() {
+                0 => {}
+                1 => {
+                    let (address, record) = matching[0];
+                    if record.status() != ProducerContinuationStatus::Reserved
+                        || !self
+                            .restored_dormant_producer_continuations
+                            .contains(address)
+                        || self.durable_producer_continuations.get(address) != Some(record)
+                    {
+                        return Preflight::Coalesce;
+                    }
+                    let identity = record.identity();
+                    // `ServicedCandidateKey` is deliberately route/priority
+                    // neutral. This branch is nevertheless class-exact:
+                    // only internal completion commands reach this
+                    // preflight, and the serialized runtime rejects
+                    // `ReuseDormant` in Normal or Progress before allocating
+                    // a FIFO ordinal. Authenticated traffic retains the
+                    // separate leader-wire lifecycle gate above.
+                    return Preflight::ReuseDormant {
+                        causal_lifecycle_key: identity.causal_lifecycle_key(),
+                        admission_ordinal: identity.admission_ordinal(),
+                        producer_stage: identity.stage(),
+                    };
+                }
+                _ => return Preflight::Reject,
+            }
         }
 
         // The reducer's persistence/signing fences intentionally report Busy
@@ -5846,6 +6129,375 @@ impl SumeragiV2Adapter {
         AdapterError::ServicedCandidateStore(reason)
     }
 
+    /// Bind the immutable lifecycle selected by the serialized runtime to the
+    /// next adapter transition.
+    ///
+    /// The runtime has already validated this carrier against its scheduler
+    /// sidecar. Keeping the seam explicit prevents direct adapter tests and
+    /// startup replay from accidentally minting production ownership.
+    pub(crate) fn bind_selected_producer_lifecycle(
+        &mut self,
+        causal_lifecycle_key: Hash,
+        admission_ordinal: u128,
+    ) -> Result<(), AdapterError> {
+        if admission_ordinal == 0 || self.selected_producer_lifecycle.is_some() {
+            return Err(self.fail_serviced_candidate_store(
+                "selected producer lifecycle was zero or already bound".to_owned(),
+            ));
+        }
+        self.selected_producer_lifecycle = Some(SelectedProducerLifecycle {
+            causal_lifecycle_key,
+            admission_ordinal,
+        });
+        Ok(())
+    }
+
+    /// Clear the one-transition runtime binding.
+    pub(crate) fn clear_selected_producer_lifecycle(&mut self) {
+        self.selected_producer_lifecycle = None;
+    }
+
+    fn producer_lifecycle_slot(
+        &self,
+        candidate: ServicedCandidateKey,
+        selected: &SelectedProducerLifecycle,
+    ) -> Result<u64, String> {
+        let mut existing_slot = None;
+        for record in self.producer_continuations.values().filter(|record| {
+            let identity = record.identity();
+            identity.admission_ordinal() == selected.admission_ordinal
+                && identity.causal_lifecycle_key() == selected.causal_lifecycle_key
+        }) {
+            let slot = record.identity().address().lifecycle_slot();
+            if existing_slot
+                .replace(slot)
+                .is_some_and(|existing| existing != slot)
+            {
+                return Err("one producer lifecycle occupied multiple bounded slots".to_owned());
+            }
+        }
+        if let Some(slot) = existing_slot {
+            return Ok(slot);
+        }
+
+        (1..=self.producer_continuation_lifecycle_capacity)
+            .find(|slot| {
+                self.producer_continuations
+                    .values()
+                    .filter(|record| record.identity().address().lifecycle_slot() == *slot)
+                    .all(|record| {
+                        let identity = record.identity();
+                        record.status() == ProducerContinuationStatus::Terminal
+                            && identity.admission_ordinal() < selected.admission_ordinal
+                            && identity.candidate().source_view() < candidate.source_view()
+                    })
+            })
+            .ok_or_else(|| "bounded producer lifecycle slots are exhausted".to_owned())
+    }
+
+    /// Reserve the exact selected lifecycle-stage address before reducer
+    /// service can retire its source.
+    fn reserve_selected_producer_continuation(
+        &mut self,
+        candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
+    ) -> Result<Option<ProducerReservationToken>, AdapterError> {
+        let (Some((candidate, _, _)), Some(selected)) =
+            (candidate, self.selected_producer_lifecycle.clone())
+        else {
+            return Ok(None);
+        };
+        let existing = self
+            .producer_continuations
+            .iter()
+            .filter(|(_, record)| record.identity().candidate() == candidate)
+            .map(|(address, _)| *address)
+            .collect::<Vec<_>>();
+        match existing.as_slice() {
+            [address] => {
+                let record = self.producer_continuations[address].clone();
+                if self.durable_producer_continuations.get(address) != Some(&record) {
+                    return Err(self.fail_serviced_candidate_store(
+                        "active producer identity was not present in durable admission metadata"
+                            .to_owned(),
+                    ));
+                }
+                if record.status() != ProducerContinuationStatus::Reserved {
+                    return Err(self.fail_serviced_candidate_store(
+                        "a terminal producer identity reached live reservation".to_owned(),
+                    ));
+                }
+                let identity = record.identity();
+                if identity.admission_ordinal() != selected.admission_ordinal
+                    || identity.causal_lifecycle_key() != selected.causal_lifecycle_key
+                {
+                    return Err(self.fail_serviced_candidate_store(
+                        "replayed producer lifecycle changed its immutable key or ordinal"
+                            .to_owned(),
+                    ));
+                }
+                let change = if self.restored_dormant_producer_continuations.remove(address) {
+                    ProducerReservationChange::ClaimedDormant
+                } else {
+                    ProducerReservationChange::Unchanged
+                };
+                if matches!(change, ProducerReservationChange::ClaimedDormant)
+                    && (self
+                        .deferred_producer_continuations
+                        .values()
+                        .any(|reservation| reservation.address == *address)
+                        || self.pending_producer_handoffs.contains_key(address))
+                {
+                    self.restored_dormant_producer_continuations
+                        .insert(*address);
+                    return Err(self.fail_serviced_candidate_store(
+                        "restart-dormant producer already had a live process alias".to_owned(),
+                    ));
+                }
+                return Ok(Some(ProducerReservationToken {
+                    address: *address,
+                    change,
+                }));
+            }
+            [] => {}
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one logical producer candidate occupied multiple bounded addresses".to_owned(),
+                ));
+            }
+        }
+        let lifecycle_slot = self
+            .producer_lifecycle_slot(candidate, &selected)
+            .map_err(|reason| self.fail_serviced_candidate_store(reason))?;
+        let identity = ProducerContinuationIdentity::new(
+            candidate,
+            selected.causal_lifecycle_key,
+            lifecycle_slot,
+            selected.admission_ordinal,
+        )
+        .map_err(|reason| self.fail_serviced_candidate_store(reason))?;
+        let address = identity.address();
+        let record = ProducerContinuationRecord::new(
+            identity,
+            ProducerContinuationStatus::Reserved,
+            Vec::new(),
+        )
+        .map_err(|reason| self.fail_serviced_candidate_store(reason))?;
+        let process_previous = self.producer_continuations.get(&address).cloned();
+        let reservation = self
+            .serviced_candidate_store
+            .reserve_producer_continuation(&mut self.producer_continuations, record);
+        let reservation = match reservation {
+            Ok(reservation) => reservation,
+            Err(reason) => return Err(self.fail_serviced_candidate_store(reason)),
+        };
+        let durable_previous = self
+            .durable_producer_continuations
+            .insert(address, self.producer_continuations[&address].clone());
+        let change = match reservation {
+            ProducerContinuationReservation::Inserted => ProducerReservationChange::Inserted,
+            ProducerContinuationReservation::Coalesced => ProducerReservationChange::Unchanged,
+            ProducerContinuationReservation::ReplacedTerminal => {
+                ProducerReservationChange::ReplacedTerminal {
+                    process_previous: process_previous.ok_or_else(|| {
+                        self.fail_serviced_candidate_store(
+                            "terminal replacement omitted its process incumbent".to_owned(),
+                        )
+                    })?,
+                    durable_previous: durable_previous.clone(),
+                }
+            }
+        };
+        if let Err(reason) = self
+            .serviced_candidate_store
+            .persist_with_producer_continuations(
+                &self.durable_serviced_candidates,
+                &self.durable_producer_continuations,
+                self.serviced_candidates_decision_reclaimed,
+            )
+        {
+            match durable_previous {
+                Some(previous) => {
+                    self.durable_producer_continuations
+                        .insert(address, previous);
+                }
+                None => {
+                    self.durable_producer_continuations.remove(&address);
+                }
+            }
+            match &change {
+                ProducerReservationChange::Unchanged => {}
+                ProducerReservationChange::Inserted => {
+                    self.producer_continuations.remove(&address);
+                }
+                ProducerReservationChange::ClaimedDormant => {
+                    self.restored_dormant_producer_continuations.insert(address);
+                }
+                ProducerReservationChange::ReplacedTerminal {
+                    process_previous, ..
+                } => {
+                    self.producer_continuations
+                        .insert(address, process_previous.clone());
+                }
+            }
+            return Err(self.fail_serviced_candidate_store(reason));
+        }
+        Ok(Some(ProducerReservationToken { address, change }))
+    }
+
+    fn persist_producer_lifecycles(&mut self) -> Result<(), AdapterError> {
+        self.serviced_candidate_store
+            .persist_with_producer_continuations(
+                &self.durable_serviced_candidates,
+                &self.durable_producer_continuations,
+                self.serviced_candidates_decision_reclaimed,
+            )
+            .map_err(|reason| self.fail_serviced_candidate_store(reason))
+    }
+
+    fn rollback_producer_reservation(
+        &mut self,
+        token: Option<ProducerReservationToken>,
+    ) -> Result<(), AdapterError> {
+        let Some(token) = token else {
+            return Ok(());
+        };
+        self.pending_producer_handoffs.remove(&token.address);
+        match token.change {
+            ProducerReservationChange::Unchanged => return Ok(()),
+            ProducerReservationChange::Inserted => {
+                self.producer_continuations.remove(&token.address);
+                self.durable_producer_continuations.remove(&token.address);
+            }
+            ProducerReservationChange::ClaimedDormant => {
+                self.restored_dormant_producer_continuations
+                    .insert(token.address);
+            }
+            ProducerReservationChange::ReplacedTerminal {
+                process_previous,
+                durable_previous,
+            } => {
+                self.producer_continuations
+                    .insert(token.address, process_previous);
+                match durable_previous {
+                    Some(previous) => {
+                        self.durable_producer_continuations
+                            .insert(token.address, previous);
+                    }
+                    None => {
+                        self.durable_producer_continuations.remove(&token.address);
+                    }
+                }
+            }
+        }
+        self.persist_producer_lifecycles()
+    }
+
+    fn release_unrecorded_producer(
+        &mut self,
+        token: Option<ProducerReservationToken>,
+    ) -> Result<(), AdapterError> {
+        let Some(token) = token else {
+            return Ok(());
+        };
+        self.pending_producer_handoffs.remove(&token.address);
+        match token.change {
+            ProducerReservationChange::Unchanged
+            | ProducerReservationChange::Inserted
+            | ProducerReservationChange::ClaimedDormant => {
+                self.producer_continuations.remove(&token.address);
+                self.durable_producer_continuations.remove(&token.address);
+                self.restored_dormant_producer_continuations
+                    .remove(&token.address);
+            }
+            ProducerReservationChange::ReplacedTerminal {
+                process_previous,
+                durable_previous,
+            } => {
+                self.producer_continuations
+                    .insert(token.address, process_previous);
+                match durable_previous {
+                    Some(previous) => {
+                        self.durable_producer_continuations
+                            .insert(token.address, previous);
+                    }
+                    None => {
+                        self.durable_producer_continuations.remove(&token.address);
+                    }
+                }
+            }
+        }
+        self.persist_producer_lifecycles()
+    }
+
+    fn terminalize_producer_continuation(
+        &mut self,
+        address: Option<ProducerContinuationAddress>,
+    ) -> Result<Option<ProducerContinuationRecord>, AdapterError> {
+        let Some(address) = address else {
+            return Ok(None);
+        };
+        let Some(previous) = self.producer_continuations.get(&address).cloned() else {
+            return Err(self.fail_serviced_candidate_store(
+                "selected producer reservation disappeared before terminalization".to_owned(),
+            ));
+        };
+        if previous.status() == ProducerContinuationStatus::Terminal {
+            return Ok(Some(previous));
+        }
+        let terminal = ProducerContinuationRecord::new(
+            previous.identity(),
+            ProducerContinuationStatus::Terminal,
+            Vec::new(),
+        )
+        .map_err(|reason| self.fail_serviced_candidate_store(reason))?;
+        self.producer_continuations.insert(address, terminal);
+        Ok(Some(previous))
+    }
+
+    /// Close producer reservations whose adapter-owned Busy occurrence was
+    /// retired by an exact state-changing corridor update.
+    ///
+    /// Queue-retirement APIs intentionally keep their existing infallible
+    /// signatures. Any impossible missing/corrupt reservation latches the
+    /// adapter fail-closed through `terminalize_producer_continuation`; the
+    /// next ingress or executor turn then reports that state.
+    fn retire_unowned_deferred_producer_continuations(&mut self) {
+        let active = self.all_deferred_admission_ordinals();
+        let retired = self
+            .deferred_producer_continuations
+            .keys()
+            .filter(|ordinal| !active.contains(ordinal))
+            .copied()
+            .collect::<Vec<_>>();
+        for ordinal in retired {
+            let Some(reservation) = self.deferred_producer_continuations.remove(&ordinal) else {
+                continue;
+            };
+            // A strict view advance or Decision removed the deferred source
+            // before service. It is a goal/exited lifecycle, not a synthetic
+            // successor acknowledgement. Restore any older durable incumbent
+            // and otherwise reopen the bounded address for reconstructed work.
+            if self
+                .release_goal_reached_producer(Some(reservation))
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+
+    /// Release a speculative active record when the same macro-step reached a
+    /// durable goal (Decision or strict view advance) before a producer
+    /// continuation was needed. If the active reservation temporarily
+    /// replaced an older durable terminal at the same bounded address, restore
+    /// that exact restart-safe incumbent in process memory.
+    fn release_goal_reached_producer(
+        &mut self,
+        reservation: Option<ProducerReservationToken>,
+    ) -> Result<(), AdapterError> {
+        self.release_unrecorded_producer(reservation)
+    }
+
     /// Reserve bounded serviced-identity capacity before mutating the reducer.
     ///
     /// The fast path needs no speculative reducer step. Only a theoretically
@@ -5888,23 +6540,28 @@ impl SumeragiV2Adapter {
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
         durable_terminal_retirement: bool,
-    ) -> Result<(), AdapterError> {
+        durable_terminal_evidence: bool,
+        producer_reservation: Option<ProducerReservationToken>,
+    ) -> Result<Option<ProducerContinuationHandoffToken>, AdapterError> {
         let Some((key, service_view, _)) = candidate else {
-            return Ok(());
+            self.release_unrecorded_producer(producer_reservation)?;
+            return Ok(None);
         };
         if self.reducer.durable_state().decision().is_some() {
             // Decision closes this height's candidate-service episode. The
             // reducer's durable Decision owns all remaining application and
             // replay progress, so no post-Decision occurrence may recreate a
             // tombstone reclaimed by that same macro-step.
-            return Ok(());
+            self.release_goal_reached_producer(producer_reservation)?;
+            return Ok(None);
         }
         if service_view < self.reducer.current_tag().view() {
             // The same macro-step durably advanced the view and reclaimed the
             // completed old-view epoch before this owner reached its return
             // seam. Recreating that obsolete key would undo strict-view
             // reclamation.
-            return Ok(());
+            self.release_goal_reached_producer(producer_reservation)?;
+            return Ok(None);
         }
         let capacity = self.serviced_candidate_capacity;
         let process_marker_exists = self.serviced_candidates.contains_key(&key);
@@ -5916,35 +6573,258 @@ impl SumeragiV2Adapter {
         if !process_marker_exists {
             assert_eq!(self.serviced_candidates.insert(key, service_view), None);
         }
-        if !durable_terminal_retirement {
-            return Ok(());
-        }
-        if self.durable_serviced_candidates.contains_key(&key) {
-            return Ok(());
-        }
-        if self.durable_serviced_candidates.len() >= capacity {
-            if !process_marker_exists {
-                self.serviced_candidates.remove(&key);
+        let Some(reservation) = producer_reservation else {
+            if !durable_terminal_retirement || self.durable_serviced_candidates.contains_key(&key) {
+                return Ok(None);
             }
-            return Err(self.fail_serviced_candidate_store(format!(
-                "derived durable serviced-candidate capacity {capacity} is exhausted"
-            )));
-        }
-        assert_eq!(
-            self.durable_serviced_candidates.insert(key, service_view),
-            None
-        );
-        if let Err(reason) = self.serviced_candidate_store.persist(
-            &self.durable_serviced_candidates,
-            self.serviced_candidates_decision_reclaimed,
-        ) {
-            self.durable_serviced_candidates.remove(&key);
-            if !process_marker_exists {
-                self.serviced_candidates.remove(&key);
+            if self.durable_serviced_candidates.len() >= capacity {
+                if !process_marker_exists {
+                    self.serviced_candidates.remove(&key);
+                }
+                return Err(self.fail_serviced_candidate_store(format!(
+                    "derived durable serviced-candidate capacity {capacity} is exhausted"
+                )));
             }
-            return Err(self.fail_serviced_candidate_store(reason));
+            assert_eq!(
+                self.durable_serviced_candidates.insert(key, service_view),
+                None
+            );
+            if let Err(reason) = self
+                .serviced_candidate_store
+                .persist_with_producer_continuations(
+                    &self.durable_serviced_candidates,
+                    &self.durable_producer_continuations,
+                    self.serviced_candidates_decision_reclaimed,
+                )
+            {
+                self.durable_serviced_candidates.remove(&key);
+                if !process_marker_exists {
+                    self.serviced_candidates.remove(&key);
+                }
+                return Err(self.fail_serviced_candidate_store(reason));
+            }
+            return Ok(None);
+        };
+        let address = reservation.address;
+        let token = self
+            .producer_continuations
+            .get(&address)
+            .and_then(ProducerContinuationRecord::handoff_token)
+            .ok_or_else(|| {
+                self.fail_serviced_candidate_store(
+                    "selected producer reservation was not live at the runtime handoff".to_owned(),
+                )
+            })?;
+        let pending = PendingProducerHandoff {
+            token,
+            service_view,
+            durable_store_terminal: durable_terminal_retirement,
+            durable_terminal_evidence,
+            durable_previous: match reservation.change {
+                ProducerReservationChange::ReplacedTerminal {
+                    durable_previous, ..
+                } => durable_previous,
+                ProducerReservationChange::Unchanged
+                | ProducerReservationChange::Inserted
+                | ProducerReservationChange::ClaimedDormant => None,
+            },
+        };
+        match self.pending_producer_handoffs.get(&address) {
+            Some(existing) if *existing != pending => {
+                return Err(self.fail_serviced_candidate_store(
+                    "an exact producer handoff changed its terminal policy".to_owned(),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                self.pending_producer_handoffs.insert(address, pending);
+            }
         }
-        Ok(())
+        Ok(Some(token))
+    }
+
+    /// Classify the exact replacement evidence retained for one pending handoff.
+    ///
+    /// A non-empty effect batch is a concrete causal successor. An empty batch
+    /// is restart-stable only when the source retained independent durable
+    /// terminal evidence; every other empty last consumer is explicitly
+    /// volatile and reopens after same-height restart.
+    pub(crate) fn producer_handoff_evidence(
+        &self,
+        token: ProducerContinuationHandoffToken,
+        has_concrete_successor: bool,
+    ) -> Result<ProducerContinuationHandoffEvidence, AdapterError> {
+        let pending = self
+            .pending_producer_handoffs
+            .get(&token.address())
+            .ok_or(AdapterError::RuntimeIngressOwnershipViolation)?;
+        if pending.token != token {
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        }
+        Ok(if has_concrete_successor {
+            ProducerContinuationHandoffEvidence::ConcreteSuccessor
+        } else if pending.durable_terminal_evidence {
+            ProducerContinuationHandoffEvidence::DurableTerminal
+        } else {
+            ProducerContinuationHandoffEvidence::VolatileTerminal
+        })
+    }
+
+    /// Consume one exact runtime handoff after its replacement owner exists.
+    ///
+    /// The opaque token is checked against both the live continuation record
+    /// and the pending service metadata. Durable publication commits the
+    /// service tombstone and producer terminal in one source-sealed snapshot.
+    pub(crate) fn acknowledge_producer_handoff(
+        &mut self,
+        token: ProducerContinuationHandoffToken,
+        evidence: ProducerContinuationHandoffEvidence,
+    ) -> Result<ProducerContinuationTerminalToken, AdapterError> {
+        let address = token.address();
+        let pending = self
+            .pending_producer_handoffs
+            .get(&address)
+            .cloned()
+            .ok_or_else(|| {
+                self.fail_serviced_candidate_store(
+                    "producer handoff acknowledgement had no pending reservation".to_owned(),
+                )
+            })?;
+        let record = self
+            .producer_continuations
+            .get(&address)
+            .cloned()
+            .ok_or_else(|| {
+                self.fail_serviced_candidate_store(
+                    "producer handoff acknowledgement lost its reservation".to_owned(),
+                )
+            })?;
+        if pending.token != token || !token.matches_reserved(&record) {
+            return Err(self.fail_serviced_candidate_store(
+                "producer handoff acknowledgement changed exact identity".to_owned(),
+            ));
+        }
+        if evidence == ProducerContinuationHandoffEvidence::DurableTerminal
+            && !pending.durable_terminal_evidence
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "producer handoff claimed terminal evidence not retained by its source".to_owned(),
+            ));
+        }
+        if evidence == ProducerContinuationHandoffEvidence::VolatileTerminal
+            && pending.durable_terminal_evidence
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "producer handoff weakened retained durable terminal evidence".to_owned(),
+            ));
+        }
+        let previous = self
+            .terminalize_producer_continuation(Some(address))?
+            .ok_or_else(|| {
+                self.fail_serviced_candidate_store(
+                    "producer handoff terminalization returned no incumbent".to_owned(),
+                )
+            })?;
+        let terminal = self
+            .producer_continuations
+            .get(&address)
+            .cloned()
+            .ok_or_else(|| {
+                self.fail_serviced_candidate_store(
+                    "producer handoff terminal disappeared after terminalization".to_owned(),
+                )
+            })?;
+        if pending.durable_store_terminal {
+            let key = token.identity().candidate();
+            let previous_service = self
+                .durable_serviced_candidates
+                .insert(key, pending.service_view);
+            let previous_durable = self
+                .durable_producer_continuations
+                .insert(address, terminal.clone());
+            if let Err(reason) = self
+                .serviced_candidate_store
+                .persist_with_producer_continuations(
+                    &self.durable_serviced_candidates,
+                    &self.durable_producer_continuations,
+                    self.serviced_candidates_decision_reclaimed,
+                )
+            {
+                match previous_service {
+                    Some(view) => {
+                        self.durable_serviced_candidates.insert(key, view);
+                    }
+                    None => {
+                        self.durable_serviced_candidates.remove(&key);
+                    }
+                }
+                match previous_durable {
+                    Some(record) => {
+                        self.durable_producer_continuations.insert(address, record);
+                    }
+                    None => {
+                        self.durable_producer_continuations.remove(&address);
+                    }
+                }
+                self.producer_continuations.insert(address, previous);
+                return Err(self.fail_serviced_candidate_store(reason));
+            }
+        } else {
+            match pending.durable_previous.clone() {
+                Some(previous) => {
+                    self.durable_producer_continuations
+                        .insert(address, previous);
+                }
+                None => {
+                    self.durable_producer_continuations.remove(&address);
+                }
+            }
+            if let Err(error) = self.persist_producer_lifecycles() {
+                self.durable_producer_continuations.insert(address, record);
+                self.producer_continuations.insert(address, previous);
+                return Err(error);
+            }
+        }
+        self.pending_producer_handoffs.remove(&address);
+        self.restored_dormant_producer_continuations
+            .remove(&address);
+        terminal.terminal_token().ok_or_else(|| {
+            self.fail_serviced_candidate_store(
+                "producer handoff did not produce an exact terminal token".to_owned(),
+            )
+        })
+    }
+
+    /// Return the safety-WAL replay cut used to reconcile generic ingress.
+    ///
+    /// The adapter is opened before the adjacent leader-wire store. Its
+    /// current view is therefore backed by replayed timeout-certificate state,
+    /// and its Decision bit is backed by the durable Decision record. The
+    /// opaque capability lets the generic store retire only records whose
+    /// protocol episode is already impossible to re-enter.
+    pub(crate) fn leader_wire_recovery_authority(
+        &self,
+    ) -> Result<LeaderWireRecoveryAuthority, AdapterError> {
+        self.ensure_ingress()?;
+        let owner: [u8; 32] = self.fingerprints.node.into();
+        Ok(LeaderWireRecoveryAuthority::from_replayed_adapter(
+            self.wire_context.id(),
+            self.wire_context.height,
+            owner,
+            self.reducer.current_tag().view(),
+            self.reducer.durable_state().decision().is_some(),
+        ))
+    }
+
+    /// Read-only restart-stable producer terminals restored from the adjacent
+    /// serviced-candidate snapshot.
+    pub(crate) fn durable_producer_terminal_tokens(
+        &self,
+    ) -> Vec<ProducerContinuationTerminalToken> {
+        self.durable_producer_continuations
+            .values()
+            .filter_map(ProducerContinuationRecord::terminal_token)
+            .collect()
     }
 
     /// Reclaim only epochs made obsolete by a strict certified view advance
@@ -5960,14 +6840,46 @@ impl SumeragiV2Adapter {
         self.serviced_candidates
             .retain(|_, service_view| *service_view >= current_view);
         let previous_durable_len = self.durable_serviced_candidates.len();
+        let previous_durable_producer_len = self.durable_producer_continuations.len();
         self.durable_serviced_candidates
             .retain(|_, service_view| *service_view >= current_view);
-        let mut durable_changed = self.durable_serviced_candidates.len() != previous_durable_len;
+        if !decision_durable {
+            // A strict certified view advance is itself the durable reason an
+            // older lifecycle cannot re-enter. Remove its paired producer
+            // tombstone whenever the exact service tombstone is reclaimed so
+            // every non-Decision snapshot keeps the two tables atomic.
+            self.durable_producer_continuations.retain(|_, record| {
+                if record.status() == ProducerContinuationStatus::Terminal {
+                    self.durable_serviced_candidates
+                        .contains_key(&record.identity().candidate())
+                } else {
+                    record.identity().candidate().source_view() >= current_view
+                }
+            });
+        }
+        let mut durable_changed = self.durable_serviced_candidates.len() != previous_durable_len
+            || self.durable_producer_continuations.len() != previous_durable_producer_len;
         if decision_durable && !self.serviced_candidates_decision_reclaimed {
             self.serviced_candidates.clear();
             self.durable_serviced_candidates.clear();
+            self.producer_continuations.clear();
+            self.durable_producer_continuations.clear();
+            self.restored_dormant_producer_continuations.clear();
+            self.deferred_producer_continuations.clear();
+            self.pending_producer_handoffs.clear();
             self.serviced_candidates_decision_reclaimed = true;
             durable_changed = true;
+        }
+        let retired_dormant = self
+            .restored_dormant_producer_continuations
+            .iter()
+            .filter(|address| !self.durable_producer_continuations.contains_key(address))
+            .copied()
+            .collect::<Vec<_>>();
+        for address in retired_dormant {
+            self.restored_dormant_producer_continuations
+                .remove(&address);
+            self.producer_continuations.remove(&address);
         }
         debug_assert!(
             self.durable_serviced_candidates
@@ -5975,10 +6887,13 @@ impl SumeragiV2Adapter {
                 .all(|key| self.serviced_candidates.contains_key(key))
         );
         if durable_changed
-            && let Err(reason) = self.serviced_candidate_store.persist(
-                &self.durable_serviced_candidates,
-                self.serviced_candidates_decision_reclaimed,
-            )
+            && let Err(reason) = self
+                .serviced_candidate_store
+                .persist_with_producer_continuations(
+                    &self.durable_serviced_candidates,
+                    &self.durable_producer_continuations,
+                    self.serviced_candidates_decision_reclaimed,
+                )
         {
             return Err(self.fail_serviced_candidate_store(reason));
         }
@@ -6111,23 +7026,88 @@ impl SumeragiV2Adapter {
                     disposition,
                     effects: Vec::new(),
                     deferred_admission_ordinal: None,
+                    producer_handoff: None,
                 },
             });
         }
-        self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)?;
-        let outcome = self.reducer.step(event)?;
+        let producer_stage = serviced_candidate_stage(&queued);
+        let locally_reconstructible_producer =
+            producer_stage.is_some_and(producer_parent_is_locally_reconstructible);
+        if self.selected_producer_lifecycle.is_some()
+            && serviced_candidate.is_some()
+            && locally_reconstructible_producer
+            && !producer_parent_has_exact_local_replay_binding(
+                &queued,
+                completion_evidence.as_ref(),
+                self.reducer.durable_state().decision().is_some(),
+            )
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "selected producer kind had no exact replayable parent binding".to_owned(),
+            ));
+        }
+        // Every selected exact producer class reserves its immutable lifecycle
+        // before the reducer step. Conditional transport and volatile-body
+        // parents are reopened through the durable generic ingress token;
+        // only the Local class additionally requires an immediate local replay
+        // binding at this boundary.
+        let producer_candidate = if producer_stage.is_some() {
+            serviced_candidate
+        } else {
+            None
+        };
+        let producer_reservation =
+            self.reserve_selected_producer_continuation(producer_candidate)?;
+        if let Err(error) =
+            self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)
+        {
+            self.rollback_producer_reservation(producer_reservation)?;
+            return Err(error);
+        }
+        let outcome = match self.reducer.step(event) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.rollback_producer_reservation(producer_reservation)?;
+                return Err(error.into());
+            }
+        };
         let disposition = outcome.disposition();
         self.record_reducer_outcome(&queued, disposition, outcome.effects());
         if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
             self.log_body_progress(&queued, disposition, 0);
-            let deferred_admission_ordinal = self.enqueue_deferred(
+            let deferred_admission_ordinal = match self.enqueue_deferred(
                 queued,
                 retag_authenticated_ingress,
                 priority,
                 admission,
                 completion_evidence,
                 authenticated_wire_identity,
-            )?;
+            ) {
+                Ok(ordinal) => ordinal,
+                Err(error) => {
+                    self.rollback_producer_reservation(producer_reservation)?;
+                    return Err(error);
+                }
+            };
+            match (deferred_admission_ordinal, producer_reservation) {
+                (Some(ordinal), Some(reservation)) => {
+                    match self.deferred_producer_continuations.get(&ordinal) {
+                        Some(existing) if existing.address != reservation.address => {
+                            // `enqueue_deferred` coalesced with an older exact
+                            // owner. Keep that owner's address and undo only
+                            // this speculative reservation.
+                            self.rollback_producer_reservation(Some(reservation))?;
+                        }
+                        Some(_) => {}
+                        None => {
+                            self.deferred_producer_continuations
+                                .insert(ordinal, reservation);
+                        }
+                    }
+                }
+                (None, reservation) => self.rollback_producer_reservation(reservation)?,
+                (Some(_), None) => {}
+            }
             if deferred_admission_ordinal.is_some()
                 && let Some(admission) = admission
             {
@@ -6139,6 +7119,7 @@ impl SumeragiV2Adapter {
                     disposition,
                     effects: Vec::new(),
                     deferred_admission_ordinal,
+                    producer_handoff: None,
                 },
             });
         }
@@ -6155,12 +7136,30 @@ impl SumeragiV2Adapter {
         // schedules them explicitly after this batch reaches the executor.
         // Concatenating them here would erase the reducer transition boundary
         // and could exceed the executor's retained-batch capacity.
-        let effects = self.drive_effects(outcome.into_effects())?;
+        let effects = match self.drive_effects(outcome.into_effects()) {
+            Ok(effects) => effects,
+            Err(error) => {
+                self.release_unrecorded_producer(producer_reservation)?;
+                return Err(error);
+            }
+        };
         let record_kind = serviced_candidate_record_kind(&queued, disposition);
         let serviced_candidate = record_kind.and(serviced_candidate);
         let durable_terminal_retirement =
             record_kind == Some(ServicedCandidateRecordKind::DurableTerminal);
-        self.record_serviced_candidate(serviced_candidate, durable_terminal_retirement)?;
+        let durable_terminal_evidence =
+            durable_terminal_retirement || completion_evidence.is_some();
+        let producer_handoff = if record_kind.is_some() {
+            self.record_serviced_candidate(
+                serviced_candidate,
+                durable_terminal_retirement,
+                durable_terminal_evidence,
+                producer_reservation,
+            )?
+        } else {
+            self.release_unrecorded_producer(producer_reservation)?;
+            None
+        };
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
@@ -6171,6 +7170,7 @@ impl SumeragiV2Adapter {
                 disposition,
                 effects,
                 deferred_admission_ordinal: None,
+                producer_handoff,
             },
         })
     }
@@ -6561,6 +7561,31 @@ impl SumeragiV2Adapter {
         &mut self,
         eligible: &BTreeSet<u128>,
     ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
+        let Some((effects, evidence, producer_handoff)) =
+            self.drain_deferred_with_handoff_for_ordinals(eligible)?
+        else {
+            return Ok(None);
+        };
+        if let Some(token) = producer_handoff {
+            let handoff_evidence = self.producer_handoff_evidence(token, !effects.is_empty())?;
+            self.acknowledge_producer_handoff(token, handoff_evidence)?;
+        }
+        Ok(Some((effects, evidence)))
+    }
+
+    /// Production deferred-service seam retaining an exact producer token
+    /// until the serialized runtime installs the returned successor owner.
+    pub(crate) fn drain_deferred_with_handoff_for_ordinals(
+        &mut self,
+        eligible: &BTreeSet<u128>,
+    ) -> Result<
+        Option<(
+            Vec<AdapterEffect>,
+            DeferredServiceEvidence,
+            Option<ProducerContinuationHandoffToken>,
+        )>,
+        AdapterError,
+    > {
         self.ensure_ingress()?;
         if !self.deferred_work_is_serviceable() {
             return Ok(None);
@@ -6589,6 +7614,11 @@ impl SumeragiV2Adapter {
             self.fail_closed = true;
             return Err(AdapterError::DeferredServiceOwnershipViolation);
         }
+        let deferred_ordinal = selection.evidence.admission_ordinal;
+        let producer_continuation = self
+            .deferred_producer_continuations
+            .get(&deferred_ordinal)
+            .cloned();
         let input = selection.input;
         let serviced_candidate = self.serviced_candidate(
             &input.event,
@@ -6605,9 +7635,12 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
+            self.deferred_producer_continuations
+                .remove(&deferred_ordinal);
+            self.release_unrecorded_producer(producer_continuation)?;
             self.publish_status()?;
             self.log_body_progress(&input.event, disposition, 0);
-            return Ok(Some((Vec::new(), selection.evidence)));
+            return Ok(Some((Vec::new(), selection.evidence, None)));
         }
         if let Err(error) =
             self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)
@@ -6632,18 +7665,34 @@ impl SumeragiV2Adapter {
         let serviced_candidate = record_kind.and(serviced_candidate);
         let durable_terminal_retirement =
             record_kind == Some(ServicedCandidateRecordKind::DurableTerminal);
-        if let Err(error) =
-            self.record_serviced_candidate(serviced_candidate, durable_terminal_retirement)
-        {
-            self.retain_failed_serviced_deferred_owner(input);
-            return Err(error);
-        }
+        let durable_terminal_evidence =
+            durable_terminal_retirement || input.completion_evidence.is_some();
+        let producer_handoff = if record_kind.is_some() {
+            self.record_serviced_candidate(
+                serviced_candidate,
+                durable_terminal_retirement,
+                durable_terminal_evidence,
+                producer_continuation,
+            )
+        } else {
+            self.release_unrecorded_producer(producer_continuation)
+                .map(|()| None)
+        };
+        let producer_handoff = match producer_handoff {
+            Ok(token) => token,
+            Err(error) => {
+                self.retain_failed_serviced_deferred_owner(input);
+                return Err(error);
+            }
+        };
+        self.deferred_producer_continuations
+            .remove(&deferred_ordinal);
         if let Some(admission) = input.admission {
             self.record_ingress_delivery(admission);
         }
         self.publish_status()?;
         self.log_body_progress(&observed_event, disposition, effects.len());
-        Ok(Some((effects, selection.evidence)))
+        Ok(Some((effects, selection.evidence, producer_handoff)))
     }
 
     fn retain_failed_serviced_deferred_owner(&mut self, input: DeferredInput) {
@@ -8642,11 +9691,12 @@ fn aggregate_core_shares(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Write as _};
+    use std::{fs::OpenOptions, io::Write as _, time::Duration};
 
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use tempfile::TempDir;
 
+    use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
     use super::*;
 
     #[derive(Debug)]
@@ -9731,6 +10781,104 @@ mod tests {
         DeferredAdmissionOrdinalSource::new(1)
     }
 
+    struct ProcessOnlyProducerReplacement {
+        address: ProducerContinuationAddress,
+        incumbent: ProducerContinuationRecord,
+        candidate: (ServicedCandidateKey, wire::View, ServicedCandidatePolicy),
+        reservation: ProducerReservationToken,
+    }
+
+    fn reserve_process_only_producer_replacement(
+        adapter: &mut SumeragiV2Adapter,
+        marker: u8,
+    ) -> ProcessOnlyProducerReplacement {
+        let event = reducer::Event::TimeoutElapsed {
+            tag: adapter.current_tag(),
+        };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"process-only predecessor"), 1)
+            .expect("bind process-only predecessor");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve process-only predecessor")
+            .expect("tracked predecessor reserves");
+        let handoff = adapter
+            .record_serviced_candidate(Some(candidate), false, false, Some(reservation))
+            .expect("drain process-only predecessor")
+            .expect("drained predecessor retains its exact reservation");
+        let address = handoff.address();
+        adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::VolatileTerminal,
+            )
+            .expect("terminalize process-only predecessor");
+        let incumbent = adapter.producer_continuations[&address].clone();
+        assert_eq!(incumbent.status(), ProducerContinuationStatus::Terminal);
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&address),
+            "volatile predecessor must not have restart-stable state"
+        );
+
+        let replacement_key = ServicedCandidateKey::new(
+            adapter.wire_context.id(),
+            adapter.wire_context.height,
+            adapter.fingerprints.node.into(),
+            adapter.wire_context.leader(1),
+            1,
+            Some([marker; 32]),
+            0,
+            ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS,
+            DeferredEventKind::TimeoutElapsed.code(),
+            [marker; 32],
+        );
+        let candidate = (replacement_key, 1, ServicedCandidatePolicy::Suppress);
+        adapter.clear_selected_producer_lifecycle();
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"newer replacement"), 2)
+            .expect("bind newer replacement");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("replace process-only terminal")
+            .expect("tracked replacement reserves");
+        assert_eq!(reservation.address, address);
+        let ProducerReservationChange::ReplacedTerminal {
+            process_previous,
+            durable_previous,
+        } = &reservation.change
+        else {
+            panic!("newer lifecycle must replace the process-only terminal");
+        };
+        assert_eq!(process_previous, &incumbent);
+        assert!(
+            durable_previous.is_none(),
+            "replacement must retain the absence of durable predecessor state"
+        );
+
+        ProcessOnlyProducerReplacement {
+            address,
+            incumbent,
+            candidate,
+            reservation,
+        }
+    }
+
+    fn assert_process_only_predecessor_absent_after_restart(directory: &TempDir) {
+        let (restarted, startup) = open_test(directory).expect("restart adapter");
+        assert!(startup.is_empty());
+        assert!(
+            restarted.producer_continuations.is_empty()
+                && restarted.durable_producer_continuations.is_empty()
+                && restarted.restored_dormant_producer_continuations.is_empty(),
+            "a process-only predecessor must not be synthesized during restart"
+        );
+    }
+
     fn open_test(
         directory: &TempDir,
     ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
@@ -10110,6 +11258,821 @@ mod tests {
     }
 
     #[test]
+    fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
+        let directory = TempDir::new().expect("temporary directory");
+        let causal_key;
+        {
+            let (adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let started_at = Instant::now();
+            let lifecycle_ordinals =
+                super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+            let (mut runtime, startup) =
+                super::super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                    adapter,
+                    startup,
+                    started_at,
+                    Duration::from_secs(4),
+                    super::super::v2_runtime::RuntimeQueueConfig::new(6, 2, 1),
+                    lifecycle_ordinals,
+                )
+                .expect("construct the original serialized runtime");
+            assert!(startup.is_empty());
+            runtime
+                .arm_live_clocks(started_at)
+                .expect("arm the original runtime");
+            let owner = runtime
+                .frozen_timeout_owner_for_test(started_at + Duration::from_secs(4))
+                .expect("freeze the deterministic original timeout owner");
+            causal_key = owner.causal_origin().lifecycle_key;
+            assert_eq!(owner.lifecycle_ordinal(), 1);
+            let mut adapter = runtime.into_driver();
+            let event = reducer::Event::TimeoutElapsed {
+                tag: adapter.current_tag(),
+            };
+            let candidate = adapter
+                .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+                .expect("timeout has a producer stage");
+            adapter
+                .bind_selected_producer_lifecycle(causal_key, owner.lifecycle_ordinal())
+                .expect("bind selected source");
+            let reservation = adapter
+                .reserve_selected_producer_continuation(Some(candidate))
+                .expect("reserve before source retirement")
+                .expect("tracked candidate reserves an address");
+            let address = reservation.address;
+            assert_eq!(
+                adapter.producer_continuations[&address].status(),
+                ProducerContinuationStatus::Reserved
+            );
+            assert_eq!(
+                adapter.durable_producer_continuations.get(&address),
+                adapter.producer_continuations.get(&address),
+                "reservation is synchronized before its source can retire"
+            );
+        }
+
+        let (restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("restart with exact active admission metadata");
+        assert!(startup.is_empty());
+        let restored = restarted
+            .producer_continuations
+            .values()
+            .next()
+            .expect("active producer metadata reopens");
+        assert_eq!(restored.status(), ProducerContinuationStatus::Reserved);
+        assert_eq!(restored.identity().admission_ordinal(), 1);
+        let restored_address = restored.identity().address();
+        assert_eq!(restored_address.lifecycle_slot(), 1);
+        assert_eq!(
+            restarted.restored_producer_continuation_ordinal_high_watermark(),
+            Some(1)
+        );
+        assert!(
+            restarted
+                .restored_dormant_producer_continuations
+                .contains(&restored_address)
+        );
+
+        let lifecycle_ordinals =
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(1);
+        let started_at = Instant::now();
+        let (mut runtime, startup) =
+            super::super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                restarted,
+                startup,
+                started_at,
+                Duration::from_secs(4),
+                super::super::v2_runtime::RuntimeQueueConfig::new(6, 2, 1),
+                lifecycle_ordinals,
+            )
+            .expect("construct the restarted serialized runtime");
+        assert!(startup.is_empty());
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the restarted runtime");
+        let step = runtime
+            .step(started_at + Duration::from_secs(4))
+            .expect("replayed timeout reuses and crosses the exact runtime handoff");
+        let super::super::v2_runtime::RuntimeStep::Advanced(effects) = step else {
+            panic!("the exact replayed timeout must advance");
+        };
+        assert!(!effects.is_empty(), "timeout retains a concrete successor");
+        let scheduler = runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout publishes exact scheduler ownership");
+        assert_eq!(
+            scheduler.selected,
+            super::super::v2_runtime::RuntimeSelectedOwnerKind::Timeout
+        );
+        let effect_ownership = runtime
+            .take_effect_ownership(effects.len())
+            .expect("take the concrete successor ownership");
+        assert!(
+            effect_ownership
+                .iter()
+                .all(|ownership| ownership.owner().lifecycle_ordinal() == 1),
+            "every concrete successor retains the original owner 1"
+        );
+        let retained = runtime
+            .driver()
+            .producer_continuations
+            .get(&restored_address)
+            .expect("runtime acknowledgement retains its process-local terminal");
+        assert_eq!(
+            retained.identity().admission_ordinal(),
+            1,
+            "restart cannot replace the immutable first-admission ordinal"
+        );
+        assert_eq!(
+            retained.identity().causal_lifecycle_key(),
+            effect_ownership[0].owner().causal_origin().lifecycle_key
+        );
+        assert_eq!(
+            retained.identity().causal_lifecycle_key(),
+            causal_key,
+            "the exact retry retains its persisted causal identity"
+        );
+        assert_eq!(retained.status(), ProducerContinuationStatus::Terminal);
+        assert!(
+            !runtime
+                .driver()
+                .durable_producer_continuations
+                .contains_key(&restored_address),
+            "a concrete volatile successor removes the dormant restart record"
+        );
+        assert!(
+            !runtime
+                .driver()
+                .restored_dormant_producer_continuations
+                .contains(&restored_address)
+        );
+
+        drop(runtime.into_driver());
+        let (restarted_again, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(3),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("restart after the runtime handoff");
+        assert!(
+            matches!(
+                startup.as_slice(),
+                [AdapterEffect::Sign {
+                    request: SignRequest::TimeoutVote(_),
+                    ..
+                }]
+            ),
+            "restart reconstructs the durable exact successor instead of the drained timeout stage"
+        );
+        assert!(
+            restarted_again.producer_continuations.is_empty()
+                && restarted_again.durable_producer_continuations.is_empty()
+                && restarted_again
+                    .restored_dormant_producer_continuations
+                    .is_empty(),
+            "the drained logical request cannot be recreated at its old stage"
+        );
+    }
+
+    #[test]
+    fn live_producer_owner_cannot_replace_immutable_identity() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let event = reducer::Event::TimeoutElapsed {
+            tag: adapter.current_tag(),
+        };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"live producer owner"), 1)
+            .expect("bind first live owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve first live owner")
+            .expect("tracked source reserves an address");
+        let address = reservation.address;
+        let original = adapter.producer_continuations[&address].clone();
+        assert!(
+            adapter.restored_dormant_producer_continuations.is_empty(),
+            "same-process reservations are never restart-dormant"
+        );
+
+        adapter.clear_selected_producer_lifecycle();
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"forged equal-rank owner"), 1)
+            .expect("bind a distinct equal-rank owner");
+        assert!(matches!(
+            adapter.reserve_selected_producer_continuation(Some(candidate)),
+            Err(AdapterError::ServicedCandidateStore(_))
+        ));
+        assert_eq!(adapter.producer_continuations[&address], original);
+        assert_eq!(
+            adapter.durable_producer_continuations.get(&address),
+            Some(&original),
+            "rejected live replacement changes no durable alias"
+        );
+    }
+
+    #[test]
+    fn restored_producer_rejects_a_mismatched_replay_identity_without_mutation() {
+        let directory = TempDir::new().expect("temporary directory");
+        let candidate;
+        {
+            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let event = reducer::Event::TimeoutElapsed {
+                tag: adapter.current_tag(),
+            };
+            candidate = adapter
+                .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+                .expect("timeout has a producer stage");
+            adapter
+                .bind_selected_producer_lifecycle(Hash::new(b"stored producer owner"), 1)
+                .expect("bind stored owner");
+            adapter
+                .reserve_selected_producer_continuation(Some(candidate))
+                .expect("persist stored owner")
+                .expect("tracked source reserves an address");
+        }
+
+        let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("restore dormant producer");
+        assert!(startup.is_empty());
+        let (address, original) = restarted
+            .producer_continuations
+            .iter()
+            .next()
+            .map(|(address, record)| (*address, record.clone()))
+            .expect("restored producer exists");
+        restarted
+            .bind_selected_producer_lifecycle(Hash::new(b"replayed producer owner"), 2)
+            .expect("bind replay owner");
+
+        assert!(matches!(
+            restarted.reserve_selected_producer_continuation(Some(candidate)),
+            Err(AdapterError::ServicedCandidateStore(_))
+        ));
+        assert_eq!(restarted.producer_continuations[&address], original);
+        assert_eq!(
+            restarted.durable_producer_continuations.get(&address),
+            Some(&original)
+        );
+        assert!(
+            restarted
+                .restored_dormant_producer_continuations
+                .contains(&address),
+            "a rejected identity replacement cannot claim the dormant alias"
+        );
+    }
+
+    #[test]
+    fn conditional_transport_service_reserves_and_coalesces_a_producer_lifecycle() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let leader = adapter.wire_context.leader(adapter.current_tag().view());
+        let message = proposal(&adapter.wire_context, leader, subject(0x6D));
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"conditional transport source"), 17)
+            .expect("bind exact transport owner");
+        let outcome = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(message))
+            .expect("service authenticated proposal");
+        let handoff = outcome
+            .producer_handoff()
+            .expect("transport service retains a producer handoff");
+        assert_eq!(
+            handoff.source_class(),
+            ProducerContinuationSourceClass::ConditionalTransport
+        );
+        assert_eq!(handoff.identity().admission_ordinal(), 17);
+        let address = handoff.identity().address();
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Reserved
+        );
+        adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::ConcreteSuccessor,
+            )
+            .expect("physical runtime successor acknowledges transport service");
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Terminal
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&address),
+            "volatile transport completion cannot become a restart-stable terminal"
+        );
+    }
+
+    #[test]
+    fn retired_empty_handoff_terminalizes_once_and_exact_replay_coalesces() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let event = reducer::Event::TimeoutElapsed {
+            tag: adapter.current_tag(),
+        };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"retired empty handoff"), 18)
+            .expect("bind exact local owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve before source retirement")
+            .expect("tracked source reserves an address");
+        let handoff = adapter
+            .record_serviced_candidate(Some(candidate), false, false, Some(reservation))
+            .expect("drain source without a concrete successor")
+            .expect("drained source retains its exact reservation");
+        let address = handoff.identity().address();
+        assert_eq!(
+            adapter
+                .producer_handoff_evidence(handoff, false)
+                .expect("classify empty handoff"),
+            ProducerContinuationHandoffEvidence::VolatileTerminal
+        );
+        let terminal = adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::VolatileTerminal,
+            )
+            .expect("retired empty handoff terminalizes");
+        assert_eq!(terminal.identity(), handoff.identity());
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Terminal
+        );
+        assert_eq!(adapter.producer_continuations.len(), 1);
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&address),
+            "process-local retirement must not be upgraded to restart-stable evidence"
+        );
+
+        let replay = adapter
+            .step(event)
+            .expect("coalesce exact retransmission after drain");
+        assert_eq!(
+            replay.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+        );
+        assert!(
+            replay.producer_handoff().is_none(),
+            "the drained identity cannot mint a second producer lifecycle"
+        );
+        assert_eq!(adapter.producer_continuations.len(), 1);
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Terminal,
+            "exact replay cannot resurrect the retired old stage"
+        );
+    }
+
+    #[test]
+    fn every_producer_stage_has_an_explicit_replay_parent_contract() {
+        let classified = ServicedCandidateStage::ALL
+            .map(|stage| (stage, producer_parent_replay_source_for_stage(stage)));
+        assert_eq!(classified.len(), SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE);
+        assert_eq!(
+            classified,
+            [
+                (
+                    ServicedCandidateStage::LocalProposalReady,
+                    ProducerParentReplaySource::DurableBodyPipeline,
+                ),
+                (
+                    ServicedCandidateStage::ProposalReceived,
+                    ProducerParentReplaySource::ConditionalResponsiveTransport,
+                ),
+                (
+                    ServicedCandidateStage::VoteReceived,
+                    ProducerParentReplaySource::ConditionalResponsiveTransport,
+                ),
+                (
+                    ServicedCandidateStage::QuorumCertificateReceived,
+                    ProducerParentReplaySource::ConditionalResponsiveTransport,
+                ),
+                (
+                    ServicedCandidateStage::TimeoutVoteReceived,
+                    ProducerParentReplaySource::ConditionalResponsiveTransport,
+                ),
+                (
+                    ServicedCandidateStage::TimeoutCertificateReceived,
+                    ProducerParentReplaySource::ConditionalResponsiveTransport,
+                ),
+                (
+                    ServicedCandidateStage::TimeoutElapsed,
+                    ProducerParentReplaySource::SafetyWal,
+                ),
+                (
+                    ServicedCandidateStage::BodyAvailable,
+                    ProducerParentReplaySource::VolatileBodyReconstruction,
+                ),
+                (
+                    ServicedCandidateStage::BodyStored,
+                    ProducerParentReplaySource::DurableBodyPipeline,
+                ),
+                (
+                    ServicedCandidateStage::ValidationCompleted,
+                    ProducerParentReplaySource::DurableBodyPipeline,
+                ),
+                (
+                    ServicedCandidateStage::ApplicationCompleted,
+                    ProducerParentReplaySource::DurableDecision,
+                ),
+            ]
+        );
+        for stage in ServicedCandidateStage::ALL {
+            let expected = matches!(
+                stage,
+                ServicedCandidateStage::LocalProposalReady
+                    | ServicedCandidateStage::TimeoutElapsed
+                    | ServicedCandidateStage::BodyStored
+                    | ServicedCandidateStage::ValidationCompleted
+                    | ServicedCandidateStage::ApplicationCompleted
+            );
+            assert_eq!(
+                producer_parent_is_locally_reconstructible(stage),
+                expected,
+                "only an independently durable local parent may reserve"
+            );
+        }
+    }
+
+    #[test]
+    fn speculative_producer_rollback_restores_free_and_terminal_slots() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let event = reducer::Event::TimeoutElapsed {
+            tag: adapter.current_tag(),
+        };
+        let first = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"first source"), 1)
+            .expect("bind first source");
+        let inserted = adapter
+            .reserve_selected_producer_continuation(Some(first))
+            .expect("reserve free slot")
+            .expect("tracked source reserves");
+        let address = inserted.address;
+        assert_eq!(inserted.change, ProducerReservationChange::Inserted);
+        let original = adapter.producer_continuations[&address].clone();
+        adapter.clear_selected_producer_lifecycle();
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"first source"), 1)
+            .expect("bind the exact physical retry");
+        let coalesced = adapter
+            .reserve_selected_producer_continuation(Some(first))
+            .expect("coalesce the same logical request")
+            .expect("tracked retry retains its original address");
+        assert_eq!(coalesced.address, address);
+        assert_eq!(coalesced.change, ProducerReservationChange::Unchanged);
+        assert_eq!(adapter.producer_continuations[&address], original);
+        adapter
+            .rollback_producer_reservation(Some(coalesced))
+            .expect("roll back coalesced reservation");
+        adapter
+            .rollback_producer_reservation(Some(inserted))
+            .expect("roll back inserted reservation");
+        assert!(!adapter.producer_continuations.contains_key(&address));
+
+        adapter.clear_selected_producer_lifecycle();
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"first source"), 1)
+            .expect("rebind first source");
+        let inserted = adapter
+            .reserve_selected_producer_continuation(Some(first))
+            .expect("reserve first owner")
+            .expect("tracked source reserves");
+        adapter
+            .terminalize_producer_continuation(Some(inserted.address))
+            .expect("terminalize incumbent");
+        let terminal = adapter.producer_continuations[&inserted.address].clone();
+
+        let replacement_key = ServicedCandidateKey::new(
+            adapter.wire_context.id(),
+            adapter.wire_context.height,
+            adapter.fingerprints.node.into(),
+            adapter.wire_context.leader(1),
+            1,
+            Some([0x47; 32]),
+            0,
+            ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS,
+            DeferredEventKind::TimeoutElapsed.code(),
+            [0x47; 32],
+        );
+        let replacement = (replacement_key, 1, ServicedCandidatePolicy::Suppress);
+        adapter.clear_selected_producer_lifecycle();
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"replacement source"), 2)
+            .expect("bind replacement source");
+        let replaced = adapter
+            .reserve_selected_producer_continuation(Some(replacement))
+            .expect("replace terminal slot")
+            .expect("tracked replacement reserves");
+        assert!(matches!(
+            replaced.change,
+            ProducerReservationChange::ReplacedTerminal { .. }
+        ));
+        adapter
+            .rollback_producer_reservation(Some(replaced))
+            .expect("roll back terminal replacement");
+        assert_eq!(adapter.producer_continuations[&address], terminal);
+    }
+
+    #[test]
+    fn process_only_producer_replacement_rollback_stays_volatile_across_restart() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x48);
+
+        adapter
+            .rollback_producer_reservation(Some(replacement.reservation))
+            .expect("roll back process-only terminal replacement");
+        assert_eq!(
+            adapter.producer_continuations[&replacement.address],
+            replacement.incumbent
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&replacement.address),
+            "rollback cannot publish the process-only predecessor"
+        );
+
+        drop(adapter);
+        assert_process_only_predecessor_absent_after_restart(&directory);
+    }
+
+    #[test]
+    fn process_only_producer_replacement_release_stays_volatile_across_restart() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x49);
+
+        adapter
+            .release_unrecorded_producer(Some(replacement.reservation))
+            .expect("release process-only terminal replacement");
+        assert_eq!(
+            adapter.producer_continuations[&replacement.address],
+            replacement.incumbent
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&replacement.address),
+            "release cannot publish the process-only predecessor"
+        );
+
+        drop(adapter);
+        assert_process_only_predecessor_absent_after_restart(&directory);
+    }
+
+    #[test]
+    fn process_only_producer_replacement_handoff_does_not_resurrect_predecessor() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x4A);
+
+        let handoff = adapter
+            .record_serviced_candidate(
+                Some(replacement.candidate),
+                false,
+                false,
+                Some(replacement.reservation),
+            )
+            .expect("stage volatile replacement handoff")
+            .expect("replacement retains an exact handoff");
+        adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::VolatileTerminal,
+            )
+            .expect("acknowledge volatile replacement handoff");
+        assert_eq!(
+            adapter.producer_continuations[&replacement.address].status(),
+            ProducerContinuationStatus::Terminal
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&replacement.address),
+            "non-durable acknowledgement cannot resurrect the process-only predecessor"
+        );
+
+        drop(adapter);
+        assert_process_only_predecessor_absent_after_restart(&directory);
+    }
+
+    #[test]
+    fn retiring_busy_local_parent_releases_unacknowledged_producer_owner() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let subject = subject(0x4A);
+        let manifest = wire::PayloadManifest::derive(
+            &adapter.wire_context,
+            round,
+            subject,
+            5,
+            &[b"producer-retirement-body".to_vec()],
+        )
+        .expect("derive body manifest");
+        adapter
+            .defer_body_pipeline_stage_for_test(
+                tag,
+                &manifest,
+                DeferredBodyPipelineStageForTest::BodyStored,
+            )
+            .expect("stage exact local parent");
+        let (admission_ordinal, candidate) = {
+            let input = adapter
+                .deferred_completions
+                .back()
+                .expect("deferred local parent");
+            (
+                input.admission_ordinal,
+                adapter
+                    .serviced_candidate(
+                        &input.event,
+                        input.priority,
+                        input.completion_evidence.as_ref(),
+                        input.authenticated_wire_identity.as_deref(),
+                    )
+                    .expect("body-store completion has a serviced identity"),
+            )
+        };
+        adapter
+            .bind_selected_producer_lifecycle(
+                Hash::new(b"retired busy local parent"),
+                admission_ordinal,
+            )
+            .expect("bind exact lifecycle");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve before adapter ownership")
+            .expect("local durable parent reserves");
+        let address = reservation.address;
+        adapter
+            .deferred_producer_continuations
+            .insert(admission_ordinal, reservation);
+
+        adapter.retire_deferred_body_pipeline_completions(tag, round, subject);
+
+        assert!(adapter.deferred_completions.is_empty());
+        assert!(
+            !adapter
+                .deferred_producer_continuations
+                .contains_key(&admission_ordinal)
+        );
+        assert!(
+            !adapter.producer_continuations.contains_key(&address),
+            "goal-reaching retirement cannot manufacture successor acknowledgement"
+        );
+    }
+
+    #[test]
+    fn terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_source() {
+        let directory = TempDir::new().expect("temporary directory");
+        let causal_key = Hash::new(b"terminal producer parent");
+        let address;
+        let terminal;
+        {
+            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let event = reducer::Event::TimeoutElapsed {
+                tag: adapter.current_tag(),
+            };
+            let candidate = adapter
+                .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+                .expect("timeout has a producer stage");
+            adapter
+                .bind_selected_producer_lifecycle(causal_key.clone(), 41)
+                .expect("bind selected source");
+            address = adapter
+                .reserve_selected_producer_continuation(Some(candidate))
+                .expect("reserve producer")
+                .expect("tracked candidate reserves an address")
+                .address;
+            adapter
+                .terminalize_producer_continuation(Some(address))
+                .expect("terminalize after source retirement");
+            terminal = adapter.producer_continuations[&address].clone();
+            adapter
+                .durable_producer_continuations
+                .insert(address, terminal.clone());
+            let terminal_candidate = terminal.identity().candidate();
+            adapter
+                .durable_serviced_candidates
+                .insert(terminal_candidate, terminal_candidate.source_view());
+            adapter
+                .serviced_candidate_store
+                .persist_with_producer_continuations(
+                    &adapter.durable_serviced_candidates,
+                    &adapter.durable_producer_continuations,
+                    adapter.serviced_candidates_decision_reclaimed,
+                )
+                .expect("publish terminal high-watermark");
+        }
+
+        let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("restore terminal producer high-watermark");
+        assert!(startup.is_empty());
+        assert_eq!(restarted.producer_continuations[&address], terminal);
+        let restored_high_watermark = restarted
+            .restored_producer_continuation_ordinal_high_watermark()
+            .expect("restored producer tombstone carries an ordinal");
+        assert_eq!(restored_high_watermark, 41);
+        let serve_high_watermark = 7;
+        assert!(restored_high_watermark > serve_high_watermark);
+        let lifecycle_ordinals =
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
+                serve_high_watermark,
+            );
+        lifecycle_ordinals
+            .advance_past(restored_high_watermark)
+            .expect("fold producer high-watermark into actor source");
+        let first_runtime_owner = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint first post-restart runtime owner");
+        let first_serve_owner = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint first post-restart Serve owner");
+        assert_eq!(first_runtime_owner, restored_high_watermark + 1);
+        assert!(first_serve_owner > first_runtime_owner);
+        assert!(
+            restarted
+                .serviced_candidate_store
+                .reserve_producer_continuation(
+                    &mut restarted.producer_continuations,
+                    ProducerContinuationRecord::new(
+                        terminal.identity(),
+                        ProducerContinuationStatus::Reserved,
+                        Vec::new(),
+                    )
+                    .expect("construct stale ABA retry"),
+                )
+                .is_err(),
+            "a drained logical stage cannot resurrect through its old identity"
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
         let directory = TempDir::new().expect("temporary directory");
@@ -10122,6 +12085,42 @@ mod tests {
                 open_test_as_leader(&directory).expect("open leader adapter");
             assert!(startup.is_empty());
             durably_retire_unowned_body_event(&mut adapter, marker);
+            let pre_decision_timeout = reducer::Event::TimeoutElapsed {
+                tag: adapter.current_tag(),
+            };
+            let pre_decision_producer = adapter
+                .serviced_candidate(
+                    &pre_decision_timeout,
+                    DeferredPriority::Completion,
+                    None,
+                    None,
+                )
+                .expect("timeout has a producer identity");
+            adapter
+                .bind_selected_producer_lifecycle(Hash::new(b"pre-Decision producer tombstone"), 1)
+                .expect("bind pre-Decision producer");
+            let pre_decision_reservation = adapter
+                .reserve_selected_producer_continuation(Some(pre_decision_producer))
+                .expect("reserve pre-Decision producer")
+                .expect("tracked timeout reserves");
+            let handoff = adapter
+                .record_serviced_candidate(
+                    Some(pre_decision_producer),
+                    true,
+                    true,
+                    Some(pre_decision_reservation),
+                )
+                .expect("stage paired pre-Decision producer tombstone")
+                .expect("pre-Decision producer has a runtime handoff");
+            adapter
+                .acknowledge_producer_handoff(
+                    handoff,
+                    ProducerContinuationHandoffEvidence::DurableTerminal,
+                )
+                .expect("publish paired pre-Decision producer tombstone");
+            adapter.clear_selected_producer_lifecycle();
+            assert!(!adapter.producer_continuations.is_empty());
+            assert!(!adapter.durable_producer_continuations.is_empty());
             assert!(adapter.serviced_candidate_count_for_test() > 0);
             snapshot_path = adapter
                 .serviced_candidate_store_path_for_test()
@@ -10188,6 +12187,8 @@ mod tests {
         assert!(restarted.reducer.durable_state().decision().is_some());
         assert!(restarted.serviced_candidates_decision_reclaimed);
         assert_eq!(restarted.serviced_candidate_count_for_test(), 0);
+        assert!(restarted.producer_continuations.is_empty());
+        assert!(restarted.durable_producer_continuations.is_empty());
         assert_ne!(
             std::fs::read(&snapshot_path).expect("read replay-reclaimed snapshot"),
             stale_snapshot,
@@ -10209,6 +12210,50 @@ mod tests {
         assert!(replayed_again.reducer.durable_state().decision().is_some());
         assert!(replayed_again.serviced_candidates_decision_reclaimed);
         assert_eq!(replayed_again.serviced_candidate_count_for_test(), 0);
+        assert!(replayed_again.producer_continuations.is_empty());
+        assert!(replayed_again.durable_producer_continuations.is_empty());
+        let decision_subject = replayed_again
+            .reducer
+            .durable_state()
+            .decision()
+            .expect("replayed Decision exists")
+            .subject();
+        let completion = reducer::Event::ApplicationCompleted {
+            tag: replayed_again.current_tag(),
+            subject: decision_subject,
+        };
+        let completion_candidate = replayed_again
+            .serviced_candidate(&completion, DeferredPriority::Completion, None, None)
+            .expect("application completion has a service identity");
+        replayed_again
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision completion"), 1)
+            .expect("bind post-Decision completion");
+        let completion_reservation = replayed_again
+            .reserve_selected_producer_continuation(Some(completion_candidate))
+            .expect("reserve post-Decision completion")
+            .expect("tracked completion reserves");
+        let completion_handoff = replayed_again
+            .record_serviced_candidate(
+                Some(completion_candidate),
+                true,
+                true,
+                Some(completion_reservation.clone()),
+            )
+            .expect("Decision retires process-local completion");
+        assert!(completion_handoff.is_none());
+        assert!(
+            !replayed_again
+                .durable_producer_continuations
+                .contains_key(&completion_reservation.address),
+            "Decision early return cannot publish an orphan producer terminal"
+        );
+        assert!(
+            !replayed_again
+                .producer_continuations
+                .contains_key(&completion_reservation.address),
+            "Decision early return cannot retain a process-local producer ghost"
+        );
+        replayed_again.clear_selected_producer_lifecycle();
         let post_replay = unowned_body_event(&replayed_again, marker);
         replayed_again
             .step(post_replay)
@@ -10331,7 +12376,7 @@ mod tests {
                 None => qc_key = Some(candidate.0),
             }
             adapter
-                .record_serviced_candidate(Some(candidate), false)
+                .record_serviced_candidate(Some(candidate), false, false, None)
                 .expect("coalesce QC carrier variant");
         }
         assert_eq!(
@@ -10379,7 +12424,7 @@ mod tests {
                 None => tc_key = Some(candidate.0),
             }
             adapter
-                .record_serviced_candidate(Some(candidate), false)
+                .record_serviced_candidate(Some(candidate), false, false, None)
                 .expect("coalesce TC carrier variant");
         }
         assert_ne!(qc_key, tc_key);
@@ -10434,7 +12479,7 @@ mod tests {
                 None => timeout_vote_key = Some(candidate.0),
             }
             adapter
-                .record_serviced_candidate(Some(candidate), false)
+                .record_serviced_candidate(Some(candidate), false, false, None)
                 .expect("coalesce nested TimeoutVote carrier variant");
         }
         assert_eq!(
@@ -10502,7 +12547,7 @@ mod tests {
                 None => proposal_key = Some(candidate.0),
             }
             adapter
-                .record_serviced_candidate(Some(candidate), false)
+                .record_serviced_candidate(Some(candidate), false, false, None)
                 .expect("coalesce nested proposal carrier variant");
         }
         assert_eq!(
@@ -10548,7 +12593,7 @@ mod tests {
                 None => vote_key = Some(candidate.0),
             }
             adapter
-                .record_serviced_candidate(Some(candidate), false)
+                .record_serviced_candidate(Some(candidate), false, false, None)
                 .expect("coalesce vote carrier variant");
         }
         assert_eq!(
@@ -16659,6 +18704,10 @@ mod tests {
             backpressured.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
         );
+        assert!(
+            backpressured.requires_runtime_retry(),
+            "a full lane retains no adapter owner and must re-expose the exact runtime command"
+        );
         assert_eq!(adapter.deferred_progress_inputs, deferred_before);
         assert_registry_eq(&adapter.registry, &registry_before);
         assert_eq!(adapter.active_subject, active_subject_before);
@@ -16676,6 +18725,7 @@ mod tests {
             retried.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
         );
+        assert!(!retried.requires_runtime_retry());
         assert_eq!(
             adapter.deferred_progress_inputs.len(),
             adapter.wire_context.roster.len()
@@ -17463,7 +19513,7 @@ mod tests {
         );
         let retained_count = adapter.serviced_candidate_count_for_test();
         adapter
-            .record_serviced_candidate(Some(retagged_candidate), false)
+            .record_serviced_candidate(Some(retagged_candidate), false, false, None)
             .expect("an exact same-episode source occurrence coalesces");
         assert_eq!(
             adapter.serviced_candidate_count_for_test(),

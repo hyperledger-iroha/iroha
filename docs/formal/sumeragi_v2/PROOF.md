@@ -1090,7 +1090,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 738 tests across thirty-eight Rust
+The current pre-network release inventory names 782 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1172,9 +1172,18 @@ regression, yielding the current
 733-test checkpoint. Five exact-Serve lifecycle regressions cover
 Pending/Reserved rollback, shutdown rollback, and route-neutral tombstone
 replay, plus cached replay after the singular future-slot barrier, yielding the
-current 738-test, 38-module inventory. The complete source-sealed
+738-test checkpoint. Another 35 exact CertifiedServe ingress and worker
+regressions bind gate ordering, immutable admission ordinals, frozen
+predecessors, coalesced retries, durable restart, terminal replay, owner
+replacement, and anti-resurrection behavior. One four-peer leader-wire
+lifecycle-store regression binds the full origin/phase/chunk slot product and
+restart-stable terminal coalescing, yielding the 774-test checkpoint. Eight
+runtime/effect/runner regressions now bind Decision/lock retirement,
+same-turn terminal consumption across live and recovery capacity retries, and
+fail-closed authenticated semantic-only Coalesce defense, yielding the current
+782-test, 39-module inventory. The complete source-sealed
 pre-network corridor
-contains 81 legs. Six source-sealed command legs and the G-SCALE
+contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
 requester epoch, and per-stream semantic sequence coordinates. Canonical
@@ -1243,7 +1252,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f`.
+`62846b01b09e3377b768793223e6fc1c3103c6dede907d9169bff8c70610a749`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1279,7 +1288,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 81 legs, including separate exact data-model status and atomic
+now has 82 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin

@@ -46,11 +46,8 @@ use super::{
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPostBaseChallengesV1,
         ZkX509CredentialMainPreAuxV1, ZkX509CredentialPreAuxBindingV1,
-        absorb_zk_x509_credential_pre_aux_binding_v1,
     },
-    credential_stark::{
-        ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, ZkX509CredentialPublicBindingV1,
-    },
+    credential_stark::ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1,
     der_air::ZkX509Rfc5280StatementV1,
     der_stark::{
         FIX_ACTIVE as DER_FIX_ACTIVE, FIX_COMPARATOR, FIX_FINAL_DOCUMENT, FIX_FIRST_ACTIVE,
@@ -513,7 +510,7 @@ impl ZkX509IoStarkStatementV1 {
 }
 
 /// Failure in the bounded zk-X509 segmented proof implementation.
-#[derive(Debug, Error)]
+#[derive(Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509StarkErrorV1 {
     /// Verifier-fixed topology or public bytes are invalid.
     #[error("zk-X509 STARK public statement is invalid")]

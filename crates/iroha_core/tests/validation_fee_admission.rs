@@ -448,7 +448,6 @@ fn test_parliament_bodies() -> ParliamentBodies {
                 epoch: 1,
                 members: vec![member.clone()],
                 alternates: Vec::new(),
-                verified: 1,
                 candidate_count: 1,
                 derived_by: Default::default(),
             },

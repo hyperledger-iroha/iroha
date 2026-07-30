@@ -164,6 +164,28 @@ pub const SERVICE_CLASS_PROGRESS: u8 = 2;
 #[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
 pub const SERVICE_CLASS_NORMAL: u8 = 3;
 
+/// No leader-wire lifecycle occupied the addressed bounded slot.
+pub(crate) const LEADER_WIRE_LIFECYCLE_ABSENT: u8 = 0;
+/// A restart-restored lifecycle owns anti-ABA state but no selector turn.
+pub(crate) const LEADER_WIRE_LIFECYCLE_DORMANT: u8 = 1;
+/// Exact bytes and one fair-ingress position own the lifecycle.
+pub(crate) const LEADER_WIRE_LIFECYCLE_INGRESS: u8 = 2;
+/// The serialized runtime owns the exact lifecycle.
+pub(crate) const LEADER_WIRE_LIFECYCLE_RUNTIME: u8 = 3;
+/// Same-process terminal memory exists without restart-stable authority.
+pub(crate) const LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL: u8 = 4;
+/// Independently verified durable evidence permanently retires the lifecycle.
+pub(crate) const LEADER_WIRE_LIFECYCLE_TERMINAL: u8 = 5;
+
+/// Insert a previously absent bounded lifecycle slot.
+pub(crate) const LEADER_WIRE_ADMISSION_INSERT: u8 = 1;
+/// Atomically reactivate an exact restart-dormant lifecycle.
+pub(crate) const LEADER_WIRE_ADMISSION_REACTIVATE: u8 = 2;
+/// Coalesce an exact retry without changing lifecycle state.
+pub(crate) const LEADER_WIRE_ADMISSION_COALESCE: u8 = 3;
+/// Replace a terminal slot with a strictly newer view and both new ordinals.
+pub(crate) const LEADER_WIRE_ADMISSION_REPLACE_TERMINAL: u8 = 4;
+
 /// A persisted view transition selected the effective lock and its fetch.
 pub const EFFECTIVE_LOCK_TRACE_ENTER_VIEW: u8 = 1;
 /// The body pipeline bound or monotonically enriched its exact owner.
@@ -250,6 +272,8 @@ pub(crate) const IDENTITY_KIND_REPLY_SOURCE_KEY: u8 = 5;
 pub(crate) const IDENTITY_KIND_REPLY_DELIVERY_ROUTE: u8 = 6;
 /// Process-local identity kind for one actor-minted writer-flush occurrence.
 pub(crate) const IDENTITY_KIND_REPLY_WRITER_OCCURRENCE: u8 = 7;
+/// Process-local identity kind for one durable leader-wire lifecycle owner.
+pub(crate) const IDENTITY_KIND_LEADER_WIRE_LIFECYCLE: u8 = 8;
 /// Canonical identity kind for one checksummed durable body frame.
 pub(crate) const IDENTITY_KIND_DURABLE_BODY_FRAME: u8 = 1;
 /// Canonical identity kind for one finality artifact.
@@ -474,6 +498,9 @@ macro_rules! refinement_tag_value {
     (IDENTITY_KIND_REPLY_WRITER_OCCURRENCE) => {
         7u8
     };
+    (IDENTITY_KIND_LEADER_WIRE_LIFECYCLE) => {
+        8u8
+    };
     (IDENTITY_KIND_DURABLE_BODY_FRAME) => {
         1u8
     };
@@ -591,6 +618,7 @@ assert_refinement_tag_values!(
     IDENTITY_KIND_REPLY_SOURCE_KEY,
     IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
     IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
+    IDENTITY_KIND_LEADER_WIRE_LIFECYCLE,
     IDENTITY_KIND_DURABLE_BODY_FRAME,
     IDENTITY_KIND_FINALITY_ARTIFACT,
     IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
@@ -2453,6 +2481,170 @@ macro_rules! production_ingress_identity_and_class_trace_body {
     }};
 }
 
+macro_rules! production_leader_wire_admission_trace_body {
+    ($projection:expr) => {{
+        let incoming_identity_is_typed = canonical_identity_is_typed_body!(
+            $projection.incoming_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_LEADER_WIRE_LIFECYCLE)
+        );
+        let incumbent_identity_is_typed = canonical_identity_is_typed_body!(
+            $projection.incumbent_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_LEADER_WIRE_LIFECYCLE)
+        );
+        let stored_identity_is_exact = canonical_identity_equal_body!(
+            $projection.incoming_identity,
+            $projection.stored_identity
+        );
+        let common_after = stored_identity_is_exact
+            && $projection.incoming_view == $projection.stored_view
+            && $projection.incoming_admission_ordinal > 0u128
+            && $projection.incoming_scheduler_ordinal > 0u128
+            && $projection.stored_admission_ordinal > 0u128
+            && $projection.stored_scheduler_ordinal > 0u128
+            && $projection.records_before <= $projection.capacity
+            && $projection.records_after <= $projection.capacity
+            && $projection.capacity > 0u64;
+        let incumbent_active_shape = match $projection.status_before {
+            LEADER_WIRE_LIFECYCLE_INGRESS => {
+                !$projection.terminal_evidence_before && !$projection.replay_dormant_before
+            }
+            LEADER_WIRE_LIFECYCLE_RUNTIME => {
+                $projection.runtime_owner_before
+                    && !$projection.terminal_evidence_before
+                    && !$projection.replay_dormant_before
+            }
+            LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL => {
+                $projection.runtime_owner_before
+                    && !$projection.terminal_evidence_before
+                    && !$projection.replay_dormant_before
+            }
+            LEADER_WIRE_LIFECYCLE_TERMINAL => {
+                $projection.runtime_owner_before
+                    && $projection.terminal_evidence_before
+                    && !$projection.replay_dormant_before
+            }
+            _ => false,
+        };
+        incoming_identity_is_typed
+            && common_after
+            && if $projection.operation == LEADER_WIRE_ADMISSION_INSERT {
+                canonical_identity_is_zero_body!($projection.incumbent_identity)
+                    && $projection.incumbent_view == 0u64
+                    && $projection.incumbent_admission_ordinal == 0u128
+                    && $projection.incumbent_scheduler_ordinal == 0u128
+                    && $projection.status_before == LEADER_WIRE_LIFECYCLE_ABSENT
+                    && $projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && $projection.stored_admission_ordinal
+                        == $projection.incoming_admission_ordinal
+                    && $projection.stored_scheduler_ordinal
+                        == $projection.incoming_scheduler_ordinal
+                    && !$projection.runtime_owner_before
+                    && !$projection.runtime_owner_after
+                    && !$projection.terminal_evidence_before
+                    && !$projection.terminal_evidence_after
+                    && !$projection.replay_dormant_before
+                    && !$projection.replay_dormant_after
+                    && $projection.last_admission_ordinal_before
+                        < $projection.incoming_admission_ordinal
+                    && $projection.scheduler_ordinal_high_watermark_before
+                        < $projection.incoming_scheduler_ordinal
+                    && $projection.last_admission_ordinal_after
+                        == $projection.incoming_admission_ordinal
+                    && $projection.scheduler_ordinal_high_watermark_after
+                        == $projection.incoming_scheduler_ordinal
+                    && $projection.records_before < u64::MAX
+                    && $projection.records_after == $projection.records_before + 1u64
+            } else if $projection.operation == LEADER_WIRE_ADMISSION_REACTIVATE {
+                incumbent_identity_is_typed
+                    && canonical_identity_equal_body!(
+                        $projection.incumbent_identity,
+                        $projection.incoming_identity
+                    )
+                    && $projection.incumbent_view == $projection.incoming_view
+                    && $projection.incumbent_admission_ordinal
+                        == $projection.stored_admission_ordinal
+                    && $projection.incumbent_scheduler_ordinal
+                        == $projection.stored_scheduler_ordinal
+                    && $projection.status_before == LEADER_WIRE_LIFECYCLE_DORMANT
+                    && $projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && $projection.runtime_owner_before == $projection.runtime_owner_after
+                    && !$projection.terminal_evidence_before
+                    && !$projection.terminal_evidence_after
+                    && $projection.replay_dormant_before
+                    && !$projection.replay_dormant_after
+                    && $projection.last_admission_ordinal_before
+                        == $projection.last_admission_ordinal_after
+                    && $projection.scheduler_ordinal_high_watermark_before
+                        == $projection.scheduler_ordinal_high_watermark_after
+                    && $projection.last_admission_ordinal_before
+                        >= $projection.stored_admission_ordinal
+                    && $projection.scheduler_ordinal_high_watermark_before
+                        >= $projection.stored_scheduler_ordinal
+                    && $projection.records_before == $projection.records_after
+            } else if $projection.operation == LEADER_WIRE_ADMISSION_COALESCE {
+                incumbent_identity_is_typed
+                    && canonical_identity_equal_body!(
+                        $projection.incumbent_identity,
+                        $projection.incoming_identity
+                    )
+                    && $projection.incumbent_view == $projection.incoming_view
+                    && $projection.incumbent_admission_ordinal
+                        == $projection.stored_admission_ordinal
+                    && $projection.incumbent_scheduler_ordinal
+                        == $projection.stored_scheduler_ordinal
+                    && incumbent_active_shape
+                    && $projection.status_after == $projection.status_before
+                    && $projection.runtime_owner_after == $projection.runtime_owner_before
+                    && $projection.terminal_evidence_after == $projection.terminal_evidence_before
+                    && !$projection.replay_dormant_after
+                    && $projection.last_admission_ordinal_before
+                        == $projection.last_admission_ordinal_after
+                    && $projection.scheduler_ordinal_high_watermark_before
+                        == $projection.scheduler_ordinal_high_watermark_after
+                    && $projection.last_admission_ordinal_before
+                        >= $projection.stored_admission_ordinal
+                    && $projection.scheduler_ordinal_high_watermark_before
+                        >= $projection.stored_scheduler_ordinal
+                    && $projection.records_before == $projection.records_after
+            } else if $projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL {
+                incumbent_identity_is_typed
+                    && !canonical_identity_equal_body!(
+                        $projection.incumbent_identity,
+                        $projection.incoming_identity
+                    )
+                    && incumbent_active_shape
+                    && ($projection.status_before == LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL
+                        || $projection.status_before == LEADER_WIRE_LIFECYCLE_TERMINAL)
+                    && $projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && $projection.stored_admission_ordinal
+                        == $projection.incoming_admission_ordinal
+                    && $projection.stored_scheduler_ordinal
+                        == $projection.incoming_scheduler_ordinal
+                    && $projection.incoming_view > $projection.incumbent_view
+                    && $projection.incoming_admission_ordinal
+                        > $projection.incumbent_admission_ordinal
+                    && $projection.incoming_scheduler_ordinal
+                        > $projection.incumbent_scheduler_ordinal
+                    && $projection.last_admission_ordinal_before
+                        < $projection.incoming_admission_ordinal
+                    && $projection.scheduler_ordinal_high_watermark_before
+                        < $projection.incoming_scheduler_ordinal
+                    && $projection.last_admission_ordinal_after
+                        == $projection.incoming_admission_ordinal
+                    && $projection.scheduler_ordinal_high_watermark_after
+                        == $projection.incoming_scheduler_ordinal
+                    && !$projection.runtime_owner_after
+                    && !$projection.terminal_evidence_after
+                    && !$projection.replay_dormant_after
+                    && $projection.records_before == $projection.records_after
+            } else {
+                false
+            }
+    }};
+}
+
 macro_rules! production_two_stage_relay_retry_trace_body {
     ($projection:expr) => {{
         $projection.daemon_source_capacity_matches_two_upstream_lanes
@@ -3713,6 +3905,45 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub(crate) queue_len_before: u64,
     pub(crate) queue_len_after: u64,
     pub(crate) queue_capacity: u64,
+}
+
+/// Total prospective state transition for one durable leader-wire admission.
+///
+/// The projection retains the complete hashed lifecycle identity, both
+/// immutable ordinals, the bounded-slot status, replay-dormant membership,
+/// and both high-watermarks. It therefore distinguishes exact retry
+/// coalescing from restart reactivation and from strictly newer terminal-slot
+/// replacement before the persistence gate mutates state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProductionLeaderWireAdmissionTraceProjection {
+    pub(crate) operation: u8,
+    pub(crate) incoming_identity: CanonicalIdentityProjection,
+    pub(crate) incumbent_identity: CanonicalIdentityProjection,
+    pub(crate) stored_identity: CanonicalIdentityProjection,
+    pub(crate) incoming_view: u64,
+    pub(crate) incumbent_view: u64,
+    pub(crate) stored_view: u64,
+    pub(crate) incoming_admission_ordinal: u128,
+    pub(crate) incumbent_admission_ordinal: u128,
+    pub(crate) stored_admission_ordinal: u128,
+    pub(crate) incoming_scheduler_ordinal: u128,
+    pub(crate) incumbent_scheduler_ordinal: u128,
+    pub(crate) stored_scheduler_ordinal: u128,
+    pub(crate) last_admission_ordinal_before: u128,
+    pub(crate) last_admission_ordinal_after: u128,
+    pub(crate) scheduler_ordinal_high_watermark_before: u128,
+    pub(crate) scheduler_ordinal_high_watermark_after: u128,
+    pub(crate) records_before: u64,
+    pub(crate) records_after: u64,
+    pub(crate) capacity: u64,
+    pub(crate) status_before: u8,
+    pub(crate) status_after: u8,
+    pub(crate) replay_dormant_before: bool,
+    pub(crate) replay_dormant_after: bool,
+    pub(crate) runtime_owner_before: bool,
+    pub(crate) runtime_owner_after: bool,
+    pub(crate) terminal_evidence_before: bool,
+    pub(crate) terminal_evidence_after: bool,
 }
 
 /// Primitive observation of one exact daemon retry across its source-fair
@@ -5959,6 +6190,57 @@ pub(crate) const fn production_body_service_refines_async_fairness_kernel(
     effective_lock_trace_claim_body!(projection, 4u8)
 }
 
+/// Check the exact post-WAL effective-lock selection before reducer commit.
+#[must_use]
+pub(crate) fn check_production_enter_view_effective_lock_transition(
+    trace: EffectiveLockTraceProjection,
+    enter_view: EnterViewProjection,
+) -> Option<CheckedProductionTransition<(EffectiveLockTraceProjection, EnterViewProjection)>> {
+    if production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
+        Some(CheckedProductionTransition {
+            projection: (trace, enter_view),
+        })
+    } else {
+        None
+    }
+}
+
+/// Check one exact body-pipeline ownership transition before map mutation.
+#[must_use]
+pub(crate) fn check_production_body_ownership_effective_lock_transition(
+    projection: EffectiveLockTraceProjection,
+) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
+    if production_body_ownership_preserves_effective_lock_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check exact body-capacity retirement before retiring its live owners.
+#[must_use]
+pub(crate) fn check_production_body_capacity_retirement_effective_lock_transition(
+    projection: EffectiveLockTraceProjection,
+) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
+    if production_body_capacity_retirement_preserves_effective_lock_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one bounded fair-service selection before queue mutation.
+#[must_use]
+pub(crate) fn check_production_body_service_effective_lock_transition(
+    projection: EffectiveLockTraceProjection,
+) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
+    if production_body_service_refines_async_fairness_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
 /// Validate exact predecessor ownership returned by successor construction.
 pub(crate) const fn production_durable_predecessor_identity_kernel(
     projection: ProductionDurablePredecessorIdentityProjection,
@@ -6035,6 +6317,13 @@ pub(crate) const fn production_ingress_identity_and_class_trace_refines_protecte
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> bool {
     production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Validate one exact durable leader-wire admission before persistence.
+pub(crate) const fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
+    projection: ProductionLeaderWireAdmissionTraceProjection,
+) -> bool {
+    production_leader_wire_admission_trace_body!(projection)
 }
 
 /// Validate that an exact inner-ingress retry rotates both its authenticated
@@ -6185,6 +6474,19 @@ pub(crate) fn check_production_ingress_transition(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionIngressIdentityAndClassTraceProjection>> {
     if production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check a complete leader-wire admission and mint opaque evidence only for
+/// the exact prospective lifecycle transition.
+#[must_use]
+pub(crate) fn check_production_leader_wire_admission_transition(
+    projection: ProductionLeaderWireAdmissionTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionLeaderWireAdmissionTraceProjection>> {
+    if production_leader_wire_admission_refines_lifecycle_ownership_kernel(projection) {
         Some(CheckedProductionTransition { projection })
     } else {
         None
@@ -6533,8 +6835,10 @@ pub(crate) fn diagnose(projection: TransitionProjection<'_>) -> TransitionDiagno
 /// No caller-provided authorization or action-exactness boolean crosses this
 /// boundary.  The kernel derives them from requested/granted capability keys,
 /// exact pre/post state identities, event tags, and invariant violation counts.
-#[must_use]
-pub fn accepts(projection: TransitionProjection<'_>) -> bool {
+#[must_use = "checked reducer evidence must be consumed before installing candidate state"]
+pub(crate) fn check(
+    projection: TransitionProjection<'_>,
+) -> Option<CheckedProductionTransition<TransitionProjection<'_>>> {
     if projection.enter_view.active {
         let enter_view = projection.enter_view;
         let protected_after = u64::from(enter_view.durable_lock_after.present);
@@ -6563,11 +6867,29 @@ pub fn accepts(projection: TransitionProjection<'_>) -> bool {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
-            return false;
-        }
+        // The inner evidence establishes the Verus-checked effective-lock
+        // claim. Consuming it here is safe because the returned outer token
+        // retains the complete borrowed transition and is the only evidence
+        // production can consume at the reducer's state-install boundary.
+        let checked_effective_lock =
+            check_production_enter_view_effective_lock_transition(trace, enter_view)?;
+        let _authorized_effective_lock = checked_effective_lock.into_projection();
     }
-    accepts_facts(transition_facts(projection))
+    if accepts_facts(transition_facts(projection)) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Report whether the complete production transition relation accepts.
+///
+/// Production uses [`check`] and consumes its opaque evidence at state
+/// installation. This boolean facade remains for pure diagnostics and
+/// mutation-focused unit tests which do not cross a mutation boundary.
+#[must_use]
+pub fn accepts(projection: TransitionProjection<'_>) -> bool {
+    check(projection).is_some()
 }
 
 #[cfg(test)]
@@ -9225,6 +9547,197 @@ mod tests {
     }
 
     #[test]
+    fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_replacement() {
+        let lifecycle_identity = |byte| {
+            CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_LEADER_WIRE_LIFECYCLE,
+                [byte; 32],
+            )
+        };
+        let first_identity = lifecycle_identity(1);
+        let second_identity = lifecycle_identity(2);
+        let insert = ProductionLeaderWireAdmissionTraceProjection {
+            operation: LEADER_WIRE_ADMISSION_INSERT,
+            incoming_identity: first_identity,
+            stored_identity: first_identity,
+            incoming_view: 2,
+            stored_view: 2,
+            incoming_admission_ordinal: 11,
+            stored_admission_ordinal: 11,
+            incoming_scheduler_ordinal: 21,
+            stored_scheduler_ordinal: 21,
+            last_admission_ordinal_before: 10,
+            last_admission_ordinal_after: 11,
+            scheduler_ordinal_high_watermark_before: 20,
+            scheduler_ordinal_high_watermark_after: 21,
+            records_before: 2,
+            records_after: 3,
+            capacity: 4,
+            status_before: LEADER_WIRE_LIFECYCLE_ABSENT,
+            status_after: LEADER_WIRE_LIFECYCLE_INGRESS,
+            ..ProductionLeaderWireAdmissionTraceProjection::default()
+        };
+        assert!(production_leader_wire_admission_refines_lifecycle_ownership_kernel(insert));
+        assert_eq!(
+            check_production_leader_wire_admission_transition(insert)
+                .expect("an absent slot mints one exact ingress lifecycle")
+                .into_projection(),
+            insert
+        );
+        assert!(
+            check_production_leader_wire_admission_transition(
+                ProductionLeaderWireAdmissionTraceProjection {
+                    stored_identity: second_identity,
+                    ..insert
+                }
+            )
+            .is_none(),
+            "the prospective stored identity cannot be substituted"
+        );
+
+        let reactivate = ProductionLeaderWireAdmissionTraceProjection {
+            operation: LEADER_WIRE_ADMISSION_REACTIVATE,
+            incumbent_identity: first_identity,
+            incumbent_view: 2,
+            incumbent_admission_ordinal: 11,
+            incumbent_scheduler_ordinal: 21,
+            last_admission_ordinal_before: 11,
+            last_admission_ordinal_after: 11,
+            scheduler_ordinal_high_watermark_before: 21,
+            scheduler_ordinal_high_watermark_after: 21,
+            records_before: 3,
+            records_after: 3,
+            status_before: LEADER_WIRE_LIFECYCLE_DORMANT,
+            replay_dormant_before: true,
+            runtime_owner_before: true,
+            runtime_owner_after: true,
+            ..insert
+        };
+        assert!(production_leader_wire_admission_refines_lifecycle_ownership_kernel(reactivate));
+        assert!(
+            check_production_leader_wire_admission_transition(
+                ProductionLeaderWireAdmissionTraceProjection {
+                    incoming_admission_ordinal: 99,
+                    incoming_scheduler_ordinal: 100,
+                    ..reactivate
+                }
+            )
+            .is_some(),
+            "a speculative retry ordinal is discarded in favor of the incumbent lifecycle"
+        );
+        assert!(
+            check_production_leader_wire_admission_transition(
+                ProductionLeaderWireAdmissionTraceProjection {
+                    replay_dormant_before: false,
+                    ..reactivate
+                }
+            )
+            .is_none(),
+            "reactivation must consume the exact restart-dormant potential"
+        );
+        assert!(
+            check_production_leader_wire_admission_transition(
+                ProductionLeaderWireAdmissionTraceProjection {
+                    incoming_scheduler_ordinal: 22,
+                    stored_scheduler_ordinal: 22,
+                    ..reactivate
+                }
+            )
+            .is_none(),
+            "an exact retry cannot publish a new scheduler position"
+        );
+
+        let coalesce = ProductionLeaderWireAdmissionTraceProjection {
+            operation: LEADER_WIRE_ADMISSION_COALESCE,
+            status_before: LEADER_WIRE_LIFECYCLE_INGRESS,
+            status_after: LEADER_WIRE_LIFECYCLE_INGRESS,
+            replay_dormant_before: false,
+            runtime_owner_before: true,
+            runtime_owner_after: true,
+            ..reactivate
+        };
+        assert!(production_leader_wire_admission_refines_lifecycle_ownership_kernel(coalesce));
+        assert_eq!(
+            check_production_leader_wire_admission_transition(coalesce)
+                .expect("a duplicate retry coalesces without a lifecycle mutation")
+                .into_projection(),
+            coalesce
+        );
+
+        let terminal_coalesce = ProductionLeaderWireAdmissionTraceProjection {
+            status_before: LEADER_WIRE_LIFECYCLE_TERMINAL,
+            status_after: LEADER_WIRE_LIFECYCLE_TERMINAL,
+            terminal_evidence_before: true,
+            terminal_evidence_after: true,
+            ..coalesce
+        };
+        assert!(
+            production_leader_wire_admission_refines_lifecycle_ownership_kernel(terminal_coalesce),
+            "an exact drained request remains coalesced by its stable tombstone"
+        );
+
+        let replacement = ProductionLeaderWireAdmissionTraceProjection {
+            operation: LEADER_WIRE_ADMISSION_REPLACE_TERMINAL,
+            incoming_identity: second_identity,
+            incumbent_identity: first_identity,
+            stored_identity: second_identity,
+            incoming_view: 3,
+            incumbent_view: 2,
+            stored_view: 3,
+            incoming_admission_ordinal: 12,
+            incumbent_admission_ordinal: 11,
+            stored_admission_ordinal: 12,
+            incoming_scheduler_ordinal: 22,
+            incumbent_scheduler_ordinal: 21,
+            stored_scheduler_ordinal: 22,
+            last_admission_ordinal_before: 11,
+            last_admission_ordinal_after: 12,
+            scheduler_ordinal_high_watermark_before: 21,
+            scheduler_ordinal_high_watermark_after: 22,
+            records_before: 3,
+            records_after: 3,
+            capacity: 4,
+            status_before: LEADER_WIRE_LIFECYCLE_TERMINAL,
+            status_after: LEADER_WIRE_LIFECYCLE_INGRESS,
+            runtime_owner_before: true,
+            terminal_evidence_before: true,
+            ..ProductionLeaderWireAdmissionTraceProjection::default()
+        };
+        assert!(production_leader_wire_admission_refines_lifecycle_ownership_kernel(replacement));
+        for invalid in [
+            ProductionLeaderWireAdmissionTraceProjection {
+                incoming_view: 2,
+                stored_view: 2,
+                ..replacement
+            },
+            ProductionLeaderWireAdmissionTraceProjection {
+                incoming_identity: first_identity,
+                stored_identity: first_identity,
+                ..replacement
+            },
+            ProductionLeaderWireAdmissionTraceProjection {
+                scheduler_ordinal_high_watermark_after: 21,
+                ..replacement
+            },
+            ProductionLeaderWireAdmissionTraceProjection {
+                status_before: LEADER_WIRE_LIFECYCLE_RUNTIME,
+                terminal_evidence_before: false,
+                ..replacement
+            },
+            ProductionLeaderWireAdmissionTraceProjection {
+                incumbent_identity: CanonicalIdentityProjection::zero(),
+                ..replacement
+            },
+        ] {
+            assert!(
+                check_production_leader_wire_admission_transition(invalid).is_none(),
+                "terminal replacement must advance identity, view, and both high-watermarks"
+            );
+        }
+    }
+
+    #[test]
     fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
         let enter_view = EffectiveLockTraceProjection {
             kind: EFFECTIVE_LOCK_TRACE_ENTER_VIEW,
@@ -9241,6 +9754,12 @@ mod tests {
                 enter_view,
                 enter_view_identity,
             )
+        );
+        assert_eq!(
+            check_production_enter_view_effective_lock_transition(enter_view, enter_view_identity,)
+                .expect("exact EnterView trace mints checked evidence")
+                .into_projection(),
+            (enter_view, enter_view_identity),
         );
         assert_eq!(enter_view.kind, EFFECTIVE_LOCK_TRACE_ENTER_VIEW);
         assert_eq!(enter_view.protected_after, enter_view.protected_before);
@@ -9262,6 +9781,16 @@ mod tests {
                 enter_view_identity,
             )
         );
+        assert!(
+            check_production_enter_view_effective_lock_transition(
+                EffectiveLockTraceProjection {
+                    owner_after: 0,
+                    ..enter_view
+                },
+                enter_view_identity,
+            )
+            .is_none()
+        );
 
         let ownership = EffectiveLockTraceProjection {
             kind: EFFECTIVE_LOCK_TRACE_OWNER,
@@ -9273,6 +9802,12 @@ mod tests {
         assert!(production_body_ownership_preserves_effective_lock_kernel(
             ownership
         ));
+        assert_eq!(
+            check_production_body_ownership_effective_lock_transition(ownership)
+                .expect("exact body owner trace mints checked evidence")
+                .into_projection(),
+            ownership,
+        );
         assert_eq!(ownership.owner_after, 1);
         assert!(ownership.protected_after >= ownership.protected_before);
         assert_eq!(ownership.owner_reused, ownership.owner_before == 1);
@@ -9282,6 +9817,15 @@ mod tests {
                 ..ownership
             }
         ));
+        assert!(
+            check_production_body_ownership_effective_lock_transition(
+                EffectiveLockTraceProjection {
+                    owner_reused: true,
+                    ..ownership
+                }
+            )
+            .is_none()
+        );
 
         let retirement = EffectiveLockTraceProjection {
             kind: EFFECTIVE_LOCK_TRACE_RETIRE,
@@ -9296,6 +9840,12 @@ mod tests {
             ..EffectiveLockTraceProjection::default()
         };
         assert!(production_body_capacity_retirement_preserves_effective_lock_kernel(retirement));
+        assert_eq!(
+            check_production_body_capacity_retirement_effective_lock_transition(retirement)
+                .expect("exact body retirement trace mints checked evidence")
+                .into_projection(),
+            retirement,
+        );
         assert_eq!(
             retirement.ready_after,
             retirement.ready_before - retirement.retired_retained - retirement.retired_ready
@@ -9312,6 +9862,15 @@ mod tests {
                 }
             )
         );
+        assert!(
+            check_production_body_capacity_retirement_effective_lock_transition(
+                EffectiveLockTraceProjection {
+                    ready_after: 7,
+                    ..retirement
+                }
+            )
+            .is_none()
+        );
 
         let service = EffectiveLockTraceProjection {
             kind: EFFECTIVE_LOCK_TRACE_SERVICE,
@@ -9326,6 +9885,12 @@ mod tests {
         assert!(production_body_service_refines_async_fairness_kernel(
             service
         ));
+        assert_eq!(
+            check_production_body_service_effective_lock_transition(service)
+                .expect("exact service trace mints checked evidence")
+                .into_projection(),
+            service,
+        );
         assert!((SERVICE_CLASS_COMPLETION..=SERVICE_CLASS_NORMAL).contains(&service.selected));
         assert!((SERVICE_CLASS_COMPLETION..=SERVICE_CLASS_NORMAL).contains(&service.cursor_after));
         assert!(service.completion_ready);
@@ -9335,6 +9900,13 @@ mod tests {
                 ..service
             }
         ));
+        assert!(
+            check_production_body_service_effective_lock_transition(EffectiveLockTraceProjection {
+                selected: SERVICE_CLASS_PROGRESS,
+                ..service
+            })
+            .is_none()
+        );
     }
 
     fn capability(kind: u8, nonce: u64) -> EffectCapabilityKey {

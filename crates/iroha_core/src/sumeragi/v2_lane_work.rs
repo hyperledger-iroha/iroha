@@ -28209,7 +28209,8 @@ pub(super) mod tests {
                 member_preimage.extend_from_slice(b"iroha:lane-relay:committee-member:v1");
                 member_preimage.extend_from_slice(&committee_seed);
                 member_preimage.extend(
-                    norito::to_bytes(&peer).expect("encode relay committee member for ranking"),
+                    norito::encode_canonical(&peer)
+                        .expect("canonically encode relay committee member for ranking"),
                 );
                 (Hash::new(member_preimage), peer)
             })

@@ -295,12 +295,14 @@ domain.  The ordinary I/O theorem already exists as
 THEOREM GstResponsiveUnappliedRunNodeIsEnabled ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ gst
     /\ ~NodeHasApplication(node)
     => ENABLED PostGstRunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
                 gst,
                 ~NodeHasApplication(node)
          PROVE ENABLED PostGstRunNode(node)
@@ -314,13 +316,15 @@ PROOF
              AsyncCurrentResponsiveVoters,
              RecoveryRunNodeGuard
     <2>2. ENABLED RunNode(node)
-      BY <1>1, <2>1, ResponsiveUnappliedRunNodeIsEnabled
+      BY <1>1, <2>1, ResponsiveUnappliedRunNodeIsEnabled,
+         ExternalCandidateProducerContinuationSelectionIsReady
     <2> QED BY <1>1, <2>2, EnabledRunNodeLiftsPostGst
   <1> QED BY <1>1
 
 THEOREM GstHistoricalRecoveryRunNodeIsEnabled ==
   \A node \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ gst
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
 BY HistoricalRecoveryRunnerEnabledAfterGst
@@ -367,11 +371,13 @@ servers; active historical-recovery targets are necessarily unapplied.
 
 THEOREM DueNodeServiceBlockerIsImmediatelyProductive ==
   /\ AsyncStrongTypeInvariant
+  /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
   /\ gst
   /\ PostGstNodeServiceBlockers # {}
   => ImmediateProductiveFairActionReady
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncCandidateProducerContinuationExternalCoverageInvariant,
               gst,
               PostGstNodeServiceBlockers # {}
          PROVE ImmediateProductiveFairActionReady
@@ -2119,11 +2125,13 @@ BY DEF HeightResetIngressOwnershipResidual
 
 THEOREM ResetBoundaryHasImmediateProductivityOrIngressResidual ==
   /\ AsyncStrongTypeInvariant
+  /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
   /\ HeightProductivityResetBoundary
   => \/ ImmediateProductiveFairActionReady
      \/ HeightResetIngressOwnershipResidual
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncCandidateProducerContinuationExternalCoverageInvariant,
               HeightProductivityResetBoundary
          PROVE \/ ImmediateProductiveFairActionReady
                \/ HeightResetIngressOwnershipResidual
@@ -2735,19 +2743,23 @@ PROOF
         BY <2>1, AsyncLiveSpecProjectsAsyncSpec
       <3>2. []AsyncStrongTypeInvariant
         BY <3>1, AsyncSpecAlwaysStrongTypeInvariant
-      <3>3. (AsyncStrongTypeInvariant
+      <3>3. []AsyncCandidateProducerContinuationExternalCoverageInvariant
+        BY <3>1,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+      <3>4. (AsyncStrongTypeInvariant
                /\ HeightResetIngressOwnershipResidual)
                 ~> (ImmediateProductiveFairActionReady
                       \/ ResponsiveNodesDecide)
         BY <1>1, <2>1
            DEF HeightResetIngressOwnershipResidualProperty
-      <3>4. [](AsyncStrongTypeInvariant
+      <3>5. [](AsyncStrongTypeInvariant
                  /\ HeightProductivityResetBoundary
                 => \/ ImmediateProductiveFairActionReady
                    \/ HeightResetIngressOwnershipResidual)
-        BY ResetBoundaryHasImmediateProductivityOrIngressResidual,
+        BY <3>3,
+           ResetBoundaryHasImmediateProductivityOrIngressResidual,
            PTL
-      <3> QED BY <3>2, <3>3, <3>4, PTL
+      <3> QED BY <3>2, <3>4, <3>5, PTL
     <2> QED BY <2>1
          DEF HeightProductivityResetBoundaryProperty
   <1> QED BY <1>1

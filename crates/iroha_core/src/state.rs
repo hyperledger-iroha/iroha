@@ -30993,7 +30993,9 @@ impl State {
             let mut buffer = Vec::with_capacity(LANE_RELAY_MEMBER_DOMAIN.len() + seed.len());
             buffer.extend_from_slice(LANE_RELAY_MEMBER_DOMAIN);
             buffer.extend_from_slice(&seed);
-            let encoded = norito::to_bytes(peer)?;
+            // Committee order is consensus-significant, so ambient Norito
+            // layout guards must never alter this ranking preimage.
+            let encoded = norito::encode_canonical(peer)?;
             buffer.extend_from_slice(&encoded);
             scored.push((Hash::new(buffer), peer.clone()));
         }
@@ -104243,28 +104245,34 @@ seiyaku SequentialNfts {
 
     #[test]
     fn lane_relay_committee_from_pool_is_deterministic() {
-        let alice = PeerId::new(
-            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let bob = PeerId::new(
-            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let carol = PeerId::new(
-            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let pool = vec![bob.clone(), alice.clone(), carol.clone(), alice.clone()];
+        let members = (1_u8..=8)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic relay committee member")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut pool = members.iter().rev().cloned().collect::<Vec<_>>();
+        pool.push(members[0].clone());
         let seed = [0x11; 32];
 
-        let committee = State::lane_relay_committee_from_pool(&pool, 2, seed).expect("committee");
-        let again = State::lane_relay_committee_from_pool(&pool, 2, seed).expect("committee");
+        let committee =
+            State::lane_relay_committee_from_pool(&pool, members.len(), seed).expect("committee");
+        let again =
+            State::lane_relay_committee_from_pool(&pool, members.len(), seed).expect("committee");
         assert_eq!(committee, again);
-        assert_eq!(committee.len(), 2);
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let under_alternate_layout = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            State::lane_relay_committee_from_pool(&pool, members.len(), seed)
+                .expect("ambient layout cannot change a consensus committee")
+        };
+        assert_eq!(committee, under_alternate_layout);
+        assert_eq!(committee.len(), members.len());
         let mut unique = committee.clone();
         unique.sort();
         unique.dedup();

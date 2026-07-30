@@ -8117,7 +8117,8 @@ BY ExactDecisionRequestAdmissionHandoffConvergence,
 Protected Serve FIFO closure under the actual exact-corridor specification.
 
 The generic Serve FIFO rank leaf is already proved under `AsyncSpecAt`; it
-does not assume away checked install-generation exhaustion in unrelated
+uses the live `Nat` generation domain.  Checked exhaustion in bounded TLC
+instances is diagnostic only and adds no liveness premise for unrelated
 Stage-2 candidate work.  The older aggregate starvation bridge was stated only for
 `AsyncLiveSpecAt`, so the two lemmas below specialize its well-founded
 natural-position argument to the weaker specification used here.
@@ -9151,7 +9152,7 @@ ExactDecisionTargetNeutralPacketDependencyRank(packet) ==
          <<TimeoutVoteByteOwnerDebt(packet.item),
            <<TransportCompletionOwnerDebt(packet.item),
              <<BoundedTransportServiceRank(
-                  recipient, packet.item.source),
+                  packet.item.envelope.recipient, packet.item.source),
                <<ResetAwareIngressReachRank(recipient),
                  <<ReadyRunAuxRank(recipient),
                    <<Stage4CapacityRank(recipient),
@@ -9296,49 +9297,53 @@ ExactDecisionTargetNeutralFixedPredecessorSet(clockValue) ==
     \cup
   ({"Serve"} \X ExactDecisionTargetNeutralLiveServeIdentitySet)
 
-ExactDecisionTargetNeutralFrozenProducerBound(clockValue) ==
-  LET roots ==
-        Cardinality(HistoricalDiscoveryDuePacketsAt(clockValue))
-          + Cardinality(
-              ExactDecisionTargetNeutralLiveCandidateIdentitySet)
-          + Cardinality(
-              ExactDecisionTargetNeutralLiveServeIdentitySet)
-          + Cardinality(Responsive) + 1
-      depth == Cardinality(AsyncWorkKinds) + 1
-  IN roots * (3 ^ depth)
-       * (AsyncIngressCapacity + AsyncIoCapacity + 1)
-
+\* The producer ceilings use source-configured cumulative work accounting,
+\* not an estimate derived from the current number of roots.  Candidate
+\* allocation charges the exact nineteen-occurrence causal subtree for every
+\* possible live carrier.  A Serve high-watermark may advance across views,
+\* so its family count is not itself a cumulative bound; the source theorem
+\* below instead proves that every fresh/advance Serve allocation is a
+\* physical ingress step which strictly lowers the frozen due-packet rank.
+\* The family budget is finite positive slack only.  Both ranges are
+\* exclusive: the ordinal at a ceiling is outside the frozen episode.  A
+\* target-neutral step therefore cannot refresh `roots * 3^depth` allowance.
 ExactDecisionTargetNeutralFixedClockSnapshot(clockValue) ==
-  LET bound ==
-        ExactDecisionTargetNeutralFrozenProducerBound(clockValue)
-  IN [clock |-> clockValue,
-      packets |-> HistoricalDiscoveryDuePacketsAt(clockValue),
-      predecessors |->
-        ExactDecisionTargetNeutralFixedPredecessorSet(clockValue),
-      candidateIdentities |->
-        ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
-      serveIdentities |->
-        ExactDecisionTargetNeutralLiveServeIdentitySet,
-      candidateCeiling |->
-        [node \in Responsive |->
-           AsyncNextCandidateServiceOrdinal(node) + bound],
-      serveCeiling |->
-        [node \in Responsive |->
-           asyncNextServeAdmissionOrdinal[node] + bound]]
+  [clock |-> clockValue,
+   packets |-> HistoricalDiscoveryDuePacketsAt(clockValue),
+   predecessors |->
+     ExactDecisionTargetNeutralFixedPredecessorSet(clockValue),
+   candidateIdentities |->
+     ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
+   serveIdentities |->
+     ExactDecisionTargetNeutralLiveServeIdentitySet,
+   candidateStart |->
+     [node \in Responsive |->
+        AsyncNextCandidateServiceOrdinal(node)],
+   serveStart |->
+     [node \in Responsive |->
+        asyncNextServeAdmissionOrdinal[node]],
+   candidateCeiling |->
+     [node \in Responsive |->
+        AsyncNextCandidateServiceOrdinal(node)
+          + AsyncCandidateProducerEpisodeBudget],
+   serveCeiling |->
+     [node \in Responsive |->
+        asyncNextServeAdmissionOrdinal[node]
+          + AsyncServeLifecycleFamilyBudget]]
 
 ExactDecisionTargetNeutralCandidateOrdinalTokens(snapshot) ==
   {[ownerKind |-> "Candidate", node |-> node, ordinal |-> ordinal]:
      node \in Responsive,
      ordinal
        \in AsyncNextCandidateServiceOrdinal(node)
-             ..snapshot.candidateCeiling[node]}
+             ..(snapshot.candidateCeiling[node] - 1)}
 
 ExactDecisionTargetNeutralServeOrdinalTokens(snapshot) ==
   {[ownerKind |-> "Serve", node |-> node, ordinal |-> ordinal]:
      node \in Responsive,
      ordinal
        \in asyncNextServeAdmissionOrdinal[node]
-             ..snapshot.serveCeiling[node]}
+             ..(snapshot.serveCeiling[node] - 1)}
 
 ExactDecisionTargetNeutralProducerEpisodeTokens(snapshot) ==
   ExactDecisionTargetNeutralCandidateOrdinalTokens(snapshot)
@@ -9368,11 +9373,23 @@ ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue) ==
   /\ ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot)
   /\ snapshot.candidateCeiling \in [Responsive -> Nat]
   /\ snapshot.serveCeiling \in [Responsive -> Nat]
+  /\ snapshot.candidateStart \in [Responsive -> Nat]
+  /\ snapshot.serveStart \in [Responsive -> Nat]
   /\ HistoricalDiscoveryDuePacketsAt(clockValue)
        \subseteq snapshot.packets
   /\ \A node \in Responsive:
+       /\ snapshot.candidateCeiling[node] =
+            snapshot.candidateStart[node]
+              + AsyncCandidateProducerEpisodeBudget
+       /\ snapshot.serveCeiling[node] =
+            snapshot.serveStart[node]
+              + AsyncServeLifecycleFamilyBudget
+       /\ snapshot.candidateStart[node]
+            <= AsyncNextCandidateServiceOrdinal(node)
        /\ AsyncNextCandidateServiceOrdinal(node)
             <= snapshot.candidateCeiling[node]
+       /\ snapshot.serveStart[node]
+            <= asyncNextServeAdmissionOrdinal[node]
        /\ asyncNextServeAdmissionOrdinal[node]
             <= snapshot.serveCeiling[node]
 
@@ -9482,7 +9499,8 @@ ExactDecisionTargetNeutralRankCellOutcome(
        snapshot, mode, node, qc, archive, request, response,
        packet, clockValue, sourceRank)
   \/ \E lowerBudget \in
-       SetLessThan(budget, OpToRel(<, Nat), Nat):
+       SetLessThan(budget, OpToRel(<, Nat), Nat)
+         \cap (Nat \ {0}):
        ExactDecisionTargetNeutralProducerEpisodeAtBudget(
          snapshot, mode, node, qc, archive, request, response,
          packet, clockValue, sourceRank, lowerBudget)
@@ -9491,6 +9509,8 @@ ExactDecisionTargetNeutralFairOwner(
     ownerKind, node, source) ==
   [ownerKind |-> ownerKind, node |-> node, source |-> source]
 
+\* Every owner is individually weakly fair.  `Admit` is the single atomic
+\* physical packet/lifecycle handoff.
 ExactDecisionTargetNeutralFairOwnerSet(initialContext) ==
   {ExactDecisionTargetNeutralFairOwner(
      "Tick", 0, AsyncUntrustedSource)}
@@ -9584,6 +9604,13 @@ BY Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncInitialCandidateLifecycleAdmissions,
+       AsyncCandidateLifecycleAdmission,
+       AsyncCandidateProducerContinuationScheduledExclusionInvariant,
+       AsyncCandidateProducerContinuationBlocks,
+       AsyncCandidateProducerContinuations,
        AsyncControlServiceStateTypeInvariant,
        AsyncCandidateServiceTombstones,
        AsyncCandidateServiceRecordsFor,
@@ -9599,6 +9626,8 @@ THEOREM ExactDecisionAsyncNextPreservesCandidateTombstones ==
   /\ AsyncNext
   => AsyncCandidateServiceLifecycleInvariant'
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
+   AsyncNextPreservesCandidateProducerContinuationScheduledExclusion,
    AsyncCandidateServicesThisStepIsSingleton,
    AsyncCandidateSuccessfulServiceInstallsTransientMarker,
    AsyncCandidateCausalAdmissionTransfersSameOwner,
@@ -9712,16 +9741,28 @@ THEOREM ExactDecisionTargetNeutralSnapshotIsFinite ==
             /\ IsFiniteSet(snapshot.predecessors)
             /\ IsFiniteSet(snapshot.candidateIdentities)
             /\ IsFiniteSet(snapshot.serveIdentities)
-            /\ ExactDecisionTargetNeutralFrozenProducerBound(clockValue)
+            /\ AsyncCandidateProducerEpisodeBudget
                  \in Nat \ {0}
+            /\ AsyncServeLifecycleFamilyBudget
+                 \in Nat \ {0}
+            /\ \A node \in Responsive:
+                 /\ snapshot.candidateCeiling[node] =
+                      snapshot.candidateStart[node]
+                        + AsyncCandidateProducerEpisodeBudget
+                 /\ snapshot.serveCeiling[node] =
+                      snapshot.serveStart[node]
+                        + AsyncServeLifecycleFamilyBudget
+                 /\ snapshot.candidateStart[node] =
+                      AsyncNextCandidateServiceOrdinal(node)
+                 /\ snapshot.serveStart[node] =
+                      asyncNextServeAdmissionOrdinal[node]
 BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
    StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
    RuntimeValidatorIdsAreFinite,
    FS_Image, FS_Union, FS_Product, FS_CardinalityType,
-   CommandSuccessorsHaveBoundedLength, Isa
+   CommandSuccessorsHaveBoundedLength, Isa, SMT
    DEF ExactDecisionTargetNeutralFixedClockSnapshot,
        ExactDecisionTargetNeutralFixedPredecessorSet,
-       ExactDecisionTargetNeutralFrozenProducerBound,
        ExactDecisionTargetNeutralLiveProducerIdentitySet,
        ExactDecisionTargetNeutralLiveCandidateIdentitySet,
        ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
@@ -9731,7 +9772,17 @@ BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
        ExactDecisionTargetNeutralCandidateOwnerIdentity,
        ExactDecisionTargetNeutralServeOwnerIdentity,
        AsyncCandidateAdmissionIdentitySet,
-       AsyncCandidateAdmissionIdentity
+       AsyncCandidateAdmissionIdentity,
+       AsyncCandidateProducerEpisodeBudget,
+       AsyncCandidateProducerEpisodeCapacity,
+       AsyncCausalCandidateLifecycleCapacity,
+       AsyncServeLifecycleFamilyBudget,
+       AsyncActiveRequestBudget,
+       AsyncActiveCertifiedRequestBudget,
+       AsyncActiveCommitRequestBudget,
+       AsyncStrongTypeInvariant, AsyncConfiguration,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ModelConfiguration, QuorumConfiguration
 
 THEOREM ExactDecisionTargetNeutralEpisodeBudgetIsNatural ==
   \A snapshot:
@@ -9871,6 +9922,56 @@ BY HistoricalDiscoveryPublicationHelpersHaveFixedClockFrame,
        AsyncNetworkStep, AdmitIngressPacket,
        AsyncFaultStep, AsyncAllVars
 
+(***************************************************************************
+Atomic ingress is strict physical progress.
+
+The individually fair Admit action removes the selected source head in the
+same transition that it appends the lane occurrence and publishes any
+leader-wire Ingress lifecycle.  Thus the existing bounded transport
+coordinate strictly descends; no proof-only reservation bit is needed.
+***************************************************************************)
+THEOREM ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank ==
+  \A packet \in OverdueResponsivePackets,
+     recipient \in Responsive,
+     source \in AsyncIngressSources:
+    /\ AsyncStrongTypeInvariant
+    /\ packet.item.envelope.recipient = recipient
+    /\ packet.item.source = source
+    /\ PostGstAdmitHiddenPacket(recipient, source)
+    => ExactDecisionTargetNeutralPacketDependencyRank(packet)'
+         \in SetLessThan(
+              ExactDecisionTargetNeutralPacketDependencyRank(packet),
+              HistoricalDiscoveryPacketDependencyOrdering,
+              HistoricalDiscoveryPacketDependencyCarrier)
+BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
+   ExactDecisionTargetNeutralPacketDependencyRankInCarrier,
+   IsaT(600)
+   DEF ExactDecisionTargetNeutralPacketDependencyRank,
+       ExactDecisionTargetNeutralCandidateOccurrenceRank,
+       ExactDecisionTargetNeutralServeOccurrenceRank,
+       ExactDecisionTargetNeutralCandidateOwners,
+       ExactDecisionTargetNeutralServeOwners,
+       ExactDecisionTargetNeutralCandidateRanks,
+       ExactDecisionTargetNeutralServeRanks,
+       ExactDecisionTargetNeutralCandidateDebtRank,
+       ExactDecisionTargetNeutralServeDebtRank,
+       HistoricalDiscoveryPacketDependencyOrdering,
+       HistoricalDiscoveryPacketDependencyCarrier,
+       HistoricalDiscoveryCapacityTailOrdering,
+       HistoricalDiscoveryTimeoutTailOrdering,
+       HistoricalDiscoveryCompletionTailOrdering,
+       HistoricalDiscoveryTransportTailOrdering,
+       HistoricalDiscoveryResetTailOrdering,
+       HistoricalDiscoveryReadyTailOrdering,
+       HistoricalDiscoveryStage4TailOrdering,
+       HistoricalDiscoveryCandidateServeTailOrdering,
+       HistoricalDiscoveryOccurrenceDebtOrdering,
+       PostGstAdmitHiddenPacket, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket, DropExactActiveLeaderWireRetry,
+       BoundedTransportServiceRank, IngressSourceServiceRank,
+       LexPairOrdering, SetLessThan, OpToRel
+
 THEOREM ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists ==
   \A snapshot:
     /\ AsyncStrongTypeInvariant
@@ -9987,6 +10088,172 @@ BY ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
        HistoricalDiscoveryDuePacketsAt,
        AsyncAllVars
 
+\* `asyncNextServeAdmissionOrdinal` is a cumulative high-watermark and may
+\* advance repeatedly for one family at higher views.  Its configured live
+\* family bound is therefore not used to bound such advances.  Post-GST
+\* allocation occurs only inside the physical hidden-ingress admission that
+\* removes one frozen due packet.  Hence a Serve high-watermark advance is
+\* already strict fixed-clock rank descent and is outside the producer
+\* non-descent episode.
+THEOREM ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank ==
+  \A snapshot, mode, node, qc, archive, request, response, packet:
+    \A clockValue \in Nat,
+       sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
+       budget \in Nat:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ DecisionFrontierUniquenessInvariant
+      /\ DecisionTimeoutFrontierInvariant
+      /\ ResponsiveRecoveryValidationClearedInvariant
+      /\ FinalProgressWitnessClosureInvariant
+      /\ ExactDecisionFanoutRetentionInvariant
+      /\ ExactDecisionRequestAuthorityIsolationInvariant
+      /\ ExactDecisionTargetNeutralProducerEpisodeAtBudget(
+           snapshot, mode, node, qc, archive, request, response,
+           packet, clockValue, sourceRank, budget)
+      /\ [AsyncNext]_AsyncAllVars
+      /\ \E recipient \in Responsive:
+           asyncNextServeAdmissionOrdinal[recipient]'
+             > asyncNextServeAdmissionOrdinal[recipient]
+      => /\ \E recipient \in Responsive,
+               source \in AsyncIngressSources:
+              AdmitIngressPacket(recipient, source)
+         /\ (ExactDecisionTargetNeutralFixedClockStrictRankGoal(
+               snapshot, mode, node, qc, archive, request, response,
+               packet, clockValue, sourceRank))'
+BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
+   HistoricalLatentOwnerDebtCannotIncreaseAtFixedClock,
+   HistoricalDiscoveryFixedClockLexStepStrictlyDescends,
+   ExactDecisionRequestHeadGateResidualStepIsSafe,
+   ExactDecisionResponseHeadGateResidualStepIsSafe,
+   AsyncBracketStepRetainsExactDecisionRecord,
+   AsyncBracketStepLeavesContext,
+   AsyncNextPreservesExactDecisionFanoutRetention,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   AsyncBracketNextPreservesFinalProgressWitnessClosure,
+   ExactDecisionTargetNeutralConcreteRankInCarrier,
+   IsaT(1200)
+   DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
+       ExactDecisionTargetNeutralFixedClockStrictRankGoal,
+       ExactDecisionTargetNeutralFixedClockBlockedAtRank,
+       ExactDecisionTargetNeutralFixedClockPending,
+       ExactDecisionTargetNeutralFixedClockExit,
+       ExactDecisionTargetNeutralResidual,
+       ExactDecisionTargetNeutralGoal,
+       ExactDecisionTargetNeutralConcreteFixedClockRank,
+       ExactDecisionTargetNeutralConcreteBlockerStage,
+       ExactDecisionTargetNeutralConcreteDependencyRank,
+       HistoricalDiscoveryFixedClockLexStep,
+       HistoricalDiscoveryFixedClockRank,
+       HistoricalDiscoveryDuePacketDebt,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       AsyncNetworkStep, PostGstAdmitHiddenPacket,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       AsyncAllVars
+
+\* Every non-goal step carries the source-frozen exclusive ceilings.  The
+\* candidate allowance is the configured exact-occurrence budget, not the
+\* simultaneous carrier capacity.  Same-origin causal children consume their
+\* parent's remaining occurrence credit; a later lifecycle cannot overtake
+\* the frozen predecessor cut.  Serve allocation needs no cumulative-view
+\* estimate because the theorem immediately above makes every such increment
+\* a strict packet-rank goal.
+THEOREM ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal ==
+  \A snapshot, mode, node, qc, archive, request, response, packet:
+    \A clockValue \in Nat,
+       sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
+       budget \in Nat:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ ExactDecisionTargetNeutralProducerEpisodeAtBudget(
+           snapshot, mode, node, qc, archive, request, response,
+           packet, clockValue, sourceRank, budget)
+      /\ [AsyncNext]_AsyncAllVars
+      /\ ~(ExactDecisionTargetNeutralFixedClockStrictRankGoal(
+             snapshot, mode, node, qc, archive, request, response,
+             packet, clockValue, sourceRank))'
+      => /\ (ExactDecisionTargetNeutralSnapshotActive(
+                 snapshot, clockValue))'
+         /\ \A responsiveNode \in Responsive:
+              /\ snapshot.candidateStart[responsiveNode]
+                   <= AsyncNextCandidateServiceOrdinal(responsiveNode)'
+              /\ AsyncNextCandidateServiceOrdinal(responsiveNode)'
+                   <= snapshot.candidateCeiling[responsiveNode]
+              /\ snapshot.serveStart[responsiveNode]
+                   <= asyncNextServeAdmissionOrdinal[responsiveNode]'
+              /\ asyncNextServeAdmissionOrdinal[responsiveNode]'
+                   <= snapshot.serveCeiling[responsiveNode]
+BY AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode,
+   AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget,
+   AsyncCausalEpisodeServicedCandidateConsumesExactOccurrenceBudget,
+   AsyncCausalEpisodeSameOriginHandoffRetainsLifecycleCut,
+   ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
+   ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists,
+   AsyncCandidateSuccessfulServiceAllocatesExactOrdinal,
+   AsyncCandidateTerminalDiscardAllocatesExactOrdinal,
+   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
+   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
+   AsyncServeIngressDuplicateDoesNotAllocateOrdinal,
+   ExactDecisionRequestLifecycleOrdinalCannotResurrect,
+   ExactDecisionServeTombstoneSurvivesSameHeightReplay,
+   SameHeightRestartPreservesServeHighWatermarks,
+   IsaT(1800)
+   DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
+       ExactDecisionTargetNeutralSnapshotActive,
+       ExactDecisionTargetNeutralProducerEpisodeBudget,
+       ExactDecisionTargetNeutralProducerEpisodeTokens,
+       ExactDecisionTargetNeutralCandidateOrdinalTokens,
+       ExactDecisionTargetNeutralServeOrdinalTokens,
+       AsyncCandidateProducerEpisodeBudget,
+       AsyncAllVars
+
+\* A non-goal step always retains at least one exclusive ordinal token.
+\* At the source this follows from the configured positive ceilings.  Later,
+\* exhaustion would contradict either the exact causal occurrence budget or
+\* the Serve-admission packet descent above.  The action premise is essential:
+\* source activity alone does not make an already-exhausted arbitrary snapshot
+\* impossible.
+THEOREM ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal ==
+  \A snapshot, mode, node, qc, archive, request, response, packet:
+    \A clockValue \in Nat,
+       sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
+       budget \in Nat:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ ExactDecisionTargetNeutralProducerEpisodeAtBudget(
+           snapshot, mode, node, qc, archive, request, response,
+           packet, clockValue, sourceRank, budget)
+      /\ [AsyncNext]_AsyncAllVars
+      /\ ~(ExactDecisionTargetNeutralFixedClockStrictRankGoal(
+             snapshot, mode, node, qc, archive, request, response,
+             packet, clockValue, sourceRank))'
+      => ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)'
+           \in Nat \ {0}
+BY AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode,
+   AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget,
+   AsyncCausalEpisodeServicedCandidateConsumesExactOccurrenceBudget,
+   AsyncCausalEpisodeSameOriginHandoffRetainsLifecycleCut,
+   ExactDecisionTargetNeutralEpisodeBudgetIsNatural,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
+   ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
+   ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal,
+   IsaT(1200)
+   DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
+       ExactDecisionTargetNeutralSnapshotActive,
+       ExactDecisionTargetNeutralProducerEpisodeBudget,
+       ExactDecisionTargetNeutralProducerEpisodeTokens,
+       ExactDecisionTargetNeutralCandidateOrdinalTokens,
+       ExactDecisionTargetNeutralServeOrdinalTokens,
+       AsyncCandidateProducerEpisodeBudget,
+       AsyncServeLifecycleFamilyBudget
+
 THEOREM ExactDecisionTargetNeutralNonDescentConsumesOrdinal ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat,
@@ -10057,7 +10324,7 @@ THEOREM ExactDecisionTargetNeutralRankCellHasConcreteFairOwner ==
              sourceRank, budget, owner)
 BY HistoricalDiscoveryFixedClockBlockerCharacterization,
    AsyncTickEnabledHasConcreteSuccessor,
-   OverdueResponsivePacketEnablesConcreteCorridorProgress,
+   OverdueResponsivePacketEnablesConcreteProgress,
    DueNodeServiceEnablesConcreteGateProgress,
    DueIoServiceEnablesConcreteLocalProgress,
    HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
@@ -10068,6 +10335,7 @@ BY HistoricalDiscoveryFixedClockBlockerCharacterization,
    HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
    HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
    HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
    ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralConcreteRankInCarrier,
@@ -10170,6 +10438,7 @@ THEOREM ExactDecisionTargetNeutralRankCellStepIsSafe ==
                  request, response, packet, clockValue,
                  sourceRank, budget)
 BY ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
    ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
    ExactDecisionRequestHeadGateResidualStepIsSafe,
    ExactDecisionResponseHeadGateResidualStepIsSafe,
@@ -10224,10 +10493,46 @@ THEOREM ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell ==
            packet, clockValue, sourceRank, budget)'
 BY ExactDecisionTargetNeutralSelectedOwnerIsReady,
    ExactDecisionTargetNeutralRankCellHasConcreteFairOwner,
+   ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal,
+   ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal,
    ENABLEDaxioms, IsaT(600)
    DEF ExactDecisionTargetNeutralOwnerReadyForRankCell,
        ExactDecisionTargetNeutralRankCellOutcome,
+       ExactDecisionTargetNeutralProducerEpisodeAtBudget,
+       ExactDecisionTargetNeutralProducerEpisodeBudget,
        AsyncAllVars
+
+\* Consuming the final positive ordinal cannot create a proofless zero-budget
+\* episode.  The repaired outcome admits only a strictly smaller positive
+\* episode, so a selected fair action at budget one must reach the exact goal
+\* (or a strict outer-rank goal) in the same transition.
+THEOREM ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal ==
+  \A initialContext, snapshot, mode, node, qc, archive,
+     request, response, packet:
+    \A clockValue \in Nat,
+       sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ PostGstReplayQuarantineExcluded
+      /\ initialContext \in ContextRecords
+      /\ AsyncCurrentResponsiveVoters
+           = AsyncVotersAt(initialContext)
+      /\ ExactDecisionTargetNeutralProducerEpisodeAtBudget(
+           snapshot, mode, node, qc, archive, request, response,
+           packet, clockValue, sourceRank, 1)
+      /\ <<ExactDecisionTargetNeutralFairAction(
+             ExactDecisionTargetNeutralSelectedFairOwner(
+               initialContext, snapshot, mode, node, qc, archive,
+               request, response, packet, clockValue,
+               sourceRank, 1))>>_AsyncAllVars
+      => ExactDecisionTargetNeutralFixedClockStrictRankGoal(
+           snapshot, mode, node, qc, archive, request, response,
+           packet, clockValue, sourceRank)'
+BY ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
+   IsaT(600)
+   DEF ExactDecisionTargetNeutralRankCellOutcome,
+       SetLessThan, OpToRel
 
 THEOREM ExactDecisionTargetNeutralFairEpisodeStep ==
   \A initialContext, snapshot, mode, node, qc, archive,
@@ -10375,6 +10680,7 @@ THEOREM ExactDecisionTargetNeutralFiniteEpisodeClosesRankCell ==
                     snapshot, mode, node, qc, archive, request, response,
                     packet, clockValue, sourceRank)
 BY ExactDecisionTargetNeutralFairEpisodeStep,
+   ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal,
    NatLessThanWellFounded, WellFoundedLeadsTo
    DEF ExactDecisionTargetNeutralRankCellOutcome
 

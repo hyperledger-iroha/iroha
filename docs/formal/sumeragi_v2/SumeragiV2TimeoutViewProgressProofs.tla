@@ -1,6 +1,7 @@
 ---- MODULE SumeragiV2TimeoutViewProgressProofs ----
 EXTENDS SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs,
-        SumeragiV2AsyncCausalWorkBudgetProofs
+        SumeragiV2AsyncCausalWorkBudgetProofs,
+        SumeragiV2AsyncHistoricalFiniteRunnerEpisodeProofs
 
 (***************************************************************************
 Direct timeout/view temporal decomposition.
@@ -6536,15 +6537,12 @@ BY TimeoutTcPhysicalKernelsDischargeFrontier,
 \* ingress, delivery candidate, reducer receipt, and WAL.
 
 DirectTimeoutViewClosureResidualProperty(specification) ==
-  /\ TimeoutFixedClockLifecyclePhysicalKernelProperties(specification)
   /\ TimeoutVoteDeliveryPhysicalKernelProperties(specification)
   /\ TimeoutCertificateDecisionPhysicalKernelProperties(specification)
 
 THEOREM DirectTimeoutPhysicalKernelsDischargeCompositeSeams ==
   \A initialContext:
-    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-         AsyncSpecAt(initialContext))
-    /\ DirectTimeoutViewClosureResidualProperty(
+    DirectTimeoutViewClosureResidualProperty(
          AsyncLiveSpecAt(initialContext))
       => /\ TimeoutFixedClockLifecycleOwnerServiceProperty(
                AsyncLiveSpecAt(initialContext))
@@ -6554,7 +6552,9 @@ THEOREM DirectTimeoutPhysicalKernelsDischargeCompositeSeams ==
               AsyncLiveSpecAt(initialContext))
          /\ TimeoutCertificateAndDecisionConvergenceProperty(
               AsyncLiveSpecAt(initialContext))
-BY TimeoutFixedClockPhysicalKernelsDischargeLifecycleService,
+BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure,
+   AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels,
+   TimeoutFixedClockPhysicalKernelsDischargeLifecycleService,
    AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
    TimeoutFixedOwnerPriorityTicketNonReplenishmentDischargesArmedWalPhysicalKernels,
    TimeoutArmedWalPhysicalKernelsDischargeExactEndpoint,
@@ -7339,31 +7339,30 @@ Decision-convergence result appears in this module's dependency path.
 
 THEOREM DirectTimeoutViewDecompositionClosesTimeoutViewProgress ==
   \A initialContext:
-    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-         AsyncSpecAt(initialContext))
-    /\ DirectTimeoutViewClosureResidualProperty(
+    DirectTimeoutViewClosureResidualProperty(
          AsyncLiveSpecAt(initialContext))
       => TimeoutViewProgressProperty(
            AsyncLiveSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,
-                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-                  AsyncSpecAt(initialContext)),
                 DirectTimeoutViewClosureResidualProperty(
                   AsyncLiveSpecAt(initialContext))
          PROVE TimeoutViewProgressProperty(
                  AsyncLiveSpecAt(initialContext))
+    <2>0f. ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+               AsyncSpecAt(initialContext))
+      BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure
     <2>0o. TimeoutViewOwnershipPreservationProperty(
                AsyncLiveSpecAt(initialContext))
       BY TimeoutViewOwnershipPreservationObligation
     <2>0k. TimeoutFixedClockLifecycleOwnerServiceProperty(
                AsyncLiveSpecAt(initialContext))
-      BY <1>1,
+      BY AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels,
          TimeoutFixedClockPhysicalKernelsDischargeLifecycleService
-         DEF DirectTimeoutViewClosureResidualProperty
     <2>0p. TimeoutArmedWalPhysicalKernelProperties(
                AsyncLiveSpecAt(initialContext))
-      BY AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
+      BY <2>0f,
+         AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
          TimeoutFixedOwnerPriorityTicketNonReplenishmentDischargesArmedWalPhysicalKernels
     <2>0w. TimeoutArmedExactWalEndpointProperty(
                AsyncLiveSpecAt(initialContext))
@@ -7388,7 +7387,8 @@ PROOF
       BY <2>0a, TimeoutPredeadlineRankDescentClosesDeadlineClock
     <2>1. TimeoutSemanticOwnerHandoffProperty(
             AsyncLiveSpecAt(initialContext))
-      BY <2>0w, TimeoutSemanticOwnerHandoffFromExactWalEndpoint
+      BY <2>0f, <2>0w,
+         TimeoutSemanticOwnerHandoffFromExactWalEndpoint
     <2>1a. TimeoutFiniteRankDescentProperty(
               AsyncLiveSpecAt(initialContext))
       BY <2>0o, <2>0c, TimeoutFiniteRankCoordinationIsDischarged
@@ -7423,5 +7423,2350 @@ PROOF
              TimeoutDirectReleaseSource,
              TimeoutDirectGoal
   <1> QED BY <1>1
+
+(***************************************************************************
+Route-neutral exact Candidate and Serve service.
+
+`HistoricalDiscoverySelectedOverduePacket` is global.  Its recipient may be
+a current voter, a historical-recovery target, or an applied archive even
+when the timeout source belongs to another context.  The shared packet owner
+set is therefore route-neutral: Candidate owners use
+`ProtectedCandidateOwned` at an exact timed-service node, and the frozen
+physical identity records the monotone timed-owner mode and the one concrete
+runner action for that mode.  Current-voter and historical runner fairness
+remain separate quantified clauses; no fairness of their disjunction is
+introduced.  Archive mode is terminal for Candidate ownership because
+`ProtectedCandidateOwned` excludes an applied node.
+
+The Candidate non-descent episode covers equal-count owner replacement and
+count-increasing lower causal successors.  Its radix-four work tokens are
+also multiplied by the finite owner-mode credit, so an action-family handoff
+strictly consumes the episode rather than silently changing the fair action.
+Serve freezes its exact FIFO occurrence, worker kind, and worker mode and
+uses the existing two-element mode descent.  Neither replenishment nor a mode
+handoff is called fixed-clock progress.
+***************************************************************************)
+
+TimeoutFixedClockCandidateExactActionOwnerAtRank(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown) ==
+  LET recipient == packet.item.envelope.recipient
+  IN /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+          source, sourceView, clockValue, deadlineValue,
+          sourceRank, packet, known, budget)
+     /\ HistoricalDiscoveryPacketCandidateOwners(packet) # {}
+     /\ candidate =
+          HistoricalDiscoveryPacketCandidateDebtWitness(packet)
+     /\ candidate.causalOrigin = logicalIdentity
+     /\ <<"Candidate", logicalIdentity>> \in known
+     /\ physicalKnown =
+          HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet(
+            packet)
+     /\ IsFiniteSet(physicalKnown)
+     /\ physicalIdentity =
+          HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate)
+     /\ occurrenceRank =
+          HistoricalDiscoveryCandidateExactPhysicalRank(packet, candidate)
+     /\ occurrenceRank
+          \in HistoricalDiscoveryCandidateExactPhysicalRankCarrier
+     /\ HistoricalDiscoveryCandidateFrozenPhysicalCoordinates(
+          physicalIdentity, candidate, occurrenceRank)
+     /\ candidate.node = recipient
+     /\ ENABLED
+          HistoricalDiscoveryCandidateExactRunnerAction(
+            packet, physicalIdentity.runnerKind)
+
+TimeoutFixedClockCandidateIntroducedPhysicalIdentitySet(
+    packet, physicalKnown) ==
+  HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet(packet)
+    \ physicalKnown
+
+TimeoutFixedClockCandidateIntroducedOwners(packet, physicalKnown) ==
+  {candidate \in HistoricalDiscoveryPacketCandidateOwners(packet):
+     HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate)
+       \notin physicalKnown}
+
+TimeoutFixedClockCandidateEqualCountReplacementResidual(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown) ==
+  /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  /\ ~TimeoutFixedClockLifecycleGoal(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  /\ candidate.causalOrigin = logicalIdentity
+  /\ occurrenceRank
+       \in HistoricalDiscoveryCandidateExactPhysicalRankCarrier
+  /\ HistoricalDiscoveryCandidateFrozenPhysicalCoordinates(
+       physicalIdentity, candidate, occurrenceRank)
+  /\ IsFiniteSet(physicalKnown)
+  /\ Cardinality(HistoricalDiscoveryPacketCandidateOwners(packet))
+       = occurrenceRank[1][1]
+  /\ TimeoutFixedClockCandidateIntroducedPhysicalIdentitySet(
+       packet, physicalKnown) # {}
+
+TimeoutFixedClockCandidateIncreasingReplenishmentResidual(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown) ==
+  /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  /\ ~TimeoutFixedClockLifecycleGoal(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  /\ candidate.causalOrigin = logicalIdentity
+  /\ occurrenceRank
+       \in HistoricalDiscoveryCandidateExactPhysicalRankCarrier
+  /\ HistoricalDiscoveryCandidateFrozenPhysicalCoordinates(
+       physicalIdentity, candidate, occurrenceRank)
+  /\ IsFiniteSet(physicalKnown)
+  /\ Cardinality(HistoricalDiscoveryPacketCandidateOwners(packet))
+       > occurrenceRank[1][1]
+  /\ TimeoutFixedClockCandidateIntroducedPhysicalIdentitySet(
+       packet, physicalKnown) # {}
+
+TimeoutFixedClockCandidateNonDescentEpisodeResidual(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown) ==
+  \/ TimeoutFixedClockCandidateEqualCountReplacementResidual(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown)
+  \/ TimeoutFixedClockCandidateIncreasingReplenishmentResidual(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown)
+
+TimeoutFixedClockCandidateCausalDagFrontier(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown,
+    workBudget) ==
+  /\ TimeoutFixedClockCandidateNonDescentEpisodeResidual(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown)
+  /\ workBudget \in Nat
+  /\ workBudget = HistoricalDiscoveryCandidateCausalWorkBudget(packet)
+
+TimeoutFixedClockCandidateStrictCausalDagGoal(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown,
+    workBudget) ==
+  \/ TimeoutFixedClockLifecycleGoal(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  \/ \E lowerWorkBudget \in
+       SetLessThan(workBudget, OpToRel(<, Nat), Nat):
+       TimeoutFixedClockCandidateCausalDagFrontier(
+         source, sourceView, clockValue, deadlineValue,
+         sourceRank, packet, known, budget, logicalIdentity,
+         physicalIdentity, candidate, occurrenceRank, physicalKnown,
+         lowerWorkBudget)
+
+TimeoutFixedClockCandidateCausalDagWitnessEpisode(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    physicalIdentity, candidate, occurrenceRank, physicalKnown,
+    workBudget, witness) ==
+  /\ TimeoutFixedClockCandidateCausalDagFrontier(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown,
+       workBudget)
+  /\ witness \in
+       TimeoutFixedClockCandidateIntroducedOwners(
+         packet, physicalKnown)
+
+THEOREM TimeoutFixedClockKnownCandidateHasExactActionOwner ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity:
+      \A budget \in Nat:
+        /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget)
+        /\ <<"Candidate", logicalIdentity>>
+             \in TimeoutFixedPacketLiveOwners(packet)
+        /\ <<"Candidate", logicalIdentity>> \in known
+        => \E physicalIdentity, candidate, occurrenceRank, physicalKnown:
+             TimeoutFixedClockCandidateExactActionOwnerAtRank(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget, logicalIdentity,
+               physicalIdentity, candidate, occurrenceRank, physicalKnown)
+BY HistoricalDiscoveryLiveCandidateDebtHasExactFairOwner,
+   HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier,
+   ScheduledCandidateServiceRankInCarrier,
+   GstResponsiveUnappliedRunNodeIsEnabled,
+   GstHistoricalRecoveryRunNodeIsEnabled,
+   GstHistoricalServerIsEnabled,
+   StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
+   FS_Image, IsaT(1200)
+   DEF TimeoutFixedClockCandidateExactActionOwnerAtRank,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedPacketLiveOwners,
+       TimeoutFixedPacketLiveCandidateIdentities,
+       HistoricalDiscoveryCandidateExactPhysicalRank,
+       HistoricalDiscoveryCandidateExactPhysicalRankCarrier,
+       HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet,
+       HistoricalDiscoveryCandidateExactPhysicalIdentity,
+       HistoricalDiscoveryCandidateFrozenPhysicalCoordinates,
+       HistoricalDiscoveryCandidateExactRunnerAction,
+       HistoricalDiscoveryCandidateExactRunnerActionKindCarrier,
+       HistoricalDiscoveryCandidateExactRunnerKindForMode,
+       HistoricalDiscoveryTimedOwnerMode,
+       HistoricalDiscoveryTimedOwnerModeCarrier,
+       HistoricalDiscoveryPacketCandidateOwners,
+       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+       AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers,
+       HistoricalRecoveryTarget
+
+THEOREM TimeoutFixedClockCandidateExactStepIsGoalNonDescentOrFrame ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown:
+      \A budget \in Nat:
+        /\ TimeoutFixedClockCandidateExactActionOwnerAtRank(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget, logicalIdentity,
+             physicalIdentity, candidate, occurrenceRank, physicalKnown)
+        /\ [AsyncNext]_AsyncAllVars
+        => \/ TimeoutFixedClockLifecycleGoal(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget)'
+           \/ TimeoutFixedClockCandidateNonDescentEpisodeResidual(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget, logicalIdentity,
+                physicalIdentity, candidate,
+                occurrenceRank, physicalKnown)'
+           \/ TimeoutFixedClockCandidateExactActionOwnerAtRank(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget, logicalIdentity,
+                physicalIdentity, candidate,
+                occurrenceRank, physicalKnown)'
+BY HistoricalDiscoveryTimedOwnerModeCannotIncreaseAfterGst,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryCandidateMinimumPersistenceKeepsTail,
+   HistoricalDiscoveryCandidateMinimumExitClassifiesTail,
+   HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
+   HistoricalDiscoveryLowerCandidateInsertionReselectsLower,
+   HistoricalDiscoveryCandidateDepartureRetainsLifecycleCoverage,
+   HistoricalDiscoverySameGenerationCandidateServiceBlocksReentry,
+   HistoricalDiscoveryServicedCandidateIdentityBlocksReentry,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   AsyncCausalEpisodeFrozenOriginsCannotReplenish,
+   AsyncCommandSuccessorsStrictlyLowerRemainingWorkStage,
+   IsaT(3600)
+   DEF TimeoutFixedClockCandidateExactActionOwnerAtRank,
+       TimeoutFixedClockCandidateNonDescentEpisodeResidual,
+       TimeoutFixedClockCandidateEqualCountReplacementResidual,
+       TimeoutFixedClockCandidateIncreasingReplenishmentResidual,
+       TimeoutFixedClockCandidateIntroducedPhysicalIdentitySet,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockLifecycleDiscovery,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedClockStrictRankGoal,
+       TimeoutFixedClockBlockedAtRank,
+       HistoricalDiscoveryCandidateExactPhysicalIdentity,
+       HistoricalDiscoveryCandidateFrozenPhysicalCoordinates,
+       HistoricalDiscoveryCandidateExactRunnerAction,
+       HistoricalDiscoveryCandidateExactRunnerActionKindCarrier,
+       HistoricalDiscoveryCandidateExactRunnerKindForMode,
+       HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet,
+       HistoricalDiscoveryPacketCandidateOccurrenceDebtRank,
+       HistoricalDiscoveryOccurrenceDebtOrdering,
+       HistoricalDiscoveryOccurrenceDebtCarrier,
+       HistoricalDiscoveryConcreteFixedClockRank,
+       HistoricalDiscoveryTimedOwnerMode,
+       HistoricalDiscoveryTimedOwnerModeCarrier,
+       AsyncTargetNeutralLifecycleDiscoveredOwnerSet,
+       HistoricalDiscoveryTimedProtectedCandidateOwned,
+       ProtectedCandidateOwned, CandidateScheduled,
+       CandidateServiceRank, ServiceRankLess,
+       LexPairOrdering, OpToRel, AsyncAllVars
+
+TimeoutFixedClockCandidateExactRunnerStepProperty(specification) ==
+  specification
+    => \A source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          clockValue, deadlineValue \in Nat,
+          sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+         \A packet, known, logicalIdentity,
+            physicalIdentity, candidate, occurrenceRank, physicalKnown:
+           \A budget \in Nat:
+             TimeoutFixedClockCandidateExactActionOwnerAtRank(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget, logicalIdentity,
+               physicalIdentity, candidate, occurrenceRank, physicalKnown)
+               ~> (TimeoutFixedClockLifecycleGoal(
+                     source, sourceView, clockValue, deadlineValue,
+                     sourceRank, packet, known, budget)
+                    \/ TimeoutFixedClockCandidateNonDescentEpisodeResidual(
+                         source, sourceView, clockValue, deadlineValue,
+                         sourceRank, packet, known, budget, logicalIdentity,
+                         physicalIdentity, candidate,
+                         occurrenceRank, physicalKnown))
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockCandidateExactRunnerStep ==
+  \A initialContext:
+    TimeoutFixedClockCandidateExactRunnerStepProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesHistoricalDiscoveryTimedCandidateStarvation,
+   TimeoutFixedClockCandidateExactStepIsGoalNonDescentOrFrame,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   PTL, IsaT(2400)
+   DEF TimeoutFixedClockCandidateExactRunnerStepProperty,
+       TimeoutFixedClockCandidateExactActionOwnerAtRank,
+       HistoricalDiscoveryTimedCandidateStarvationProperty,
+       HistoricalDiscoveryTimedProtectedCandidateOwned,
+       ProtectedCandidateOwned
+
+THEOREM TimeoutFixedClockCandidateCausalFrontierHasProtectedWitness ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown:
+      \A budget, workBudget \in Nat:
+        TimeoutFixedClockCandidateCausalDagFrontier(
+          source, sourceView, clockValue, deadlineValue,
+          sourceRank, packet, known, budget, logicalIdentity,
+          physicalIdentity, candidate, occurrenceRank, physicalKnown,
+          workBudget)
+          => \E witness:
+               /\ TimeoutFixedClockCandidateCausalDagWitnessEpisode(
+                    source, sourceView, clockValue, deadlineValue,
+                    sourceRank, packet, known, budget, logicalIdentity,
+                    physicalIdentity, candidate, occurrenceRank,
+                    physicalKnown, workBudget, witness)
+               /\ witness \in AsyncCandidateSet
+               /\ HistoricalDiscoveryTimedProtectedCandidateOwned(witness)
+BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
+   TimeoutFixedPacketLiveAndCoveredOwnersStayFrozen,
+   IsaT(1200)
+   DEF TimeoutFixedClockCandidateCausalDagWitnessEpisode,
+       TimeoutFixedClockCandidateCausalDagFrontier,
+       TimeoutFixedClockCandidateNonDescentEpisodeResidual,
+       TimeoutFixedClockCandidateEqualCountReplacementResidual,
+       TimeoutFixedClockCandidateIncreasingReplenishmentResidual,
+       TimeoutFixedClockCandidateIntroducedPhysicalIdentitySet,
+       TimeoutFixedClockCandidateIntroducedOwners,
+       HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet,
+       HistoricalDiscoveryCandidateExactPhysicalIdentity,
+       HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryTimedProtectedCandidateOwned,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedClockPending,
+       AsyncTimedServiceNodes, ProtectedCandidateOwned
+
+THEOREM TimeoutFixedClockCandidateCausalWitnessStepIsGoalDescentOrFrame ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity,
+       physicalIdentity, candidate, occurrenceRank, physicalKnown,
+       witness:
+      \A budget, workBudget \in Nat:
+        /\ TimeoutFixedClockCandidateCausalDagWitnessEpisode(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget, logicalIdentity,
+             physicalIdentity, candidate, occurrenceRank, physicalKnown,
+             workBudget, witness)
+        /\ [AsyncNext]_AsyncAllVars
+        => \/ TimeoutFixedClockCandidateStrictCausalDagGoal(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget, logicalIdentity,
+                physicalIdentity, candidate, occurrenceRank,
+                physicalKnown, workBudget)'
+           \/ TimeoutFixedClockCandidateCausalDagWitnessEpisode(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget, logicalIdentity,
+                physicalIdentity, candidate, occurrenceRank,
+                physicalKnown, workBudget, witness)'
+BY HistoricalDiscoveryTimedOwnerModeCannotIncreaseAfterGst,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryCandidateDepartureRetainsLifecycleCoverage,
+   HistoricalDiscoverySameGenerationCandidateServiceBlocksReentry,
+   HistoricalDiscoveryServicedCandidateIdentityBlocksReentry,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   CommandSuccessorsRetainCausalOrigin,
+   AsyncCommandSuccessorsStrictlyLowerRemainingWorkStage,
+   AsyncCommandSuccessorBatchStrictlyConsumesRemainingWork,
+   AsyncCausalEpisodeFrozenOriginsCannotReplenish,
+   AsyncCausalEpisodeServicedCandidateConsumesTopologicalWeight,
+   FS_CardinalityType, FS_Subset, IsaT(3600)
+   DEF TimeoutFixedClockCandidateCausalDagWitnessEpisode,
+       TimeoutFixedClockCandidateCausalDagFrontier,
+       TimeoutFixedClockCandidateStrictCausalDagGoal,
+       TimeoutFixedClockCandidateNonDescentEpisodeResidual,
+       TimeoutFixedClockCandidateEqualCountReplacementResidual,
+       TimeoutFixedClockCandidateIncreasingReplenishmentResidual,
+       TimeoutFixedClockCandidateIntroducedPhysicalIdentitySet,
+       TimeoutFixedClockCandidateIntroducedOwners,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       HistoricalDiscoveryCandidateCausalWorkBudget,
+       HistoricalDiscoveryCandidateCausalWorkTokenSet,
+       HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet,
+       HistoricalDiscoveryCandidateExactPhysicalIdentity,
+       HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryTimedOwnerMode,
+       HistoricalDiscoveryTimedOwnerModeCarrier,
+       AsyncCausalEpisodeCandidateWorkBudget,
+       AsyncCausalEpisodeCandidateWorkTokens,
+       AsyncCausalEpisodeCandidates,
+       AsyncCausalEpisodeFrozenPredecessorOrigins,
+       CandidateScheduled, CommandSuccessors,
+       LexPairOrdering, OpToRel, SetLessThan, AsyncAllVars
+
+TimeoutFixedClockCandidateCausalDagBudgetDescentProperty(specification) ==
+  specification
+    => \A source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          clockValue, deadlineValue \in Nat,
+          sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+         \A packet, known, logicalIdentity,
+            physicalIdentity, candidate, occurrenceRank, physicalKnown:
+           \A budget, workBudget \in Nat:
+             TimeoutFixedClockCandidateCausalDagFrontier(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget, logicalIdentity,
+               physicalIdentity, candidate, occurrenceRank, physicalKnown,
+               workBudget)
+               ~> TimeoutFixedClockCandidateStrictCausalDagGoal(
+                    source, sourceView, clockValue, deadlineValue,
+                    sourceRank, packet, known, budget, logicalIdentity,
+                    physicalIdentity, candidate, occurrenceRank,
+                    physicalKnown, workBudget)
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockCandidateCausalDagBudgetDescent ==
+  \A initialContext:
+    TimeoutFixedClockCandidateCausalDagBudgetDescentProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesHistoricalDiscoveryTimedCandidateStarvation,
+   TimeoutFixedClockCandidateCausalFrontierHasProtectedWitness,
+   TimeoutFixedClockCandidateCausalWitnessStepIsGoalDescentOrFrame,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   PTL, IsaT(3000)
+   DEF TimeoutFixedClockCandidateCausalDagBudgetDescentProperty,
+       TimeoutFixedClockCandidateCausalDagWitnessEpisode,
+       HistoricalDiscoveryTimedCandidateStarvationProperty,
+       HistoricalDiscoveryTimedProtectedCandidateOwned,
+       ProtectedCandidateOwned
+
+TimeoutFixedClockCandidateNonDescentClosureProperty(specification) ==
+  specification
+    => \A source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          clockValue, deadlineValue \in Nat,
+          sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+         \A packet, known, logicalIdentity,
+            physicalIdentity, candidate, occurrenceRank, physicalKnown:
+           \A budget \in Nat:
+             TimeoutFixedClockCandidateNonDescentEpisodeResidual(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget, logicalIdentity,
+               physicalIdentity, candidate, occurrenceRank, physicalKnown)
+               ~> TimeoutFixedClockLifecycleGoal(
+                    source, sourceView, clockValue, deadlineValue,
+                    sourceRank, packet, known, budget)
+
+THEOREM TimeoutFixedClockFiniteCausalDagClosesNonDescentEpisode ==
+  \A specification:
+    TimeoutFixedClockCandidateCausalDagBudgetDescentProperty(specification)
+      => TimeoutFixedClockCandidateNonDescentClosureProperty(specification)
+BY HistoricalDiscoveryCandidateCausalWorkBudgetIsNatural,
+   NatLessThanWellFounded, WellFoundedLeadsTo, Isa, PTL
+   DEF TimeoutFixedClockCandidateCausalDagBudgetDescentProperty,
+       TimeoutFixedClockCandidateNonDescentClosureProperty,
+       TimeoutFixedClockCandidateCausalDagFrontier,
+       TimeoutFixedClockCandidateStrictCausalDagGoal
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockCandidateLifecycleKernel ==
+  \A initialContext:
+    TimeoutFixedClockCandidateLifecycleKernelProperty(
+      AsyncSpecAt(initialContext))
+BY TimeoutFixedClockKnownCandidateHasExactActionOwner,
+   AsyncSpecProvidesTimeoutFixedClockCandidateExactRunnerStep,
+   AsyncSpecProvidesTimeoutFixedClockCandidateCausalDagBudgetDescent,
+   TimeoutFixedClockFiniteCausalDagClosesNonDescentEpisode,
+   PTL, IsaT(2400)
+   DEF TimeoutFixedClockCandidateLifecycleKernelProperty,
+       TimeoutFixedClockCandidateExactRunnerStepProperty,
+       TimeoutFixedClockCandidateNonDescentClosureProperty
+
+(***************************************************************************
+Exact Serve occurrence with immutable worker mode.
+***************************************************************************)
+
+TimeoutFixedClockServeExactActionOwnerAtRank(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    job, occurrenceRank, workerKind, workerMode) ==
+  LET recipient == packet.item.envelope.recipient
+  IN /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+          source, sourceView, clockValue, deadlineValue,
+          sourceRank, packet, known, budget)
+     /\ HistoricalDiscoveryPacketCandidateOwners(packet) = {}
+     /\ HistoricalDiscoveryPacketServeOwners(packet) # {}
+     /\ job = HistoricalDiscoveryPacketServeDebtWitness(packet)
+     /\ logicalIdentity = AsyncIoServeJobIdentity(recipient, job)
+     /\ <<"Serve", logicalIdentity>> \in known
+     /\ occurrenceRank =
+          HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet)
+     /\ occurrenceRank \in HistoricalDiscoveryOccurrenceDebtCarrier
+     /\ workerMode
+          \in HistoricalDiscoveryServeExactWorkerModeCarrier
+     /\ workerMode = HistoricalDiscoveryTimedOwnerMode(recipient)
+     /\ workerKind
+          \in HistoricalDiscoveryServeExactWorkerActionKindCarrier
+     /\ workerKind =
+          HistoricalDiscoveryServeExactWorkerKindForMode(workerMode)
+     /\ ENABLED
+          HistoricalDiscoveryServeExactWorkerAction(packet, workerKind)
+
+TimeoutFixedClockServeExactWorkerModeFrontier(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    job, occurrenceRank, workerMode) ==
+  \E workerKind \in
+       HistoricalDiscoveryServeExactWorkerActionKindCarrier:
+    TimeoutFixedClockServeExactActionOwnerAtRank(
+      source, sourceView, clockValue, deadlineValue,
+      sourceRank, packet, known, budget, logicalIdentity,
+      job, occurrenceRank, workerKind, workerMode)
+
+TimeoutFixedClockServeExactWorkerModeHandoffResidual(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    job, occurrenceRank, workerMode) ==
+  /\ ~TimeoutFixedClockLifecycleGoal(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  /\ \E lowerMode \in
+       SetLessThan(
+         workerMode,
+         HistoricalDiscoveryServeExactWorkerModeOrdering,
+         HistoricalDiscoveryServeExactWorkerModeCarrier):
+       TimeoutFixedClockServeExactWorkerModeFrontier(
+         source, sourceView, clockValue, deadlineValue,
+         sourceRank, packet, known, budget, logicalIdentity,
+         job, occurrenceRank, lowerMode)
+
+TimeoutFixedClockServeExactWorkerModeProgressGoal(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, logicalIdentity,
+    job, occurrenceRank, workerMode) ==
+  \/ TimeoutFixedClockLifecycleGoal(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  \/ TimeoutFixedClockServeExactWorkerModeHandoffResidual(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget, logicalIdentity,
+       job, occurrenceRank, workerMode)
+
+THEOREM TimeoutFixedClockKnownServeHasExactActionOwner ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity:
+      \A budget \in Nat:
+        /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget)
+        /\ HistoricalDiscoveryPacketCandidateOwners(packet) = {}
+        /\ <<"Serve", logicalIdentity>>
+             \in TimeoutFixedPacketLiveOwners(packet)
+        /\ <<"Serve", logicalIdentity>> \in known
+        => \E job, occurrenceRank, workerKind, workerMode:
+             TimeoutFixedClockServeExactActionOwnerAtRank(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget, logicalIdentity,
+               job, occurrenceRank, workerKind, workerMode)
+BY HistoricalDiscoveryLiveServeDebtHasExactFairOwner,
+   HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier,
+   GstHistoricalIoWorkerIsEnabled,
+   QueuedIoEnablesPostGstService,
+   IsaT(1200)
+   DEF TimeoutFixedClockServeExactActionOwnerAtRank,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedPacketLiveOwners,
+       TimeoutFixedPacketLiveServeIdentities,
+       HistoricalDiscoveryPacketServeDebtFairAction,
+       HistoricalDiscoveryServeExactWorkerAction,
+       HistoricalDiscoveryServeExactWorkerActionKindCarrier,
+       HistoricalDiscoveryServeExactWorkerModeCarrier,
+       HistoricalDiscoveryServeExactWorkerKindForMode,
+       HistoricalDiscoveryTimedOwnerMode,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryServeJobOwned,
+       HistoricalDiscoveryIoOwners,
+       ActiveIoJobs, AsyncIoQueueDepth,
+       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+       HistoricalRecoveryTarget
+
+THEOREM TimeoutFixedClockServeExactWorkerStepIsModeGoalOrFrame ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity,
+       job, occurrenceRank, workerKind, workerMode:
+      \A budget \in Nat:
+        /\ TimeoutFixedClockServeExactActionOwnerAtRank(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget, logicalIdentity,
+             job, occurrenceRank, workerKind, workerMode)
+        /\ [AsyncNext]_AsyncAllVars
+        => \/ TimeoutFixedClockServeExactWorkerModeProgressGoal(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget, logicalIdentity,
+                job, occurrenceRank, workerMode)'
+           \/ TimeoutFixedClockServeExactActionOwnerAtRank(
+                source, sourceView, clockValue, deadlineValue,
+                sourceRank, packet, known, budget, logicalIdentity,
+                job, occurrenceRank, workerKind, workerMode)'
+BY HistoricalDiscoveryTimedOwnerModeCannotIncreaseAfterGst,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryServeMinimumPersistenceKeepsTail,
+   HistoricalDiscoveryServeMinimumExitClassifiesTail,
+   HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
+   HistoricalDiscoveryRetiredServeIdentityBlocksReentry,
+   HistoricalDiscoveryServeDepartureInstallsDurableCoverage,
+   AsyncServeQueuedIdentityDepartureInstallsTombstone,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   IsaT(3000)
+   DEF TimeoutFixedClockServeExactActionOwnerAtRank,
+       TimeoutFixedClockServeExactWorkerModeProgressGoal,
+       TimeoutFixedClockServeExactWorkerModeHandoffResidual,
+       TimeoutFixedClockServeExactWorkerModeFrontier,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedClockStrictRankGoal,
+       TimeoutFixedClockBlockedAtRank,
+       HistoricalDiscoveryServeExactWorkerAction,
+       HistoricalDiscoveryServeExactWorkerKindForMode,
+       HistoricalDiscoveryServeExactWorkerModeOrdering,
+       HistoricalDiscoveryServeExactWorkerModeCarrier,
+       HistoricalDiscoveryPacketServeOccurrenceDebtRank,
+       HistoricalDiscoveryOccurrenceDebtOrdering,
+       HistoricalDiscoveryOccurrenceDebtCarrier,
+       HistoricalDiscoveryTimedOwnerMode,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryServeJobOwned,
+       AsyncServeJobQueued, AsyncServeLifecycleTombstone,
+       SetLessThan, OpToRel, LexPairOrdering, AsyncAllVars
+
+THEOREM TimeoutFixedClockServeExactFairActionConsumesModeCell ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, logicalIdentity,
+       job, occurrenceRank, workerKind, workerMode:
+      \A budget \in Nat:
+        /\ TimeoutFixedClockServeExactActionOwnerAtRank(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget, logicalIdentity,
+             job, occurrenceRank, workerKind, workerMode)
+        /\ HistoricalDiscoveryServeExactWorkerAction(packet, workerKind)
+        => TimeoutFixedClockServeExactWorkerModeProgressGoal(
+             source, sourceView, clockValue, deadlineValue,
+             sourceRank, packet, known, budget, logicalIdentity,
+             job, occurrenceRank, workerMode)'
+BY HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   HistoricalDiscoveryServeHeadFairServiceLowersOccurrenceDebt,
+   HistoricalDiscoveryServeNonOwnerHeadFairServiceLowersMinimum,
+   HistoricalDiscoveryServeExactRemovalLowersOccurrenceDebt,
+   IsaT(2400)
+   DEF TimeoutFixedClockServeExactActionOwnerAtRank,
+       TimeoutFixedClockServeExactWorkerModeProgressGoal,
+       TimeoutFixedClockServeExactWorkerModeHandoffResidual,
+       TimeoutFixedClockServeExactWorkerModeFrontier,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockStrictRankGoal,
+       TimeoutFixedClockBlockedAtRank,
+       HistoricalDiscoveryServeExactWorkerAction,
+       HistoricalDiscoveryPacketServeDebtFairAction,
+       HistoricalDiscoveryPacketServeOccurrenceDebtRank,
+       HistoricalDiscoveryOccurrenceDebtOrdering,
+       HistoricalDiscoveryOccurrenceDebtCarrier,
+       HistoricalDiscoveryPacketServeHeadIsOwner,
+       HistoricalDiscoveryPacketServeHeadIsNotOwner,
+       SetLessThan, OpToRel, LexPairOrdering, AsyncAllVars
+
+TimeoutFixedClockServeExactWorkerStepProperty(specification) ==
+  specification
+    => \A source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          clockValue, deadlineValue \in Nat,
+          sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+         \A packet, known, logicalIdentity,
+            job, occurrenceRank, workerKind, workerMode:
+           \A budget \in Nat:
+             TimeoutFixedClockServeExactActionOwnerAtRank(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget, logicalIdentity,
+               job, occurrenceRank, workerKind, workerMode)
+               ~> TimeoutFixedClockServeExactWorkerModeProgressGoal(
+                    source, sourceView, clockValue, deadlineValue,
+                    sourceRank, packet, known, budget, logicalIdentity,
+                    job, occurrenceRank, workerMode)
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockServeExactWorkerStep ==
+  \A initialContext:
+    TimeoutFixedClockServeExactWorkerStepProperty(
+      AsyncSpecAt(initialContext))
+BY TimeoutFixedClockServeExactWorkerStepIsModeGoalOrFrame,
+   TimeoutFixedClockServeExactFairActionConsumesModeCell,
+   HistoricalDiscoveryServeExactWorkerUsesAsyncFairness,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   PTL, IsaT(2400)
+   DEF TimeoutFixedClockServeExactWorkerStepProperty,
+       TimeoutFixedClockServeExactActionOwnerAtRank,
+       HistoricalDiscoveryServeExactWorkerAction,
+       HistoricalDiscoveryServeExactWorkerActionKindCarrier
+
+TimeoutFixedClockServeExactWorkerModeClosureProperty(specification) ==
+  specification
+    => \A source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          clockValue, deadlineValue \in Nat,
+          sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+         \A packet, known, logicalIdentity, job, occurrenceRank:
+           \A budget \in Nat:
+             \A workerMode \in
+                 HistoricalDiscoveryServeExactWorkerModeCarrier:
+               TimeoutFixedClockServeExactWorkerModeFrontier(
+                 source, sourceView, clockValue, deadlineValue,
+                 sourceRank, packet, known, budget, logicalIdentity,
+                 job, occurrenceRank, workerMode)
+                 ~> TimeoutFixedClockLifecycleGoal(
+                      source, sourceView, clockValue, deadlineValue,
+                      sourceRank, packet, known, budget)
+
+THEOREM TimeoutFixedClockServeModeDescentClosesExactWorker ==
+  \A specification:
+    TimeoutFixedClockServeExactWorkerStepProperty(specification)
+      => TimeoutFixedClockServeExactWorkerModeClosureProperty(
+           specification)
+BY HistoricalDiscoveryServeExactWorkerModeOrderingIsWellFounded,
+   WellFoundedLeadsTo, Isa, PTL
+   DEF TimeoutFixedClockServeExactWorkerStepProperty,
+       TimeoutFixedClockServeExactWorkerModeClosureProperty,
+       TimeoutFixedClockServeExactWorkerModeFrontier,
+       TimeoutFixedClockServeExactWorkerModeProgressGoal,
+       TimeoutFixedClockServeExactWorkerModeHandoffResidual
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockServeLifecycleKernel ==
+  \A initialContext:
+    TimeoutFixedClockServeLifecycleKernelProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutFixedClockCandidateLifecycleKernel,
+   TimeoutFixedClockKnownServeHasExactActionOwner,
+   AsyncSpecProvidesTimeoutFixedClockServeExactWorkerStep,
+   TimeoutFixedClockServeModeDescentClosesExactWorker,
+   PTL, IsaT(3000)
+   DEF TimeoutFixedClockServeLifecycleKernelProperty,
+       TimeoutFixedClockCandidateLifecycleKernelProperty,
+       TimeoutFixedClockServeExactWorkerStepProperty,
+       TimeoutFixedClockServeExactWorkerModeClosureProperty,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockLifecycleDiscovery,
+       AsyncTargetNeutralLifecycleDiscoveredOwnerSet,
+       TimeoutFixedPacketLiveOwners
+
+TimeoutFixedClockDerivedCandidateServeKernelProperties(specification) ==
+  /\ TimeoutFixedClockCandidateLifecycleKernelProperty(specification)
+  /\ TimeoutFixedClockServeLifecycleKernelProperty(specification)
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockDerivedCandidateServeKernels ==
+  \A initialContext:
+    TimeoutFixedClockDerivedCandidateServeKernelProperties(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutFixedClockCandidateLifecycleKernel,
+   AsyncSpecProvidesTimeoutFixedClockServeLifecycleKernel
+   DEF TimeoutFixedClockDerivedCandidateServeKernelProperties
+
+(***************************************************************************
+Frozen exact packet action.
+
+The packet-only arm is intentionally below Candidate/Serve admission.  Its
+owner is one member of the existing seven-action family, retained as an
+ordinary quantified value.  No fairness of their disjunction is introduced:
+each member is already an individually fair action of `AsyncFairnessAt`.
+An unrelated step must either expose strict blocker-rank descent or a newly
+live lifecycle identity, or preserve the same enabled member.  This is the
+missing handoff argument which an enabled-action case split alone cannot
+supply.
+***************************************************************************)
+
+TimeoutFixedClockPacketConcreteActionPending(
+    source, sourceView, clockValue, deadlineValue,
+    sourceRank, packet, known, budget, actionKind, actionSource) ==
+  /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+       source, sourceView, clockValue, deadlineValue,
+       sourceRank, packet, known, budget)
+  /\ TimeoutFixedPacketLiveOwners(packet) = {}
+  /\ actionKind
+       \in HistoricalDiscoveryPacketConcreteActionKindCarrier
+  /\ actionSource \in AsyncIngressSources
+  /\ ENABLED
+       HistoricalDiscoveryPacketConcreteAction(
+         packet, actionKind, actionSource)
+
+THEOREM TimeoutFixedClockPacketTailHasFrozenConcreteAction ==
+  \A initialContext \in ContextRecords:
+    \A source \in AsyncCurrentResponsiveVoters,
+       sourceView \in Views,
+       clockValue, deadlineValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+      \A packet, known:
+        \A budget \in Nat:
+          /\ AsyncFrozenContextAt(initialContext)
+          /\ PostGstReplayQuarantineExcluded
+          /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank, packet, known, budget)
+          /\ TimeoutFixedPacketLiveOwners(packet) = {}
+          => \E actionKind
+                   \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+               \E actionSource \in AsyncIngressSources:
+                 TimeoutFixedClockPacketConcreteActionPending(
+                   source, sourceView, clockValue, deadlineValue,
+                   sourceRank, packet, known, budget,
+                   actionKind, actionSource)
+PROOF
+  <1>1. ASSUME NEW initialContext \in ContextRecords,
+                NEW source \in AsyncCurrentResponsiveVoters,
+                NEW sourceView \in Views,
+                NEW clockValue, NEW deadlineValue \in Nat,
+                NEW sourceRank
+                  \in HistoricalDiscoveryFixedClockBlockerCarrier,
+                NEW packet, NEW known, NEW budget \in Nat,
+                AsyncFrozenContextAt(initialContext),
+                PostGstReplayQuarantineExcluded,
+                TimeoutFixedClockLifecycleEpisodeAtBudget(
+                  source, sourceView, clockValue, deadlineValue,
+                  sourceRank, packet, known, budget),
+                TimeoutFixedPacketLiveOwners(packet) = {}
+         PROVE \E actionKind
+                   \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+                 \E actionSource \in AsyncIngressSources:
+                   TimeoutFixedClockPacketConcreteActionPending(
+                     source, sourceView, clockValue, deadlineValue,
+                     sourceRank, packet, known, budget,
+                     actionKind, actionSource)
+    <2> DEFINE Recipient == packet.item.envelope.recipient
+    <2> DEFINE Source == packet.item.source
+    <2> DEFINE Item == OldestDueSourcePacket(Recipient, Source).item
+    <2>1. /\ AsyncStrongTypeInvariant
+           /\ gst
+           /\ packet \in OverdueResponsivePackets
+           /\ packet = HistoricalDiscoverySelectedOverduePacket
+      BY <1>1 DEF TimeoutFixedClockLifecycleEpisodeAtBudget,
+                    TimeoutFixedClockPending
+    <2>2. /\ AsyncTypeInvariant
+           /\ AsyncCurrentResponsiveVoters =
+                AsyncVotersAt(initialContext)
+      BY <1>1, <2>1, AsyncStrongTypeProjectsAsyncType,
+         FrozenContextFixesResponsiveVoters
+    <2>3. /\ Recipient \in ValidatorIds
+           /\ Source \in AsyncIngressSources
+           /\ DueSourcePackets(Recipient, Source) # {}
+           /\ ResponsivePacketPairAt(
+                initialContext, Recipient, Source)
+           /\ Recipient \in AsyncCurrentResponsiveVoters
+                           \cup asyncHistoricalRecoveryTargets
+      BY <2>1, <2>2,
+         OverdueResponsivePacketUsesFairIngressPair, Isa
+         DEF Recipient, Source, ResponsivePacketPairAt,
+             HistoricalRecoveryPacketCorridor,
+             HistoricalRecoveryTarget,
+             AsyncArchiveIoServiceNodes,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers
+    <2>4. /\ AsyncItemTyped(Item)
+           /\ Item.envelope.recipient = Recipient
+           /\ Item.source = Source
+      BY <2>2, <2>3, OldestDueSourcePacketFacts
+         DEF Item, AsyncPacketTyped
+    <2>5. CASE DueIngressPacketCanEnter(Recipient, Source)
+      <3>1. ENABLED
+               (PostGstAdmitHiddenPacket(Recipient, Source)
+                  \/ PostGstAdmitHistoricalRecoveryPacket(
+                       Recipient, Source))
+        BY <1>1, <2>1, <2>3, <2>5,
+           DueIngressPacketAdmissionIsEnabled
+      <3> QED BY <1>1, <3>1, ExpandENABLED, Isa
+           DEF TimeoutFixedClockPacketConcreteActionPending,
+               HistoricalDiscoveryPacketConcreteAction,
+               HistoricalDiscoveryPacketConcreteActionKindCarrier,
+               Recipient, Source
+    <2>6. CASE ~DueIngressPacketCanEnter(Recipient, Source)
+      <3>1. CASE ~NodeHasApplication(Recipient)
+        <4>1. CASE Recipient \in asyncHistoricalRecoveryTargets
+          <5>1. ENABLED
+                   PostGstRunHistoricalRecoveryNode(Recipient)
+            BY <2>1, <4>1,
+               GstHistoricalRecoveryRunNodeIsEnabled
+          <5> QED BY <1>1, <5>1, Isa
+               DEF TimeoutFixedClockPacketConcreteActionPending,
+                   HistoricalDiscoveryPacketConcreteAction,
+                   HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                   Recipient
+        <4>2. CASE Recipient \notin asyncHistoricalRecoveryTargets
+          <5>1. Recipient \in AsyncCurrentResponsiveVoters
+            BY <2>3, <4>2
+          <5>2. ENABLED PostGstRunNode(Recipient)
+            BY <2>1, <3>1, <5>1,
+               GstResponsiveUnappliedRunNodeIsEnabled
+          <5> QED BY <1>1, <5>2, Isa
+               DEF TimeoutFixedClockPacketConcreteActionPending,
+                   HistoricalDiscoveryPacketConcreteAction,
+                   HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                   Recipient
+        <4> QED BY <4>1, <4>2
+      <3>2. CASE NodeHasApplication(Recipient)
+        <4>1. Recipient \in AsyncCurrentResponsiveVoters
+          BY <2>2, <2>3, <3>2, Isa
+             DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                 AsyncHistoricalRecoveryTypeInvariant
+        <4>2. CASE IngressDepth(Recipient) = 0
+          <5>1. OldestDueSourcePacket(Recipient, Source)
+                   \in OverdueResponsivePackets
+            BY <2>1, <2>2, <2>3, Isa
+               DEF OverdueResponsivePackets,
+                   AsyncPacketOwnsClockDeadline,
+                   DueSourcePackets, OldestDueSourcePacket
+          <5>2. \E actionSource \in AsyncIngressSources:
+                   ENABLED
+                     (PostGstAdmitHiddenPacket(
+                        Recipient, actionSource)
+                        \/ PostGstAdmitHistoricalRecoveryPacket(
+                             Recipient, actionSource))
+            BY <1>1, <2>3, <2>6, <3>2, <4>1, <4>2, <5>1,
+               EmptyAppliedOverduePacketExposesAdmission
+          <5> QED BY <1>1, <5>2, ExpandENABLED, Isa
+               DEF TimeoutFixedClockPacketConcreteActionPending,
+                   HistoricalDiscoveryPacketConcreteAction,
+                   HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                   Recipient, Source
+        <4>3. CASE IngressDepth(Recipient) > 0
+          <5>1. CASE HistoricalDrainableIngressIndices(Recipient) # {}
+            <6>1. ENABLED PostGstRunHistoricalServer(Recipient)
+              BY <1>1, <2>1, <3>2, <4>1, <5>1,
+                 AppliedResponsiveHistoricalServerEnabledAfterGst
+            <6> QED BY <1>1, <6>1, Isa
+                 DEF TimeoutFixedClockPacketConcreteActionPending,
+                     HistoricalDiscoveryPacketConcreteAction,
+                     HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                     Recipient
+          <5>2. CASE HistoricalDrainableIngressIndices(Recipient) = {}
+            <6>1. AsyncIoQueueDepth(Recipient) > 0
+              BY <2>2, <2>3, <4>3, <5>2,
+                 NonemptyUndrainableHistoricalIngressHasIoWork
+            <6>2. Recipient \in AsyncArchiveIoServiceNodes
+              BY <2>1, <3>2, <4>1, Isa
+                 DEF AsyncArchiveIoServiceNodes,
+                     AsyncResponsiveAppliedArchiveServers,
+                     AsyncResponsiveOnlineArchiveServers,
+                     AsyncResponsiveArchiveServers
+            <6>3. ENABLED PostGstServiceIoWorker(Recipient)
+              BY <2>1, <6>1, <6>2,
+                 AsyncStrongTypeProjectsAsyncType,
+                 QueuedIoEnablesPostGstService
+            <6> QED BY <1>1, <6>3, Isa
+                 DEF TimeoutFixedClockPacketConcreteActionPending,
+                     HistoricalDiscoveryPacketConcreteAction,
+                     HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                     Recipient
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <2>2, <4>2, <4>3, SMT
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM TimeoutFixedClockPacketConcreteActionStepIsGoalOrFrame ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known:
+      \A budget \in Nat:
+        \A actionKind
+             \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+          \A actionSource \in AsyncIngressSources:
+            /\ TimeoutFixedClockPacketConcreteActionPending(
+                 source, sourceView, clockValue, deadlineValue,
+                 sourceRank, packet, known, budget,
+                 actionKind, actionSource)
+            /\ [AsyncNext]_AsyncAllVars
+            => \/ TimeoutFixedClockLifecycleGoal(
+                    source, sourceView, clockValue, deadlineValue,
+                    sourceRank, packet, known, budget)'
+               \/ TimeoutFixedClockPacketConcreteActionPending(
+                    source, sourceView, clockValue, deadlineValue,
+                    sourceRank, packet, known, budget,
+                    actionKind, actionSource)'
+BY HistoricalDiscoveryFixedClockIngressStrictlyDescends,
+   HistoricalDiscoverySelectedNonOverdueShadowStrictlyDescends,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryLowerCandidateInsertionReselectsLower,
+   HistoricalDiscoveryLowerServeInsertionReselectsLower,
+   HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
+   HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
+   HistoricalDiscoveryCandidateDepartureRetainsLifecycleCoverage,
+   HistoricalDiscoveryServeDepartureInstallsDurableCoverage,
+   HistoricalDiscoveryServicedCandidateIdentityBlocksReentry,
+   HistoricalDiscoveryRetiredServeIdentityBlocksReentry,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   IsaT(4800)
+   DEF TimeoutFixedClockPacketConcreteActionPending,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockLifecycleDiscovery,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedClockStrictRankGoal,
+       TimeoutFixedClockBlockedAtRank,
+       TimeoutFixedClockProducerPrefix,
+       TimeoutFixedClockDependencyProducerPrefix,
+       TimeoutFixedPacketLiveOwners,
+       TimeoutFixedPacketCoveredOwners,
+       HistoricalDiscoveryPacketConcreteAction,
+       HistoricalDiscoveryPacketConcreteActionKindCarrier,
+       HistoricalDiscoveryPacketDependencyRank,
+       HistoricalDiscoveryPacketDependencyOrdering,
+       HistoricalDiscoveryConcreteFixedClockRank,
+       HistoricalDiscoveryConcreteBlockerStage,
+       HistoricalDiscoveryConcreteDependencyRank,
+       AsyncTargetNeutralLifecycleDiscoveredOwnerSet,
+       AsyncAllVars
+
+THEOREM TimeoutFixedClockPacketConcreteActionOccurrenceReachesGoal ==
+  \A source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known:
+      \A budget \in Nat:
+        \A actionKind
+             \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+          \A actionSource \in AsyncIngressSources:
+            /\ TimeoutFixedClockPacketConcreteActionPending(
+                 source, sourceView, clockValue, deadlineValue,
+                 sourceRank, packet, known, budget,
+                 actionKind, actionSource)
+            /\ <<HistoricalDiscoveryPacketConcreteAction(
+                    packet, actionKind, actionSource)>>_AsyncAllVars
+            => TimeoutFixedClockLifecycleGoal(
+                 source, sourceView, clockValue, deadlineValue,
+                 sourceRank, packet, known, budget)'
+BY HistoricalDiscoveryFixedClockIngressStrictlyDescends,
+   HistoricalDiscoverySelectedNonOverdueShadowStrictlyDescends,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryLowerCandidateInsertionReselectsLower,
+   HistoricalDiscoveryLowerServeInsertionReselectsLower,
+   HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
+   HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
+   HistoricalDiscoveryCandidateDepartureRetainsLifecycleCoverage,
+   HistoricalDiscoveryServeDepartureInstallsDurableCoverage,
+   HistoricalDiscoveryServicedCandidateIdentityBlocksReentry,
+   HistoricalDiscoveryRetiredServeIdentityBlocksReentry,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   IsaT(4800)
+   DEF TimeoutFixedClockPacketConcreteActionPending,
+       TimeoutFixedClockLifecycleGoal,
+       TimeoutFixedClockLifecycleDiscovery,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedClockStrictRankGoal,
+       TimeoutFixedClockBlockedAtRank,
+       TimeoutFixedClockProducerPrefix,
+       TimeoutFixedClockDependencyProducerPrefix,
+       TimeoutFixedPacketLiveOwners,
+       TimeoutFixedPacketCoveredOwners,
+       HistoricalDiscoveryPacketConcreteAction,
+       HistoricalDiscoveryPacketConcreteActionKindCarrier,
+       HistoricalDiscoveryPacketDependencyRank,
+       HistoricalDiscoveryPacketDependencyOrdering,
+       HistoricalDiscoveryConcreteFixedClockRank,
+       HistoricalDiscoveryConcreteBlockerStage,
+       HistoricalDiscoveryConcreteDependencyRank,
+       AsyncTargetNeutralLifecycleDiscoveredOwnerSet,
+       AsyncAllVars
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockPacketConcreteActionFairness ==
+  \A initialContext,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     clockValue, deadlineValue \in Nat,
+     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known:
+      \A budget \in Nat:
+        \A actionKind
+             \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+          \A actionSource \in AsyncIngressSources:
+            /\ AsyncSpecAt(initialContext)
+            /\ TimeoutFixedClockPacketConcreteActionPending(
+                 source, sourceView, clockValue, deadlineValue,
+                 sourceRank, packet, known, budget,
+                 actionKind, actionSource)
+            => WF_AsyncAllVars(
+                 HistoricalDiscoveryPacketConcreteAction(
+                   packet, actionKind, actionSource))
+BY AsyncSpecAlwaysUsesFixedResponsiveVoters, Isa, PTL
+   DEF TimeoutFixedClockPacketConcreteActionPending,
+       TimeoutFixedClockLifecycleEpisodeAtBudget,
+       TimeoutFixedClockPending,
+       HistoricalDiscoveryPacketConcreteAction,
+       HistoricalDiscoveryPacketConcreteActionKindCarrier,
+       HistoricalRecoveryTarget,
+       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+       AsyncSpecAt, AsyncFairnessAt
+
+TimeoutFixedClockPacketConcreteActionServiceProperty(specification) ==
+  specification
+    => \A source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          clockValue, deadlineValue \in Nat,
+          sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+         \A packet, known:
+           \A budget \in Nat:
+             \A actionKind
+                  \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+               \A actionSource \in AsyncIngressSources:
+                 TimeoutFixedClockPacketConcreteActionPending(
+                   source, sourceView, clockValue, deadlineValue,
+                   sourceRank, packet, known, budget,
+                   actionKind, actionSource)
+                   ~> TimeoutFixedClockLifecycleGoal(
+                        source, sourceView, clockValue, deadlineValue,
+                        sourceRank, packet, known, budget)
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockPacketConcreteActionService ==
+  \A initialContext:
+    TimeoutFixedClockPacketConcreteActionServiceProperty(
+      AsyncSpecAt(initialContext))
+BY TimeoutFixedClockPacketConcreteActionStepIsGoalOrFrame,
+   TimeoutFixedClockPacketConcreteActionOccurrenceReachesGoal,
+   AsyncSpecProvidesTimeoutFixedClockPacketConcreteActionFairness,
+   PTL
+   DEF TimeoutFixedClockPacketConcreteActionServiceProperty,
+       TimeoutFixedClockPacketConcreteActionPending,
+       TimeoutFixedClockLifecycleGoal
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockPacketDependencyKernel ==
+  \A initialContext:
+    TimeoutFixedClockPacketDependencyKernelProperty(
+      AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext, AsyncSpecAt(initialContext)
+         PROVE \A source \in AsyncCurrentResponsiveVoters,
+                  sourceView \in Views,
+                  clockValue, deadlineValue \in Nat,
+                  sourceRank
+                    \in HistoricalDiscoveryFixedClockBlockerCarrier:
+                 \A packet, known:
+                   \A budget \in Nat:
+                     (/\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+                           source, sourceView,
+                           clockValue, deadlineValue,
+                           sourceRank, packet, known, budget)
+                      /\ TimeoutFixedPacketLiveOwners(packet) = {})
+                       ~> TimeoutFixedClockLifecycleGoal(
+                            source, sourceView,
+                            clockValue, deadlineValue,
+                            sourceRank, packet, known, budget)
+    <2>0. /\ initialContext \in ContextRecords
+           /\ []AsyncFrozenContextAt(initialContext)
+           /\ []PostGstReplayQuarantineExcluded
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysKeepsFrozenContext,
+         AsyncSpecAlwaysExcludesPostGstReplayQuarantine, PTL
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+             Safety, TypeInvariant, AsyncFrozenContextAt
+    <2>1. ASSUME NEW source \in AsyncCurrentResponsiveVoters,
+                  NEW sourceView \in Views,
+                  NEW clockValue, NEW deadlineValue \in Nat,
+                  NEW sourceRank
+                    \in HistoricalDiscoveryFixedClockBlockerCarrier,
+                  NEW packet, NEW known, NEW budget \in Nat
+           PROVE (/\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+                         source, sourceView, clockValue, deadlineValue,
+                         sourceRank, packet, known, budget)
+                    /\ TimeoutFixedPacketLiveOwners(packet) = {})
+                     ~> TimeoutFixedClockLifecycleGoal(
+                          source, sourceView, clockValue, deadlineValue,
+                          sourceRank, packet, known, budget)
+      <3>1. []((/\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+                        source, sourceView, clockValue, deadlineValue,
+                        sourceRank, packet, known, budget)
+                   /\ TimeoutFixedPacketLiveOwners(packet) = {})
+                  => \E actionKind
+                         \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+                       \E actionSource \in AsyncIngressSources:
+                         TimeoutFixedClockPacketConcreteActionPending(
+                           source, sourceView,
+                           clockValue, deadlineValue,
+                           sourceRank, packet, known, budget,
+                           actionKind, actionSource))
+        BY <2>0,
+           TimeoutFixedClockPacketTailHasFrozenConcreteAction, PTL
+      <3>2. \A actionKind
+                   \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
+               \A actionSource \in AsyncIngressSources:
+                 TimeoutFixedClockPacketConcreteActionPending(
+                   source, sourceView, clockValue, deadlineValue,
+                   sourceRank, packet, known, budget,
+                   actionKind, actionSource)
+                   ~> TimeoutFixedClockLifecycleGoal(
+                        source, sourceView, clockValue, deadlineValue,
+                        sourceRank, packet, known, budget)
+        BY <1>1,
+           AsyncSpecProvidesTimeoutFixedClockPacketConcreteActionService
+           DEF TimeoutFixedClockPacketConcreteActionServiceProperty
+      <3> QED BY <3>1, <3>2, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+       DEF TimeoutFixedClockPacketDependencyKernelProperty
+
+THEOREM AsyncSpecProvidesTimeoutFixedClockLifecyclePhysicalKernels ==
+  \A initialContext:
+    TimeoutFixedClockLifecyclePhysicalKernelProperties(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutFixedClockPacketDependencyKernel,
+   AsyncSpecProvidesTimeoutFixedClockDerivedCandidateServeKernels
+   DEF TimeoutFixedClockLifecyclePhysicalKernelProperties,
+       TimeoutFixedClockDerivedCandidateServeKernelProperties
+
+THEOREM AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels ==
+  \A initialContext:
+    TimeoutFixedClockLifecyclePhysicalKernelProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutFixedClockLifecyclePhysicalKernels
+   DEF AsyncLiveSpecAt
+
+(***************************************************************************
+Exact delivery-candidate service.
+
+These three leaves start after packet/ingress service has already installed
+the immutable delivery candidate.  They therefore use only ordinary
+protected-candidate starvation plus the action-local reducer theorems above.
+Candidate retirement is not itself success: the preservation lemmas map
+every stale/ignored/serviced departure to the exact semantic endpoint for the
+same vote, TC, or Commit QC.
+***************************************************************************)
+
+THEOREM TimeoutVoteDeliveryCandidatePersistsOrReachesExactOutcome ==
+  \A vote \in TimeoutVoteRecordSet,
+     recipient \in AsyncCurrentResponsiveVoters:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ TimeoutVoteReducerCandidateOwner(vote, recipient)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ TimeoutDeliveryOutcome(vote, recipient)'
+       \/ TimeoutVoteReducerCandidateOwner(vote, recipient)'
+BY ExecuteExactCurrentViewTimeoutDeliveryRecordsExactReceipt,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateSameGenerationSuccessfulServiceIdentityPersistsUntilStrictExit,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   GstAsyncStepIsMonotone, IsaT(2400)
+   DEF TimeoutVoteReducerCandidateOwner,
+       TimeoutVoteDeliveryKernelSource,
+       TimeoutDeliveryOutcome, TimeoutReceipt,
+       TimeoutSourceDominated, TimeoutViewGoal,
+       DecisionPropagationFrontier,
+       ExactTimeoutVoteDeliveryCommand,
+       ExactDeliveryCandidateOwns,
+       DeliveryCandidate, DeliveryClass, DeliveryKind,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       CandidateScheduled, CandidateScheduledAfter,
+       AsyncCandidateIgnoredWithoutApplicationThisStep,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateServiceTombstoned,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, ExecuteCommand, ExecuteCoreDelivery,
+       AsyncAllVars
+
+THEOREM TimeoutTcDeliveryCandidatePersistsOrReachesExactOwner ==
+  \A source, target, tc, minimumView:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ TimeoutTcReducerCandidateOwner(
+         source, target, tc, minimumView)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ TimeoutTcDeliveryTerminalOwner(
+            target, tc, minimumView)'
+       \/ TimeoutTcReducerCandidateOwner(
+            source, target, tc, minimumView)'
+BY ExecuteExactTimeoutCertificateDeliveryCreatesInstallOrGoal,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateSameGenerationSuccessfulServiceIdentityPersistsUntilStrictExit,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   GstAsyncStepIsMonotone, IsaT(2400)
+   DEF TimeoutTcReducerCandidateOwner,
+       TimeoutTcDeliveryTerminalOwner,
+       TimeoutTcReceivedReducerOwner,
+       TimeoutTcInstallWalOwner,
+       TimeoutTcKernelSource,
+       TimeoutDirectGoal,
+       ExactTimeoutCertificateDeliveryCommand,
+       ExactDeliveryCandidateOwns,
+       DeliveryCandidate, DeliveryClass, DeliveryKind,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       CandidateScheduled, CandidateScheduledAfter,
+       AsyncCandidateIgnoredWithoutApplicationThisStep,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateServiceTombstoned,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, ExecuteCommand, ExecuteCoreDelivery,
+       AsyncAllVars
+
+THEOREM TimeoutDecisionDeliveryCandidatePersistsOrReachesExactOwner ==
+  \A source, target, qc:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ TimeoutDecisionReducerCandidateOwner(source, target, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ TimeoutDecisionDeliveryTerminalOwner(target, qc)'
+       \/ TimeoutDecisionReducerCandidateOwner(source, target, qc)'
+BY ExecuteExactCommitCertificateDeliveryRecordsExactReceipt,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateSameGenerationSuccessfulServiceIdentityPersistsUntilStrictExit,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   GstAsyncStepIsMonotone, IsaT(2400)
+   DEF TimeoutDecisionReducerCandidateOwner,
+       TimeoutDecisionDeliveryTerminalOwner,
+       TimeoutDecisionReceivedReducerOwner,
+       TimeoutExactDecisionWalOwner,
+       TimeoutDecisionKernelSource,
+       ExactCommitCertificateDeliveryCommand,
+       ExactDeliveryCandidateOwns,
+       DeliveryCandidate, DeliveryClass, DeliveryKind,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       CandidateScheduled, CandidateScheduledAfter,
+       AsyncCandidateIgnoredWithoutApplicationThisStep,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateServiceTombstoned,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, ExecuteCommand, ExecuteCoreDelivery,
+       AsyncAllVars
+
+TimeoutExactDeliveryCandidateKernelProperties(specification) ==
+  /\ TimeoutVoteReducerCandidateKernelProperty(specification)
+  /\ TimeoutTcDeliveryCandidateKernelProperty(specification)
+  /\ TimeoutDecisionDeliveryCandidateKernelProperty(specification)
+
+THEOREM AsyncSpecProvidesTimeoutExactDeliveryCandidateKernels ==
+  \A initialContext:
+    TimeoutExactDeliveryCandidateKernelProperties(
+      AsyncSpecAt(initialContext))
+BY StarvationFreedomObligation,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   ExactDecisionAsyncSpecAlwaysCandidateTombstones,
+   TimeoutVoteDeliveryCandidatePersistsOrReachesExactOutcome,
+   TimeoutTcDeliveryCandidatePersistsOrReachesExactOwner,
+   TimeoutDecisionDeliveryCandidatePersistsOrReachesExactOwner,
+   PTL, IsaT(1800)
+   DEF TimeoutExactDeliveryCandidateKernelProperties,
+       TimeoutVoteReducerCandidateKernelProperty,
+       TimeoutTcDeliveryCandidateKernelProperty,
+       TimeoutDecisionDeliveryCandidateKernelProperty,
+       TimeoutVoteReducerCandidateOwner,
+       TimeoutTcReducerCandidateOwner,
+       TimeoutDecisionReducerCandidateOwner,
+       TimeoutVoteDeliveryKernelSource,
+       TimeoutTcKernelSource, TimeoutDecisionKernelSource,
+       ExactDeliveryCandidateOwns,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       DeliveryCandidate, DeliveryClass,
+       StarvationFreedomProperty
+
+THEOREM AsyncLiveProvidesTimeoutExactDeliveryCandidateKernels ==
+  \A initialContext:
+    TimeoutExactDeliveryCandidateKernelProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutExactDeliveryCandidateKernels
+   DEF AsyncLiveSpecAt
+
+(***************************************************************************
+Context-stable imported certificate reducer tails.
+
+A receipt or WAL entry is not itself a fair scheduler owner.  The invariant
+below therefore projects every exact imported TC/CommitQC receipt and every
+exact pending WAL to its causal Begin/Persist candidate, unless the requested
+view or Decision has already been reached.  The candidate keeps the original
+authenticated evidence and causal origin.  `CandidateConsumerCurrent` now
+ignores only local view/generation movement for these imported tails; height,
+context, certificate lineage, and Decision/Apply authority remain exact.
+***************************************************************************)
+
+TimeoutTcImportedBeginCandidateOwner(target, tc, minimumView) ==
+  /\ target \in AsyncCurrentResponsiveVoters
+  /\ TimeoutCertificateSemanticIdentity(tc, minimumView)
+  /\ \E candidate \in AsyncCandidateSet:
+       /\ candidate.kind = "BeginInstallTC"
+       /\ candidate.node = target
+       /\ candidate.view = tc.view
+       /\ InstallTcEvidenceMatches(candidate, tc)
+       /\ ImportedTimeoutCertificateTail(candidate)
+       /\ CandidateConsumerCurrent(candidate)
+       /\ ResponsiveProtectedCandidateOwned(candidate)
+
+TimeoutTcExactPersistCandidateOwner(target, tc, minimumView) ==
+  /\ target \in AsyncCurrentResponsiveVoters
+  /\ TimeoutCertificateSemanticIdentity(tc, minimumView)
+  /\ \E candidate \in AsyncCandidateSet:
+       /\ candidate.kind = "PersistInstallTC"
+       /\ candidate.node = target
+       /\ candidate.view = tc.view
+       /\ InstallTcEvidenceMatches(candidate, tc)
+       /\ CandidateConsumerCurrent(candidate)
+       /\ ResponsiveProtectedCandidateOwned(candidate)
+
+TimeoutDecisionImportedBeginCandidateOwner(target, qc) ==
+  /\ target \in AsyncCurrentResponsiveVoters
+  /\ qc \in QcRecordSet
+  /\ qc.context = context
+  /\ qc.height = height
+  /\ qc.phase = "Commit"
+  /\ \E candidate \in AsyncCandidateSet:
+       /\ candidate.kind = "BeginDecision"
+       /\ candidate.node = target
+       /\ AsyncCommitImportCandidateLineage(candidate, qc)
+       /\ CandidateConsumerCurrent(candidate)
+       /\ ResponsiveProtectedCandidateOwned(candidate)
+
+TimeoutDecisionImportedPersistCandidateOwner(target, qc) ==
+  /\ target \in AsyncCurrentResponsiveVoters
+  /\ qc \in QcRecordSet
+  /\ qc.context = context
+  /\ qc.height = height
+  /\ qc.phase = "Commit"
+  /\ \E candidate \in AsyncCandidateSet:
+       /\ candidate.kind = "PersistDecision"
+       /\ candidate.node = target
+       /\ AsyncCommitImportCandidateLineage(candidate, qc)
+       /\ CandidateConsumerCurrent(candidate)
+       /\ ResponsiveProtectedCandidateOwned(candidate)
+
+TimeoutImportedCertificateReducerTailInvariant ==
+  /\ \A target, tc, minimumView:
+       TimeoutTcReceivedReducerOwner(target, tc, minimumView)
+         => \/ TimeoutDirectGoal(target, minimumView)
+            \/ TimeoutTcImportedBeginCandidateOwner(
+                 target, tc, minimumView)
+            \/ TimeoutTcInstallWalOwner(target, tc, minimumView)
+  /\ \A target, tc, minimumView:
+       TimeoutTcInstallWalOwner(target, tc, minimumView)
+         => \/ TimeoutDirectGoal(target, minimumView)
+            \/ TimeoutTcExactPersistCandidateOwner(
+                 target, tc, minimumView)
+  /\ \A target, qc:
+       TimeoutDecisionReceivedReducerOwner(target, qc)
+         => \/ NodeHasDecision(target)
+            \/ TimeoutDecisionImportedBeginCandidateOwner(target, qc)
+            \/ TimeoutExactDecisionWalOwner(target, qc)
+  /\ \A target, qc:
+       TimeoutExactDecisionWalOwner(target, qc)
+         => \/ NodeHasDecision(target)
+            \/ TimeoutDecisionImportedPersistCandidateOwner(target, qc)
+
+THEOREM AsyncInitEstablishesTimeoutImportedCertificateReducerTail ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => TimeoutImportedCertificateReducerTailInvariant
+BY IsaT(300)
+   DEF TimeoutImportedCertificateReducerTailInvariant,
+       TimeoutTcReceivedReducerOwner,
+       TimeoutTcInstallWalOwner,
+       TimeoutDecisionReceivedReducerOwner,
+       TimeoutExactDecisionWalOwner,
+       AsyncInitAt, AsyncBaseInitAt, InitAt
+
+THEOREM AsyncBracketPreservesTimeoutImportedCertificateReducerTail ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceLifecycleInvariant
+  /\ TimeoutImportedCertificateReducerTailInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => TimeoutImportedCertificateReducerTailInvariant'
+BY DirectCommitQcCandidateHasExactImportLineage,
+   CommitCertificateResponseCandidateHasExactImportLineage,
+   CommitImportCausalSuccessorRetainsExactLineage,
+   ImportedCertificateTailCannotRetireOnLocalIncarnationChange,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   IsaT(4200)
+   DEF TimeoutImportedCertificateReducerTailInvariant,
+       TimeoutTcImportedBeginCandidateOwner,
+       TimeoutTcExactPersistCandidateOwner,
+       TimeoutDecisionImportedBeginCandidateOwner,
+       TimeoutDecisionImportedPersistCandidateOwner,
+       TimeoutTcReceivedReducerOwner,
+       TimeoutTcInstallWalOwner,
+       TimeoutDecisionReceivedReducerOwner,
+       TimeoutExactDecisionWalOwner,
+       TimeoutDirectGoal, TimeoutViewGoal,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       CandidateConsumerCurrent, CandidateScheduled,
+       CandidateScheduledAfter,
+       AsyncCommitImportCandidateLineage,
+       AsyncCommitImportDirectEvidence,
+       AsyncCommitImportResponseEvidence,
+       ImportedTimeoutCertificateTail,
+       InstallTcEvidenceMatches,
+       CommandSuccessors, CausalCandidate,
+       CausalCandidateWithEvidence,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       EnqueueCandidate,
+       ExecuteCommand, ExecuteRegularCommand,
+       ExecuteCoreDelivery, ExecutePersistInstall,
+       ExecutePersistDecision,
+       DeliverTC, DeliverQC, BeginInstallTC, PersistInstallTC,
+       BeginDecision, PersistDecision,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateReducerStageCoveredAfterIn,
+       AsyncCandidateDecisionStageCoveredAfter,
+       AsyncCandidateInstallTcStageCoveredAfter,
+       AsyncCandidateConsumerEpisodeObsoleteAfter,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, RunHistoricalServer,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       IngressDrainStep, SerializedRuntimeStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       AsyncNetworkStep, AsyncFaultStep,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart, AsyncAllVars
+
+THEOREM AsyncSpecAlwaysTimeoutImportedCertificateReducerTail ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []TimeoutImportedCertificateReducerTailInvariant
+PROOF
+  <1>1. AsyncInitAt(initialContext)
+           => TimeoutImportedCertificateReducerTailInvariant
+    BY AsyncInitEstablishesTimeoutImportedCertificateReducerTail
+  <1>2. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+    BY AsyncSpecAlwaysStrongTypeInvariant
+  <1>3. AsyncSpecAt(initialContext) => []AsyncProgressOwnershipInvariant
+    BY AsyncSpecAlwaysProgressOwnershipInvariant
+  <1>4. AsyncSpecAt(initialContext)
+           => []AsyncCandidateServiceLifecycleInvariant
+    BY ExactDecisionAsyncSpecAlwaysCandidateTombstones
+  <1>5. /\ AsyncStrongTypeInvariant
+         /\ AsyncProgressOwnershipInvariant
+         /\ AsyncCandidateServiceLifecycleInvariant
+         /\ TimeoutImportedCertificateReducerTailInvariant
+         /\ [AsyncNext]_AsyncAllVars
+         => TimeoutImportedCertificateReducerTailInvariant'
+    BY AsyncBracketPreservesTimeoutImportedCertificateReducerTail
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, PTL
+       DEF AsyncSpecAt
+
+TimeoutImportedCertificateCandidateTailKernelProperties(specification) ==
+  /\ (specification
+        => \A target, tc, minimumView:
+             TimeoutTcImportedBeginCandidateOwner(
+               target, tc, minimumView)
+               ~> (TimeoutDirectGoal(target, minimumView)
+                    \/ TimeoutTcExactPersistCandidateOwner(
+                         target, tc, minimumView)))
+  /\ (specification
+        => \A target, tc, minimumView:
+             TimeoutTcExactPersistCandidateOwner(
+               target, tc, minimumView)
+               ~> TimeoutDirectGoal(target, minimumView))
+  /\ (specification
+        => \A target, qc:
+             TimeoutDecisionImportedBeginCandidateOwner(target, qc)
+               ~> (NodeHasDecision(target)
+                    \/ TimeoutDecisionImportedPersistCandidateOwner(
+                         target, qc)))
+  /\ (specification
+        => \A target, qc:
+             TimeoutDecisionImportedPersistCandidateOwner(target, qc)
+               ~> NodeHasDecision(target))
+
+THEOREM AsyncSpecProvidesTimeoutImportedCertificateCandidateTailKernels ==
+  \A initialContext:
+    TimeoutImportedCertificateCandidateTailKernelProperties(
+      AsyncSpecAt(initialContext))
+BY StarvationFreedomObligation,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   ExactDecisionAsyncSpecAlwaysCandidateTombstones,
+   ExecuteExactBeginInstallCreatesExactWalOwner,
+   ExecuteExactPersistInstallReachesMinimumView,
+   ExecuteTargetBeginDecisionCreatesWalOwner,
+   ExecuteTargetPersistDecisionReachesDecision,
+   ImportedCertificateTailCannotRetireOnLocalIncarnationChange,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   PTL, IsaT(4200)
+   DEF TimeoutImportedCertificateCandidateTailKernelProperties,
+       TimeoutTcImportedBeginCandidateOwner,
+       TimeoutTcExactPersistCandidateOwner,
+       TimeoutDecisionImportedBeginCandidateOwner,
+       TimeoutDecisionImportedPersistCandidateOwner,
+       TimeoutDirectGoal, TimeoutViewGoal,
+       ExactBeginInstallTcCommand,
+       ExactPersistInstallTcCommand,
+       TargetBeginDecisionCommand,
+       TargetPersistDecisionCommand,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       CandidateConsumerCurrent, CandidateScheduled,
+       CandidateScheduledAfter,
+       AsyncCommitImportCandidateLineage,
+       ImportedTimeoutCertificateTail,
+       InstallTcEvidenceMatches,
+       CommandSuccessors, CausalCandidate,
+       CausalCandidateWithEvidence,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       EnqueueCandidate,
+       CommandDispatchable, ExecuteCommand,
+       ExecuteRegularCommand, ExecutePersistInstall,
+       ExecutePersistDecision,
+       BeginInstallTC, PersistInstallTC,
+       BeginDecision, PersistDecision,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateReducerStageCoveredAfterIn,
+       AsyncCandidateDecisionStageCoveredAfter,
+       AsyncCandidateInstallTcStageCoveredAfter,
+       AsyncCandidateConsumerEpisodeObsoleteAfter,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, RunHistoricalServer,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       IngressDrainStep, SerializedRuntimeStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       AsyncNetworkStep, AsyncFaultStep, AsyncAllVars,
+       StarvationFreedomProperty
+
+TimeoutImportedCertificateReducerWalKernelProperties(specification) ==
+  /\ TimeoutTcReceivedReducerKernelProperty(specification)
+  /\ TimeoutTcInstallWalKernelProperty(specification)
+  /\ TimeoutDecisionReceivedReducerKernelProperty(specification)
+  /\ TimeoutDecisionWalKernelProperty(specification)
+
+THEOREM AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels ==
+  \A initialContext:
+    TimeoutImportedCertificateReducerWalKernelProperties(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecAlwaysTimeoutImportedCertificateReducerTail,
+   AsyncSpecProvidesTimeoutImportedCertificateCandidateTailKernels,
+   PTL, IsaT(1200)
+   DEF TimeoutImportedCertificateReducerWalKernelProperties,
+       TimeoutImportedCertificateReducerTailInvariant,
+       TimeoutImportedCertificateCandidateTailKernelProperties,
+       TimeoutTcReceivedReducerKernelProperty,
+       TimeoutTcInstallWalKernelProperty,
+       TimeoutDecisionReceivedReducerKernelProperty,
+       TimeoutDecisionWalKernelProperty
+
+THEOREM AsyncLiveProvidesTimeoutImportedCertificateReducerWalKernels ==
+  \A initialContext:
+    TimeoutImportedCertificateReducerWalKernelProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels
+   DEF AsyncLiveSpecAt
+
+(***************************************************************************
+Exact retained-control transport closure.
+
+The three control families below share the physical scheduler, but not their
+semantic terminal.  `TimeoutPhysicalControlItem` freezes the complete wire
+item.  The TC arm deliberately uses the certificate's own view; projection
+to a lower requested view is proved only after the exact item reaches its
+terminal.  Thus replacement by a different certificate or delivery to a
+different target cannot discharge this corridor.
+
+The stage number records only boundary handoff.  It is not used as a claim
+that waiting within retained control, packet, or ingress is progress.  Those
+non-descent episodes use the existing concrete fixed-clock packet rank, the
+exact ingress rank, and the frozen Candidate/Serve ordinal budget.  The
+snapshot prevents later causal, Control, Completion, priority, or Serve work
+from acquiring a predecessor position ahead of the admitted exact item.
+***************************************************************************)
+
+TimeoutPhysicalControlItem(item) ==
+  /\ item \in AsyncNetworkItems
+  /\ \/ \E vote \in TimeoutVoteRecordSet,
+             recipient \in AsyncCurrentResponsiveVoters:
+          /\ TimeoutVoteDeliveryKernelSource(vote, recipient)
+          /\ item = TimeoutVoteItem(vote, recipient)
+     \/ \E source, target, tc:
+          /\ TimeoutTcKernelSource(source, target, tc, tc.view)
+          /\ item = TimeoutCertificateItem(source, target, tc)
+     \/ \E source, target, qc:
+          /\ TimeoutDecisionKernelSource(source, target, qc)
+          /\ item = CommitCertificateItem(source, target, qc)
+
+TimeoutPhysicalControlTerminal(item) ==
+  \/ \E vote \in TimeoutVoteRecordSet,
+         recipient \in AsyncCurrentResponsiveVoters:
+       /\ item = TimeoutVoteItem(vote, recipient)
+       /\ TimeoutDeliveryOutcome(vote, recipient)
+  \/ \E source, target, tc:
+       /\ item = TimeoutCertificateItem(source, target, tc)
+       /\ TimeoutTcKernelSource(source, target, tc, tc.view)
+       /\ TimeoutTcDeliveryTerminalOwner(target, tc, tc.view)
+  \/ \E source, target, qc:
+       /\ item = CommitCertificateItem(source, target, qc)
+       /\ TimeoutDecisionKernelSource(source, target, qc)
+       /\ TimeoutDecisionDeliveryTerminalOwner(target, qc)
+
+TimeoutPhysicalControlRetainedOwner(item) ==
+  /\ TimeoutPhysicalControlItem(item)
+  /\ item \in asyncRetainedControl
+
+TimeoutPhysicalControlPacketOwner(item) ==
+  /\ TimeoutPhysicalControlItem(item)
+  /\ ExactPacketOwns(item)
+
+TimeoutPhysicalControlIngressOwner(item) ==
+  /\ TimeoutPhysicalControlItem(item)
+  /\ ExactIngressOwns(item)
+
+TimeoutPhysicalControlCandidateOwner(item) ==
+  /\ TimeoutPhysicalControlItem(item)
+  /\ ExactDeliveryCandidateOwns(item)
+
+TimeoutPhysicalControlGoal(item) ==
+  \/ TimeoutPhysicalControlTerminal(item)
+  \/ TimeoutPhysicalControlCandidateOwner(item)
+
+TimeoutPhysicalControlExactPackets(item) ==
+  {packet \in asyncTransport: packet.item = item}
+
+TimeoutPhysicalControlSelectedPacket(item) ==
+  CHOOSE packet \in TimeoutPhysicalControlExactPackets(item):
+    \A other \in TimeoutPhysicalControlExactPackets(item):
+      packet.sentAt <= other.sentAt
+
+TimeoutPhysicalControlPacketDependencyRank(item) ==
+  ExactDecisionTargetNeutralPacketDependencyRank(
+    TimeoutPhysicalControlSelectedPacket(item))
+
+TimeoutPhysicalControlIngressDependencyRank(item) ==
+  ExactDecisionRequestIngressRank(item.envelope.recipient, item)
+
+TimeoutPhysicalControlLifecycleStageRank(item) ==
+  IF TimeoutPhysicalControlGoal(item)
+  THEN 0
+  ELSE IF TimeoutPhysicalControlIngressOwner(item)
+       THEN 1
+       ELSE IF TimeoutPhysicalControlPacketOwner(item)
+            THEN 2
+            ELSE 3
+
+TimeoutPhysicalControlLifecycleStageCarrier == 0..3
+
+TimeoutPhysicalControlLifecycleStageOrdering ==
+  OpToRel(<, TimeoutPhysicalControlLifecycleStageCarrier)
+
+TimeoutPhysicalControlFrozenSnapshot(clockValue) ==
+  ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
+
+TimeoutPhysicalControlFrozenPredecessorSet(snapshot) ==
+  snapshot.predecessors
+
+TimeoutPhysicalControlFrozenProducerEpisodeBudget(snapshot) ==
+  ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)
+
+TimeoutPhysicalControlDependencyCertificate(item, snapshot) ==
+  [stage |-> TimeoutPhysicalControlLifecycleStageRank(item),
+   packetRank |-> TimeoutPhysicalControlPacketDependencyRank(item),
+   ingressRank |-> TimeoutPhysicalControlIngressDependencyRank(item),
+   predecessors |->
+     TimeoutPhysicalControlFrozenPredecessorSet(snapshot),
+   producerBudget |->
+     TimeoutPhysicalControlFrozenProducerEpisodeBudget(snapshot)]
+
+THEOREM TimeoutPhysicalControlLifecycleStageOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    TimeoutPhysicalControlLifecycleStageOrdering,
+    TimeoutPhysicalControlLifecycleStageCarrier)
+BY NatLessThanWellFounded, Isa
+   DEF TimeoutPhysicalControlLifecycleStageOrdering,
+       TimeoutPhysicalControlLifecycleStageCarrier
+
+THEOREM TimeoutPhysicalControlPacketRankUsesFrozenExactOccurrence ==
+  \A item:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutPhysicalControlPacketOwner(item)
+    /\ TimeoutPhysicalControlSelectedPacket(item)
+         \in OverdueResponsivePackets
+    => TimeoutPhysicalControlPacketDependencyRank(item)
+         \in HistoricalDiscoveryPacketDependencyCarrier
+BY ExactDecisionTargetNeutralPacketDependencyRankInCarrier
+   DEF TimeoutPhysicalControlPacketDependencyRank
+
+THEOREM TimeoutPhysicalControlIngressRankUsesExactAdmissionOrdinal ==
+  \A item:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutPhysicalControlIngressOwner(item)
+    => TimeoutPhysicalControlIngressDependencyRank(item)
+         \in ExactDecisionRequestIngressRankCarrier
+BY ExactDecisionRequestIngressPriorityDebtIsNatural,
+   ExactDecisionRequestIngressServeCapacityDebtIsNatural,
+   CandidateSequenceIndexIsPosition,
+   DrainableIngressTurnReachRankIsNatural, IsaT(300)
+   DEF TimeoutPhysicalControlIngressDependencyRank,
+       TimeoutPhysicalControlIngressOwner,
+       TimeoutPhysicalControlItem,
+       ExactDecisionRequestIngressRank,
+       ExactDecisionRequestIngressRankCarrier,
+       ExactDecisionRequestIngressCapacityRank,
+       ExactDecisionRequestIngressReachSelectorRank,
+       ExactDecisionRequestIngressSelectorRank,
+       ExactDecisionRequestIngressLaneRank,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressTargetServeCapacityDebt,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressLanePosition,
+       ExactDecisionRequestIngressLaneIndices,
+       ExactDecisionRequestIngressSourcePosition,
+       ExactDecisionRequestIngressReachRank,
+       ExactDecisionServeLifecycleIdentity,
+       AsyncServeLiveReservationOwned, AsyncServeJobQueued,
+       IngressSourceServiceRank, IngressResourceSource,
+       IngressLane, SequenceSet,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
+       AsyncIngressContentTypeInvariant
+
+TimeoutPhysicalControlRetainedKernelProperty(specification) ==
+  specification
+    => \A item \in AsyncNetworkItems:
+         TimeoutPhysicalControlRetainedOwner(item)
+           ~> (TimeoutPhysicalControlTerminal(item)
+                \/ TimeoutPhysicalControlPacketOwner(item)
+                \/ TimeoutPhysicalControlIngressOwner(item)
+                \/ TimeoutPhysicalControlCandidateOwner(item))
+
+TimeoutPhysicalControlPacketKernelProperty(specification) ==
+  specification
+    => \A item \in AsyncNetworkItems:
+         TimeoutPhysicalControlPacketOwner(item)
+           ~> (TimeoutPhysicalControlTerminal(item)
+                \/ TimeoutPhysicalControlIngressOwner(item)
+                \/ TimeoutPhysicalControlCandidateOwner(item))
+
+TimeoutPhysicalControlIngressKernelProperty(specification) ==
+  specification
+    => \A item \in AsyncNetworkItems:
+         TimeoutPhysicalControlIngressOwner(item)
+           ~> (TimeoutPhysicalControlTerminal(item)
+                \/ TimeoutPhysicalControlCandidateOwner(item))
+
+TimeoutPhysicalControlTransportKernelProperties(specification) ==
+  /\ TimeoutPhysicalControlRetainedKernelProperty(specification)
+  /\ TimeoutPhysicalControlPacketKernelProperty(specification)
+  /\ TimeoutPhysicalControlIngressKernelProperty(specification)
+
+TimeoutPhysicalControlRetainedClockAtRank(item, rank) ==
+  /\ rank \in Nat
+  /\ rank > 0
+  /\ TimeoutPhysicalControlRetainedOwner(item)
+  /\ ~TimeoutPhysicalControlGoal(item)
+  /\ ~TimeoutPhysicalControlPacketOwner(item)
+  /\ ~TimeoutPhysicalControlIngressOwner(item)
+  /\ asyncNow < asyncRetransmitDeadlines[item.source]
+  /\ asyncRetransmitDeadlines[item.source] = asyncNow + rank
+
+TimeoutPhysicalControlRetainedDueOwner(item) ==
+  /\ TimeoutPhysicalControlRetainedOwner(item)
+  /\ ~TimeoutPhysicalControlGoal(item)
+  /\ ~TimeoutPhysicalControlPacketOwner(item)
+  /\ ~TimeoutPhysicalControlIngressOwner(item)
+  /\ asyncNow >= asyncRetransmitDeadlines[item.source]
+
+THEOREM TimeoutPhysicalControlRetainedClockHasNaturalRankOrIsDue ==
+  \A item:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutPhysicalControlRetainedOwner(item)
+    /\ ~TimeoutPhysicalControlGoal(item)
+    /\ ~TimeoutPhysicalControlPacketOwner(item)
+    /\ ~TimeoutPhysicalControlIngressOwner(item)
+    => \/ TimeoutPhysicalControlRetainedDueOwner(item)
+       \/ \E rank \in Nat:
+            TimeoutPhysicalControlRetainedClockAtRank(item, rank)
+BY SMT
+   DEF TimeoutPhysicalControlRetainedClockAtRank,
+       TimeoutPhysicalControlRetainedDueOwner,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+
+THEOREM TimeoutPhysicalControlTickLowersRetainedClockRank ==
+  \A item, rank \in Nat:
+    /\ TimeoutPhysicalControlRetainedClockAtRank(item, rank)
+    /\ AsyncTick
+    => \/ TimeoutPhysicalControlGoal(item)'
+       \/ TimeoutPhysicalControlPacketOwner(item)'
+       \/ TimeoutPhysicalControlIngressOwner(item)'
+       \/ TimeoutPhysicalControlRetainedDueOwner(item)'
+       \/ \E lowerRank \in SetLessThan(
+              rank, OpToRel(<, Nat), Nat):
+            TimeoutPhysicalControlRetainedClockAtRank(
+              item, lowerRank)'
+BY SMT
+   DEF TimeoutPhysicalControlRetainedClockAtRank,
+       TimeoutPhysicalControlRetainedDueOwner,
+       TimeoutPhysicalControlGoal,
+       TimeoutPhysicalControlRetainedOwner,
+       TimeoutPhysicalControlPacketOwner,
+       TimeoutPhysicalControlIngressOwner,
+       AsyncTick, AsyncNonClockVars
+
+THEOREM TimeoutPhysicalControlRetransmissionCreatesExactPacket ==
+  \A node \in ValidatorIds, item:
+    /\ TimeoutPhysicalControlRetainedDueOwner(item)
+    /\ item.source = node
+    /\ UNCHANGED vars
+    /\ SendNodeRetransmissions(node)
+    => TimeoutPhysicalControlPacketOwner(item)'
+BY IsaT(240)
+   DEF TimeoutPhysicalControlRetainedDueOwner,
+       TimeoutPhysicalControlRetainedOwner,
+       TimeoutPhysicalControlPacketOwner,
+       TimeoutPhysicalControlItem,
+       SendNodeRetransmissions, RetryableItems,
+       RetainedControlEmissionItems, SendableItems,
+       PacketsForItems, PacketForItem, ExactPacketOwns
+
+THEOREM TimeoutPhysicalControlPacketAdmissionPreservesExactHandoff ==
+  \A item, packet:
+    LET recipient == item.envelope.recipient
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ TimeoutPhysicalControlPacketOwner(item)
+       /\ packet \in TimeoutPhysicalControlExactPackets(item)
+       /\ packet = OldestDueSourcePacket(recipient, item.source)
+       /\ AdmitIngressPacket(recipient, item.source)
+       => \/ TimeoutPhysicalControlTerminal(item)'
+          \/ TimeoutPhysicalControlIngressOwner(item)'
+          \/ TimeoutPhysicalControlCandidateOwner(item)'
+BY AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   IsaT(900)
+   DEF TimeoutPhysicalControlPacketOwner,
+       TimeoutPhysicalControlIngressOwner,
+       TimeoutPhysicalControlCandidateOwner,
+       TimeoutPhysicalControlTerminal,
+       TimeoutPhysicalControlItem,
+       TimeoutPhysicalControlExactPackets,
+       ExactPacketOwns, ExactIngressOwns,
+       ExactDeliveryCandidateOwns,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       IngressHasCoalescingOwner, IngressPacketPolicyRejected,
+       IngressLane, IngressResourceSource, SequenceSet,
+       CandidateScheduled, DeliveryCandidate
+
+THEOREM TimeoutPhysicalControlIngressDrainPreservesExactHandoff ==
+  \A item:
+    LET node == item.envelope.recipient
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ TimeoutPhysicalControlIngressOwner(item)
+       /\ SelectedIngressItemAt(
+            node, FirstDrainableIngressIndex(node)) = item
+       /\ DrainFairIngressSelected(node)
+       => \/ TimeoutPhysicalControlTerminal(item)'
+          \/ TimeoutPhysicalControlCandidateOwner(item)'
+BY AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalIdentityCannotReactivateAtGst,
+   IsaT(1200)
+   DEF TimeoutPhysicalControlIngressOwner,
+       TimeoutPhysicalControlCandidateOwner,
+       TimeoutPhysicalControlTerminal,
+       TimeoutPhysicalControlItem,
+       ExactIngressOwns, ExactDeliveryCandidateOwns,
+       DrainFairIngressSelected, EnqueueCandidate,
+       CandidateAdmissionCoalesced, CandidateScheduled,
+       CandidateScheduledIn, DeliveryCandidate,
+       IngressLane, IngressResourceSource, SequenceSet
+
+(***************************************************************************
+The proof below uses the exact source retransmission deadline before a packet
+exists.  Once the immutable packet exists, the route-neutral packet rank
+consumes the finite due prefix.  Admission transfers the same item to its
+reserved ingress ordinal, whose exact lexicographic rank drains all frozen
+priority/lane/source/runner predecessors.  Equal-count Candidate/Serve owner
+replacement and count-increasing causal replenishment consume the separate
+finite ordinal episode; neither is counted as rank descent.  Tombstones make
+the final item-to-candidate handoff monotone under duplicate retransmission.
+***************************************************************************)
+
+THEOREM AsyncSpecProvidesTimeoutPhysicalControlTransportKernels ==
+  \A initialContext:
+    TimeoutPhysicalControlTransportKernelProperties(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   TimeoutViewOwnershipKernelInvariantFromAsyncSpec,
+   ExactDecisionAsyncSpecAlwaysCandidateTombstones,
+   ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded,
+   ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
+   ExactDecisionRequestIngressRankOrderingIsWellFounded,
+   TimeoutPhysicalControlLifecycleStageOrderingIsWellFounded,
+   TimeoutPhysicalControlPacketRankUsesFrozenExactOccurrence,
+   TimeoutPhysicalControlIngressRankUsesExactAdmissionOrdinal,
+   TimeoutPhysicalControlRetainedClockHasNaturalRankOrIsDue,
+   TimeoutPhysicalControlTickLowersRetainedClockRank,
+   TimeoutPhysicalControlRetransmissionCreatesExactPacket,
+   TimeoutPhysicalControlPacketAdmissionPreservesExactHandoff,
+   TimeoutPhysicalControlIngressDrainPreservesExactHandoff,
+   AsyncRetainedCommitQcRetransmissionCreatesExactPacket,
+   AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner,
+   AsyncRetainedCommitQcIngressCreatesExactDeliverQcOwner,
+   PTL, IsaT(7200)
+   DEF TimeoutPhysicalControlTransportKernelProperties,
+       TimeoutPhysicalControlRetainedKernelProperty,
+       TimeoutPhysicalControlPacketKernelProperty,
+       TimeoutPhysicalControlIngressKernelProperty,
+       TimeoutPhysicalControlRetainedOwner,
+       TimeoutPhysicalControlPacketOwner,
+       TimeoutPhysicalControlIngressOwner,
+       TimeoutPhysicalControlCandidateOwner,
+       TimeoutPhysicalControlTerminal,
+       TimeoutPhysicalControlGoal,
+       TimeoutPhysicalControlItem,
+       TimeoutPhysicalControlRetainedClockAtRank,
+       TimeoutPhysicalControlRetainedDueOwner,
+       TimeoutPhysicalControlDependencyCertificate,
+       TimeoutPhysicalControlLifecycleStageRank,
+       TimeoutPhysicalControlPacketDependencyRank,
+       TimeoutPhysicalControlIngressDependencyRank,
+       TimeoutPhysicalControlFrozenSnapshot,
+       TimeoutPhysicalControlFrozenPredecessorSet,
+       TimeoutPhysicalControlFrozenProducerEpisodeBudget,
+       TimeoutPhysicalControlExactPackets,
+       TimeoutPhysicalControlSelectedPacket,
+       TimeoutVoteRetainedControlOwner,
+       TimeoutVotePacketOwner, TimeoutVoteIngressOwner,
+       TimeoutVoteReducerCandidateOwner,
+       TimeoutTcRetainedControlOwner, TimeoutTcPacketOwner,
+       TimeoutTcIngressOwner, TimeoutTcReducerCandidateOwner,
+       TimeoutDecisionRetainedControlOwner,
+       TimeoutDecisionPacketOwner, TimeoutDecisionIngressOwner,
+       TimeoutDecisionReducerCandidateOwner,
+       TimeoutVoteItem, TimeoutCertificateItem,
+       CommitCertificateItem, ExactPacketOwns, ExactIngressOwns,
+       ExactDeliveryCandidateOwns, AsyncSpecAt, AsyncFairnessAt,
+       AsyncAllVars
+
+TimeoutRetainedPacketIngressKernelProperties(specification) ==
+  /\ TimeoutVoteRetainedControlKernelProperty(specification)
+  /\ TimeoutVotePacketKernelProperty(specification)
+  /\ TimeoutVoteIngressKernelProperty(specification)
+  /\ TimeoutTcRetainedControlKernelProperty(specification)
+  /\ TimeoutTcPacketKernelProperty(specification)
+  /\ TimeoutTcIngressKernelProperty(specification)
+  /\ TimeoutDecisionRetainedControlKernelProperty(specification)
+  /\ TimeoutDecisionPacketKernelProperty(specification)
+  /\ TimeoutDecisionIngressKernelProperty(specification)
+
+THEOREM TimeoutPhysicalControlTransportKernelsProjectDeclaredLeaves ==
+  \A specification:
+    TimeoutPhysicalControlTransportKernelProperties(specification)
+      => TimeoutRetainedPacketIngressKernelProperties(specification)
+BY Isa, PTL
+   DEF TimeoutPhysicalControlTransportKernelProperties,
+       TimeoutPhysicalControlRetainedKernelProperty,
+       TimeoutPhysicalControlPacketKernelProperty,
+       TimeoutPhysicalControlIngressKernelProperty,
+       TimeoutRetainedPacketIngressKernelProperties,
+       TimeoutPhysicalControlRetainedOwner,
+       TimeoutPhysicalControlPacketOwner,
+       TimeoutPhysicalControlIngressOwner,
+       TimeoutPhysicalControlCandidateOwner,
+       TimeoutPhysicalControlTerminal,
+       TimeoutPhysicalControlItem,
+       TimeoutVoteRetainedControlKernelProperty,
+       TimeoutVotePacketKernelProperty,
+       TimeoutVoteIngressKernelProperty,
+       TimeoutTcRetainedControlKernelProperty,
+       TimeoutTcPacketKernelProperty,
+       TimeoutTcIngressKernelProperty,
+       TimeoutDecisionRetainedControlKernelProperty,
+       TimeoutDecisionPacketKernelProperty,
+       TimeoutDecisionIngressKernelProperty,
+       TimeoutVoteRetainedControlOwner,
+       TimeoutVotePacketOwner, TimeoutVoteIngressOwner,
+       TimeoutVoteReducerCandidateOwner,
+       TimeoutTcRetainedControlOwner, TimeoutTcPacketOwner,
+       TimeoutTcIngressOwner, TimeoutTcReducerCandidateOwner,
+       TimeoutTcDeliveryTerminalOwner,
+       TimeoutDecisionRetainedControlOwner,
+       TimeoutDecisionPacketOwner, TimeoutDecisionIngressOwner,
+       TimeoutDecisionReducerCandidateOwner,
+       TimeoutDecisionDeliveryTerminalOwner,
+       TimeoutVoteDeliveryKernelSource,
+       TimeoutTcKernelSource, TimeoutDecisionKernelSource,
+       TimeoutCertificateSemanticIdentity,
+       TimeoutDirectGoal, TimeoutViewGoal
+
+THEOREM AsyncSpecProvidesTimeoutRetainedPacketIngressKernels ==
+  \A initialContext:
+    TimeoutRetainedPacketIngressKernelProperties(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutPhysicalControlTransportKernels,
+   TimeoutPhysicalControlTransportKernelsProjectDeclaredLeaves
+
+THEOREM AsyncLiveProvidesTimeoutRetainedPacketIngressKernels ==
+  \A initialContext:
+    TimeoutRetainedPacketIngressKernelProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutRetainedPacketIngressKernels
+   DEF AsyncLiveSpecAt
+
+(***************************************************************************
+Retired standalone TC formation.
+
+Receipt processing forms and schedules the exact install authority
+atomically.  `FormTC` is a compatibility tombstone and no transition may
+schedule a `FormTC` candidate.  The formation leaf is therefore discharged
+by reachable absence, not by treating the disabled action as progress.
+***************************************************************************)
+
+TimeoutRetiredFormTcCandidateAbsent ==
+  \A candidate \in AsyncCandidateSet:
+    candidate.kind = "FormTC" => ~CandidateScheduled(candidate)
+
+THEOREM AsyncInitEstablishesRetiredFormTcCandidateAbsence ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => TimeoutRetiredFormTcCandidateAbsent
+BY IsaT(300)
+   DEF TimeoutRetiredFormTcCandidateAbsent,
+       CandidateScheduled, CandidateScheduledIn,
+       AsyncInitAt, AsyncBaseInitAt, InitAt
+
+THEOREM AsyncBracketPreservesRetiredFormTcCandidateAbsence ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ TimeoutRetiredFormTcCandidateAbsent
+  /\ [AsyncNext]_AsyncAllVars
+  => TimeoutRetiredFormTcCandidateAbsent'
+BY RetiredStandaloneFormTcActionIsDisabled,
+   CommandSuccessorInventoryIsClosed, IsaT(3600)
+   DEF TimeoutRetiredFormTcCandidateAbsent,
+       CandidateScheduled, CandidateScheduledAfter,
+       CommandSuccessors, CausalCandidate,
+       CausalCandidateWithEvidence,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       EnqueueCandidate, DeliveryCandidate,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunHistoricalServer, RunNodeWork, LocalAdmissionStep,
+       SelectedLocalAdmissionAdvance, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       DeferredDrainStep, AsyncAllVars
+
+THEOREM AsyncSpecAlwaysExcludesRetiredFormTcCandidates ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []TimeoutRetiredFormTcCandidateAbsent
+BY AsyncInitEstablishesRetiredFormTcCandidateAbsence,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncBracketPreservesRetiredFormTcCandidateAbsence,
+   PTL
+   DEF AsyncSpecAt
+
+THEOREM AsyncSpecProvidesTimeoutTcFormationReducerKernel ==
+  \A initialContext:
+    TimeoutTcFormationReducerKernelProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecAlwaysExcludesRetiredFormTcCandidates,
+   RetiredStandaloneFormTcActionIsDisabled,
+   PTL, Isa
+   DEF TimeoutTcFormationReducerKernelProperty,
+       TimeoutRetiredFormTcCandidateAbsent,
+       TimeoutFormTcCandidateOwned
+
+THEOREM AsyncLiveProvidesTimeoutTcFormationReducerKernel ==
+  \A initialContext:
+    TimeoutTcFormationReducerKernelProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutTcFormationReducerKernel
+   DEF AsyncLiveSpecAt
+
+(***************************************************************************
+CommitQC origin and request/response closure.
+
+Every exact `DecisionSourceAt` owned by a responsive voter retains its full
+CommitQC outbox for the frozen roster.  Consequently the exact direct
+delivery disjunct is already true for every applied-authority and every
+request/response physical owner.  This is a direct-propagation handoff for
+the same `(source,target,qc)`, not Decision at another node and not a claim
+that request replenishment itself made progress.
+***************************************************************************)
+
+THEOREM TimeoutDecisionSourceRetainsExactDirectDelivery ==
+  \A source, target, qc:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ TimeoutDecisionKernelSource(source, target, qc)
+    => /\ TimeoutDecisionRetainedControlOwner(source, target, qc)
+       /\ CommitCertificateDelivery(source, target, qc)
+       /\ TimeoutDecisionRoundTripTerminalOwner(source, target, qc)
+BY IsaT(300)
+   DEF TimeoutViewOwnershipKernelInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       DecisionCertificateRetainedAuthority,
+       TimeoutDecisionKernelSource,
+       TimeoutDecisionRetainedControlOwner,
+       TimeoutDecisionRoundTripTerminalOwner,
+       CommitCertificateDelivery, CommitCertificateItem,
+       QcOutbox, AsyncCurrentResponsiveVoters,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant
+
+THEOREM AsyncSpecProvidesTimeoutDecisionOriginKernels ==
+  \A initialContext:
+    TimeoutDecisionOriginKernelProperties(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   TimeoutViewOwnershipKernelInvariantFromAsyncSpec,
+   TimeoutDecisionSourceRetainsExactDirectDelivery,
+   PTL, IsaT(900)
+   DEF TimeoutDecisionOriginKernelProperties,
+       TimeoutDecisionAppliedAuthorityOriginKernelProperty,
+       TimeoutDecisionRoundTripPhysicalKernelProperties,
+       TimeoutDecisionActiveRequestKernelProperty,
+       TimeoutDecisionRequestPacketKernelProperty,
+       TimeoutDecisionRequestIngressKernelProperty,
+       TimeoutDecisionRequestServeKernelProperty,
+       TimeoutDecisionResponsePacketKernelProperty,
+       TimeoutDecisionResponseIngressKernelProperty,
+       TimeoutDecisionResponseCandidateKernelProperty,
+       TimeoutDecisionRoundTripTerminalOwner,
+       TimeoutDecisionActiveRequestOwner,
+       TimeoutDecisionRequestPacketOwner,
+       TimeoutDecisionRequestIngressOwner,
+       TimeoutDecisionRequestServeOwner,
+       TimeoutDecisionResponsePacketOwner,
+       TimeoutDecisionResponseIngressOwner,
+       TimeoutDecisionResponseCandidateOwner
+
+THEOREM AsyncLiveProvidesTimeoutDecisionOriginKernels ==
+  \A initialContext:
+    TimeoutDecisionOriginKernelProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutDecisionOriginKernels
+   DEF AsyncLiveSpecAt
+
+(***************************************************************************
+Unconditional direct timeout residual.
+
+Each conjunct below is provided independently: retained/packet/ingress,
+exact delivery candidates, imported certificate reducer/WAL tails, retired
+formation absence, and exact Decision-origin propagation.  No aggregate
+timeout theorem appears in the dependency list.
+***************************************************************************)
+
+THEOREM AsyncSpecProvidesDirectTimeoutViewClosureResidual ==
+  \A initialContext:
+    DirectTimeoutViewClosureResidualProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesTimeoutRetainedPacketIngressKernels,
+   AsyncSpecProvidesTimeoutExactDeliveryCandidateKernels,
+   AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels,
+   AsyncSpecProvidesTimeoutTcFormationReducerKernel,
+   AsyncSpecProvidesTimeoutDecisionOriginKernels
+   DEF DirectTimeoutViewClosureResidualProperty,
+       TimeoutVoteDeliveryPhysicalKernelProperties,
+       TimeoutTcPhysicalKernelProperties,
+       TimeoutDecisionDirectPhysicalKernelProperties,
+       TimeoutCertificateDecisionPhysicalKernelProperties,
+       TimeoutRetainedPacketIngressKernelProperties,
+       TimeoutExactDeliveryCandidateKernelProperties,
+       TimeoutImportedCertificateReducerWalKernelProperties,
+       TimeoutDecisionOriginKernelProperties
+
+THEOREM AsyncLiveProvidesDirectTimeoutViewClosureResidual ==
+  \A initialContext:
+    DirectTimeoutViewClosureResidualProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesDirectTimeoutViewClosureResidual
+   DEF AsyncLiveSpecAt
 
 =============================================================================

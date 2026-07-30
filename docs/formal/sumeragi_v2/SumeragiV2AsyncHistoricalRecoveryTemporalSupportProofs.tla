@@ -1,6 +1,7 @@
 ---- MODULE SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs ----
 EXTENDS SumeragiV2AsyncHistoricalRecoveryTransportClosureProofs,
-        SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs
+        SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs,
+        SumeragiV2AsyncHistoricalCandidateProducerContinuationProofs
 
 (***************************************************************************
 Historical temporal support classification.
@@ -144,10 +145,18 @@ THEOREM HistoricalTemporalRunNodeIsNonstuttering ==
 BY Isa
    DEF PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
-       LocalAdmissionStep, IngressDrainStep,
+       LocalAdmissionStep, IngressDrainStep, EnqueueCandidate,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncAllVars, AsyncSchedulerVars,
@@ -157,6 +166,7 @@ BY Isa
 THEOREM HistoricalTemporalProtectedOwnerEnablesFairRunner ==
   \A candidate:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ gst
     /\ HistoricalProtectedCandidateOwned(candidate)
     => ENABLED
@@ -165,6 +175,7 @@ THEOREM HistoricalTemporalProtectedOwnerEnablesFairRunner ==
 PROOF
   <1>1. ASSUME NEW candidate,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
                 gst,
                 HistoricalProtectedCandidateOwned(candidate)
          PROVE ENABLED
@@ -399,8 +410,11 @@ THEOREM HistoricalTemporalStage3SameRunnerAuxOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage3ServeEpisodeResidual(
               candidate, position, rank)'
+         \/ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(
+              candidate.node)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
+   AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
    SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
    IngressDrainStrictlyDecreasesRuntimeReach,
@@ -429,6 +443,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -488,6 +504,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        PostGstRunHistoricalRecoveryNode,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -527,12 +545,14 @@ BY HistoricalTemporalStage3CarrierFacts,
 
 THEOREM HistoricalTemporalStage3EnablesFairRunner ==
   \A candidate, position:
-    HistoricalTemporalStage3Pending(candidate, position)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ HistoricalTemporalStage3Pending(candidate, position)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(
                candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
                 HistoricalTemporalStage3Pending(candidate, position)
          PROVE ENABLED
                  <<PostGstRunHistoricalRecoveryNode(
@@ -547,7 +567,7 @@ PROOF
              HistoricalRecoveryTarget
     <2>2. ENABLED
              PostGstRunHistoricalRecoveryNode(candidate.node)
-      BY <2>1, HistoricalRecoveryRunnerEnabledAfterGst
+      BY <1>1, <2>1, HistoricalRecoveryRunnerEnabledAfterGst
     <2>3. PostGstRunHistoricalRecoveryNode(candidate.node)
              => <<PostGstRunHistoricalRecoveryNode(
                     candidate.node)>>_AsyncAllVars
@@ -575,7 +595,8 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage3AuxProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage3AuxBlocked(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+             /\ HistoricalTemporalStage3AuxBlocked(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage3AuxProgress(
                     candidate, position, rank)
@@ -612,9 +633,12 @@ PROOF
          HistoricalTemporalStage3OtherStepUnlessAuxDescent, Isa
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage3AuxBlocked(
                      candidate, position, rank)
@@ -898,8 +922,11 @@ THEOREM HistoricalTemporalStage4SameRunnerProducesOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage4ServeEpisodeResidual(
               candidate, position, rank)'
+         \/ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(
+              candidate.node)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
+   AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix,
    ProducerAdmissionRecordsCausalDebt,
    OwedAdmissibleCausalCannotBeOvertaken,
    CandidateSequenceIndexIsPosition,
@@ -948,6 +975,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        LocalSourceDistance, CandidateSequenceIndex,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1025,6 +1054,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SelectedCompletionQueueNonempty,
        PostGstRunHistoricalRecoveryNode,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1123,13 +1154,15 @@ BY HistoricalTemporalStage4CarrierFacts,
 
 THEOREM HistoricalTemporalStage4EnablesFairRunner ==
   \A candidate, position, rank:
-    HistoricalTemporalStage4BlockedAtRank(
-      candidate, position, rank)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ HistoricalTemporalStage4BlockedAtRank(
+         candidate, position, rank)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(
                candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate, NEW position, NEW rank,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
                 HistoricalTemporalStage4BlockedAtRank(
                   candidate, position, rank)
          PROVE ENABLED
@@ -1146,7 +1179,7 @@ PROOF
              HistoricalRecoveryTarget
     <2>2. ENABLED
              PostGstRunHistoricalRecoveryNode(candidate.node)
-      BY <2>1, HistoricalRecoveryRunnerEnabledAfterGst
+      BY <1>1, <2>1, HistoricalRecoveryRunnerEnabledAfterGst
     <2>3. PostGstRunHistoricalRecoveryNode(candidate.node)
              => <<PostGstRunHistoricalRecoveryNode(
                     candidate.node)>>_AsyncAllVars
@@ -1174,7 +1207,8 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage4Progress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage4BlockedAtRank(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+             /\ HistoricalTemporalStage4BlockedAtRank(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage4Progress(
                     candidate, position, rank)
@@ -1210,9 +1244,12 @@ PROOF
          HistoricalTemporalStage4OtherStepUnlessProgress, Isa
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage4BlockedAtRank(
                      candidate, position, rank)
@@ -1549,8 +1586,11 @@ THEOREM HistoricalTemporalStage6PreAdmissionSameRunnerOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage6PreAdmissionRunnerEpisodeResidual(
               candidate, position, rank)'
+         \/ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(
+              candidate.node)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
+   AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
    SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
    IngressDrainStrictlyDecreasesRuntimeReach,
@@ -1591,6 +1631,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncOutstandingWorkCount,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1665,6 +1707,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1714,12 +1758,14 @@ BY HistoricalTemporalStage6CarrierFacts,
 
 THEOREM HistoricalTemporalStage6EnablesFairRunner ==
   \A candidate, position:
-    HistoricalTemporalStage6Pending(candidate, position)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ HistoricalTemporalStage6Pending(candidate, position)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(
                candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
                 HistoricalTemporalStage6Pending(candidate, position)
          PROVE ENABLED
                  <<PostGstRunHistoricalRecoveryNode(
@@ -1734,7 +1780,7 @@ PROOF
              HistoricalRecoveryTarget
     <2>2. ENABLED
              PostGstRunHistoricalRecoveryNode(candidate.node)
-      BY <2>1, HistoricalRecoveryRunnerEnabledAfterGst
+      BY <1>1, <2>1, HistoricalRecoveryRunnerEnabledAfterGst
     <2>3. PostGstRunHistoricalRecoveryNode(candidate.node)
              => <<PostGstRunHistoricalRecoveryNode(
                     candidate.node)>>_AsyncAllVars
@@ -1762,7 +1808,8 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage6PreAdmissionAuxProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage6PreAdmissionBlockedAtAux(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+             /\ HistoricalTemporalStage6PreAdmissionBlockedAtAux(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage6PreAdmissionAuxProgress(
                     candidate, position, rank)
@@ -1799,9 +1846,12 @@ PROOF
          HistoricalTemporalStage6PreAdmissionOtherStep, Isa
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage6PreAdmissionBlockedAtAux(
                      candidate, position, rank)
@@ -1933,8 +1983,11 @@ THEOREM HistoricalTemporalStage6OwedSameRunnerOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage6OwedRunnerEpisodeResidual(
               candidate, position, rank)'
+         \/ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(
+              candidate.node)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
+   AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
    SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
    IngressDrainStrictlyDecreasesRuntimeReach,
@@ -1969,6 +2022,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncOutstandingWorkCount,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2037,6 +2092,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2094,7 +2151,8 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage6OwedAuxProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage6OwedBlockedAtAux(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+             /\ HistoricalTemporalStage6OwedBlockedAtAux(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage6OwedAuxProgress(
                     candidate, position, rank)
@@ -2132,9 +2190,12 @@ PROOF
          HistoricalTemporalStage6OwedOtherStep, Isa
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage6OwedBlockedAtAux(
                      candidate, position, rank)
@@ -2272,8 +2333,11 @@ THEOREM HistoricalTemporalStage6NonCompletionSameRunnerOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage6NonCompletionServeEpisodeResidual(
               candidate, position, rank)'
+         \/ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(
+              candidate.node)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
+   AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
    SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
    IngressDrainStrictlyDecreasesRuntimeReach,
@@ -2316,6 +2380,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2395,6 +2461,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2453,7 +2521,8 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage6NonCompletionProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage6NonCompletionBlockedAtRank(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+             /\ HistoricalTemporalStage6NonCompletionBlockedAtRank(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage6NonCompletionProgress(
                     candidate, position, rank)
@@ -2491,9 +2560,12 @@ PROOF
          HistoricalTemporalStage6NonCompletionOtherStep, Isa
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage6NonCompletionBlockedAtRank(
                      candidate, position, rank)
@@ -2821,7 +2893,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CausalCandidates, TrackedWorkCandidates, CandidateScheduled,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       RunHistoricalServer, OpenHistoricalRecovery,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -3204,7 +3279,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncIoQueueDepth, AsyncOutstandingWorkCount,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       RunHistoricalServer, OpenHistoricalRecovery,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -3627,7 +3705,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ProducerCompletionCanAdmit, ProducerCompletionCanAdvance,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       RunHistoricalServer, OpenHistoricalRecovery,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -3726,6 +3807,8 @@ PROOF
                  AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
                  AsyncNonRunnerStep, RunNode,
                  RunHistoricalRecoveryNode, RunNodeWork,
+                 ResolveRunNodeCandidateProducerContinuation,
+                 AsyncSchedulerExceptCausalControlAndNodeService,
                  SerializedLocalPrecedesServeIngressStep,
                  SelectedLocalAdmissionAdvance,
                  AsyncServeIngressTargetOnlyTurn,
@@ -4410,7 +4493,10 @@ BY BusyPhaseOwnerPartitionObligation,
        CausalCandidates, TrackedWorkCandidates,
        CandidateConsumerCurrent, CommandDispatchable,
        CommandExecutionReady, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, LocalAdmissionStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       LocalAdmissionStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -4505,6 +4591,8 @@ BY BusyPhaseOwnerPartitionObligation,
        RequestsUniqueByNode, RequestNodeSet, NodeIdle,
        PendingNodes, SigningNodes, AllPendingRequests,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -4892,10 +4980,12 @@ PROOF
                   /\ asyncDeferredDrainOwed[candidate.node])
     <2>1. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
-              /\ AsyncDeferredHandoffOwnershipInvariant)
+              /\ AsyncDeferredHandoffOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage, PTL
     <2>2. (HistoricalTemporalStage2Owned(candidate)
              /\ ~NodeIdle(candidate.node))
              ~> HistoricalTemporalStage2BusyTerminationGoal(candidate)
@@ -4934,6 +5024,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -4992,10 +5084,12 @@ PROOF
       BY <1>1, HistoricalTemporalStage2IdleHandoffDrainRearmed
     <2>2. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
-              /\ AsyncDeferredHandoffOwnershipInvariant)
+              /\ AsyncDeferredHandoffOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage, PTL
     <2>3. (HistoricalTemporalStage2ExactIdleRetryPending(candidate)
               /\ asyncDeferredDrainOwed[candidate.node]
               /\ Stage2HandoffCursorDistance(candidate) = distance)
@@ -5034,6 +5128,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5164,10 +5260,12 @@ PROOF
                  ~> HistoricalTemporalStage2HandoffProgressExit(candidate)
     <2>1. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
-              /\ AsyncDeferredHandoffOwnershipInvariant)
+              /\ AsyncDeferredHandoffOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage, PTL
     <2>2. [] [(\/ ~HistoricalTemporalStage2ExactIdleRetrySelected(
                        candidate)
                   \/ ~DeferredDrainStep(candidate.node)
@@ -5205,6 +5303,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5283,11 +5383,13 @@ PROOF
     <2>1. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
               /\ AsyncDeferredHandoffOwnershipInvariant
-              /\ Stage2BusyKernelInvariant)
+              /\ Stage2BusyKernelInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
          AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
-         AsyncSpecAlwaysStage2BusyKernelObligation, PTL
+         AsyncSpecAlwaysStage2BusyKernelObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage, PTL
          DEF Stage2BusyKernelProperty
     <2>2. (HistoricalTemporalStage2Owned(candidate)
              /\ ~NodeIdle(candidate.node))
@@ -5352,6 +5454,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5441,6 +5545,8 @@ PROOF
              SerializedRuntimeStep,
              SerializedRuntimePrecedesServeIngressStep, RunNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5873,6 +5979,11 @@ BY Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncInitialCandidateLifecycleAdmissions,
+       AsyncCandidateLifecycleAdmission,
        AsyncControlServiceStateTypeInvariant,
        AsyncCandidateServiceTombstones,
        AsyncCandidateServiceRecordsFor,
@@ -5888,6 +5999,7 @@ THEOREM HistoricalTemporalNextPreservesCandidateServiceTombstones ==
   /\ AsyncNext
   => AsyncCandidateServiceTombstoneLifecycleInvariant'
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
    AsyncCandidateServicesThisStepIsSingleton,
    AsyncCandidateTerminalRetirementsThisStepIsSingleton,
    AsyncCandidateSuccessfulServiceInstallsTombstone,
@@ -5908,7 +6020,10 @@ BY AsyncNextPreservesControlServiceStateTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       LocalAdmissionStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn, IngressDrainStep,

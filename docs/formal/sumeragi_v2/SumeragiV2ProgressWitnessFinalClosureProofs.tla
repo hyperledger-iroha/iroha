@@ -827,7 +827,9 @@ THEOREM RunNodeWorkPreservesResponsiveReplayLineagedCarrier ==
 BY LocalAdmissionPreservesResponsiveReplayLineagedCarrier,
    IngressDrainPreservesResponsiveReplayLineagedCarrier,
    SerializedRuntimePreservesResponsiveReplayLineagedCarrier, Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService
 
 THEOREM RunHistoricalServerEstablishesFinalMonotoneCarrierFrame ==
   \A node \in ValidatorIds:
@@ -968,7 +970,7 @@ THEOREM ResponsiveRestartPreservesFinalProgressWitnessClosure ==
   /\ FinalProgressWitnessClosureInvariant
   /\ PreGstResponsiveRestart
   => FinalProgressWitnessClosureInvariant'
-BY ResponsiveRestartRebindsExactDurableDecisionAuthority, IsaT(420)
+BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(420)
    DEF ResponsiveRecoveryValidationClearedInvariant,
        RecoveryNodeValidationCleared,
        AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
