@@ -4635,7 +4635,8 @@ mod tests {
     #[test]
     fn qualification_seal_capture_rejects_replaced_release_after_full_qualification() {
         let (temporary, qualified_release_directory, pinned_source) = pinned_source_fixture();
-        let replacement_release_directory = temporary.path().join("replacement-release");
+        let replacement_release_directory =
+            canonical_temporary_root(&temporary).join("replacement-release");
         std::fs::create_dir(&replacement_release_directory)
             .expect("create replacement release directory");
         for artifact in &pinned_source.artifacts {

@@ -15478,7 +15478,7 @@ pub(super) mod tests {
         queued: usize,
         capacity: usize,
         next_lifecycle_ordinal: u128,
-        local_proposal_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+        effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
         external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
         external_lifecycle_owner_capacity: Option<usize>,
     }
@@ -15489,7 +15489,7 @@ pub(super) mod tests {
                 queued,
                 capacity,
                 next_lifecycle_ordinal: 1,
-                local_proposal_owners: BTreeMap::new(),
+                effect_owners: BTreeMap::new(),
                 external_lifecycle_owners: Vec::new(),
                 external_lifecycle_owner_capacity: None,
             }
@@ -15497,6 +15497,87 @@ pub(super) mod tests {
 
         fn reject_completion() -> Result<(), EnqueueError> {
             Err(EnqueueError::Full)
+        }
+
+        fn effect_ownership(
+            &mut self,
+            effect: &AdapterEffect,
+        ) -> Result<RuntimeEffectOwnership, String> {
+            let mut identity = Vec::new();
+            let tag = match effect {
+                AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    ..
+                }
+                | AdapterEffect::StoreBody {
+                    tag,
+                    round,
+                    subject,
+                }
+                | AdapterEffect::ValidateBody {
+                    tag,
+                    round,
+                    subject,
+                } => {
+                    identity.extend_from_slice(b"body-pipeline");
+                    identity.extend_from_slice(&round.encode());
+                    identity.extend_from_slice(&subject.encode());
+                    *tag
+                }
+                AdapterEffect::Sign { tag, request } => {
+                    identity.extend_from_slice(b"sign");
+                    identity.extend_from_slice(&request.signature_preimage());
+                    *tag
+                }
+                AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                } => {
+                    identity.extend_from_slice(b"apply");
+                    identity.extend_from_slice(&subject.encode());
+                    identity.extend_from_slice(&certificate.as_ref().encode());
+                    *tag
+                }
+                AdapterEffect::Broadcast(message) => {
+                    identity.extend_from_slice(b"broadcast");
+                    identity.extend_from_slice(&message.encode());
+                    EventTag::new(1, 0, Generation::new(0))
+                }
+                AdapterEffect::EnterView { tag, .. } => {
+                    identity.extend_from_slice(b"enter-view");
+                    identity.extend_from_slice(&tag.height().to_le_bytes());
+                    identity.extend_from_slice(&tag.view().to_le_bytes());
+                    *tag
+                }
+                AdapterEffect::ReportEquivocation { .. }
+                | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
+                    identity.extend_from_slice(format!("{effect:?}").as_bytes());
+                    EventTag::new(1, 0, Generation::new(0))
+                }
+            };
+            self.ownership_for_identity(tag, Hash::new(identity))
+        }
+
+        fn ownership_for_identity(
+            &mut self,
+            tag: EventTag,
+            identity: Hash,
+        ) -> Result<RuntimeEffectOwnership, String> {
+            if let Some(existing) = self.effect_owners.get(&identity) {
+                return Ok(existing.clone());
+            }
+            let next_lifecycle_ordinal = self
+                .next_lifecycle_ordinal
+                .checked_add(1)
+                .ok_or_else(|| "saturated runtime lifecycle-owner ordinal overflowed".to_owned())?;
+            let ownership =
+                RuntimeEffectOwnership::fresh_for_test(tag, self.next_lifecycle_ordinal);
+            self.next_lifecycle_ordinal = next_lifecycle_ordinal;
+            self.effect_owners.insert(identity, ownership.clone());
+            Ok(ownership)
         }
     }
 
@@ -15516,11 +15597,10 @@ pub(super) mod tests {
             &mut self,
             effects: &[AdapterEffect],
         ) -> Result<Vec<RuntimeEffectOwnership>, String> {
-            if effects.is_empty() {
-                Ok(Vec::new())
-            } else {
-                Err("saturated test runtime returned effects without ownership".to_owned())
-            }
+            effects
+                .iter()
+                .map(|effect| self.effect_ownership(effect))
+                .collect()
         }
 
         fn set_external_lifecycle_owners(
@@ -15573,22 +15653,10 @@ pub(super) mod tests {
             tag: EventTag,
             manifest: &wire::PayloadManifest,
         ) -> Result<RuntimeEffectOwnership, String> {
-            let mut semantic = Vec::from(b"body-pipeline".as_slice());
-            semantic.extend_from_slice(&manifest.round.encode());
-            semantic.extend_from_slice(&manifest.subject.encode());
-            let identity = Hash::new(semantic);
-            if let Some(existing) = self.local_proposal_owners.get(&identity) {
-                return Ok(existing.clone());
-            }
-            let lifecycle_ordinal = self.next_lifecycle_ordinal;
-            self.next_lifecycle_ordinal = self
-                .next_lifecycle_ordinal
-                .checked_add(1)
-                .ok_or_else(|| "saturated test runtime lifecycle ordinal exhausted".to_owned())?;
-            let ownership = RuntimeEffectOwnership::fresh_for_test(tag, lifecycle_ordinal);
-            self.local_proposal_owners
-                .insert(identity, ownership.clone());
-            Ok(ownership)
+            let mut identity = Vec::from(b"body-pipeline".as_slice());
+            identity.extend_from_slice(&manifest.round.encode());
+            identity.extend_from_slice(&manifest.subject.encode());
+            self.ownership_for_identity(tag, Hash::new(identity))
         }
 
         fn take_scheduler_ownership(&mut self) -> Result<(), String> {
@@ -15780,6 +15848,58 @@ pub(super) mod tests {
         fn watchdog_threshold(&self) -> Duration {
             Duration::from_secs(1)
         }
+    }
+
+    #[test]
+    fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let manifest = proposal.manifest;
+        let tag = EventTag::new(
+            service.context.height,
+            manifest.round.view,
+            Generation::new(service.context.height),
+        );
+        let mut runtime = SaturatedCompletionRuntime::new(0, 1);
+        runtime
+            .configure_external_lifecycle_owner_capacity(1)
+            .expect("configure bounded external owners");
+        let proposal_owner = runtime
+            .mint_local_proposal_effect_ownership(tag, &manifest)
+            .expect("mint local proposal owner");
+        let fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let fetch_owner = runtime
+            .take_effect_ownership(&[fetch])
+            .expect("derive positional fetch owner")
+            .pop()
+            .expect("one effect has one owner");
+        assert_eq!(fetch_owner, proposal_owner);
+
+        runtime
+            .set_external_lifecycle_owners(vec![proposal_owner.owner().clone()])
+            .expect("one external owner fits");
+        assert_eq!(runtime.external_lifecycle_owners.len(), 1);
+        assert!(
+            runtime
+                .set_external_lifecycle_owners(vec![
+                    proposal_owner.owner().clone();
+                    MAX_EFFECTS_PER_STEP + 2
+                ])
+                .is_err()
+        );
+        assert_eq!(
+            runtime.external_lifecycle_owners.len(),
+            1,
+            "rejected publication must preserve the prior bounded owner set"
+        );
     }
 
     /// Build closed-network production services for sibling runner tests.
@@ -26868,7 +26988,8 @@ pub(super) mod tests {
 
     #[test]
     fn fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission() {
-        let (service, keys) = fixture();
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -26904,7 +27025,7 @@ pub(super) mod tests {
                 command_tx
                     .queue
                     .lifecycle_ordinals
-                    .next_ordinal()
+                    .next_ordinal_for_test()
                     .expect("inspect shared ordinal source"),
                 Some(1),
                 "Busy admission must not mint an actor-global ordinal"
