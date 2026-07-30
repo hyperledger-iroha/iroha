@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncFairServiceProofs ----
-EXTENDS SumeragiV2AsyncRecoveryVoteEpochProofs
+EXTENDS SumeragiV2AsyncRecoveryVoteEpochContinuationProofs
 
 THEOREM VoteDeliveryConsumesCurrentPoolEpoch ==
   \A envelope:

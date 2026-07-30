@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncTimeoutKernelProofs ----
-EXTENDS SumeragiV2AsyncInstallRunnerProofs
+EXTENDS SumeragiV2AsyncInstallRunnerContinuationProofs
 
 (***************************************************************************
 Timeout-certificate progress boundary.

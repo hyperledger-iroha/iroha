@@ -58,9 +58,10 @@ BY AdequateViewTimeoutExists
 
 (***************************************************************************
 The two rotating-leader clauses compose to aggregate responsive Decision.
-This theorem belongs here, above the locked-body dependency: it is useful for
-the adequate-leader reduction but is not allowed to close retained-lock
-reproposal by terminal-Decision subsumption.
+This theorem is proved without consuming the final locked-body release claim.
+The higher temporal-closure module may then use the independently established
+Decision convergence to discharge retained-lock reproposal through its
+legitimate Decision outcome, preserving the acyclic dependency order.
 ***************************************************************************)
 
 THEOREM RotatingLeaderProgressSuppliesResponsiveDecisionConvergence ==

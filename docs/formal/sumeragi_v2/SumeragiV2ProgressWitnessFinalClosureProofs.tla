@@ -968,7 +968,7 @@ THEOREM ResponsiveRestartPreservesFinalProgressWitnessClosure ==
   /\ FinalProgressWitnessClosureInvariant
   /\ PreGstResponsiveRestart
   => FinalProgressWitnessClosureInvariant'
-BY ResponsiveRestartRebindsExactDurableDecisionAuthority, IsaT(420)
+BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(420)
    DEF ResponsiveRecoveryValidationClearedInvariant,
        RecoveryNodeValidationCleared,
        AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,

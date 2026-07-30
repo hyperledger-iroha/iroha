@@ -595,6 +595,7 @@ StrictSameRoundTcUpgrade(node, tc) ==
   /\ NodeInstalledTC(node, tc.view)
   /\ TcHighRank(tc) > highestRank[node]
   /\ TcHighRank(tc) > lockRank[node]
+  /\ GenerationCanIncrement(generation[node])
 
 InstalledTcAuthorizesCommitVote(commitVote) == FALSE
 
@@ -2211,11 +2212,12 @@ Crash(node) ==
 
 Restart(node) ==
   /\ node \in ValidatorIds \ up
+  /\ GenerationCanIncrement(generation[node])
   /\ up' = up \cup {node}
-  \* Restart denotes a complete process replacement. Crash and the outer
-  \* asynchronous reset have destroyed every old completion sender/queue;
-  \* durable semantic tombstones remain outside this process-local counter.
-  /\ generation' = [generation EXCEPT ![node] = 0]
+  \* Restart is a same-view process replacement.  Advancing the executor
+  \* generation rejects delayed pre-crash callbacks even when their semantic
+  \* identity is retained durably for exact replay.
+  /\ generation' = [generation EXCEPT ![node] = @ + 1]
   /\ UNCHANGED <<height, context, contextHistory, nodeView, gst,
                  availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
@@ -2449,7 +2451,6 @@ TypeInvariant ==
        /\ PrepareQcSubject(lockPrepareQc[node]) = lockSubject[node]
        /\ PrepareQcRank(highestPrepareQc[node]) = highestRank[node]
        /\ PrepareQcSubject(highestPrepareQc[node]) = highestSubject[node]
-       /\ generation[node] <= highestRank[node] + 1
        /\ (lockPrepareQc[node] # NoPrepareQC
              => lockPrepareQc[node] \in prepareQCs)
        /\ (highestPrepareQc[node] # NoPrepareQC

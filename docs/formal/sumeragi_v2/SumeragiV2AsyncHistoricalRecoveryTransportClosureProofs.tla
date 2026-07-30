@@ -3311,7 +3311,11 @@ PROOF
 (***************************************************************************
 Exact residual inventory.
 
-No theorem in this module asserts any operator in the inventory below.
+This generic one-height module deliberately declares the exact transport
+interfaces without importing product fairness.  The direct indexed product
+module `SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs` now
+instantiates every item below from fixed packet-action, historical-target
+runner, historical-server runner, and ordinary archive-I/O fairness.
 
   1. `HistoricalCommitArchiveRouteAvailabilityProperty` is a chain/Async
      refinement seam.  `HistoricalRecoverySourceReady` supplies an applied
@@ -3354,10 +3358,10 @@ No theorem in this module asserts any operator in the inventory below.
      transport leaves belongs to the separate historical-target reducer
      theorem; it is not archive transport fairness.
 
-TODO: instantiate these exact residual kernels from the direct indexed
-packet, historical-target runner, historical-server runner, and ordinary
-archive-I/O fairness clauses.  Do not replace them with aggregate
-target-to-Decision, all-responsive-joined, or application-liveness premises.
+The indexed instantiation retains exact context, request, certificate,
+subject, recipient, source, and lifecycle identities.  These declarations
+must not be replaced with aggregate target-to-Decision, all-responsive-joined,
+or application-liveness premises.
 ***************************************************************************)
 
 HistoricalCommitTransportResidualKernels(specification) ==

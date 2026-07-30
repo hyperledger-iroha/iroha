@@ -44,6 +44,7 @@ use super::{
     InboundBlockMessage, SumeragiWorker,
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
+    serviced_candidate_store::LeaderWireLifecycleStoreGate,
     v2::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
         ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
@@ -52,7 +53,7 @@ use super::{
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
-    v2_body_store::BlockSignaturePolicy,
+    v2_body_store::{BlockSignaturePolicy, V2BodyStore},
     v2_candidate::{
         CandidateAttachments, CandidateDescriptor, CandidateLimits, CandidateParent,
         CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
@@ -668,6 +669,63 @@ impl Drop for CertifiedServeIngressBinding {
     }
 }
 
+/// Per-height binding of durable generic leader-wire ownership to fair ingress.
+struct LeaderWireIngressBinding {
+    ingress_ready: Arc<AtomicBool>,
+    block_ingress: Arc<FairV2Ingress>,
+    gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
+}
+
+impl LeaderWireIngressBinding {
+    fn bind(
+        ingress_ready: Arc<AtomicBool>,
+        block_ingress: Arc<FairV2Ingress>,
+        gate: Arc<LeaderWireLifecycleStoreGate>,
+        restore: super::serviced_candidate_store::LeaderWireLifecycleRestore,
+        lifecycle_ordinals: super::v2_runtime::RuntimeLifecycleOrdinalSource,
+        context_id: wire::HeightContextId,
+        height: wire::Height,
+    ) -> Result<Self, V2RunnerError> {
+        block_ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&gate),
+                restore,
+                lifecycle_ordinals,
+                context_id,
+                height,
+            )
+            .map_err(V2RunnerError::Service)?;
+        Ok(Self {
+            ingress_ready,
+            block_ingress,
+            gate: Some(gate),
+        })
+    }
+
+    fn retire(&mut self) -> Result<(), V2RunnerError> {
+        let Some(gate) = self.gate.as_ref() else {
+            return Ok(());
+        };
+        close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);
+        self.block_ingress
+            .unbind_leader_wire_lifecycle_gate(gate)
+            .map_err(V2RunnerError::Service)?;
+        self.gate = None;
+        Ok(())
+    }
+}
+
+impl Drop for LeaderWireIngressBinding {
+    fn drop(&mut self) {
+        if let Err(error) = self.retire() {
+            iroha_logger::error!(
+                %error,
+                "failed to retire the per-height durable leader-wire lifecycle gate"
+            );
+        }
+    }
+}
+
 struct V2StatusClearGuard {
     clear_on_drop: bool,
 }
@@ -962,6 +1020,29 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             certified_request_capacity,
         )
         .map_err(V2RunnerError::Service)?;
+        // Open and validate the body store before the runtime can mint a new
+        // scheduler ordinal. Its independently reconstructed receipt catalog
+        // is the authority for body-backed leader-wire terminals; the gate's
+        // adjacent snapshot cannot validate itself after a crash.
+        let body_store = V2BodyStore::open_with_policy(
+            storage_root.join("bodies"),
+            context.clone(),
+            signature_policy,
+        )
+        .map_err(|error| {
+            V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                error.to_string(),
+            ))
+        })?;
+        let recovered_body_catalog = body_store.recovery_catalog().map_err(|error| {
+            V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                error.to_string(),
+            ))
+        })?;
+        let recovered_body_receipts = recovered_body_catalog
+            .values()
+            .map(|(_, receipt)| receipt.clone())
+            .collect::<Vec<_>>();
         let adapter_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
@@ -970,7 +1051,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // complete successor stack is live. No reducer status from this
             // adapter may escape the construction boundary early.
             SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(
-                wal_path,
+                wal_path.clone(),
                 verified_context,
                 local_validator,
                 Generation::INITIAL,
@@ -981,7 +1062,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             )
         } else {
             SumeragiV2Adapter::open_with_capacity_geometry(
-                wal_path,
+                wal_path.clone(),
                 verified_context,
                 local_validator,
                 Generation::INITIAL,
@@ -992,6 +1073,57 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             )
         };
         let (adapter, startup_effects) = adapter?;
+        // Adapter replay returns plain effects; their fresh lifecycle owners
+        // are minted only by `SerializedV2Runtime` below. Fold the validated
+        // producer snapshot into the shared source before that constructor so
+        // neither startup/runtime work nor a later Serve reservation can reuse
+        // a reclaimed producer ordinal.
+        if let Some(high_watermark) =
+            adapter.restored_producer_continuation_ordinal_high_watermark()
+        {
+            lifecycle_ordinals
+                .advance_past(high_watermark)
+                .map_err(V2RunnerError::Service)?;
+        }
+        let leader_wire_roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let leader_wire_max_chunk_count = context.da_layout.max_chunk_count;
+        let leader_wire_capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+            leader_wire_roster.len(),
+            leader_wire_max_chunk_count,
+        )
+        .map_err(V2RunnerError::Service)?;
+        let leader_wire_owner: [u8; 32] = fingerprints.node.into();
+        let leader_wire_recovery_authority = adapter.leader_wire_recovery_authority()?;
+        let producer_terminals = adapter.durable_producer_terminal_tokens();
+        let (leader_wire_gate, leader_wire_restore) = LeaderWireLifecycleStoreGate::open(
+            &wal_path,
+            context.id(),
+            context.height,
+            leader_wire_owner,
+            leader_wire_roster,
+            leader_wire_capacity,
+            leader_wire_max_chunk_count,
+            leader_wire_recovery_authority,
+            &producer_terminals,
+            &recovered_body_receipts,
+        )
+        .map_err(V2RunnerError::Service)?;
+        lifecycle_ordinals
+            .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
+            .map_err(V2RunnerError::Service)?;
+        let mut leader_wire_ingress_binding = LeaderWireIngressBinding::bind(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&block_rx),
+            Arc::clone(&leader_wire_gate),
+            leader_wire_restore,
+            lifecycle_ordinals.clone(),
+            context.id(),
+            context.height,
+        )?;
         adapter_construction.complete();
         let runtime_construction = output_guard
             .begin_fail_stop_operation()
@@ -1005,13 +1137,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             lifecycle_ordinals.clone(),
         )?;
         runtime_construction.complete();
-        let (mut executor, body_store) = V2EffectExecutor::open(
+        let (mut executor, body_store) = V2EffectExecutor::open_with_body_store(
             runtime,
-            storage_root.join("bodies"),
+            body_store,
             context.clone(),
             local_peer.clone(),
             local_validator,
-            signature_policy,
             Arc::clone(&output_guard),
             effect_queue,
         )?;
@@ -1071,6 +1202,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             chunk_queue_capacity,
             lifecycle_ordinals,
             Arc::clone(&output_guard),
+            Arc::clone(&block_rx),
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
@@ -1110,6 +1242,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 }
                 if shutdown_signal.is_sent() {
                     certified_serve_ingress_binding.retire()?;
+                    leader_wire_ingress_binding.retire()?;
                     services.allow_clean_shutdown();
                     return Ok(());
                 }
@@ -1253,6 +1386,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             }
             if shutdown_signal.is_sent() {
                 certified_serve_ingress_binding.retire()?;
+                leader_wire_ingress_binding.retire()?;
                 services.allow_clean_shutdown();
                 return Ok(());
             }
@@ -1260,6 +1394,42 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // poll. It rebuilds the live overlays only at its next semantic
             // deadline or after the published height owner changes.
             liveness_watchdog.poll(Instant::now());
+
+            if executor.has_retained_certified_body_response() {
+                let target_ordinal = executor
+                    .retained_certified_body_response_scheduler_ordinal()?
+                    .ok_or_else(|| {
+                        V2RunnerError::Service(
+                            "retained certified body response lost its exact scheduler position"
+                                .to_owned(),
+                        )
+                    })?;
+                // Give one strict frozen predecessor first claim on newly
+                // available completion capacity. Otherwise the response could
+                // occupy the sole returned slot and strand that older owner.
+                services.drain_exact_serve_runtime_predecessor(&mut executor, target_ordinal)?;
+                if executor
+                    .older_runtime_lifecycle_predates_exact_serve(Instant::now(), target_ordinal)?
+                {
+                    // The matching PendingFetch is itself an older passive
+                    // owner, so this is one bounded opportunity rather than a
+                    // prerequisite for retry.
+                    advance_executor_once_before_exact_serve(&mut executor, &mut services)?;
+                }
+                match executor.retry_retained_certified_body_response(&mut services) {
+                    Ok(_) => {}
+                    Err(EffectTransportError::Backpressure) => {}
+                    Err(EffectTransportError::FailClosed(reason)) => {
+                        return Err(V2RunnerError::Service(reason));
+                    }
+                    Err(error) => {
+                        iroha_logger::debug!(%error, "rejected retained certified body response");
+                    }
+                }
+                committed_lane_status_publisher.publish_if_changed(&lane_work);
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
 
             // The network thread installs an exact certified-body ticket before
             // its carrier becomes visible in fair ingress. Give that target a
@@ -1622,6 +1792,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     continue;
                 };
                 certified_serve_ingress_binding.retire()?;
+                leader_wire_ingress_binding.retire()?;
                 lane_work.prune_finalized_merge_sidecars()?;
                 services
                     .handoff_applied_height_output_to_durable_reconstruction(
@@ -2259,10 +2430,17 @@ fn drain_v2_ingress(
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
+    if executor.has_retained_certified_body_response() {
+        // The dedicated outer episode owns all progress until this exact
+        // transport completion either crosses capacity or reaches a permanent
+        // terminal. Do not give even the Runtime half-turn of a new batch to a
+        // later owner.
+        return Ok(());
+    }
     for turn in outer_ingress_turns(limit) {
         if turn == OuterIngressTurn::Runtime {
             if services
-                .certified_serve_barrier_request_hash()
+                .certified_serve_barrier()
                 .map_err(V2RunnerError::Service)?
                 .is_some()
             {
@@ -2295,95 +2473,84 @@ fn drain_v2_ingress(
         let terminal_subject = executor.local_proposal_directive()?.decided_subject();
         let terminal_decision = terminal_subject.is_some();
         let mut prepared_serve = None;
-        let mut serve_barrier = services
-            .certified_serve_barrier_request_hash()
-            .map_err(V2RunnerError::Service)?;
-        let Some(mut inbound) = receiver.try_recv_if(|inbound| {
-            if let Some(barrier_hash) = serve_barrier {
-                let is_barrier_target = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload:
-                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
-                        ..
-                    }) if HashOf::new(request) == barrier_hash
-                );
-                if !is_barrier_target {
+        let Some(mut inbound) = receiver
+            .try_recv_if_checked(|inbound| {
+                if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
                     return false;
                 }
-            }
-            if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
-                return false;
-            }
-            let BlockMessage::V2(message) = inbound.message() else {
-                return true;
-            };
-            if message.validate_version().is_err() {
-                return true;
-            }
-            let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
-            else {
-                return true;
-            };
-            if request.round.height != executor.context().height
-                || certified_body_request_is_superseded_after_decision(
-                    request,
-                    terminal_subject,
-                    executor.context().height,
-                )
-            {
-                return true;
-            }
-            let Some(sender) = inbound.sender() else {
-                return true;
-            };
-            let Some(authenticated_via) = inbound.via() else {
-                return true;
-            };
-            let Some(reply_routes) = inbound.reply_routes() else {
-                return true;
-            };
-            let Some(ingress_ownership) = inbound.ingress_ownership() else {
-                return true;
-            };
-            if reply_routes.semantic_target() != sender
-                || !ingress_ownership.validate_exact()
-                || !ingress_ownership.matches_message(inbound.message())
-                || !ingress_ownership.matches_semantic_origin(Some(sender))
-                || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-            {
-                return true;
-            }
-            let authenticated =
-                match executor.authenticate_certified_body_request(request.clone(), sender) {
+                let BlockMessage::V2(message) = inbound.message() else {
+                    return true;
+                };
+                if message.validate_version().is_err() {
+                    return true;
+                }
+                let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
+                    &message.payload
+                else {
+                    return true;
+                };
+                if request.round.height != executor.context().height
+                    || certified_body_request_is_superseded_after_decision(
+                        request,
+                        terminal_subject,
+                        executor.context().height,
+                    )
+                {
+                    return true;
+                }
+                let Some(sender) = inbound.sender() else {
+                    return true;
+                };
+                let Some(authenticated_via) = inbound.via() else {
+                    return true;
+                };
+                let Some(reply_routes) = inbound.reply_routes() else {
+                    return true;
+                };
+                let Some(ingress_ownership) = inbound.ingress_ownership() else {
+                    return true;
+                };
+                if reply_routes.semantic_target() != sender
+                    || !ingress_ownership.validate_exact()
+                    || !ingress_ownership.matches_message(inbound.message())
+                    || !ingress_ownership.matches_semantic_origin(Some(sender))
+                    || !ingress_ownership.matches_reply_routes(Some(reply_routes))
+                {
+                    return true;
+                }
+                let authenticated = match executor
+                    .authenticate_certified_body_request(request.clone(), sender)
+                {
                     Ok(authenticated) => authenticated,
                     Err(error) => {
                         prepared_serve = Some(PreparedCertifiedServe::Rejected(error.to_string()));
                         return true;
                     }
                 };
-            match services.prepare_certified_request(authenticated_via, authenticated) {
-                Ok(admission) => {
-                    prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
-                    true
+                match services.prepare_certified_request(authenticated_via, authenticated) {
+                    Ok(admission) => {
+                        prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
+                        true
+                    }
+                    Err(CertifiedServePrepareError::Backpressure) => {
+                        // `prepare_certified_request` installs the off-queue debt
+                        // before returning capacity backpressure. The fair
+                        // selector's immutable physical cutoff keeps every later
+                        // ingress occurrence behind this retained target.
+                        false
+                    }
+                    Err(CertifiedServePrepareError::Rejected(reason)) => {
+                        prepared_serve = Some(PreparedCertifiedServe::Rejected(reason));
+                        true
+                    }
+                    Err(CertifiedServePrepareError::Service(reason)) => {
+                        prepared_serve = Some(PreparedCertifiedServe::Service(reason));
+                        true
+                    }
                 }
-                Err(CertifiedServePrepareError::Backpressure) => {
-                    // `prepare_certified_request` installs the off-queue debt
-                    // before returning capacity backpressure. Freeze this scan
-                    // immediately so no later ingress occurrence can pass.
-                    serve_barrier = Some(HashOf::new(request));
-                    false
-                }
-                Err(CertifiedServePrepareError::Rejected(reason)) => {
-                    prepared_serve = Some(PreparedCertifiedServe::Rejected(reason));
-                    true
-                }
-                Err(CertifiedServePrepareError::Service(reason)) => {
-                    prepared_serve = Some(PreparedCertifiedServe::Service(reason));
-                    true
-                }
-            }
-        }) else {
+            })
+            .map_err(V2RunnerError::Service)?
+        else {
             break;
         };
         if inbound.message().is_lane_local() {
@@ -2392,7 +2559,7 @@ fn drain_v2_ingress(
             let _ = lane_work.service_next_historical_recovery()?;
             continue;
         }
-        let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+        let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
             V2RunnerError::Service(
                 "global Sumeragi v2 ingress lost its fair ownership carrier".to_owned(),
             )
@@ -2405,6 +2572,9 @@ fn drain_v2_ingress(
                 "global Sumeragi v2 ingress carried altered fair ownership".to_owned(),
             ));
         }
+        receiver
+            .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+            .map_err(V2RunnerError::Service)?;
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
             return Err(V2RunnerError::Service(
@@ -2413,10 +2583,12 @@ fn drain_v2_ingress(
         }
         let BlockMessage::V2(message) = message else {
             iroha_logger::debug!("rejected legacy global message on v2-only consensus ingress");
+            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             continue;
         };
         if let Err(error) = message.validate_version() {
             iroha_logger::debug!(%error, "rejected wrong-version Sumeragi v2 envelope");
+            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             continue;
         }
         match message.payload {
@@ -2424,63 +2596,79 @@ fn drain_v2_ingress(
                 if !terminal_decision {
                     enqueue_control(
                         executor,
+                        receiver,
                         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
                             proposal,
                         )),
                         ingress_ownership,
                     )?;
+                } else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 }
             }
             wire::ConsensusMessageV2Payload::Vote(vote) => {
                 if !terminal_decision {
                     enqueue_control(
                         executor,
+                        receiver,
                         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
                         ingress_ownership,
                     )?;
+                } else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 }
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
                 if !terminal_decision {
                     enqueue_control(
                         executor,
+                        receiver,
                         wire::ConsensusMessageV2::new(
                             wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
                         ),
                         ingress_ownership,
                     )?;
+                } else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 }
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
                 if !terminal_decision {
                     enqueue_control(
                         executor,
+                        receiver,
                         wire::ConsensusMessageV2::new(
                             wire::ConsensusMessageV2Payload::TimeoutVote(vote),
                         ),
                         ingress_ownership,
                     )?;
+                } else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 }
             }
             wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
                 if !terminal_decision {
                     enqueue_control(
                         executor,
+                        receiver,
                         wire::ConsensusMessageV2::new(
                             wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
                         ),
                         ingress_ownership,
                     )?;
+                } else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 }
             }
             wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
-                drop(ingress_ownership);
                 if let Err(error) = manifest.validate(executor.context()) {
                     iroha_logger::debug!(%error, "rejected standalone Sumeragi v2 manifest");
                 }
+                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             }
             wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
                 let Some(sender) = sender else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
                 if terminal_decision
@@ -2493,7 +2681,7 @@ fn drain_v2_ingress(
                     // After Decision, unmatched chunks can never become
                     // relevant and must not crowd the decided body's bounded
                     // transport completion out of the orphan buffer.
-                    drop(ingress_ownership);
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 }
                 services
@@ -2502,6 +2690,7 @@ fn drain_v2_ingress(
             }
             wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
                 let Some(sender) = sender else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
                 let Some(reply_routes) = reply_routes else {
@@ -2509,6 +2698,7 @@ fn drain_v2_ingress(
                         %sender,
                         "rejected certified body request without authenticated reply route"
                     );
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
                 if reply_routes.semantic_target() != &sender {
@@ -2516,6 +2706,7 @@ fn drain_v2_ingress(
                         %sender,
                         "rejected certified body request with mismatched reply target"
                     );
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 }
                 if request.round.height < executor.context().height {
@@ -2556,7 +2747,7 @@ fn drain_v2_ingress(
                         // Current-height serving authority narrows to the
                         // exact Decision. A certified losing body remains
                         // useful only before that terminal choice.
-                        drop(ingress_ownership);
+                        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                         continue;
                     }
                     match prepared_serve.take() {
@@ -2571,6 +2762,7 @@ fn drain_v2_ingress(
                         }
                         Some(PreparedCertifiedServe::Rejected(reason)) => {
                             iroha_logger::debug!(%reason, "rejected certified body request");
+                            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                         }
                         Some(PreparedCertifiedServe::Service(reason)) => {
                             return Err(V2RunnerError::Service(reason));
@@ -2588,19 +2780,29 @@ fn drain_v2_ingress(
                         active_height = executor.context().height,
                         "rejected future-height certified body request"
                     );
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 }
             }
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
                 let Some(sender) = sender else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
-                match executor.accept_certified_body_response_with_ingress_ownership(
+                let admission = executor.accept_certified_body_response_with_ingress_ownership(
                     response,
                     &sender,
-                    ingress_ownership,
+                    &ingress_ownership,
                     services,
-                ) {
+                );
+                match admission {
                     Ok(_) => {}
+                    Err(EffectTransportError::Backpressure) => {
+                        // End the complete batch immediately. A second
+                        // Runtime/Ingress pair could otherwise let later work
+                        // overtake the newly retained exact carrier before the
+                        // dedicated outer episode observes it.
+                        return Ok(());
+                    }
                     Err(EffectTransportError::FailClosed(reason)) => {
                         return Err(V2RunnerError::Service(reason));
                     }
@@ -2611,6 +2813,7 @@ fn drain_v2_ingress(
             }
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
                 let Some(sender) = sender else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
                 let Some(reply_routes) = reply_routes else {
@@ -2618,6 +2821,7 @@ fn drain_v2_ingress(
                         %sender,
                         "rejected CommitQC request without authenticated reply route"
                     );
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
                 if reply_routes.semantic_target() != &sender {
@@ -2625,6 +2829,7 @@ fn drain_v2_ingress(
                         %sender,
                         "rejected CommitQC request with mismatched reply target"
                     );
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 }
                 let response_peer = sender.clone();
@@ -2654,16 +2859,18 @@ fn drain_v2_ingress(
                     // therefore reducer-producing, unlike body/chunk
                     // transport completions. Decision is terminal for global
                     // consensus input at this height.
-                    drop(ingress_ownership);
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 }
                 let Some(sender) = sender else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                     continue;
                 };
                 let discovered = match block_sync.authenticate_response(response, &sender) {
                     Ok(discovered) => discovered,
                     Err(error) => {
                         iroha_logger::debug!(%error, "rejected CommitQC discovery response");
+                        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                         continue;
                     }
                 };
@@ -2684,7 +2891,10 @@ fn drain_decided_lane_recovery_ingress(
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
 ) -> Result<(), V2RunnerError> {
-    let Some(inbound) = receiver.try_recv_if(|_| true) else {
+    let Some(inbound) = receiver
+        .try_recv_if_checked(|_| true)
+        .map_err(V2RunnerError::Service)?
+    else {
         return Ok(());
     };
     if inbound.message().is_lane_local() {
@@ -2812,25 +3022,57 @@ fn serve_block_sync_while_guarded<Response>(
 
 fn enqueue_control(
     executor: &mut V2EffectExecutor,
+    receiver: &FairV2Ingress,
     message: wire::ConsensusMessageV2,
     ingress_ownership: FairV2IngressOwnershipEvidence,
 ) -> Result<(), V2RunnerError> {
-    match executor.enqueue_network_with_ingress_ownership(message, ingress_ownership) {
+    let terminal_ownership = ingress_ownership.clone();
+    complete_control_ingress_admission(
+        receiver,
+        &terminal_ownership,
+        executor.enqueue_network_with_ingress_ownership(message, ingress_ownership),
+    )
+}
+
+fn complete_control_ingress_admission(
+    receiver: &FairV2Ingress,
+    terminal_ownership: &FairV2IngressOwnershipEvidence,
+    admission: Result<EventTag, NetworkIngressError>,
+) -> Result<(), V2RunnerError> {
+    match admission {
         Ok(_) => Ok(()),
-        Err(NetworkIngressError::FailClosed) => Err(V2RunnerError::RuntimeFailClosed),
+        Err(NetworkIngressError::FailClosed) => {
+            mark_leader_wire_volatile(receiver, terminal_ownership)?;
+            Err(V2RunnerError::RuntimeFailClosed)
+        }
         Err(NetworkIngressError::Authentication(error)) => {
             iroha_logger::debug!(%error, "rejected Sumeragi v2 control ingress");
+            mark_leader_wire_volatile(receiver, terminal_ownership)?;
             Ok(())
         }
         Err(NetworkIngressError::Backpressure(error)) => {
+            mark_leader_wire_volatile(receiver, terminal_ownership)?;
             Err(V2RunnerError::RuntimeAdmissionInvariant(error.to_string()))
         }
         Err(NetworkIngressError::TransportPayload) => {
+            mark_leader_wire_volatile(receiver, terminal_ownership)?;
             Err(V2RunnerError::RuntimeAdmissionInvariant(
                 "transport payload reached reducer-control admission".to_owned(),
             ))
         }
     }
+}
+
+fn mark_leader_wire_volatile(
+    receiver: &FairV2Ingress,
+    ownership: &FairV2IngressOwnershipEvidence,
+) -> Result<(), V2RunnerError> {
+    if let Some(receipt) = ownership.leader_wire_runtime_receipt() {
+        receiver
+            .mark_leader_wire_volatile_terminal(receipt)
+            .map_err(V2RunnerError::Service)?;
+    }
+    Ok(())
 }
 
 fn commit_certificate_admission_completed(
@@ -3802,7 +4044,7 @@ mod tests {
     };
 
     use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         ChainId,
         account::AccountId,
@@ -4007,6 +4249,180 @@ mod tests {
             },
             keys,
         )
+    }
+
+    fn leader_wire_runtime_ingress_fixture() -> (
+        TempDir,
+        FairV2Ingress,
+        Arc<LeaderWireLifecycleStoreGate>,
+        FairV2IngressOwnershipEvidence,
+        wire::ConsensusMessageV2,
+        PeerId,
+    ) {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let body = b"runner authenticated-Coalesce defense".to_vec();
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"runner authenticated-Coalesce block",
+            )),
+            payload_hash: Hash::new(&body),
+        };
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            round,
+            subject,
+            u64::try_from(body.len()).expect("small runner fixture body"),
+            std::slice::from_ref(&body),
+        )
+        .expect("runner leader-wire fixture manifest");
+        let proposer = context.leader(round.view);
+        let mut proposal = wire::Proposal {
+            round,
+            proposer,
+            subject,
+            manifest,
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        proposal.signature = Signature::new(
+            keys[usize::try_from(proposer).expect("small runner proposer index")].private_key(),
+            &proposal.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
+        let semantic_origin = context.roster
+            [usize::try_from(proposer).expect("small runner proposer index")]
+        .validator
+        .clone();
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let directory = TempDir::new().expect("temporary runner leader-wire directory");
+        let ingress = FairV2Ingress::new(
+            64,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+        );
+        ingress
+            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .expect("configure runner leader-wire ingress");
+        ingress.require_leader_wire_lifecycle_gate();
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            context.da_layout.max_chunk_count,
+        )
+        .expect("derive runner leader-wire capacity");
+        let owner = [0xD4; 32];
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                owner,
+                round.view,
+                false,
+            );
+        let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("runner-leader-wire.wal"),
+            context.id(),
+            context.height,
+            owner,
+            roster.iter().cloned().collect(),
+            capacity,
+            context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open runner leader-wire gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&gate),
+                restore,
+                super::super::RuntimeLifecycleOrdinalSource::after_high_watermark(64),
+                context.id(),
+                context.height,
+            )
+            .expect("bind runner leader-wire gate");
+        ingress.open().expect("open runner leader-wire ingress");
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message.clone()),
+                Some(semantic_origin.clone()),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let mut admitted = ingress
+            .try_recv()
+            .expect("drain runner leader-wire fixture");
+        let mut ownership = admitted
+            .take_ingress_ownership()
+            .expect("runner leader-wire fixture retains ingress ownership");
+        ingress
+            .bind_leader_wire_runtime_ownership(&mut ownership)
+            .expect("bind runner leader-wire runtime receipt");
+        (
+            directory,
+            ingress,
+            gate,
+            ownership,
+            message,
+            semantic_origin,
+        )
+    }
+
+    #[test]
+    fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
+        let (_directory, ingress, gate, ownership, message, semantic_origin) =
+            leader_wire_runtime_ingress_fixture();
+        assert!(
+            ownership.leader_wire_runtime_receipt().is_some(),
+            "the synthetic stale Coalesce result carries a fresh runtime receipt"
+        );
+        assert!(
+            gate.earliest_ingress_scheduler_ordinal()
+                .expect("read runner leader-wire minimum")
+                .is_some()
+        );
+
+        assert!(matches!(
+            complete_control_ingress_admission(
+                &ingress,
+                &ownership,
+                Err(NetworkIngressError::FailClosed),
+            ),
+            Err(V2RunnerError::RuntimeFailClosed)
+        ));
+        assert_eq!(
+            gate.earliest_ingress_scheduler_ordinal()
+                .expect("read retired runner leader-wire minimum"),
+            None
+        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message),
+                Some(semantic_origin),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert_eq!(
+            gate.earliest_ingress_scheduler_ordinal()
+                .expect("retry retains the terminal tombstone"),
+            None
+        );
     }
 
     #[test]

@@ -43,27 +43,30 @@ IndexedDecisionWitness(initialContext) ==
        commitQCs <- IndexedCore(initialContext, 23),
        formedTCs <- IndexedCore(initialContext, 24),
        installedTCs <- IndexedCore(initialContext, 25),
-       lockRank <- IndexedCore(initialContext, 26),
-       lockSubject <- IndexedCore(initialContext, 27),
-       highestRank <- IndexedCore(initialContext, 28),
-       highestSubject <- IndexedCore(initialContext, 29),
-       pendingProposal <- IndexedCore(initialContext, 30),
-       pendingPrepare <- IndexedCore(initialContext, 31),
-       pendingObservePrepare <- IndexedCore(initialContext, 32),
-       pendingLockCommit <- IndexedCore(initialContext, 33),
-       pendingTimeout <- IndexedCore(initialContext, 34),
-       pendingInstallTC <- IndexedCore(initialContext, 35),
-       pendingDecision <- IndexedCore(initialContext, 36),
-       signProposals <- IndexedCore(initialContext, 37),
-       signVotes <- IndexedCore(initialContext, 38),
-       signTimeouts <- IndexedCore(initialContext, 39),
-       proposalNetwork <- IndexedCore(initialContext, 40),
-       voteNetwork <- IndexedCore(initialContext, 41),
-       qcNetwork <- IndexedCore(initialContext, 42),
-       timeoutNetwork <- IndexedCore(initialContext, 43),
-       tcNetwork <- IndexedCore(initialContext, 44),
-       decisions <- IndexedCore(initialContext, 45),
-       applied <- IndexedCore(initialContext, 46),
+       lastInstalledTc <- IndexedCore(initialContext, 26),
+       lockPrepareQc <- IndexedCore(initialContext, 27),
+       highestPrepareQc <- IndexedCore(initialContext, 28),
+       lockRank <- IndexedCore(initialContext, 29),
+       lockSubject <- IndexedCore(initialContext, 30),
+       highestRank <- IndexedCore(initialContext, 31),
+       highestSubject <- IndexedCore(initialContext, 32),
+       pendingProposal <- IndexedCore(initialContext, 33),
+       pendingPrepare <- IndexedCore(initialContext, 34),
+       pendingObservePrepare <- IndexedCore(initialContext, 35),
+       pendingLockCommit <- IndexedCore(initialContext, 36),
+       pendingTimeout <- IndexedCore(initialContext, 37),
+       pendingInstallTC <- IndexedCore(initialContext, 38),
+       pendingDecision <- IndexedCore(initialContext, 39),
+       signProposals <- IndexedCore(initialContext, 40),
+       signVotes <- IndexedCore(initialContext, 41),
+       signTimeouts <- IndexedCore(initialContext, 42),
+       proposalNetwork <- IndexedCore(initialContext, 43),
+       voteNetwork <- IndexedCore(initialContext, 44),
+       qcNetwork <- IndexedCore(initialContext, 45),
+       timeoutNetwork <- IndexedCore(initialContext, 46),
+       tcNetwork <- IndexedCore(initialContext, 47),
+       decisions <- IndexedCore(initialContext, 48),
+       applied <- IndexedCore(initialContext, 49),
        asyncNow <- IndexedScheduler(initialContext, 1),
        asyncCommandQueues <- IndexedScheduler(initialContext, 2),
        asyncNextCommandClass <- IndexedScheduler(initialContext, 3),
@@ -104,29 +107,33 @@ IndexedDecisionWitness(initialContext) ==
        asyncTransport <- IndexedScheduler(initialContext, 38),
        asyncIngressLanes <- IndexedScheduler(initialContext, 39),
        asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 41),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 42),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 43),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 44),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
-         IndexedRecovery(initialContext, 5)
+         IndexedRecovery(initialContext, 5),
+       asyncFixedCorridorDeadlines <-
+         IndexedFixedCorridorDeadlines(initialContext)
 
 (***************************************************************************
-Proof-bearing one-height temporal closure over one indexed Async instance.
+Exact Decision-source safety over one indexed Async instance.
 
 This instance has the identical state projection as `IndexedAsync` and
-`IndexedDecisionWitness`, but imports the proved temporal closure rather than
-the lower proof-debt facade.  It is used only after the indexed product has
-joined every responsive peer to the frozen context.  In particular, it does
-not consume indexed height liveness or exact historical-recovery progress.
+`IndexedDecisionWitness`, but imports only the source-retention and exact
+Decision-service vocabulary needed below.  It deliberately stops below the
+application-liveness and one-height temporal-closure modules.  Local indexed
+runner fairness is supplied by the product providers instead of projecting a
+whole `AsyncSpecAt` after an all-responsive join barrier.
 ***************************************************************************)
 
-IndexedOneHeightProof(initialContext) ==
-  INSTANCE SumeragiV2AsyncTemporalClosureProofs
+IndexedDecisionServiceWitness(initialContext) ==
+  INSTANCE SumeragiV2ExactDecisionStageServiceClosureProofs
     WITH
        height <- IndexedCore(initialContext, 1),
        context <- IndexedCore(initialContext, 2),
@@ -153,27 +160,30 @@ IndexedOneHeightProof(initialContext) ==
        commitQCs <- IndexedCore(initialContext, 23),
        formedTCs <- IndexedCore(initialContext, 24),
        installedTCs <- IndexedCore(initialContext, 25),
-       lockRank <- IndexedCore(initialContext, 26),
-       lockSubject <- IndexedCore(initialContext, 27),
-       highestRank <- IndexedCore(initialContext, 28),
-       highestSubject <- IndexedCore(initialContext, 29),
-       pendingProposal <- IndexedCore(initialContext, 30),
-       pendingPrepare <- IndexedCore(initialContext, 31),
-       pendingObservePrepare <- IndexedCore(initialContext, 32),
-       pendingLockCommit <- IndexedCore(initialContext, 33),
-       pendingTimeout <- IndexedCore(initialContext, 34),
-       pendingInstallTC <- IndexedCore(initialContext, 35),
-       pendingDecision <- IndexedCore(initialContext, 36),
-       signProposals <- IndexedCore(initialContext, 37),
-       signVotes <- IndexedCore(initialContext, 38),
-       signTimeouts <- IndexedCore(initialContext, 39),
-       proposalNetwork <- IndexedCore(initialContext, 40),
-       voteNetwork <- IndexedCore(initialContext, 41),
-       qcNetwork <- IndexedCore(initialContext, 42),
-       timeoutNetwork <- IndexedCore(initialContext, 43),
-       tcNetwork <- IndexedCore(initialContext, 44),
-       decisions <- IndexedCore(initialContext, 45),
-       applied <- IndexedCore(initialContext, 46),
+       lastInstalledTc <- IndexedCore(initialContext, 26),
+       lockPrepareQc <- IndexedCore(initialContext, 27),
+       highestPrepareQc <- IndexedCore(initialContext, 28),
+       lockRank <- IndexedCore(initialContext, 29),
+       lockSubject <- IndexedCore(initialContext, 30),
+       highestRank <- IndexedCore(initialContext, 31),
+       highestSubject <- IndexedCore(initialContext, 32),
+       pendingProposal <- IndexedCore(initialContext, 33),
+       pendingPrepare <- IndexedCore(initialContext, 34),
+       pendingObservePrepare <- IndexedCore(initialContext, 35),
+       pendingLockCommit <- IndexedCore(initialContext, 36),
+       pendingTimeout <- IndexedCore(initialContext, 37),
+       pendingInstallTC <- IndexedCore(initialContext, 38),
+       pendingDecision <- IndexedCore(initialContext, 39),
+       signProposals <- IndexedCore(initialContext, 40),
+       signVotes <- IndexedCore(initialContext, 41),
+       signTimeouts <- IndexedCore(initialContext, 42),
+       proposalNetwork <- IndexedCore(initialContext, 43),
+       voteNetwork <- IndexedCore(initialContext, 44),
+       qcNetwork <- IndexedCore(initialContext, 45),
+       timeoutNetwork <- IndexedCore(initialContext, 46),
+       tcNetwork <- IndexedCore(initialContext, 47),
+       decisions <- IndexedCore(initialContext, 48),
+       applied <- IndexedCore(initialContext, 49),
        asyncNow <- IndexedScheduler(initialContext, 1),
        asyncCommandQueues <- IndexedScheduler(initialContext, 2),
        asyncNextCommandClass <- IndexedScheduler(initialContext, 3),
@@ -214,16 +224,134 @@ IndexedOneHeightProof(initialContext) ==
        asyncTransport <- IndexedScheduler(initialContext, 38),
        asyncIngressLanes <- IndexedScheduler(initialContext, 39),
        asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 41),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 42),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 43),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 44),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
-         IndexedRecovery(initialContext, 5)
+         IndexedRecovery(initialContext, 5),
+       asyncFixedCorridorDeadlines <-
+         IndexedFixedCorridorDeadlines(initialContext)
+
+(***************************************************************************
+Generic local adequate-leader witness over the same indexed state.
+
+Only the target-local GST-to-Decision interface is consumed below.  The
+instance contributes no aggregate Decide, application, one-height, or height
+liveness theorem.  Its service kernel is discharged against the indexed
+product's exact current-voter action fairness.
+***************************************************************************)
+
+IndexedAdequateLeaderWitness(initialContext) ==
+  INSTANCE SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs
+    WITH
+       height <- IndexedCore(initialContext, 1),
+       context <- IndexedCore(initialContext, 2),
+       contextHistory <- IndexedCore(initialContext, 3),
+       nodeView <- IndexedCore(initialContext, 4),
+       generation <- IndexedCore(initialContext, 5),
+       up <- IndexedCore(initialContext, 6),
+       gst <- IndexedCore(initialContext, 7),
+       availableBodies <- IndexedCore(initialContext, 8),
+       durableBodies <- IndexedCore(initialContext, 9),
+       retainedLockedBodies <- IndexedCore(initialContext, 10),
+       validatedBodies <- IndexedCore(initialContext, 11),
+       invalidBodies <- IndexedCore(initialContext, 12),
+       seenProposals <- IndexedCore(initialContext, 13),
+       receivedVotes <- IndexedCore(initialContext, 14),
+       receivedQCs <- IndexedCore(initialContext, 15),
+       receivedTimeoutVotes <- IndexedCore(initialContext, 16),
+       receivedTCs <- IndexedCore(initialContext, 17),
+       proposalIntents <- IndexedCore(initialContext, 18),
+       prepareIntents <- IndexedCore(initialContext, 19),
+       commitIntents <- IndexedCore(initialContext, 20),
+       timeoutIntents <- IndexedCore(initialContext, 21),
+       prepareQCs <- IndexedCore(initialContext, 22),
+       commitQCs <- IndexedCore(initialContext, 23),
+       formedTCs <- IndexedCore(initialContext, 24),
+       installedTCs <- IndexedCore(initialContext, 25),
+       lastInstalledTc <- IndexedCore(initialContext, 26),
+       lockPrepareQc <- IndexedCore(initialContext, 27),
+       highestPrepareQc <- IndexedCore(initialContext, 28),
+       lockRank <- IndexedCore(initialContext, 29),
+       lockSubject <- IndexedCore(initialContext, 30),
+       highestRank <- IndexedCore(initialContext, 31),
+       highestSubject <- IndexedCore(initialContext, 32),
+       pendingProposal <- IndexedCore(initialContext, 33),
+       pendingPrepare <- IndexedCore(initialContext, 34),
+       pendingObservePrepare <- IndexedCore(initialContext, 35),
+       pendingLockCommit <- IndexedCore(initialContext, 36),
+       pendingTimeout <- IndexedCore(initialContext, 37),
+       pendingInstallTC <- IndexedCore(initialContext, 38),
+       pendingDecision <- IndexedCore(initialContext, 39),
+       signProposals <- IndexedCore(initialContext, 40),
+       signVotes <- IndexedCore(initialContext, 41),
+       signTimeouts <- IndexedCore(initialContext, 42),
+       proposalNetwork <- IndexedCore(initialContext, 43),
+       voteNetwork <- IndexedCore(initialContext, 44),
+       qcNetwork <- IndexedCore(initialContext, 45),
+       timeoutNetwork <- IndexedCore(initialContext, 46),
+       tcNetwork <- IndexedCore(initialContext, 47),
+       decisions <- IndexedCore(initialContext, 48),
+       applied <- IndexedCore(initialContext, 49),
+       asyncNow <- IndexedScheduler(initialContext, 1),
+       asyncCommandQueues <- IndexedScheduler(initialContext, 2),
+       asyncNextCommandClass <- IndexedScheduler(initialContext, 3),
+       asyncFifoOwed <- IndexedScheduler(initialContext, 4),
+       asyncTimeoutEmitted <- IndexedScheduler(initialContext, 5),
+       asyncRunnerPhase <- IndexedScheduler(initialContext, 6),
+       asyncRunnerBudget <- IndexedScheduler(initialContext, 7),
+       asyncCausalAdmissionOwed <- IndexedScheduler(initialContext, 8),
+       asyncNextLocalSource <- IndexedScheduler(initialContext, 9),
+       asyncIoQueues <- IndexedScheduler(initialContext, 10),
+       asyncNextServeAdmissionOrdinal <- IndexedScheduler(initialContext, 11),
+       asyncNextServeIngressOrdinal <- IndexedScheduler(initialContext, 12),
+       asyncServeIngressAdmissions <- IndexedScheduler(initialContext, 13),
+       asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
+       asyncServeReservations <- IndexedScheduler(initialContext, 15),
+       asyncServeTombstones <- IndexedScheduler(initialContext, 16),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncSentItems <- IndexedScheduler(initialContext, 34),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
+       asyncTransport <- IndexedScheduler(initialContext, 38),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
+       asyncIngressReady <- IndexedScheduler(initialContext, 40),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
+       asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
+       asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
+       asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
+       asyncHistoricalLockRestartAuthorities <-
+         IndexedRecovery(initialContext, 5),
+       asyncFixedCorridorDeadlines <-
+         IndexedFixedCorridorDeadlines(initialContext)
 
 (***************************************************************************
 Indexed exact-source retention support.
@@ -267,7 +395,48 @@ BY Isa
        IndexedDecisionWitness!AsyncSchedulerVars,
        IndexedDecisionWitness!AsyncRecoveryVars,
        IndexedDecisionWitness!vars,
-       IndexedCore, IndexedScheduler, IndexedRecovery
+       IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+       IndexedRecovery, IndexedFixedCorridorDeadlines
+
+THEOREM IndexedAdequateLeaderWitnessVariablesAreExact ==
+  IndexedAsyncStateShape
+    => \A initialContext \in AdmissibleContextRecords:
+         IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars =
+           IndexedAsyncStateAt(initialContext)
+BY Isa
+   DEF IndexedAsyncStateShape, IndexedAsyncStateAt,
+       IndexedAdequateLeaderWitness!AsyncAllVars,
+       IndexedAdequateLeaderWitness!AsyncSchedulerVars,
+       IndexedAdequateLeaderWitness!AsyncRecoveryVars,
+       IndexedAdequateLeaderWitness!vars,
+       IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+       IndexedRecovery, IndexedFixedCorridorDeadlines
+
+THEOREM IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
+      => IndexedAdequateLeaderWitness(initialContext)!
+           AsyncLiveSpecAt(initialContext)
+BY Isa
+   DEF IndexedAsync!AsyncLiveSpecAt,
+       IndexedAdequateLeaderWitness!AsyncLiveSpecAt,
+       IndexedAsyncStateAt,
+       IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+       IndexedRecovery, IndexedFixedCorridorDeadlines
+
+THEOREM IndexedDecisionServiceWitnessVariablesAreExact ==
+  IndexedAsyncStateShape
+    => \A initialContext \in AdmissibleContextRecords:
+         IndexedDecisionServiceWitness(initialContext)!AsyncAllVars =
+           IndexedAsyncStateAt(initialContext)
+BY Isa
+   DEF IndexedAsyncStateShape, IndexedAsyncStateAt,
+       IndexedDecisionServiceWitness!AsyncAllVars,
+       IndexedDecisionServiceWitness!AsyncSchedulerVars,
+       IndexedDecisionServiceWitness!AsyncRecoveryVars,
+       IndexedDecisionServiceWitness!vars,
+       IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+       IndexedRecovery, IndexedFixedCorridorDeadlines
 
 THEOREM IndexedInitProjectsEveryDecisionWitnessInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -323,10 +492,68 @@ PROOF
                IndexedDecisionWitness!AsyncSchedulerVars,
                IndexedDecisionWitness!AsyncRecoveryVars,
                IndexedDecisionWitness!vars,
-               IndexedCore, IndexedScheduler, IndexedRecovery
+               IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+               IndexedRecovery, IndexedFixedCorridorDeadlines
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
+
+THEOREM IndexedBracketStepProjectsEveryAdequateLeaderWitnessStep ==
+  \A initialContext \in AdmissibleContextRecords:
+    [IndexedChainNext]_IndexedChainVars
+      => [IndexedAdequateLeaderWitness(initialContext)!AsyncNext]_(
+           IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
+                [IndexedChainNext]_IndexedChainVars
+         PROVE [IndexedAdequateLeaderWitness(initialContext)!AsyncNext]_(
+                 IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)
+    <2>1. CASE IndexedChainNext
+      <3>1. IndexedAsyncStateShape
+        BY <2>1 DEF IndexedChainNext
+      <3>2. IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars =
+               IndexedAsyncStateAt(initialContext)
+        BY <1>1, <3>1, IndexedAdequateLeaderWitnessVariablesAreExact
+      <3>3. [IndexedAsync(initialContext)!AsyncNext]_(
+               IndexedAsyncStateAt(initialContext))
+        BY <2>1, IndexedStepProjectsEveryAsyncStep
+      <3> QED BY <3>2, <3>3, Isa
+           DEF IndexedAdequateLeaderWitness!AsyncNext,
+               IndexedAsync!AsyncNext
+    <2>2. CASE UNCHANGED IndexedChainVars
+      <3>1. UNCHANGED indexedAsyncState
+        BY <2>2 DEF IndexedChainVars
+      <3>2. UNCHANGED
+               (IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)
+        BY <3>1, Isa
+           DEF IndexedAdequateLeaderWitness!AsyncAllVars,
+               IndexedAdequateLeaderWitness!AsyncSchedulerVars,
+               IndexedAdequateLeaderWitness!AsyncRecoveryVars,
+               IndexedAdequateLeaderWitness!vars,
+               IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+               IndexedRecovery, IndexedFixedCorridorDeadlines
+      <3> QED BY <3>2
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM IndexedBracketStepProjectsEveryDecisionServiceWitnessStep ==
+  \A initialContext \in AdmissibleContextRecords:
+    [IndexedChainNext]_IndexedChainVars
+      => [IndexedDecisionServiceWitness(initialContext)!AsyncNext]_(
+           IndexedDecisionServiceWitness(initialContext)!AsyncAllVars)
+BY IndexedBracketStepProjectsEveryDecisionWitnessStep, Isa
+   DEF IndexedDecisionServiceWitness!AsyncNext,
+       IndexedDecisionWitness!AsyncNext,
+       IndexedDecisionServiceWitness!AsyncAllVars,
+       IndexedDecisionServiceWitness!AsyncSchedulerVars,
+       IndexedDecisionServiceWitness!AsyncRecoveryVars,
+       IndexedDecisionServiceWitness!vars,
+       IndexedDecisionWitness!AsyncAllVars,
+       IndexedDecisionWitness!AsyncSchedulerVars,
+       IndexedDecisionWitness!AsyncRecoveryVars,
+       IndexedDecisionWitness!vars,
+       IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
+       IndexedRecovery, IndexedFixedCorridorDeadlines
 
 THEOREM IndexedChainInitEstablishesDecisionWitnessSupport ==
   IndexedChainInit => IndexedDecisionWitnessSupport
@@ -484,8 +711,9 @@ applied it.  That source is broader than the historical-recovery protocol:
 at genesis, and for an ordinary current voter at a newly activated context,
 it can hold before an applied archive source or an exact historical target
 exists.  The first residual below owns precisely that prefix.  It must be
-discharged by source availability or ordinary one-height progress; treating
-it as a historical packet/service theorem would be circular.
+discharged by source availability or one joined current voter's local
+Decision-to-Apply corridor; treating it as a historical packet/service
+theorem would be circular.
 
 After exact source authority exists, the remaining predicates name only
 production state:
@@ -513,10 +741,12 @@ corridor, not on voter fairness.
 
 The exact Open property, exact Decision-stage ownership exposure, and exact
 application receipt handoff are proved here from `IndexedChainSpec`.  The
-remaining temporal rank and authority operators are not asserted as theorems.
-One PTL reduction exposes the historical-only boundary after source authority;
-a second keeps the broader chain-level premise conditional on the
-ordinary-consensus authority residual.
+certificate rank, exact historical-target Decision rank, ordinary-owner
+Decision rank, and authority-acquisition operators are closed below from
+their exact physical and strict-height providers.  The concluding PTL
+reduction still exposes the historical-only boundary after source authority;
+the broader chain-level premise is discharged without importing aggregate
+application, one-height, or height-liveness conclusions.
 ***************************************************************************)
 
 IndexedHistoricalExactApplication(initialContext, node) ==
@@ -781,7 +1011,7 @@ IndexedHistoricalCertificateDecisionWalLineageSource(
   /\ qc.context = initialContext
   /\ qc.phase = "Commit"
   /\ IndexedAsync(initialContext)!DecisionWal(node, qc, FALSE)
-       \in IndexedCore(initialContext, 36)
+       \in IndexedCore(initialContext, 39)
 
 IndexedHistoricalCertificateReceivedQcLineageInvariantAt(initialContext) ==
   \A node \in Responsive, qc:
@@ -1107,7 +1337,7 @@ IndexedHistoricalCommitCertificateImported(
        /\ \/ IndexedAsync(initialContext)!QcAt(node, qc)
                \in IndexedCore(initialContext, 15)
           \/ IndexedAsync(initialContext)!DecisionWal(node, qc, FALSE)
-               \in IndexedCore(initialContext, 36)
+               \in IndexedCore(initialContext, 39)
           \/ \E candidate:
                IndexedHistoricalCertificateCommandFor(
                  initialContext, node, qc, candidate)
@@ -1182,7 +1412,7 @@ packet admission, and Serve/I/O service remain obligations of
 
 IndexedHistoricalDecisionRecord(initialContext, node, qc) ==
   /\ [node |-> node, qc |-> qc]
-       \in IndexedCore(initialContext, 45)
+       \in IndexedCore(initialContext, 48)
   /\ qc.context = initialContext
   /\ qc.phase = "Commit"
 
@@ -2050,23 +2280,26 @@ The historical Candidate/Serve leaves below cover only the second class.  Keep
 the two temporal cones separate so an automated prover cannot use a broad
 `IsaT` step to discharge the ordinary owner with a target-only premise.
 
-The ordinary branch is closed by the indexed instance of the exact Decision
-and application-completion corridor.  The target branch is closed by the
-historical Candidate ranks plus the exact CertifiedRequest transport corridor.
-Neither property below assumes the other branch, authority acquisition, or
+The ordinary branch is closed by the indexed five-leaf exact Decision service
+corridor.  The target branch is closed by the historical Candidate ranks plus
+the exact CertifiedRequest transport corridor.  Neither property below
+assumes the other branch, authority acquisition, aggregate application, or
 indexed height liveness.
 ***************************************************************************)
+
+IndexedHistoricalDecisionOrdinaryRankGoal(
+    initialContext, node, rank) ==
+  \/ IndexedHistoricalExactApplication(initialContext, node)
+  \/ \E lower \in SetLessThan(rank, OpToRel(<, Nat), Nat):
+       IndexedHistoricalDecisionStageAt(initialContext, node, lower)
 
 IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt(
     initialContext, node, rank) ==
   ( /\ node \in IndexedAsync(initialContext)!
                  AsyncCurrentResponsiveVoters
     /\ IndexedHistoricalDecisionStageAt(initialContext, node, rank))
-    ~> (IndexedHistoricalExactApplication(initialContext, node)
-         \/ \E lower \in SetLessThan(
-              rank, OpToRel(<, Nat), Nat):
-              IndexedHistoricalDecisionStageAt(
-                initialContext, node, lower))
+    ~> IndexedHistoricalDecisionOrdinaryRankGoal(
+         initialContext, node, rank)
 
 IndexedHistoricalDecisionTargetOwnerRankProgressAt(
     initialContext, node, rank) ==
@@ -2138,18 +2371,55 @@ THEOREM IndexedHistoricalDecisionOrdinaryStageHasExactServiceSourceAtGst ==
                  AsyncCurrentResponsiveVoters
     /\ IndexedHistoricalDecisionStageAt(initialContext, node, rank)
     => \E qc:
-         IndexedOneHeightProof(initialContext)!
+         IndexedDecisionServiceWitness(initialContext)!
            ExactDecisionServiceSource(node, qc)
 BY IndexedHistoricalDecisionOwnerHasExactRecoveryStage, Isa
    DEF IndexedHistoricalDecisionStageAt,
        IndexedHistoricalDecisionRecord,
-       IndexedOneHeightProof!ExactDecisionServiceSource,
-       IndexedOneHeightProof!ExactDecisionRecord,
-       IndexedOneHeightProof!DecisionRecoveryStageExact,
+       IndexedDecisionServiceWitness!ExactDecisionServiceSource,
+       IndexedDecisionServiceWitness!ExactDecisionRecord,
+       IndexedDecisionServiceWitness!DecisionRecoveryStageExact,
        IndexedDecisionWitness!DecisionRecoveryStageExact,
        IndexedAsync!AsyncCurrentResponsiveVoters,
-       IndexedOneHeightProof!AsyncCurrentResponsiveVoters,
+       IndexedDecisionServiceWitness!AsyncCurrentResponsiveVoters,
        IndexedCore, IndexedScheduler, IndexedRecovery
+
+THEOREM IndexedHistoricalDecisionOrdinaryOwnerPersistsOrGoals ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive,
+     rank \in 1..6:
+    LET owner ==
+          /\ node \in IndexedAsync(initialContext)!
+                       AsyncCurrentResponsiveVoters
+          /\ IndexedHistoricalDecisionStageAt(
+               initialContext, node, rank)
+    IN /\ IndexedCompositionInvariant
+       /\ IndexedDecisionWitnessSupportAt(initialContext)
+       /\ IndexedResponsiveRecoveryDormant
+       /\ owner
+       /\ [IndexedChainNext]_IndexedChainVars
+       => \/ owner'
+          \/ IndexedHistoricalDecisionOrdinaryRankGoal(
+               initialContext, node, rank)'
+BY IndexedHistoricalTransport(initialContext)!
+     HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff,
+   JoinedNonCurrentHasApplicationEvidence, IsaT(1800)
+   DEF IndexedHistoricalDecisionOrdinaryRankGoal,
+       IndexedHistoricalDecisionStageAt,
+       IndexedHistoricalDecisionRecord,
+       IndexedHistoricalDecisionOwned,
+       IndexedHistoricalRecoveryRunnerOwned,
+       IndexedHistoricalExactApplication,
+       IndexedNodeCurrentAt,
+       IndexedDecisionWitnessSupportAt,
+       IndexedCompositionInvariant,
+       IndexedResponsiveRecoveryDormant,
+       IndexedCore, IndexedScheduler, IndexedRecovery,
+       IndexedAsync!AsyncCurrentResponsiveVoters,
+       IndexedAsync!NodeHasApplication,
+       IndexedHistoricalTransport!AsyncCurrentResponsiveVoters,
+       IndexedHistoricalTransport!NodeHasApplication,
+       IndexedChainVars
 
 THEOREM IndexedHistoricalDecisionOwnerClassesCloseRankProgress ==
   /\ IndexedHistoricalDecisionOrdinaryOwnerRankProgressProperty
@@ -2226,10 +2496,10 @@ IndexedHistoricalDecisionTargetCandidateRankProgressResidualProperty ==
          initialContext, node, 1)
 
 THEOREM IndexedChainSpecClosesHistoricalDecisionTargetCandidateRankResiduals ==
-  /\ IndexedChainSpec
-  /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
+  IndexedChainSpec
     => IndexedHistoricalDecisionTargetCandidateRankProgressResidualProperty
-BY IndexedChainSpecClosesHistoricalDecisionBodyCandidateLeaves,
+BY IndexedChainSpecProvidesHistoricalFiniteRunnerEpisodeClosure,
+   IndexedChainSpecClosesHistoricalDecisionBodyCandidateLeaves,
    IndexedChainSpecClosesHistoricalProtectedCandidateStarvation,
    IsaT(1200), PTL
    DEF IndexedHistoricalDecisionTargetCandidateRankProgressResidualProperty,
@@ -2598,7 +2868,7 @@ IndexedHistoricalCertificateLocalImportAt(initialContext, node) ==
        /\ \/ IndexedAsync(initialContext)!QcAt(node, qc)
                 \in IndexedCore(initialContext, 15)
           \/ IndexedAsync(initialContext)!DecisionWal(node, qc, FALSE)
-                \in IndexedCore(initialContext, 36)
+                \in IndexedCore(initialContext, 39)
           \/ \E candidate:
                IndexedHistoricalCertificateCommandFor(
                  initialContext, node, qc, candidate)
@@ -2951,15 +3221,19 @@ PROOF
 Exact certificate-rank residual surface.
 
 The compatibility aggregate above is useful for local rank composition, but
-it is not the release dependency boundary.  The boundary below names the
-still-open physical packet corridor and exact Commit transport kernels.
+it is not the release dependency boundary.  Fixed-kind Serve service is now a
+theorem of `IndexedChainSpec`; route-neutral Candidate service is conditional
+on its explicit cross-instance starvation lift.  The boundary below therefore
+names the remaining concrete packet-action service, that neutral Candidate
+lift, and the exact Commit transport kernels through the combined fixed-clock
+residual.
 Fixed-clock non-packet service and the two target-local receipt/WAL entry
 handoffs are theorems of `IndexedChainSpec`; archive Serve response is also
 proved and is supplied by the transport-kernel reduction.
 ***************************************************************************)
 
 IndexedHistoricalCertificatePhysicalResidualKernels ==
-  /\ IndexedHistoricalFixedClockPacketCorridorTemporalResidual
+  /\ IndexedHistoricalFixedClockPacketRemainingTemporalResidual
   /\ IndexedHistoricalCommitTransportResidualKernelProperties
 
 THEOREM IndexedHistoricalCertificatePhysicalKernelsCloseRankResidual ==
@@ -2970,8 +3244,12 @@ PROOF
   <1>1. ASSUME IndexedChainSpec,
                IndexedHistoricalCertificatePhysicalResidualKernels
          PROVE IndexedHistoricalCertificateRankProgressResidualProperty
-    <2>1. IndexedHistoricalCertificateDiscoveryRunnerResidualProperty
+    <2>0. IndexedHistoricalFixedClockPacketCorridorTemporalResidual
       BY <1>1,
+         IndexedChainSpecAndRemainingPacketResidualProvideFixedClockPacketCorridor
+         DEF IndexedHistoricalCertificatePhysicalResidualKernels
+    <2>1. IndexedHistoricalCertificateDiscoveryRunnerResidualProperty
+      BY <1>1, <2>0,
          IndexedHistoricalFixedClockExactResidualsCloseCertificateDiscoveryRank
          DEF IndexedHistoricalCertificatePhysicalResidualKernels
     <2>2. IndexedHistoricalCommitCertificateTransportLeafProperty
@@ -2991,18 +3269,18 @@ PROOF
 
 THEOREM IndexedHistoricalDecisionTargetCertifiedRequestClosesTargetRank ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
   /\ IndexedHistoricalDecisionTargetCertifiedRequestResidualProperty
   => IndexedHistoricalDecisionTargetOwnerRankProgressProperty
-BY IndexedChainSpecClosesHistoricalDecisionTargetCandidateRankResiduals,
+BY IndexedChainSpecProvidesHistoricalFiniteRunnerEpisodeClosure,
+   IndexedChainSpecClosesHistoricalDecisionTargetCandidateRankResiduals,
    IndexedHistoricalDecisionTargetRankResidualSplitsAtCertifiedRequest
 
 THEOREM IndexedHistoricalDecisionPhysicalKernelsCloseTargetRank ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
   /\ IndexedHistoricalDecisionTransportResidualKernelProperties
   => IndexedHistoricalDecisionTargetOwnerRankProgressProperty
-BY IndexedHistoricalDecisionTransportKernelsCloseExactLeaf,
+BY IndexedChainSpecProvidesHistoricalFiniteRunnerEpisodeClosure,
+   IndexedHistoricalDecisionTransportKernelsCloseExactLeaf,
    IndexedHistoricalDecisionTransportLeafClosesTargetRankFive,
    IndexedHistoricalDecisionTargetCertifiedRequestClosesTargetRank
 
@@ -3458,106 +3736,823 @@ PROOF
        DEF IndexedExactHistoricalRecoveryFromAuthorityProgress
 
 (***************************************************************************
-Exact ordinary-authority prefix split.
+Exact local archive-authority bridge.
 
-The authority-acquisition wrapper cannot soundly import
-`IndexedLiveInstanceActivationObligation`: its antecedent names one joined
-historical target, while that obligation requires eventual join of every
-responsive validator in the frozen instance.  The existing arbitrary-context
-join theorems consume `IndexedExactHistoricalRecoveryProgress`, so using them
-here would be circular.
+Historical recovery needs one immutable archive owner, not an aggregate
+application at every responsive process.  The owner below is chosen once from
+the frozen responsive voting roster.  That roster is finite and nonempty by
+the dual-quorum configuration, so retries cannot replace the owner or enlarge
+the authority universe.
 
-After activation, `AsyncAllResponsiveAppliedAt` supplies an application at
-every current responsive voter.  The indexed Open guard now selects any such
-joined frozen-roster archive which durably holds the exact body certified by
-the source CommitQC.  It does not conflate that response-signature owner with
-one of the old QC signers: the QC authorizes the immutable subject and the
-archive authenticates the exact hash-bound response.  The remaining prefix
-work is therefore source selection and retention, not preservation of a
-self-signed CommitQC origin through Decision and Apply.
+Once the owner is joined, the indexed routing invariant gives the exact
+dichotomy used by production:
 
-The three properties below make those boundaries machine-inspectable without
-adding fairness or changing the release statement:
+  * if the owner is still current, the generic adequate-leader kernel reaches
+    its durable Decision and the exact Decision service corridor applies it
+    using that owner's local runner/packet/I/O fairness; or
+  * if the owner is no longer current, advancing past this context already
+    implies the exact application receipt.
 
-  1. reach exact entry or a still-outstanding fully joined instance;
-  2. in that instance, reach exact entry or a still-outstanding typed archive;
-  3. retain/restore that archive through GST until the existing exact Open
-     guard (or another entry arm) appears.
-
-The reduction is pure PTL composition.  It is not a proof of any of the three
-producer properties, and none may be discharged with indexed height liveness
-or `IndexedExactHistoricalRecoveryProgress`.
+The receipt projection and body-retention invariant then produce one typed
+`IndexedHistoricalRecoverySourceReady` witness.  No all-responsive join,
+aggregate Apply, application liveness, one-height closure, or height liveness
+appears in this dependency cone.
 ***************************************************************************)
 
+IndexedHistoricalRecoveryArchiveOwner(initialContext) ==
+  CHOOSE server \in
+    IndexedAsync(initialContext)!AsyncVotersAt(initialContext):
+      TRUE
+
+IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext) ==
+  IndexedHistoricalRecoveryArchiveOwner(initialContext)
+    \in joinedByContext[initialContext]
+
+IndexedHistoricalRecoveryArchiveOwnerApplied(initialContext) ==
+  /\ IndexedCore(initialContext, 7)
+  /\ IndexedHistoricalRecoveryArchiveOwner(initialContext)
+       \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters
+  /\ IndexedAsync(initialContext)!NodeHasApplication(
+       IndexedHistoricalRecoveryArchiveOwner(initialContext))
+
 IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext) ==
-  /\ IndexedAllResponsiveJoined(initialContext)
+  /\ IndexedCore(initialContext, 7)
   /\ \E server \in ValidatorIds,
        source \in Chain!DecisionEvidenceSet:
        IndexedHistoricalRecoverySourceReady(
          initialContext, server, source)
 
-IndexedOneHeightFiniteRunnerEpisodeClosureAt(initialContext) ==
-  IndexedOneHeightProof(initialContext)!
-    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-      IndexedOneHeightProof(initialContext)!AsyncSpecAt(initialContext))
-
-IndexedOneHeightFiniteRunnerEpisodeClosureProperty ==
+IndexedLocalAdequateLeaderSemanticKernelProperty ==
   \A initialContext \in AdmissibleContextRecords:
-    IndexedOneHeightFiniteRunnerEpisodeClosureAt(initialContext)
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderLocalSemanticKernelProperty(IndexedChainSpec)
 
-IndexedFiniteRunnerEpisodeClosureProperties ==
-  /\ IndexedOneHeightFiniteRunnerEpisodeClosureProperty
-  /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-
-IndexedHistoricalOneHeightCompletionAt(initialContext) ==
-  IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
-    => (IndexedCore(initialContext, 7)
-          ~> IndexedAsync(initialContext)!
-                AsyncAllResponsiveAppliedAt(initialContext))
-
-THEOREM IndexedOneHeightTemporalClosureIsExact ==
+IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty ==
   \A initialContext \in AdmissibleContextRecords:
-    IndexedOneHeightFiniteRunnerEpisodeClosureAt(initialContext)
-      => IndexedHistoricalOneHeightCompletionAt(initialContext)
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderLocalFreshSelfCorridorExposureProperty(
+        IndexedChainSpec)
+
+IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderFreshSelfLeaderDecisionProperty(IndexedChainSpec)
+
+IndexedLocalAdequateLeaderTargetProofInvariantsProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderTargetProofInvariantsProperty(IndexedChainSpec)
+
+IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty(
+        IndexedChainSpec)
+
+IndexedLocalAdequateLeaderProducerTransportClosureProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderTargetProducerTransportClosureProperty(
+        IndexedChainSpec)
+
+IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderTargetProductiveEpisodeRankStepProperty(
+        IndexedChainSpec)
+
+IndexedAdequateLeaderLocalFairBehaviorAt(initialContext) ==
+  /\ [][IndexedAdequateLeaderWitness(initialContext)!AsyncNext]_(
+       IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)
+  /\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+       IndexedAdequateLeaderWitness(initialContext)!gst
+         /\ IndexedAdequateLeaderWitness(initialContext)!AsyncTick)
+  /\ \A node \in IndexedAdequateLeaderWitness(initialContext)!
+                   AsyncVotersAt(initialContext):
+       /\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+            IndexedAdequateLeaderWitness(initialContext)!
+              PostGstRunNode(node))
+       /\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+            IndexedAdequateLeaderWitness(initialContext)!
+              PostGstResolveLocalCandidateProducerContinuation(node))
+       /\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+            IndexedAdequateLeaderWitness(initialContext)!
+              PostGstServiceConditionalTransportProducerContinuation(node))
+       /\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+            IndexedAdequateLeaderWitness(initialContext)!
+              PostGstServiceVolatileBodyProducerContinuation(node))
+  /\ \A node \in Responsive:
+       WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+         IndexedAdequateLeaderWitness(initialContext)!
+           PostGstServiceIoWorker(node))
+  /\ \A recipient \in Responsive,
+        source \in IndexedAdequateLeaderWitness(initialContext)!
+                   AsyncIngressSources:
+       WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+         IndexedAdequateLeaderWitness(initialContext)!
+           PostGstAdmitHiddenPacket(recipient, source))
+  /\ \A slot \in IndexedAdequateLeaderWitness(initialContext)!
+                  AsyncLeaderWireLifecycleSlotSet:
+       WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
+         IndexedAdequateLeaderWitness(initialContext)!
+           PostGstRetireLeaderWireLifecycleSlot(slot))
+
+IndexedLocalAdequateLeaderDecisionConvergenceProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderLocalTargetDecisionConvergenceProperty(
+        IndexedChainSpec)
+
+IndexedLocalExactDecisionStageServiceProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedDecisionServiceWitness(initialContext)!
+      ExactDecisionStageServiceProperty(IndexedChainSpec)
+
+THEOREM IndexedLiveChainSpecProvidesLocalAdequateLeaderProofInvariants ==
+  IndexedLiveChainSpec
+    => IndexedLocalAdequateLeaderTargetProofInvariantsProperty
 PROOF
-  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-                IndexedOneHeightFiniteRunnerEpisodeClosureAt(initialContext)
-         PROVE IndexedHistoricalOneHeightCompletionAt(initialContext)
-    <2>1. IndexedOneHeightProof(initialContext)!
-             OneHeightCompletionLiveness(initialContext)
-      BY IndexedOneHeightProof(initialContext)!
-           AsyncTemporalClosureOneHeightCompletionObligation
-         DEF IndexedOneHeightFiniteRunnerEpisodeClosureAt
-    <2> QED BY <2>1
-         DEF IndexedHistoricalOneHeightCompletionAt,
-             IndexedOneHeightProof!OneHeightCompletionLiveness,
-             IndexedOneHeightProof!AsyncLiveSpecAt,
-             IndexedOneHeightProof!AsyncAllResponsiveAppliedAt,
-             IndexedAsync!AsyncLiveSpecAt,
-             IndexedAsync!AsyncAllResponsiveAppliedAt,
-             IndexedAsyncStateAt, IndexedCore, IndexedScheduler,
-             IndexedRecovery
+  <1>1. ASSUME IndexedLiveChainSpec
+         PROVE IndexedLocalAdequateLeaderTargetProofInvariantsProperty
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. []IndexedCompositionInvariant
+      BY <2>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>3. \A initialContext \in AdmissibleContextRecords:
+             [](IndexedAdequateLeaderWitness(initialContext)!
+                  AsyncAllVars = IndexedAsyncStateAt(initialContext))
+      BY <2>2, IndexedAdequateLeaderWitnessVariablesAreExact, PTL
+         DEF IndexedCompositionInvariant
+    <2>4. \A initialContext \in AdmissibleContextRecords:
+             []( /\ IndexedAdequateLeaderWitness(initialContext)!
+                        AsyncStrongTypeInvariant
+                  /\ IndexedAdequateLeaderWitness(initialContext)!
+                        AsyncProgressOwnershipInvariant
+                  /\ IndexedAdequateLeaderWitness(initialContext)!
+                        AsyncCandidateServiceTombstoneLifecycleInvariant)
+      BY <2>2, <2>3, Isa, PTL
+         DEF IndexedCompositionInvariant,
+             IndexedEveryInstanceAsyncStrongTypeInvariant,
+             IndexedAdequateLeaderWitness!AsyncStrongTypeInvariant
+    <2> QED BY <2>1, <2>4
+         DEF IndexedLocalAdequateLeaderTargetProofInvariantsProperty,
+             IndexedAdequateLeaderWitness!
+               AdequateLeaderTargetProofInvariantsProperty
   <1> QED BY <1>1
 
-THEOREM IndexedOneHeightTemporalClosureEventuallySetsExactGst ==
+THEOREM IndexedLiveChainSpecProvidesAdequateLeaderLocalFairBehavior ==
+  IndexedLiveChainSpec
+    => \A initialContext \in AdmissibleContextRecords:
+         IndexedAdequateLeaderLocalFairBehaviorAt(initialContext)
+PROOF
+  <1>1. ASSUME IndexedLiveChainSpec,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedAdequateLeaderLocalFairBehaviorAt(initialContext)
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. [][IndexedAdequateLeaderWitness(initialContext)!AsyncNext]_(
+             IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)
+      BY <2>1,
+         IndexedBracketStepProjectsEveryAdequateLeaderWitnessStep, PTL
+    <2>3. IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars =
+             IndexedAsyncStateAt(initialContext)
+      BY <2>1, IndexedChainSpecEstablishesCompositionInvariant,
+         IndexedAdequateLeaderWitnessVariablesAreExact, PTL
+         DEF IndexedCompositionInvariant
+    <2>4. WF_(IndexedAsyncStateAt(initialContext))(
+             IndexedPostGstTick(initialContext))
+      BY <2>1, IndexedPostGstTickFairnessTransfersLocally
+    <2>5. \A node \in IndexedAsync(initialContext)!
+                         AsyncVotersAt(initialContext):
+             WF_(IndexedAsyncStateAt(initialContext))(
+               IndexedAsync(initialContext)!PostGstRunNode(node))
+      BY <2>1, IndexedPostGstRunNodeFairnessTransfersLocally
+    <2>6. /\ \A node \in IndexedAsync(initialContext)!
+                            AsyncVotersAt(initialContext):
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstResolveLocalCandidateProducerContinuation(
+                           node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstServiceConditionalTransportProducerContinuation(
+                           node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstServiceVolatileBodyProducerContinuation(node))
+           /\ \A recipient \in Responsive,
+                 source \in IndexedAsync(initialContext)!AsyncIngressSources:
+                  WF_(IndexedAsyncStateAt(initialContext))(
+                    IndexedAsync(initialContext)!
+                      PostGstAdmitHiddenPacket(recipient, source))
+           /\ \A slot \in IndexedAsync(initialContext)!
+                           AsyncLeaderWireLifecycleSlotSet:
+                WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstRetireLeaderWireLifecycleSlot(slot))
+      BY <2>1, IndexedAdequateLeaderNonRunnerFairnessTransfersLocally
+    <2>7. \A node \in Responsive:
+             WF_(IndexedAsyncStateAt(initialContext))(
+               IndexedAsync(initialContext)!PostGstServiceIoWorker(node))
+      BY <2>1, IndexedHistoricalNonPacketOwnerFairnessTransfersLocally
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, Isa
+         DEF IndexedAdequateLeaderLocalFairBehaviorAt,
+             IndexedPostGstTick,
+             IndexedAdequateLeaderWitness!AsyncAllVars,
+             IndexedAdequateLeaderWitness!AsyncSchedulerVars,
+             IndexedAdequateLeaderWitness!AsyncRecoveryVars,
+             IndexedAdequateLeaderWitness!vars,
+             IndexedAsyncStateAt, IndexedCore,
+             IndexedScheduler, IndexedRecovery
+  <1> QED BY <1>1
+
+THEOREM IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster ==
+  \A initialContext \in AdmissibleContextRecords,
+     target \in ValidatorIds:
+    /\ IndexedCompositionInvariant
+    /\ IndexedAdequateLeaderWitness(initialContext)!
+         AdequateLeaderLocalTargetDecisionSource(target)
+    => IndexedAllResponsiveJoined(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
+                NEW target \in ValidatorIds,
+                /\ IndexedCompositionInvariant
+                /\ IndexedAdequateLeaderWitness(initialContext)!
+                     AdequateLeaderLocalTargetDecisionSource(target)
+         PROVE IndexedAllResponsiveJoined(initialContext)
+    <2>1. IndexedAsync(initialContext)!gst
+      BY <1>1, Isa
+         DEF IndexedAdequateLeaderWitness!
+               AdequateLeaderLocalTargetDecisionSource
+    <2>2. Responsive \subseteq
+             IndexedAsync(initialContext)!AsyncActiveServiceNodes
+      BY <1>1, <2>1
+         DEF IndexedCompositionInvariant,
+             IndexedPostGstResponsiveActiveRosterCoherence
+    <2>3. Responsive \subseteq ValidatorIds
+      BY <1>1, Isa
+         DEF IndexedCompositionInvariant,
+             IndexedEveryInstanceAsyncStrongTypeInvariant,
+             IndexedAsync!AsyncStrongTypeInvariant,
+             IndexedAsync!StrongInductiveInvariant,
+             IndexedAsync!Safety, IndexedAsync!TypeInvariant,
+             IndexedAsync!ModelConfiguration,
+             IndexedAsync!QuorumConfiguration
+    <2>4. \A node \in Responsive:
+             node \in joinedByContext[initialContext]
+      BY <1>1, <2>1, <2>2, <2>3,
+         IndexedPostGstActiveServiceOwnerHasJoinedProductInstance, Isa
+    <2> QED BY <2>4 DEF IndexedAllResponsiveJoined
+  <1> QED BY <1>1
+
+(***************************************************************************
+Fresh-self exposure is source-conditioned, not an all-context activation
+assumption.  If a local target source never occurs, its leads-to claim is
+vacuous.  Otherwise GST plus the product coherence invariant proves that the
+complete responsive roster has joined this exact instance; monotone joining
+then supplies the existing local AsyncLive activation theorem.  The adequate-
+leader witness has the identical state substitution, so its standalone
+well-founded view-exposure proof applies without any authority carry or bundle.
+***************************************************************************)
+THEOREM IndexedLiveChainSpecProvidesLocalAdequateLeaderFreshSelfCorridorExposure ==
+  IndexedLiveChainSpec
+    => IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+PROOF
+  <1>1. ASSUME IndexedLiveChainSpec
+         PROVE IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. []IndexedCompositionInvariant
+      BY <2>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>3. ASSUME NEW initialContext \in AdmissibleContextRecords
+           PROVE IndexedAdequateLeaderWitness(initialContext)!
+                   AdequateLeaderLocalFreshSelfCorridorExposureProperty(
+                     IndexedChainSpec)
+      <3>1. ASSUME NEW target \in ValidatorIds
+             PROVE IndexedAdequateLeaderWitness(initialContext)!
+                     AdequateLeaderLocalTargetDecisionSource(target)
+                       ~> IndexedAdequateLeaderWitness(initialContext)!
+                            AdequateLeaderTargetFreshSelfCorridorGoal(target)
+        <4>1. [](IndexedAdequateLeaderWitness(initialContext)!
+                    AdequateLeaderLocalTargetDecisionSource(target)
+                   => IndexedAllResponsiveJoined(initialContext))
+          BY <2>2,
+             IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster, PTL
+        <4>2. IndexedAllResponsiveJoined(initialContext)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedAllResponsiveJoined(initialContext)'
+          BY <2>3, IndexedAllResponsiveJoinedIsStable
+        <4>3. CASE <>IndexedAdequateLeaderWitness(initialContext)!
+                         AdequateLeaderLocalTargetDecisionSource(target)
+          <5>1. <>IndexedAllResponsiveJoined(initialContext)
+            BY <4>1, <4>3, PTL
+          <5>2. TRUE ~> IndexedAllResponsiveJoined(initialContext)
+            BY <2>1, <4>2, <5>1, PTL DEF IndexedChainSpec
+          <5>3. IndexedAsync(initialContext)!
+                   AsyncLiveSpecAt(initialContext)
+            BY <1>1, <2>3, <5>2,
+               IndexedLiveInstanceActivationObligation
+          <5>4. IndexedAdequateLeaderWitness(initialContext)!
+                   AsyncLiveSpecAt(initialContext)
+            BY <2>3, <5>3,
+               IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec
+          <5>5. IndexedAdequateLeaderWitness(initialContext)!
+                   AdequateLeaderLocalFreshSelfCorridorExposureProperty(
+                     IndexedAdequateLeaderWitness(initialContext)!
+                       AsyncLiveSpecAt(initialContext))
+            BY IndexedAdequateLeaderWitness(initialContext)!
+                 AsyncLiveProvidesLocalFreshSelfCorridorExposure
+          <5> QED BY <2>3, <5>4, <5>5
+               DEF IndexedAdequateLeaderWitness!
+                     AdequateLeaderLocalFreshSelfCorridorExposureProperty
+        <4>4. CASE ~<>IndexedAdequateLeaderWitness(initialContext)!
+                         AdequateLeaderLocalTargetDecisionSource(target)
+          BY <4>4, PTL
+        <4> QED BY <4>3, <4>4
+      <3> QED BY <2>1, <3>1
+           DEF IndexedAdequateLeaderWitness!
+                 AdequateLeaderLocalFreshSelfCorridorExposureProperty
+    <2> QED BY <2>3
+         DEF IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+  <1> QED BY <1>1
+
+THEOREM IndexedAdequateLeaderCompletedProvidersSupplyLocalSemanticKernel ==
+  /\ IndexedLiveChainSpec
+  /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+  /\ IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty
+  /\ IndexedLocalAdequateLeaderProducerTransportClosureProperty
+  /\ IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty
+    => IndexedLocalAdequateLeaderSemanticKernelProperty
+PROOF
+  <1>1. ASSUME /\ IndexedLiveChainSpec
+                /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+                /\ IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty
+                /\ IndexedLocalAdequateLeaderProducerTransportClosureProperty
+                /\ IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedAdequateLeaderWitness(initialContext)!
+                 AdequateLeaderLocalSemanticKernelProperty(IndexedChainSpec)
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. IndexedAdequateLeaderWitness(initialContext)!
+             AdequateLeaderTargetProofInvariantsProperty(IndexedChainSpec)
+      BY <1>1,
+         IndexedLiveChainSpecProvidesLocalAdequateLeaderProofInvariants
+         DEF IndexedLocalAdequateLeaderTargetProofInvariantsProperty
+    <2>3. IndexedChainSpec
+             => []IndexedAdequateLeaderWitness(initialContext)!
+                    AsyncStrongTypeInvariant
+      BY <2>2
+         DEF IndexedAdequateLeaderWitness!
+               AdequateLeaderTargetProofInvariantsProperty
+    <2> QED BY <1>1, <2>2, <2>3,
+         IndexedAdequateLeaderWitness(initialContext)!
+           AdequateLeaderCompletedLocalProviderKernelSuppliesSemanticKernel
+         DEF IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty,
+             IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty,
+             IndexedLocalAdequateLeaderProducerTransportClosureProperty,
+             IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty,
+             IndexedAdequateLeaderWitness!
+               AdequateLeaderCompletedLocalProviderKernelProperty
+  <1> QED BY <1>1
+       DEF IndexedLocalAdequateLeaderSemanticKernelProperty
+
+THEOREM IndexedAdequateLeaderFixedDeadlineDisseminationAndExposureSupplyLocalConvergence ==
+  /\ IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+  /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+    => IndexedLocalAdequateLeaderDecisionConvergenceProperty
+PROOF
+  <1>1. ASSUME
+          /\ IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+          /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty,
+        NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedAdequateLeaderWitness(initialContext)!
+                 AdequateLeaderLocalTargetDecisionConvergenceProperty(
+                   IndexedChainSpec)
+    <2> QED BY <1>1,
+         IndexedAdequateLeaderWitness(initialContext)!
+           AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalTargetConvergence
+         DEF IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty,
+             IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty,
+             IndexedAdequateLeaderWitness!
+               AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+  <1> QED BY <1>1
+       DEF IndexedLocalAdequateLeaderDecisionConvergenceProperty
+
+THEOREM IndexedHistoricalRecoveryArchiveOwnerIsFrozenResponsiveVoter ==
   \A initialContext \in AdmissibleContextRecords:
-    IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
-      => <>IndexedCore(initialContext, 7)
+    IndexedHistoricalRecoveryArchiveOwner(initialContext)
+      \in IndexedAsync(initialContext)!AsyncVotersAt(initialContext)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
-         PROVE IndexedAsync(initialContext)!
-                 AsyncLiveSpecAt(initialContext)
-                   => <>IndexedCore(initialContext, 7)
-    <2>1. IndexedOneHeightProof(initialContext)!
-             AsyncSpecAt(initialContext)
-             => <>IndexedCore(initialContext, 7)
-      BY IndexedOneHeightProof(initialContext)!AsyncGstEventually
-    <2> QED BY <2>1
-         DEF IndexedOneHeightProof!AsyncSpecAt,
-             IndexedOneHeightProof!AsyncLiveSpecAt,
-             IndexedAsync!AsyncLiveSpecAt,
-             IndexedAsyncStateAt, IndexedCore, IndexedScheduler,
-             IndexedRecovery
+         PROVE IndexedHistoricalRecoveryArchiveOwner(initialContext)
+                 \in IndexedAsync(initialContext)!
+                      AsyncVotersAt(initialContext)
+    <2> QED BY <1>1, IndexedResponsiveVoterSetIsNonempty, Isa
+         DEF IndexedHistoricalRecoveryArchiveOwner
+  <1> QED BY <1>1
+
+THEOREM IndexedHistoricalRecoveryArchiveOwnerIsResponsive ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedHistoricalRecoveryArchiveOwner(initialContext) \in Responsive
+BY IndexedHistoricalRecoveryArchiveOwnerIsFrozenResponsiveVoter, Isa
+   DEF IndexedAsync!AsyncVotersAt
+
+(***************************************************************************
+Exact GST enabledness boundary.
+
+Joining one owner is enough to select the product instance, but it is not
+enough to enable `AsyncSetGST`: the executable guard also requires every
+Responsive service owner to be active.  The roster premise below is therefore
+part of the leads-to source.  It is the strongest local statement justified
+by the transition relation and prevents the former one-joined-node shortcut
+from silently inventing GST.
+***************************************************************************)
+
+IndexedResponsiveActiveRosterAt(initialContext) ==
+  Responsive \subseteq
+    IndexedAsync(initialContext)!AsyncActiveServiceNodes
+
+THEOREM IndexedJoinedResponsiveActiveRosterIsStable ==
+  \A initialContext \in AdmissibleContextRecords:
+    /\ IndexedCompositionInvariant
+    /\ initialContext \in JoinedContexts
+    /\ IndexedResponsiveActiveRosterAt(initialContext)
+    /\ [IndexedChainNext]_IndexedChainVars
+    => /\ initialContext \in JoinedContexts'
+       /\ IndexedResponsiveActiveRosterAt(initialContext)'
+BY IndexedStepPreservesCompositionInvariant,
+   JoinedMembershipIsMonotone, Isa
+   DEF IndexedResponsiveActiveRosterAt,
+       IndexedCompositionInvariant,
+       IndexedServiceActivationCoherence,
+       IndexedServiceActivationMembershipCoherenceAt,
+       IndexedAsync!AsyncServiceActivationRestricted,
+       IndexedAsync!AsyncActiveServiceNodes,
+       JoinedContexts, IndexedChainVars
+
+THEOREM IndexedChainSpecResponsiveActiveRosterEventuallySetsExactGst ==
+  IndexedChainSpec
+    => \A initialContext \in AdmissibleContextRecords:
+         /\ initialContext \in JoinedContexts
+         /\ IndexedResponsiveActiveRosterAt(initialContext)
+           ~> IndexedCore(initialContext, 7)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE /\ initialContext \in JoinedContexts
+               /\ IndexedResponsiveActiveRosterAt(initialContext)
+                 ~> IndexedCore(initialContext, 7)
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. []( /\ initialContext \in JoinedContexts
+              /\ IndexedResponsiveActiveRosterAt(initialContext)
+              /\ ~IndexedCore(initialContext, 7)
+                => ENABLED IndexedSetGstStep(initialContext))
+      BY <1>1, <2>1, IndexedFairActionsRemainEnabledInProduct,
+         ExpandENABLED, Isa, PTL
+         DEF IndexedAsync!AsyncSetGST, IndexedAsync!SetGST,
+             IndexedResponsiveActiveRosterAt,
+             IndexedCore, IndexedAsyncStateAt
+    <2>3. WF_IndexedChainVars(IndexedSetGstStep(initialContext))
+      BY <1>1 DEF IndexedChainSpec, IndexedFairness
+    <2>4. [](IndexedSetGstStep(initialContext)
+              => IndexedCore(initialContext, 7)')
+      BY IndexedFairProductStepsProjectExactOccurrences, Isa, PTL
+         DEF IndexedSetGstStep, IndexedAsync!AsyncSetGST,
+             IndexedAsync!SetGST, IndexedCore
+    <2>5. []( /\ initialContext \in JoinedContexts
+              /\ IndexedResponsiveActiveRosterAt(initialContext)
+              /\ ~IndexedCore(initialContext, 7)
+                => \/ /\ initialContext \in JoinedContexts'
+                         /\ IndexedResponsiveActiveRosterAt(initialContext)'
+                   \/ IndexedCore(initialContext, 7)')
+      BY <1>1, <2>1, JoinedMembershipIsMonotone, Isa, PTL
+         DEF IndexedResponsiveActiveRosterAt,
+             IndexedCompositionInvariant,
+             IndexedServiceActivationCoherence,
+             IndexedServiceActivationMembershipCoherenceAt,
+             IndexedAsync!AsyncActiveServiceNodes,
+             JoinedContexts, IndexedChainVars
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, PTL
+  <1> QED BY <1>1
+
+(***************************************************************************
+Indexed lift of the five exact Decision leaves.
+
+The standalone theorem is proved from five exact owners.  This lift substitutes
+the indexed state tuple and transfers only the actions those owners name:
+SetGST/Tick, one current-voter RunNode, the exact packet admission action, and
+the exact archive/IO owners exposed by the request lifecycle.  The current
+voter finite-runner provider supplies the Candidate ranks.  This is a theorem
+of the product relation, not a residual premise.
+***************************************************************************)
+
+THEOREM IndexedChainSpecClosesLocalExactDecisionOffSchedulerCorridor ==
+  IndexedChainSpec
+    => \A initialContext \in AdmissibleContextRecords:
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionOffSchedulerResidualConvergenceProperty(
+             IndexedChainSpec)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedDecisionServiceWitness(initialContext)!
+                 ExactDecisionOffSchedulerResidualConvergenceProperty(
+                   IndexedChainSpec)
+    <2>1. []IndexedHistoricalTemporalSupportAt(initialContext)
+      BY <1>1, IndexedChainSpecAlwaysHistoricalTemporalSupport, PTL
+    <2>2. [][IndexedDecisionServiceWitness(initialContext)!AsyncNext]_(
+             IndexedDecisionServiceWitness(initialContext)!AsyncAllVars)
+      BY <1>1,
+         IndexedBracketStepProjectsEveryDecisionServiceWitnessStep, PTL
+    <2>3. WF_(IndexedAsyncStateAt(initialContext))(
+             IndexedPostGstTick(initialContext))
+      BY <1>1, IndexedPostGstTickFairnessTransfersLocally
+    <2>4. \A node \in IndexedAsync(initialContext)!
+                         AsyncVotersAt(initialContext):
+             WF_(IndexedAsyncStateAt(initialContext))(
+               IndexedAsync(initialContext)!PostGstRunNode(node))
+      BY <1>1, IndexedPostGstRunNodeFairnessTransfersLocally
+    <2>5. IndexedHistoricalFixedClockPacketCorridorTemporalResidual
+      BY <1>1, IndexedChainSpecClosesHistoricalFixedClockPacketCorridor
+    <2>6. IndexedCurrentVoterProtectedCandidateStarvationProperties
+      BY <1>1,
+         IndexedChainSpecClosesCurrentVoterProtectedCandidateStarvation
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionRequestClockOwnerConvergence,
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionRequestRuntimePrefixConvergence,
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionRequestHeadGateOwnerConvergence,
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionRequestAdmissionCoalescingOutcomeIsDischarged,
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergence,
+         IndexedFairActionsRemainEnabledInProduct,
+         IndexedFairProductStepsProjectExactOccurrences,
+         PTL, IsaT(12000)
+         DEF IndexedHistoricalTemporalSupportAt,
+             IndexedCurrentVoterProtectedCandidateStarvationProperties,
+             IndexedDecisionServiceWitness!
+               ExactDecisionOffSchedulerResidualConvergenceProperty,
+             IndexedDecisionServiceWitness!
+               ExactDecisionRequestClockOwnerConvergenceProperty,
+             IndexedDecisionServiceWitness!
+               ExactDecisionRequestRuntimePrefixConvergenceProperty,
+             IndexedDecisionServiceWitness!
+               ExactDecisionRequestHeadGateOwnerConvergenceProperty,
+             IndexedDecisionServiceWitness!
+               ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty,
+             IndexedDecisionServiceWitness!
+               ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty,
+             IndexedDecisionServiceWitness!AsyncAllVars,
+             IndexedDecisionServiceWitness!AsyncSchedulerVars,
+             IndexedDecisionServiceWitness!AsyncRecoveryVars,
+             IndexedDecisionServiceWitness!vars,
+             IndexedAsyncStateAt, IndexedCore,
+             IndexedScheduler, IndexedRecovery
+  <1> QED BY <1>1
+
+THEOREM IndexedChainSpecProvidesLocalExactDecisionStageService ==
+  IndexedChainSpec => IndexedLocalExactDecisionStageServiceProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedDecisionServiceWitness(initialContext)!
+                 ExactDecisionStageServiceProperty(IndexedChainSpec)
+    <2>1. IndexedDecisionServiceWitness(initialContext)!
+             ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+               IndexedChainSpec)
+      BY <1>1,
+         IndexedChainSpecProvidesCurrentVoterFiniteRunnerEpisodeClosure,
+         Isa
+         DEF IndexedCurrentVoterFiniteRunnerEpisodeClosureProperties,
+             IndexedDecisionServiceWitness!
+               ProtectedServiceFiniteRunnerEpisodeClosureProperty,
+             IndexedDecisionServiceWitness!
+               AsyncReadyRunnerEpisodeClosureProperty,
+             IndexedDecisionServiceWitness!
+               AsyncCapacityRunnerEpisodeClosureProperty,
+             IndexedHistoricalTransport!
+               AsyncReadyRunnerEpisodeClosureProperty,
+             IndexedHistoricalTransport!
+               AsyncCapacityRunnerEpisodeClosureProperty,
+             IndexedCore, IndexedScheduler, IndexedRecovery
+    <2>2. IndexedDecisionServiceWitness(initialContext)!
+             ExactDecisionOffSchedulerResidualConvergenceProperty(
+               IndexedChainSpec)
+      BY <1>1, IndexedChainSpecClosesLocalExactDecisionOffSchedulerCorridor
+    <2> QED BY <2>1, <2>2,
+         IndexedDecisionServiceWitness(initialContext)!
+           ExactDecisionOffSchedulerResidualConvergenceDischargesStageService
+  <1> QED BY <1>1
+       DEF IndexedLocalExactDecisionStageServiceProperty
+
+(***************************************************************************
+Generic adequate-leader product lift.
+
+The sibling module supplies the local semantic reduction.  The product lift
+feeds it the exact frozen-owner fairness and the already-proved packet,
+runner, timeout, tombstone, and finite-episode providers.  Its conclusion is
+GST-to-Decision for one target; it never forms the aggregate Decide mode.
+***************************************************************************)
+
+THEOREM IndexedLocalAdequateLeaderSemanticKernelProvidesDecisionConvergence ==
+  IndexedLocalAdequateLeaderSemanticKernelProperty
+    => IndexedLocalAdequateLeaderDecisionConvergenceProperty
+PROOF
+  <1>1. ASSUME IndexedLocalAdequateLeaderSemanticKernelProperty,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedAdequateLeaderWitness(initialContext)!
+                 AdequateLeaderLocalTargetDecisionConvergenceProperty(
+                   IndexedChainSpec)
+    <2>1. IndexedAdequateLeaderWitness(initialContext)!
+             AdequateLeaderLocalSemanticKernelProperty(IndexedChainSpec)
+      BY <1>1 DEF IndexedLocalAdequateLeaderSemanticKernelProperty
+    <2> QED BY <2>1,
+         IndexedAdequateLeaderWitness(initialContext)!
+           AdequateLeaderLocalSemanticKernelSuppliesTargetDecisionConvergence
+  <1> QED BY <1>1
+       DEF IndexedLocalAdequateLeaderDecisionConvergenceProperty
+
+(***************************************************************************
+One exact local application becomes one immutable archive authority.
+***************************************************************************)
+
+THEOREM IndexedLocalAppliedVoterSuppliesTypedArchiveAuthority ==
+  \A initialContext \in AdmissibleContextRecords,
+     server \in ValidatorIds:
+    /\ IndexedCompositionInvariant
+    /\ IndexedDecisionWitnessSupportAt(initialContext)
+    /\ IndexedResponsiveRecoveryDormant
+    /\ IndexedCore(initialContext, 7)
+    /\ server \in IndexedAsync(initialContext)!
+                   AsyncCurrentResponsiveVoters
+    /\ server \in joinedByContext[initialContext]
+    /\ IndexedAsync(initialContext)!NodeHasApplication(server)
+    => IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
+                NEW server \in ValidatorIds,
+                IndexedCompositionInvariant,
+                IndexedDecisionWitnessSupportAt(initialContext),
+                IndexedResponsiveRecoveryDormant,
+                IndexedCore(initialContext, 7),
+                server \in IndexedAsync(initialContext)!
+                            AsyncCurrentResponsiveVoters,
+                server \in joinedByContext[initialContext],
+                IndexedAsync(initialContext)!NodeHasApplication(server)
+         PROVE IndexedHistoricalRecoveryTypedArchiveAuthority(
+                   initialContext)
+    <2> QED BY <1>1,
+         IndexedDecisionWitness(initialContext)!GstResponsiveNodesAreUp,
+         IsaT(900)
+         DEF IndexedHistoricalRecoveryTypedArchiveAuthority,
+             IndexedHistoricalRecoverySourceReady,
+             IndexedDecisionWitnessSupportAt,
+             IndexedCompositionInvariant,
+             IndexedTotalReceiptProjection,
+             IndexedDecisionReceiptProjection,
+             IndexedApplicationReceiptProjection,
+             IndexedCurrentDecisions, IndexedCurrentApplications,
+             IndexedDecisions, IndexedApplications,
+             JoinedContexts,
+             IndexedResponsiveRecoveryDormant,
+             IndexedCore, IndexedRecovery,
+             Chain!ChainEpochInvariant,
+             Chain!ChainEpochTypeInvariant,
+             Chain!DurableDecisionEvidenceSound,
+             Chain!DurableApplicationEvidenceSound,
+             Chain!ApplicationHasRecordedDecision,
+             Chain!DecisionBacksCertifiedSlot,
+             Chain!CanonicalCommitForSlot,
+             Chain!ReceiptOutsideChainHorizon,
+             IndexedDecisionWitness!AsyncStrongTypeInvariant,
+             IndexedDecisionWitness!StrongInductiveInvariant,
+             IndexedDecisionWitness!Safety,
+             IndexedDecisionWitness!AppliedRequiresDecision,
+             IndexedDecisionWitness!AsyncRecoveryTypeInvariant,
+             IndexedDecisionWitness!AsyncGstRecoveryPhaseInvariant,
+             IndexedDecisionWitness!
+               CurrentAppliedArchiveBodyRetentionInvariant,
+             IndexedDecisionWitness!AsyncCurrentResponsiveVoters,
+             IndexedDecisionWitness!CurrentVoters,
+             IndexedDecisionWitness!CurrentEpoch,
+             IndexedDecisionWitness!NodeHasApplication,
+             IndexedDecisionWitness!BodyHeldBy,
+             IndexedAsync!NodeHasApplication,
+             IndexedAsync!AsyncCurrentResponsiveVoters,
+             IndexedAsync!BodyHeldBy,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights, ModelConfiguration, ValidatorIds
+  <1> QED BY <1>1
+
+THEOREM IndexedChainSpecJoinedArchiveOwnerProducesTypedAuthority ==
+  /\ IndexedChainSpec
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
+    => \A initialContext \in AdmissibleContextRecords:
+         /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+         /\ IndexedResponsiveActiveRosterAt(initialContext)
+           ~> IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+               /\ IndexedResponsiveActiveRosterAt(initialContext)
+                 ~> IndexedHistoricalRecoveryTypedArchiveAuthority(
+                      initialContext)
+    <2>0. LET server ==
+                 IndexedHistoricalRecoveryArchiveOwner(initialContext)
+    <2>1. server \in IndexedAsync(initialContext)!
+                    AsyncVotersAt(initialContext)
+      BY <1>1, IndexedHistoricalRecoveryArchiveOwnerIsFrozenResponsiveVoter
+    <2>2. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>3. []IndexedDecisionWitnessSupport
+      BY <1>1, IndexedChainSpecAlwaysDecisionWitnessSupport, PTL
+    <2>4. []IndexedResponsiveRecoveryDormant
+      BY <1>1, IndexedChainSpecKeepsResponsiveRecoveryDormant, PTL
+    <2>5. /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+           /\ IndexedResponsiveActiveRosterAt(initialContext)
+             => /\ initialContext \in JoinedContexts
+                /\ IndexedResponsiveActiveRosterAt(initialContext)
+      BY <1>1, <2>1, Isa
+         DEF IndexedHistoricalRecoveryArchiveOwnerJoined, JoinedContexts
+    <2>6. /\ initialContext \in JoinedContexts
+           /\ IndexedResponsiveActiveRosterAt(initialContext)
+             ~> IndexedCore(initialContext, 7)
+      BY <1>1,
+         IndexedChainSpecResponsiveActiveRosterEventuallySetsExactGst
+    <2>7. IndexedAdequateLeaderWitness(initialContext)!
+             AdequateLeaderLocalTargetDecisionConvergenceProperty(
+               IndexedChainSpec)
+      BY <1>1 DEF IndexedLocalAdequateLeaderDecisionConvergenceProperty
+    <2>8. IndexedDecisionServiceWitness(initialContext)!
+             ExactDecisionStageServiceProperty(IndexedChainSpec)
+      BY <1>1, IndexedChainSpecProvidesLocalExactDecisionStageService
+         DEF IndexedLocalExactDecisionStageServiceProperty
+    <2>9. []( /\ IndexedCore(initialContext, 7)
+              /\ server \in joinedByContext[initialContext]
+              /\ ~IndexedNodeCurrentAt(initialContext, server)
+                => IndexedAsync(initialContext)!
+                     NodeHasApplication(server))
+      BY <1>1, <2>2, JoinedNonCurrentHasApplicationEvidence, PTL
+    <2>10. ( /\ IndexedCore(initialContext, 7)
+              /\ IndexedNodeCurrentAt(initialContext, server)
+              /\ ~IndexedAsync(initialContext)!NodeHasDecision(server))
+              ~> IndexedAsync(initialContext)!NodeHasDecision(server)
+      BY <1>1, <2>1, <2>7, <2>2, PTL, Isa
+         DEF IndexedAdequateLeaderWitness!
+               AdequateLeaderLocalTargetDecisionConvergenceProperty,
+             IndexedAdequateLeaderWitness!
+               AdequateLeaderLocalTargetDecisionSource,
+             IndexedAdequateLeaderWitness!
+               AsyncCurrentResponsiveVoters,
+             IndexedAsync!AsyncVotersAt,
+             IndexedAsync!AsyncCurrentResponsiveVoters,
+             IndexedNodeCurrentAt
+    <2>11. []( /\ IndexedCore(initialContext, 7)
+               /\ IndexedNodeCurrentAt(initialContext, server)
+               /\ IndexedAsync(initialContext)!NodeHasDecision(server)
+                 => \E qc:
+                      IndexedDecisionServiceWitness(initialContext)!
+                        ExactDecisionServiceSource(server, qc))
+      BY <1>1, <2>1, <2>2, <2>3,
+         IndexedDecisionServiceWitness(initialContext)!
+           PostGstResponsiveDecisionHasExactServiceSource,
+         PTL, Isa
+         DEF IndexedDecisionWitnessSupport,
+             IndexedDecisionWitnessSupportAt,
+             IndexedDecisionServiceWitness!AsyncCurrentResponsiveVoters,
+             IndexedAsync!AsyncVotersAt,
+             IndexedAsync!AsyncCurrentResponsiveVoters,
+             IndexedNodeCurrentAt
+    <2>12. \A qc:
+              IndexedDecisionServiceWitness(initialContext)!
+                ExactDecisionServiceSource(server, qc)
+                ~> IndexedAsync(initialContext)!NodeHasApplication(server)
+      BY <2>8
+         DEF IndexedDecisionServiceWitness!
+               ExactDecisionStageServiceProperty,
+             IndexedDecisionServiceWitness!NodeHasApplication,
+             IndexedAsync!NodeHasApplication
+    <2>13. ( /\ IndexedCore(initialContext, 7)
+              /\ server \in joinedByContext[initialContext])
+              ~> IndexedAsync(initialContext)!NodeHasApplication(server)
+      BY <2>9, <2>10, <2>11, <2>12, PTL
+    <2>14. []( /\ IndexedCore(initialContext, 7)
+               /\ server \in joinedByContext[initialContext]
+               /\ IndexedAsync(initialContext)!NodeHasApplication(server)
+                 => IndexedHistoricalRecoveryTypedArchiveAuthority(
+                      initialContext))
+      BY <1>1, <2>1, <2>2, <2>3, <2>4,
+         IndexedLocalAppliedVoterSuppliesTypedArchiveAuthority,
+         PTL DEF IndexedDecisionWitnessSupport
+    <2> QED BY <2>5, <2>6, <2>13, <2>14, PTL
+         DEF IndexedHistoricalRecoveryArchiveOwnerJoined
   <1> QED BY <1>1
 
 IndexedHistoricalRecoveryActivationPrefixResidualProperty ==
@@ -3566,27 +4561,10 @@ IndexedHistoricalRecoveryActivationPrefixResidualProperty ==
     IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
       initialContext, node)
       ~> (IndexedHistoricalRecoveryEntryGoal(initialContext, node)
-           \/ /\ IndexedAllResponsiveJoined(initialContext)
+           \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+              /\ IndexedResponsiveActiveRosterAt(initialContext)
               /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                    initialContext, node))
-
-(***************************************************************************
-Genesis/non-genesis activation boundary.
-
-Every responsive validator is joined to `GenesisContext` by
-`IndexedChainInit`, and joined membership is monotone.  The genesis slice of
-the activation prefix is therefore immediate and does not consume one-height
-or historical-recovery liveness.
-
-A non-genesis joined target is different.  It proves that one validator
-crossed the predecessor, not that every responsive validator did.  New-roster
-entrants and responsive observers may still be at an earlier canonical
-context.  `IndexedResponsiveHeightReached(initialContext.height)` is the exact
-predecessor-catchup boundary after which the existing successor-activation
-starvation theorem can join them to `initialContext`; establishing that
-boundary requires a well-founded lower-height ordinary/historical composition.
-It may not be obtained from `IndexedExactHistoricalRecoveryProgress` here.
-***************************************************************************)
 
 IndexedHistoricalRecoveryGenesisActivationPrefixResidualProperty ==
   \A initialContext \in AdmissibleContextRecords,
@@ -3595,7 +4573,8 @@ IndexedHistoricalRecoveryGenesisActivationPrefixResidualProperty ==
     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
          initialContext, node)
       ~> (IndexedHistoricalRecoveryEntryGoal(initialContext, node)
-           \/ /\ IndexedAllResponsiveJoined(initialContext)
+           \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+              /\ IndexedResponsiveActiveRosterAt(initialContext)
               /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                    initialContext, node))
 
@@ -3606,7 +4585,8 @@ IndexedHistoricalRecoveryNonGenesisActivationPrefixResidualProperty ==
     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
          initialContext, node)
       ~> (IndexedHistoricalRecoveryEntryGoal(initialContext, node)
-           \/ /\ IndexedAllResponsiveJoined(initialContext)
+           \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+              /\ IndexedResponsiveActiveRosterAt(initialContext)
               /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                    initialContext, node))
 
@@ -3630,228 +4610,45 @@ BY PTL
        IndexedHistoricalRecoveryGenesisActivationPrefixResidualProperty,
        IndexedHistoricalRecoveryNonGenesisActivationPrefixResidualProperty
 
-THEOREM IndexedChainSpecAlwaysActivatesHistoricalGenesisInstance ==
+THEOREM IndexedChainSpecAlwaysJoinsHistoricalGenesisArchiveOwner ==
   IndexedChainSpec
-    => []IndexedAllResponsiveJoined(GenesisContext)
+    => []( /\ IndexedHistoricalRecoveryArchiveOwnerJoined(GenesisContext)
+           /\ IndexedResponsiveActiveRosterAt(GenesisContext))
 PROOF
   <1>1. IndexedChainInit
-           => \A node \in Responsive:
-                node \in joinedByContext[GenesisContext]
-    BY Isa
-       DEF IndexedChainInit, GenesisContext, AdmissibleContextRecords,
+           => IndexedHistoricalRecoveryArchiveOwnerJoined(GenesisContext)
+    BY IndexedHistoricalRecoveryArchiveOwnerIsResponsive, Isa
+       DEF IndexedChainInit,
+           IndexedHistoricalRecoveryArchiveOwnerJoined,
+           GenesisContext, AdmissibleContextRecords,
            FrozenContextAdmissible, ContextRecords, LineagesAt, Heights,
            ModelConfiguration, ValidatorIds
-  <1>2. \A node \in Responsive:
-           node \in joinedByContext[GenesisContext]
-             /\ [IndexedChainNext]_IndexedChainVars
-             => node \in joinedByContext[GenesisContext]'
+  <1>2. IndexedHistoricalRecoveryArchiveOwnerJoined(GenesisContext)
+           /\ [IndexedChainNext]_IndexedChainVars
+           => IndexedHistoricalRecoveryArchiveOwnerJoined(GenesisContext)'
     BY IndexedNodeJoinIsStable, Isa
-       DEF AdmissibleContextRecords, FrozenContextAdmissible,
+       DEF IndexedHistoricalRecoveryArchiveOwnerJoined,
+           AdmissibleContextRecords, FrozenContextAdmissible,
            ContextRecords, LineagesAt, Heights, GenesisContext,
            ModelConfiguration, ValidatorIds
-  <1> QED BY <1>1, <1>2, PTL
-       DEF IndexedChainSpec, IndexedAllResponsiveJoined
+  <1>3. IndexedChainSpec
+           => []IndexedResponsiveActiveRosterAt(GenesisContext)
+    BY IndexedChainSpecKeepsGenesisResponsiveRosterActive
+       DEF IndexedResponsiveActiveRosterAt
+  <1> QED BY <1>1, <1>2, <1>3, PTL DEF IndexedChainSpec
 
 THEOREM IndexedLiveChainSpecClosesHistoricalGenesisActivationPrefix ==
   IndexedLiveChainSpec
     => IndexedHistoricalRecoveryGenesisActivationPrefixResidualProperty
 BY IndexedLiveChainSpecProjectsIndexedChainSpec,
-   IndexedChainSpecAlwaysActivatesHistoricalGenesisInstance, PTL
+   IndexedChainSpecAlwaysJoinsHistoricalGenesisArchiveOwner, PTL
    DEF IndexedHistoricalRecoveryGenesisActivationPrefixResidualProperty
-
-(***************************************************************************
-Applied-voter archive source.
-
-Once the exact one-height instance is activated and GST has arrived, any
-responsive frozen-roster voter named by the nonempty dual quorum eventually
-owns an exact applied receipt.  The indexed receipt projection places that
-same record in both durable evidence sets.  The final witness invariant keeps
-the exact body at that voter, so the record is a typed archive source for the
-frozen context.  No historical packet or recovery rank is used here.
-***************************************************************************)
-
-THEOREM IndexedExactGstAppliedVoterSuppliesTypedArchiveAuthority ==
-  \A initialContext \in AdmissibleContextRecords:
-    /\ IndexedCompositionInvariant
-    /\ IndexedDecisionWitnessSupportAt(initialContext)
-    /\ IndexedResponsiveRecoveryDormant
-    /\ IndexedCore(initialContext, 7)
-    /\ IndexedAllResponsiveJoined(initialContext)
-    /\ IndexedAsync(initialContext)!
-         AsyncAllResponsiveAppliedAt(initialContext)
-    => IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext)
-PROOF
-  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-                IndexedCompositionInvariant,
-                IndexedDecisionWitnessSupportAt(initialContext),
-                IndexedResponsiveRecoveryDormant,
-                IndexedCore(initialContext, 7),
-                IndexedAllResponsiveJoined(initialContext),
-                IndexedAsync(initialContext)!
-                  AsyncAllResponsiveAppliedAt(initialContext)
-         PROVE IndexedHistoricalRecoveryTypedArchiveAuthority(
-                   initialContext)
-    <2> QED BY <1>1, IndexedResponsiveVoterSetIsNonempty,
-         IndexedDecisionWitness(initialContext)!GstResponsiveNodesAreUp,
-         IsaT(600)
-         DEF IndexedHistoricalRecoveryTypedArchiveAuthority,
-             IndexedHistoricalRecoverySourceReady,
-             IndexedDecisionWitnessSupportAt,
-             IndexedCompositionInvariant,
-             IndexedTotalReceiptProjection,
-             IndexedDecisionReceiptProjection,
-             IndexedApplicationReceiptProjection,
-             IndexedCurrentDecisions, IndexedCurrentApplications,
-             IndexedDecisions, IndexedApplications,
-             IndexedAllResponsiveJoined,
-             IndexedResponsiveRecoveryDormant,
-             IndexedCore, IndexedRecovery,
-             Chain!ChainEpochInvariant,
-             Chain!ChainEpochTypeInvariant,
-             Chain!DurableDecisionEvidenceSound,
-             Chain!DurableApplicationEvidenceSound,
-             Chain!ApplicationHasRecordedDecision,
-             Chain!DecisionBacksCertifiedSlot,
-             Chain!CanonicalCommitForSlot,
-             Chain!ReceiptOutsideChainHorizon,
-             IndexedDecisionWitness!AsyncStrongTypeInvariant,
-             IndexedDecisionWitness!StrongInductiveInvariant,
-             IndexedDecisionWitness!Safety,
-             IndexedDecisionWitness!AppliedRequiresDecision,
-             IndexedDecisionWitness!AsyncRecoveryTypeInvariant,
-             IndexedDecisionWitness!AsyncGstRecoveryPhaseInvariant,
-             IndexedDecisionWitness!
-               CurrentAppliedArchiveBodyRetentionInvariant,
-             IndexedDecisionWitness!AsyncCurrentResponsiveVoters,
-             IndexedDecisionWitness!CurrentVoters,
-             IndexedDecisionWitness!CurrentEpoch,
-             IndexedDecisionWitness!AsyncResponsiveAppliedArchiveServers,
-             IndexedDecisionWitness!AsyncResponsiveOnlineArchiveServers,
-             IndexedDecisionWitness!AsyncResponsiveArchiveServers,
-             IndexedDecisionWitness!AsyncArchiveServerIds,
-             IndexedDecisionWitness!AsyncAllResponsiveAppliedAt,
-             IndexedDecisionWitness!AsyncVotersAt,
-             IndexedDecisionWitness!NodeHasApplication,
-             IndexedDecisionWitness!BodyHeldBy,
-             IndexedAsync!AsyncAllResponsiveAppliedAt,
-             IndexedAsync!AsyncVotersAt,
-             IndexedAsync!NodeHasApplication,
-             IndexedAsync!AsyncCurrentResponsiveVoters,
-             IndexedAsync!BodyHeldBy,
-             AdmissibleContextRecords, FrozenContextAdmissible,
-             ContextRecords, Heights, ModelConfiguration, ValidatorIds
-  <1> QED BY <1>1
-
-THEOREM IndexedLiveActivatedInstanceProducesTypedArchiveAuthority ==
-  /\ IndexedLiveChainSpec
-  /\ IndexedOneHeightFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords:
-         IndexedAllResponsiveJoined(initialContext)
-           ~> /\ IndexedCore(initialContext, 7)
-              /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
-                   initialContext)
-PROOF
-  <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedOneHeightFiniteRunnerEpisodeClosureProperty,
-              NEW initialContext \in AdmissibleContextRecords
-         PROVE IndexedAllResponsiveJoined(initialContext)
-                 ~> /\ IndexedCore(initialContext, 7)
-                    /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
-                         initialContext)
-    <2>0. IndexedChainSpec
-      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
-    <2>1. IndexedAllResponsiveJoined(initialContext)
-             /\ [IndexedChainNext]_IndexedChainVars
-             => IndexedAllResponsiveJoined(initialContext)'
-      BY <1>1, IndexedAllResponsiveJoinedIsStable
-    <2>2. <>IndexedAllResponsiveJoined(initialContext)
-             => (TRUE ~> IndexedAllResponsiveJoined(initialContext))
-      BY <2>0, <2>1, PTL DEF IndexedChainSpec
-    <2>3. (/\ IndexedLiveChainSpec
-            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
-             => IndexedAsync(initialContext)!
-                  AsyncLiveSpecAt(initialContext)
-      BY <1>1, IndexedLiveInstanceActivationObligation
-    <2>4. IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
-             => <>IndexedCore(initialContext, 7)
-      BY <1>1, IndexedOneHeightTemporalClosureEventuallySetsExactGst
-    <2>5. IndexedHistoricalOneHeightCompletionAt(initialContext)
-      BY <1>1, IndexedOneHeightTemporalClosureIsExact
-         DEF IndexedOneHeightFiniteRunnerEpisodeClosureProperty
-    <2>6. []IndexedCompositionInvariant
-      BY <2>0, IndexedChainSpecEstablishesCompositionInvariant, PTL
-    <2>7. []IndexedDecisionWitnessSupport
-      BY <2>0, IndexedChainSpecAlwaysDecisionWitnessSupport, PTL
-    <2>8. []IndexedResponsiveRecoveryDormant
-      BY <2>0, IndexedChainSpecKeepsResponsiveRecoveryDormant, PTL
-    <2>9. []( /\ IndexedCore(initialContext, 7)
-              /\ IndexedAllResponsiveJoined(initialContext)
-              /\ IndexedAsync(initialContext)!
-                   AsyncAllResponsiveAppliedAt(initialContext)
-                => IndexedHistoricalRecoveryTypedArchiveAuthority(
-                     initialContext))
-      BY <1>1, <2>6, <2>7, <2>8,
-         IndexedExactGstAppliedVoterSuppliesTypedArchiveAuthority,
-         PTL DEF IndexedDecisionWitnessSupport
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>9, PTL
-         DEF IndexedHistoricalOneHeightCompletionAt
-  <1> QED BY <1>1
-
-(***************************************************************************
-Activated ordinary-voter completion.
-
-This is the one-height half of the ordinary Decision-owner bridge.  It starts
-only after every responsive validator has joined the frozen context, transfers
-the exact indexed fairness clauses into that Async instance, waits for its own
-GST, and then invokes the proof-bearing one-height closure.  It does not use
-indexed height liveness or historical recovery at the frozen height.
-***************************************************************************)
-
-THEOREM IndexedLiveActivatedInstanceCompletesEveryResponsiveVoter ==
-  /\ IndexedLiveChainSpec
-  /\ IndexedOneHeightFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords:
-         IndexedAllResponsiveJoined(initialContext)
-           ~> IndexedAsync(initialContext)!
-                 AsyncAllResponsiveAppliedAt(initialContext)
-PROOF
-  <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedOneHeightFiniteRunnerEpisodeClosureProperty,
-              NEW initialContext \in AdmissibleContextRecords
-         PROVE IndexedAllResponsiveJoined(initialContext)
-                 ~> IndexedAsync(initialContext)!
-                       AsyncAllResponsiveAppliedAt(initialContext)
-    <2>0. IndexedChainSpec
-      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
-    <2>1. IndexedAllResponsiveJoined(initialContext)
-             /\ [IndexedChainNext]_IndexedChainVars
-             => IndexedAllResponsiveJoined(initialContext)'
-      BY <1>1, IndexedAllResponsiveJoinedIsStable
-    <2>2. <>IndexedAllResponsiveJoined(initialContext)
-             => (TRUE ~> IndexedAllResponsiveJoined(initialContext))
-      BY <2>0, <2>1, PTL DEF IndexedChainSpec
-    <2>3. (/\ IndexedLiveChainSpec
-            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
-             => IndexedAsync(initialContext)!
-                  AsyncLiveSpecAt(initialContext)
-      BY <1>1, IndexedLiveInstanceActivationObligation
-    <2>4. IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
-             => <>IndexedCore(initialContext, 7)
-      BY <1>1, IndexedOneHeightTemporalClosureEventuallySetsExactGst
-    <2>5. IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
-             => (IndexedCore(initialContext, 7)
-                   ~> IndexedAsync(initialContext)!
-                         AsyncAllResponsiveAppliedAt(initialContext))
-      BY <1>1, IndexedOneHeightTemporalClosureIsExact
-         DEF IndexedOneHeightFiniteRunnerEpisodeClosureProperty,
-             IndexedHistoricalOneHeightCompletionAt
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
-  <1> QED BY <1>1
 
 IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty ==
   \A initialContext \in AdmissibleContextRecords,
      node \in Responsive:
-    /\ IndexedAllResponsiveJoined(initialContext)
+    /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+    /\ IndexedResponsiveActiveRosterAt(initialContext)
     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
          initialContext, node)
       ~> (IndexedHistoricalRecoveryEntryGoal(initialContext, node)
@@ -3868,18 +4665,17 @@ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty ==
          initialContext, node)
       ~> IndexedHistoricalRecoveryEntryGoal(initialContext, node)
 
-THEOREM IndexedExactGstTypedArchiveResidualHasEntry ==
+THEOREM IndexedExactTypedArchiveResidualHasEntry ==
   \A initialContext \in AdmissibleContextRecords,
      node \in Responsive:
     /\ IndexedCompositionInvariant
     /\ IndexedDecisionWitnessSupportAt(initialContext)
     /\ IndexedResponsiveRecoveryDormant
-    /\ IndexedCore(initialContext, 7)
     /\ IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext)
     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
          initialContext, node)
     => IndexedHistoricalRecoveryEntryGoal(initialContext, node)
-BY IsaT(420)
+BY IsaT(480)
    DEF IndexedHistoricalRecoveryTypedArchiveAuthority,
        IndexedHistoricalRecoveryAuthorityAcquisitionResidual,
        IndexedHistoricalRecoveryEntryGoal,
@@ -3921,14 +4717,15 @@ BY IsaT(420)
 
 THEOREM IndexedLiveChainSpecClosesActivatedArchiveProducerResidual ==
   /\ IndexedLiveChainSpec
-  /\ IndexedOneHeightFiniteRunnerEpisodeClosureProperty
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
     => IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedOneHeightFiniteRunnerEpisodeClosureProperty,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
               NEW initialContext \in AdmissibleContextRecords,
               NEW node \in Responsive
-         PROVE /\ IndexedAllResponsiveJoined(initialContext)
+         PROVE /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+                /\ IndexedResponsiveActiveRosterAt(initialContext)
                 /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                      initialContext, node)
                  ~> (IndexedHistoricalRecoveryEntryGoal(
@@ -3952,22 +4749,20 @@ PROOF
                 \/ IndexedHistoricalRecoveryEntryGoal(
                      initialContext, node)'
       BY <1>1, IndexedHistoricalAuthorityResidualPersistsOrEnters
-    <2>4. IndexedAllResponsiveJoined(initialContext)
-             ~> /\ IndexedCore(initialContext, 7)
-                /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
-                     initialContext)
-      BY <1>1, IndexedLiveActivatedInstanceProducesTypedArchiveAuthority
+    <2>4. /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
+           /\ IndexedResponsiveActiveRosterAt(initialContext)
+             ~> IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext)
+      BY <1>1, <2>0,
+         IndexedChainSpecJoinedArchiveOwnerProducesTypedAuthority
     <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
   <1> QED BY <1>1
        DEF IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
 
 THEOREM IndexedLiveChainSpecClosesTypedArchiveEntryResidual ==
-  /\ IndexedLiveChainSpec
-  /\ IndexedOneHeightFiniteRunnerEpisodeClosureProperty
+  IndexedLiveChainSpec
     => IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedOneHeightFiniteRunnerEpisodeClosureProperty,
               NEW initialContext \in AdmissibleContextRecords,
               NEW node \in Responsive
          PROVE /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
@@ -3984,39 +4779,19 @@ PROOF
       BY <2>0, IndexedChainSpecAlwaysDecisionWitnessSupport, PTL
     <2>3. []IndexedResponsiveRecoveryDormant
       BY <2>0, IndexedChainSpecKeepsResponsiveRecoveryDormant, PTL
-    <2>4. [][IndexedChainNext]_IndexedChainVars
-      BY <2>0, PTL DEF IndexedChainSpec
-    <2>5. IndexedCompositionInvariant
-             /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
-                  initialContext, node)
-             /\ [IndexedChainNext]_IndexedChainVars
-             => \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
-                      initialContext, node)'
-                \/ IndexedHistoricalRecoveryEntryGoal(
-                     initialContext, node)'
-      BY <1>1, IndexedHistoricalAuthorityResidualPersistsOrEnters
-    <2>6. IndexedAllResponsiveJoined(initialContext)
-             ~> /\ IndexedCore(initialContext, 7)
-                /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
-                     initialContext)
-      BY <1>1, IndexedLiveActivatedInstanceProducesTypedArchiveAuthority
-    <2>7. IndexedHistoricalRecoveryTypedArchiveAuthority(initialContext)
-             => IndexedAllResponsiveJoined(initialContext)
-      BY DEF IndexedHistoricalRecoveryTypedArchiveAuthority
-    <2>8. []( /\ IndexedCore(initialContext, 7)
-              /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
-                   initialContext)
+    <2>4. []( /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
+                       initialContext)
               /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                    initialContext, node)
                 => IndexedHistoricalRecoveryEntryGoal(
                      initialContext, node))
       BY <1>1, <2>1, <2>2, <2>3,
-         IndexedExactGstTypedArchiveResidualHasEntry,
+         IndexedExactTypedArchiveResidualHasEntry,
          PTL DEF IndexedDecisionWitnessSupport
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5,
-                 <2>6, <2>7, <2>8, PTL
+    <2> QED BY <2>4, PTL
   <1> QED BY <1>1
        DEF IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+
 
 (***************************************************************************
 Strict-height recovery/Decision mutual induction.
@@ -4028,8 +4803,8 @@ height.  The operators below expose the exact induction interface:
     completion, and context-local Decision-rank progress together;
   * lower authority and entry completion range only over strict ancestors in
     the frozen target's immutable lineage and yield strict-ancestor advance;
-  * that advance activates the ordinary current-voter one-height corridor,
-    while the exact historical target remains a separate rank premise; and
+  * that advance joins the deterministic frozen-roster archive owner, while
+    the exact historical target remains a separate rank premise; and
   * progress through a numeric height is the finite induction accumulator.
 
 The chain refinement's `IndexedStrictAncestorRecoveryAdvance` kernel turns
@@ -4464,7 +5239,9 @@ THEOREM IndexedHistoricalStrictAncestorRecoveryClosesActivationAt ==
               IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                 targetContext, node)
                 ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
-                     \/ /\ IndexedAllResponsiveJoined(targetContext)
+                     \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(
+                              targetContext)
+                        /\ IndexedResponsiveActiveRosterAt(targetContext)
                         /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                              targetContext, node))
 PROOF
@@ -4476,7 +5253,9 @@ PROOF
          PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                    targetContext, node)
                  ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
-                      \/ /\ IndexedAllResponsiveJoined(targetContext)
+                      \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(
+                               targetContext)
+                         /\ IndexedResponsiveActiveRosterAt(targetContext)
                          /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                               targetContext, node))
     <2>1. []IndexedCompositionInvariant
@@ -4499,90 +5278,172 @@ PROOF
          DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual,
              HistoricalRecoveryOutstanding,
              IndexedTargetJoined, JoinedContexts
-    <2>5. IndexedTargetJoined(targetContext)
-             ~> IndexedAllResponsiveJoined(targetContext)
-      BY <1>1, IndexedStrictAncestorRecoveryEventuallyJoinsTarget
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+    <2>5. targetContext.height \in 0..targetContext.height
+      BY <1>1, Isa
+         DEF AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights
+    <2>6. IndexedTargetJoined(targetContext)
+             ~> IndexedResponsiveHeightReached(targetContext.height)
+      BY <1>1, <2>5,
+         IndexedJoinedTargetReachesEveryAncestorFromStrictRecovery
+    <2>7. IndexedHistoricalRecoveryArchiveOwner(targetContext)
+             \in Responsive
+      BY <1>1, IndexedHistoricalRecoveryArchiveOwnerIsResponsive
+    <2>8. (IndexedTargetJoined(targetContext)
+              /\ IndexedResponsiveHeightReached(targetContext.height))
+             ~> IndexedHistoricalRecoveryArchiveOwner(targetContext)
+                   \in joinedByContext[
+                        IndexedAncestorContext(
+                          targetContext, targetContext.height)]
+      BY <1>1, <2>5, <2>7,
+         IndexedReachedAncestorEventuallyJoinsResponsiveNode
+    <2>9. IndexedAncestorContext(targetContext, targetContext.height)
+             = targetContext
+      BY <1>1, Isa
+         DEF IndexedAncestorContext, AdmissibleContextRecords,
+             FrozenContextAdmissible, ContextRecords, LineagesAt,
+             Heights, ContextRecord
+    <2>10. IndexedTargetJoined(targetContext)
+              /\ [IndexedChainNext]_IndexedChainVars
+              => IndexedTargetJoined(targetContext)'
+      BY <1>1, IndexedTargetJoinedIsStable
+    <2>11. IndexedTargetJoined(targetContext)
+              ~> IndexedHistoricalRecoveryArchiveOwnerJoined(targetContext)
+      BY <2>6, <2>8, <2>9, <2>10, PTL
+         DEF IndexedHistoricalRecoveryArchiveOwnerJoined
+    <2>12. IndexedTargetJoined(targetContext)
+               ~> IndexedResponsiveActiveRosterAt(targetContext)
+      BY <1>1,
+         IndexedStrictAncestorRecoveryEventuallyActivatesResponsiveRoster
+         DEF IndexedResponsiveActiveRosterAt
+    <2>13. []( /\ IndexedHistoricalRecoveryArchiveOwnerJoined(targetContext)
+               /\ IndexedResponsiveActiveRosterAt(targetContext)
+                 => /\ IndexedHistoricalRecoveryArchiveOwnerJoined(
+                          targetContext)'
+                    /\ IndexedResponsiveActiveRosterAt(targetContext)')
+      BY <1>1, <2>1, IndexedJoinedResponsiveActiveRosterIsStable,
+         JoinedMembershipIsMonotone, PTL
+         DEF IndexedHistoricalRecoveryArchiveOwnerJoined
+    <2>14. IndexedTargetJoined(targetContext)
+               ~> /\ IndexedHistoricalRecoveryArchiveOwnerJoined(
+                        targetContext)
+                   /\ IndexedResponsiveActiveRosterAt(targetContext)
+      BY <2>11, <2>12, <2>13, PTL
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>14, PTL
   <1> QED BY <1>1
 
 (***************************************************************************
-Ordinary Decision owners at one strict-height induction step.
+Ordinary Decision owners use one joined current runner after activation.
 
-An ordinary owner already proves that the frozen context is joined.  Recovery
-completion at strict ancestors is sufficient for successor activation to join
-the remaining responsive validators.  The activated one-height instance then
-applies the exact Decision at every frozen-roster voter.  This closes the
-ordinary current-voter service arm without assuming recovery, application
-liveness, or height liveness at the current height; callers must supply only
-the well-founded strict-ancestor premise.
+The exact historical stage already identifies a joined current responsive
+voter.  Strict-ancestor recovery activates the frozen Responsive service
+roster required by the executable SetGST guard.  Product fairness then sets
+GST for that instance, the frozen stage either lowers meanwhile or exposes
+the exact Decision service source, and the five-leaf local service corridor
+reaches Apply.  No aggregate application theorem or current-height liveness
+wrapper occurs in this dependency cone.
 ***************************************************************************)
 
 THEOREM IndexedLiveStrictAncestorsCloseOrdinaryDecisionOwnerRanks ==
-  /\ IndexedLiveChainSpec
-  /\ IndexedOneHeightFiniteRunnerEpisodeClosureProperty
-  /\ IndexedSuccessorActivationProgress
-  => \A initialContext \in AdmissibleContextRecords:
-       IndexedStrictAncestorRecoveryAdvance(initialContext)
-         => \A node \in Responsive, rank \in 1..6:
-              IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt(
-                initialContext, node, rank)
+  IndexedChainSpec
+    => \A initialContext \in AdmissibleContextRecords:
+         IndexedStrictAncestorRecoveryAdvance(initialContext)
+           => \A node \in Responsive, rank \in 1..6:
+                IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt(
+                  initialContext, node, rank)
 PROOF
-  <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedOneHeightFiniteRunnerEpisodeClosureProperty,
-              IndexedSuccessorActivationProgress,
+  <1>1. ASSUME IndexedChainSpec,
               NEW initialContext \in AdmissibleContextRecords,
               IndexedStrictAncestorRecoveryAdvance(initialContext),
               NEW node \in Responsive,
               NEW rank \in 1..6
          PROVE IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt(
                  initialContext, node, rank)
-    <2>0. IndexedChainSpec
-      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
-    <2>1. /\ node \in IndexedAsync(initialContext)!
-                         AsyncCurrentResponsiveVoters
-           /\ IndexedHistoricalDecisionStageAt(
-                initialContext, node, rank)
-             => IndexedTargetJoined(initialContext)
+    <2>0. LET owner ==
+                 /\ node \in IndexedAsync(initialContext)!
+                              AsyncCurrentResponsiveVoters
+                 /\ IndexedHistoricalDecisionStageAt(
+                      initialContext, node, rank)
+               goal ==
+                 IndexedHistoricalDecisionOrdinaryRankGoal(
+                   initialContext, node, rank)
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. []IndexedDecisionWitnessSupport
+      BY <1>1, IndexedChainSpecAlwaysDecisionWitnessSupport, PTL
+    <2>3. []IndexedResponsiveRecoveryDormant
+      BY <1>1, IndexedChainSpecKeepsResponsiveRecoveryDormant, PTL
+    <2>4. [][IndexedChainNext]_IndexedChainVars
+      BY <1>1, PTL DEF IndexedChainSpec
+    <2>5. [](owner
+              => /\ initialContext \in JoinedContexts
+                 /\ IndexedNodeCurrentAt(initialContext, node))
+      BY <1>1, <2>1,
+         IndexedHistoricalDecisionOrdinaryOwnerHasJoinedCurrentRunner,
+         PTL DEF owner
+    <2>6. IndexedSuccessorActivationProgress
       BY <1>1,
-         IndexedHistoricalDecisionOrdinaryOwnerHasJoinedCurrentRunner
-         DEF IndexedTargetJoined
-    <2>2. IndexedTargetJoined(initialContext)
-             ~> IndexedAllResponsiveJoined(initialContext)
-      BY <1>1, <2>0,
-         IndexedStrictAncestorRecoveryEventuallyJoinsTarget
-    <2>3. IndexedAllResponsiveJoined(initialContext)
-             ~> IndexedAsync(initialContext)!
-                   AsyncAllResponsiveAppliedAt(initialContext)
-      BY <1>1, IndexedLiveActivatedInstanceCompletesEveryResponsiveVoter
-    <2>4. []IndexedDecisionWitnessSupport
-      BY <2>0, IndexedChainSpecAlwaysDecisionWitnessSupport
-    <2>5. [](/\ node \in IndexedAsync(initialContext)!
-                          AsyncCurrentResponsiveVoters
-             /\ IndexedHistoricalDecisionStageAt(
-                  initialContext, node, rank)
-               => node \in IndexedAsync(initialContext)!
-                             AsyncVotersAt(initialContext))
-      BY <1>1, <2>4, Isa
-         DEF IndexedDecisionWitnessSupport,
-             IndexedDecisionWitnessSupportAt,
-             IndexedHistoricalDecisionStageAt,
-             IndexedHistoricalDecisionOwned,
-             IndexedHistoricalRecoveryRunnerOwned,
-             IndexedAsync!AsyncCurrentResponsiveVoters,
-             IndexedAsync!AsyncVotersAt,
-             IndexedAsync!CurrentVoters,
-             IndexedAsync!CurrentEpoch
-    <2>6. [](/\ node \in IndexedAsync(initialContext)!
-                          AsyncVotersAt(initialContext)
-             /\ IndexedAsync(initialContext)!
-                  AsyncAllResponsiveAppliedAt(initialContext)
-               => IndexedHistoricalExactApplication(
-                    initialContext, node))
-      BY <1>1, PTL
-         DEF IndexedAsync!AsyncAllResponsiveAppliedAt,
+         IndexedChainSpecClosesSuccessorActivationForHistoricalInduction
+    <2>7. initialContext \in JoinedContexts
+             ~> IndexedResponsiveActiveRosterAt(initialContext)
+      BY <1>1, <2>6,
+         IndexedStrictAncestorRecoveryEventuallyActivatesResponsiveRoster
+         DEF IndexedTargetJoined, IndexedResponsiveActiveRosterAt
+    <2>8. []( /\ IndexedCompositionInvariant
+              /\ IndexedDecisionWitnessSupportAt(initialContext)
+              /\ IndexedResponsiveRecoveryDormant
+              /\ owner
+              /\ [IndexedChainNext]_IndexedChainVars
+                => \/ owner'
+                   \/ goal')
+      BY <1>1, <2>1, <2>2, <2>3, <2>4,
+         IndexedHistoricalDecisionOrdinaryOwnerPersistsOrGoals,
+         PTL DEF IndexedDecisionWitnessSupport, owner, goal
+    <2>9. owner
+             ~> (goal
+                  \/ /\ IndexedResponsiveActiveRosterAt(initialContext)
+                     /\ owner)
+      BY <2>5, <2>7, <2>8, PTL
+    <2>10. /\ IndexedResponsiveActiveRosterAt(initialContext)
+            /\ owner
+             ~> (goal
+                  \/ /\ IndexedCore(initialContext, 7)
+                     /\ owner)
+      BY <1>1, <2>5, <2>8,
+         IndexedChainSpecResponsiveActiveRosterEventuallySetsExactGst,
+         PTL
+    <2>11. []( /\ IndexedCompositionInvariant
+              /\ IndexedDecisionWitnessSupportAt(initialContext)
+              /\ IndexedResponsiveRecoveryDormant
+              /\ IndexedCore(initialContext, 7)
+              /\ owner
+                => \E qc:
+                     IndexedDecisionServiceWitness(initialContext)!
+                       ExactDecisionServiceSource(node, qc))
+      BY <1>1, <2>1, <2>2, <2>3,
+         IndexedHistoricalDecisionOrdinaryStageHasExactServiceSourceAtGst,
+         PTL DEF IndexedDecisionWitnessSupport, owner
+    <2>12. IndexedDecisionServiceWitness(initialContext)!
+              ExactDecisionStageServiceProperty(IndexedChainSpec)
+      BY <1>1, IndexedChainSpecProvidesLocalExactDecisionStageService
+         DEF IndexedLocalExactDecisionStageServiceProperty
+    <2>13. \A qc:
+              IndexedDecisionServiceWitness(initialContext)!
+                ExactDecisionServiceSource(node, qc)
+                ~> IndexedAsync(initialContext)!NodeHasApplication(node)
+      BY <1>1, <2>12
+         DEF IndexedDecisionServiceWitness!ExactDecisionStageServiceProperty,
+             IndexedDecisionServiceWitness!NodeHasApplication,
+             IndexedAsync!NodeHasApplication
+    <2>14. ( /\ IndexedCore(initialContext, 7)
+               /\ owner)
+               ~> goal
+      BY <2>1, <2>2, <2>3, <2>11, <2>13, PTL
+         DEF goal, IndexedHistoricalDecisionOrdinaryRankGoal,
              IndexedHistoricalExactApplication
-    <2> QED BY <2>1, <2>2, <2>3, <2>5, <2>6, PTL
-         DEF IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt
+    <2> QED BY <2>9, <2>10, <2>14, PTL
+         DEF IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt,
+             owner, goal
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalAuthorityProgressAtHeightFromStrictAncestors ==
@@ -4613,12 +5474,15 @@ PROOF
     <2>2. IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
              targetContext, node)
              ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
-                  \/ /\ IndexedAllResponsiveJoined(targetContext)
+                  \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(
+                           targetContext)
+                     /\ IndexedResponsiveActiveRosterAt(targetContext)
                      /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                           targetContext, node))
       BY <1>1, <2>1,
          IndexedHistoricalStrictAncestorRecoveryClosesActivationAt
-    <2>3. /\ IndexedAllResponsiveJoined(targetContext)
+    <2>3. /\ IndexedHistoricalRecoveryArchiveOwnerJoined(targetContext)
+           /\ IndexedResponsiveActiveRosterAt(targetContext)
            /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                 targetContext, node)
              ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
@@ -4640,7 +5504,7 @@ PROOF
 
 THEOREM IndexedHistoricalJointProgressAtHeightFromStrictAncestors ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => \A targetContext \in AdmissibleContextRecords:
@@ -4648,7 +5512,7 @@ THEOREM IndexedHistoricalJointProgressAtHeightFromStrictAncestors ==
          => IndexedHistoricalRecoveryJointProgressAt(targetContext)
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedFiniteRunnerEpisodeClosureProperties,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
               IndexedHistoricalCertificateRankProgressResidualProperty,
               IndexedHistoricalDecisionTargetOwnerRankProgressProperty,
               NEW targetContext \in AdmissibleContextRecords,
@@ -4662,10 +5526,8 @@ PROOF
     <2>2. IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
       BY <1>1,
          IndexedLiveChainSpecClosesActivatedArchiveProducerResidual
-         DEF IndexedFiniteRunnerEpisodeClosureProperties
     <2>3. IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
       BY <1>1, IndexedLiveChainSpecClosesTypedArchiveEntryResidual
-         DEF IndexedFiniteRunnerEpisodeClosureProperties
     <2>4. /\ IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext)
            /\ IndexedHistoricalRecoveryEntryCompletionBelow(targetContext)
       BY <1>1,
@@ -4676,9 +5538,8 @@ PROOF
     <2>6. \A node \in Responsive, rank \in 1..6:
              IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt(
                targetContext, node, rank)
-      BY <1>1, <2>1, <2>5,
+      BY <2>0, <2>5,
          IndexedLiveStrictAncestorsCloseOrdinaryDecisionOwnerRanks
-         DEF IndexedFiniteRunnerEpisodeClosureProperties
     <2>7. \A node \in Responsive, rank \in 1..6:
              IndexedHistoricalDecisionTargetOwnerRankProgressAt(
                targetContext, node, rank)
@@ -4699,13 +5560,13 @@ PROOF
 
 THEOREM IndexedHistoricalJointProgressStartsAtHeightZero ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => IndexedHistoricalRecoveryJointProgressThroughHeight(0)
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedFiniteRunnerEpisodeClosureProperties,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
               IndexedHistoricalCertificateRankProgressResidualProperty,
               IndexedHistoricalDecisionTargetOwnerRankProgressProperty,
               NEW initialContext \in AdmissibleContextRecords,
@@ -4725,7 +5586,7 @@ PROOF
 
 THEOREM IndexedHistoricalJointProgressAdvancesOneHeight ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => \A limit \in Nat:
@@ -4733,7 +5594,7 @@ THEOREM IndexedHistoricalJointProgressAdvancesOneHeight ==
          => IndexedHistoricalRecoveryJointProgressThroughHeight(limit + 1)
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedFiniteRunnerEpisodeClosureProperties,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
               IndexedHistoricalCertificateRankProgressResidualProperty,
               IndexedHistoricalDecisionTargetOwnerRankProgressProperty,
               NEW limit \in Nat,
@@ -4773,13 +5634,13 @@ PROOF
 
 THEOREM IndexedHistoricalStrictHeightMutualInductionClosesJointProgress ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => IndexedHistoricalRecoveryJointProgressProperty
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedFiniteRunnerEpisodeClosureProperties,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
               IndexedHistoricalCertificateRankProgressResidualProperty,
               IndexedHistoricalDecisionTargetOwnerRankProgressProperty
          PROVE IndexedHistoricalRecoveryJointProgressProperty
@@ -4828,7 +5689,7 @@ BY Isa
 
 THEOREM IndexedHistoricalStrictHeightServiceCompositionClosesAuthority ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
@@ -4837,7 +5698,7 @@ BY IndexedHistoricalStrictHeightMutualInductionClosesJointProgress,
 
 THEOREM IndexedHistoricalStrictHeightServiceCompositionClosesDecisionRank ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => IndexedHistoricalDecisionRankProgressResidualProperty
@@ -4846,7 +5707,7 @@ BY IndexedHistoricalStrictHeightMutualInductionClosesJointProgress,
 
 THEOREM IndexedHistoricalStrictHeightServiceCompositionClosesActivationPrefix ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
   /\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty
   => IndexedHistoricalRecoveryActivationPrefixResidualProperty
@@ -4874,14 +5735,15 @@ PROOF
     <2>1. IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
              initialContext, node)
              ~> (IndexedHistoricalRecoveryEntryGoal(
-                   initialContext, node)
-                  \/ /\ IndexedAllResponsiveJoined(initialContext)
+                  initialContext, node)
+                  \/ /\ IndexedHistoricalRecoveryArchiveOwnerJoined(
+                           initialContext)
                      /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                           initialContext, node))
       BY <1>1
          DEF IndexedHistoricalRecoveryOrdinaryAuthorityResidualProperties,
              IndexedHistoricalRecoveryActivationPrefixResidualProperty
-    <2>2. /\ IndexedAllResponsiveJoined(initialContext)
+    <2>2. /\ IndexedHistoricalRecoveryArchiveOwnerJoined(initialContext)
            /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
                 initialContext, node)
              ~> (IndexedHistoricalRecoveryEntryGoal(
@@ -4907,13 +5769,12 @@ PROOF
 (***************************************************************************
 Complete residual inventory and PTL reduction.
 
-The ordinary-consensus authority prefix is now a derived strict-height
-composition.  It consumes the proved successor-activation theorem, the exact
-one-height temporal closure used by the typed-archive producer, and both
-historical service-rank properties.  It is intentionally not an independent
-leaf: until the adequate-leader dependency inside one-height closure and the
-explicit physical residual groups below are discharged, the authority
-wrapper's transitive dependency cone remains open.
+The ordinary-consensus authority prefix is a derived strict-height
+composition.  It consumes the proved successor-activation theorem, one fixed
+responsive archive owner, the generic local adequate-leader Decision kernel,
+the five exact Decision service leaves, and both historical service-rank
+properties.  No aggregate application, one-height, or height-liveness wrapper
+appears in the authority dependency cone.
 
 There are three direct temporal-kernel groups in this leaf:
 
@@ -4929,10 +5790,11 @@ The broad first source cannot be closed by historical fairness.  In the
 reachable genesis state every responsive node is joined at height zero, while
 there is no Decision, application, recovery target, or applied archive:
 `HistoricalRecoveryOutstanding` holds and every historical fair action is
-disabled.  The sound caller decomposition is therefore ordinary current-voter
-one-height progress until an exact durable applied source exists, followed by
-the Open theorem and historical-only ranks in this module.  Assuming indexed
-height liveness here would be circular.
+disabled.  The sound caller decomposition is therefore one joined current
+voter's exact Decision service until an exact durable applied source exists,
+followed by the Open theorem and historical-only ranks in this module.
+Assuming aggregate application or indexed height liveness here would be
+circular.
 
 Exact Open and the application receipt handoff are proved above from
 `IndexedChainSpec`.  The certificate residual is split into historical
@@ -4954,27 +5816,27 @@ completeness is also a product invariant, leaving its three physical-owner
 kernels.  The rank-source/GST bridge and ordinary-I/O Serve response are
 proved above.  The ordinary current-voter branch is
 now derived by the strict-height mutual induction above: completed strict
-ancestors activate the frozen context, and the exact one-height closure then
-applies the Decision at every frozen-roster voter.  No item in this inventory
-assumes
-`IndexedExactHistoricalRecoveryProgress`,
-`ApplicationLivenessProperty`, or `ExactDecisionStageServiceProperty`.
+ancestors join one frozen responsive archive owner, and the local exact
+Decision corridor then applies that owner's Decision.  No item in this
+inventory assumes
+`IndexedExactHistoricalRecoveryProgress`, aggregate application liveness, or
+the local exact Decision stage service property as a premise.
 ***************************************************************************)
 
 (***************************************************************************
-Exact proof-debt declarations.
+Exact historical-recovery release declarations.
 
-Only the physical certificate-rank wrapper and the exact historical-target
-CertifiedRequest corridor remain proofless below.  Decision-stage ownership,
-its executor-class split, the ordinary current-voter lift, the combined
-Decision-rank property, and authority acquisition are proof-bearing
-compositions.  Their proof text exposes rather than hides the two remaining
-proofless wrappers and their physical dependency groups.
+The physical certificate wrapper and exact historical-target
+CertifiedRequest corridor are deductive below.  Their proofs consume the
+source-local fixed-clock packet episode and the six exact transport kernels;
+the ordinary-owner branch additionally consumes strict-ancestor activation
+of the executable Responsive service roster.  Decision-stage ownership, its
+executor-class split, the combined Decision-rank property, and authority
+acquisition are proof-bearing compositions over those providers.
 
-TODO: discharge the packet-local fixed-clock corridor, the three Commit
-transport kernels, and the three historical Decision transport kernels under
-the explicit `IndexedLiveChainSpec` install-generation premise, without
-assuming indexed height liveness or aggregate application liveness.
+No declaration in this section assumes indexed height liveness, aggregate
+application liveness, or its own conclusion.  Bounded install-generation
+exhaustion remains a TLC diagnostic, not a temporal premise.
 ***************************************************************************)
 
 (***************************************************************************
@@ -4986,15 +5848,14 @@ CommitQC evidence/item/origin lineage.  Membership in the `AsyncCandidateSet`
 type carrier, a stale scheduled occurrence, or an unrelated same-round command
 cannot fabricate imported certificate ownership.
 
-The remaining rank theorem is reduced to
+The rank theorem is reduced to
 `IndexedHistoricalCertificateRemainingCorridorProperty`:
 
-  * rank 4 still needs discovery-clock progress through the overdue-packet
-    corridor.  Local node/I/O service and Tick are already closed from their
-    exact product fairness.  The Candidate/Serve identity bridge and indexed
-    lifecycle invariant are proved, but the packet-local finite non-descent
-    episode remains temporal proof debt;
-  * ranks 3 and 2 still need exact request/response retention through
+  * rank 4 uses discovery-clock progress through the overdue-packet corridor.
+    Local node/I/O service, Tick, the Candidate/Serve identity bridge, and the
+    packet-local finite non-descent episode are all closed from exact product
+    fairness and frozen finite ranks;
+  * ranks 3 and 2 use exact request/response retention through
     retransmission, historical packet admission, archive Serve/ordinary I/O,
     and response admission; and
   * rank 1 excludes append-only QcEnvelope history.  Its exact command arm is
@@ -5003,17 +5864,32 @@ The remaining rank theorem is reduced to
     either exposes an exact Candidate, the existing DeliverQC, BeginDecision,
     and PersistDecision tail is already closed.
 
-The Stage 2..6 and Candidate tail prerequisites are no longer assumptions.
-Assuming the remaining consequences via target-to-Decision, or assuming this
-wrapper itself, would still be circular.
-
-TODO: prove the fixed-clock finite episode and exact authenticated
-request/response owner retention before adding a proof to this wrapper.
+The Stage 2..6 and Candidate tail prerequisites are not assumptions.  The
+proof below imports only the source-local fixed-clock and Commit physical
+providers, never target-to-Decision or this wrapper itself.
 ***************************************************************************)
 
 THEOREM IndexedHistoricalCertificateRankProgressResidualObligation ==
   IndexedLiveChainSpec
     => IndexedHistoricalCertificateRankProgressResidualProperty
+PROOF
+  <1>1. ASSUME IndexedLiveChainSpec
+         PROVE IndexedHistoricalCertificateRankProgressResidualProperty
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. IndexedHistoricalFixedClockPacketRemainingTemporalResidual
+      BY <2>1,
+         IndexedChainSpecClosesHistoricalFixedClockPacketRemainingResidual
+    <2>3. IndexedHistoricalCommitTransportResidualKernelProperties
+      BY <2>1,
+         IndexedChainSpecClosesSixHistoricalPhysicalTransportKernels
+         DEF IndexedHistoricalCommitTransportResidualKernelProperties
+    <2>4. IndexedHistoricalCertificatePhysicalResidualKernels
+      BY <2>2, <2>3
+         DEF IndexedHistoricalCertificatePhysicalResidualKernels
+    <2> QED BY <2>1, <2>4,
+         IndexedHistoricalCertificatePhysicalKernelsCloseRankResidual
+  <1> QED BY <1>1
 
 (***************************************************************************
 Decision-rank non-circularity boundary.
@@ -5021,24 +5897,38 @@ Decision-rank non-circularity boundary.
 `IndexedChainSpecClosesHistoricalDecisionTargetCandidateRankResiduals` closes
 ranks 6, 4, 3, 2, and 1 only for an exact historical target.  By
 `IndexedHistoricalDecisionTargetRankResidualSplitsAtCertifiedRequest`, that
-branch reduces to the rank-5 active CertifiedRequest corridor, which is the
-sole proofless Decision seam below.  The strict-height mutual induction closes
-the separate ordinary current-voter branch and recombines it with the target
-branch at each context.  Neither branch borrows indexed height liveness, and
-the target branch may not treat request replenishment as progress.
+branch reduces to the rank-5 active CertifiedRequest corridor, now supplied
+by the exact Decision transport provider below.  The strict-height mutual
+induction closes the separate ordinary current-voter branch and recombines it
+with the target branch at each context.  Neither branch borrows indexed
+height liveness, and the target branch may not treat request replenishment as
+progress.
 ***************************************************************************)
 
 THEOREM IndexedHistoricalDecisionTargetCertifiedRequestResidualObligation ==
   IndexedLiveChainSpec
     => IndexedHistoricalDecisionTargetCertifiedRequestResidualProperty
+PROOF
+  <1>1. ASSUME IndexedLiveChainSpec
+         PROVE IndexedHistoricalDecisionTargetCertifiedRequestResidualProperty
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. IndexedHistoricalDecisionTransportResidualKernelProperties
+      BY <2>1,
+         IndexedChainSpecClosesSixHistoricalPhysicalTransportKernels
+         DEF IndexedHistoricalDecisionTransportResidualKernelProperties
+    <2>3. IndexedHistoricalDecisionCertifiedBodyTransportLeafProperty
+      BY <2>1, <2>2,
+         IndexedHistoricalDecisionTransportKernelsCloseExactLeaf
+    <2> QED BY <2>1, <2>3,
+         IndexedHistoricalDecisionTransportLeafClosesTargetRankFive
+  <1> QED BY <1>1
 
 THEOREM IndexedHistoricalDecisionTargetOwnerRankProgressObligation ==
-  /\ IndexedLiveChainSpec
-  /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
+  IndexedLiveChainSpec
     => IndexedHistoricalDecisionTargetOwnerRankProgressProperty
 PROOF
-  <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedHistoricalFiniteRunnerEpisodeClosureProperty
+  <1>1. ASSUME IndexedLiveChainSpec
          PROVE IndexedHistoricalDecisionTargetOwnerRankProgressProperty
     <2>1. IndexedChainSpec
       BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
@@ -5051,18 +5941,17 @@ PROOF
 
 THEOREM IndexedHistoricalDecisionRankProgressResidualObligation ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
     => IndexedHistoricalDecisionRankProgressResidualProperty
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedFiniteRunnerEpisodeClosureProperties
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty
          PROVE IndexedHistoricalDecisionRankProgressResidualProperty
     <2>1. IndexedHistoricalCertificateRankProgressResidualProperty
       BY <1>1, IndexedHistoricalCertificateRankProgressResidualObligation
     <2>2. IndexedHistoricalDecisionTargetOwnerRankProgressProperty
       BY <1>1,
          IndexedHistoricalDecisionTargetOwnerRankProgressObligation
-         DEF IndexedFiniteRunnerEpisodeClosureProperties
     <2> QED BY <1>1, <2>1, <2>2,
          IndexedHistoricalStrictHeightServiceCompositionClosesDecisionRank
   <1> QED BY <1>1
@@ -5073,44 +5962,94 @@ Authority-acquisition closure.
 This wrapper is deliberately below the certificate and target-owner rank
 compositions.  The strict-height mutual induction derives context-local entry
 completion and consumes the already-proved successor-activation theorem.  Its
-typed-archive producer uses `IndexedOneHeightTemporalClosureIsExact`, whose
-dependency cone includes the exact adequate-leader closure and the exact
-Decision leaves but imports no indexed height or historical-recovery progress
-theorem.  Consequently the composition is acyclic, while a proofless or
-weakened adequate-leader/rank dependency still invalidates this wrapper
-through the aggregate checker.
+typed-archive producer joins one deterministic frozen-roster owner, consumes
+the generic local adequate-leader Decision kernel, and then uses the five
+exact Decision service leaves to reach local Apply.  The dependency cone
+imports no aggregate application, one-height, height, or historical-recovery
+progress theorem.
 ***************************************************************************)
 
 THEOREM IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation ==
   /\ IndexedLiveChainSpec
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
     => IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
-              IndexedFiniteRunnerEpisodeClosureProperties
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty
          PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
     <2>1. IndexedHistoricalCertificateRankProgressResidualProperty
       BY <1>1, IndexedHistoricalCertificateRankProgressResidualObligation
     <2>2. IndexedHistoricalDecisionTargetOwnerRankProgressProperty
       BY <1>1,
          IndexedHistoricalDecisionTargetOwnerRankProgressObligation
-         DEF IndexedFiniteRunnerEpisodeClosureProperties
     <2> QED BY <1>1, <2>1, <2>2,
          IndexedHistoricalStrictHeightServiceCompositionClosesAuthority
   <1> QED BY <1>1
 
+THEOREM IndexedHistoricalReleaseResidualsDischargeExactProgress ==
+  /\ IndexedLiveChainSpec
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
+    => IndexedExactHistoricalRecoveryProgress
+PROOF
+  <1>1. ASSUME IndexedLiveChainSpec,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty
+         PROVE IndexedExactHistoricalRecoveryProgress
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. IndexedHistoricalCertificateRankProgressResidualProperty
+      BY <1>1, IndexedHistoricalCertificateRankProgressResidualObligation
+    <2>3. IndexedHistoricalDecisionRankProgressResidualProperty
+      BY <1>1, IndexedHistoricalDecisionRankProgressResidualObligation
+    <2>4. IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+      BY <1>1,
+         IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation
+    <2>5. IndexedHistoricalRecoveryEntryCompletionProperty
+      BY <2>1, <2>2, <2>3,
+         IndexedHistoricalServiceKernelsDischargeEntryCompletion
+    <2>6. ASSUME NEW initialContext \in AdmissibleContextRecords,
+                  NEW node \in Responsive
+           PROVE HistoricalRecoveryOutstanding(initialContext, node)
+                   ~> HistoricalRecoveryComplete(initialContext, node)
+      <3>1. HistoricalRecoveryOutstanding(initialContext, node)
+               => (IndexedHistoricalRecoveryEntryGoal(
+                     initialContext, node)
+                    \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                         initialContext, node))
+        BY DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual
+      <3>2. IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+               initialContext, node)
+               ~> IndexedHistoricalRecoveryEntryGoal(
+                    initialContext, node)
+        BY <2>4
+           DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+      <3>3. IndexedHistoricalRecoveryEntryGoal(initialContext, node)
+               ~> HistoricalRecoveryComplete(initialContext, node)
+        BY <2>5 DEF IndexedHistoricalRecoveryEntryCompletionProperty
+      <3> QED BY <3>1, <3>2, <3>3, PTL
+    <2> QED BY <2>6 DEF IndexedExactHistoricalRecoveryProgress
+  <1> QED BY <1>1
+
+THEOREM IndexedHistoricalFixedDeadlineDisseminationAndExposureDischargeExactProgress ==
+  /\ IndexedLiveChainSpec
+  /\ IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+  /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
+    => IndexedExactHistoricalRecoveryProgress
+BY IndexedAdequateLeaderFixedDeadlineDisseminationAndExposureSupplyLocalConvergence,
+   IndexedHistoricalReleaseResidualsDischargeExactProgress
+
 IndexedHistoricalRecoveryTemporalResidualKernels ==
-  /\ IndexedFiniteRunnerEpisodeClosureProperties
-  /\ IndexedHistoricalFixedClockPacketCorridorTemporalResidual
+  /\ IndexedHistoricalFixedClockPacketRemainingTemporalResidual
   /\ IndexedHistoricalCommitTransportResidualKernelProperties
   /\ IndexedHistoricalDecisionTransportResidualKernelProperties
 
 THEOREM IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress ==
   /\ IndexedLiveChainSpec
+  /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
   /\ IndexedHistoricalRecoveryTemporalResidualKernels
     => IndexedExactHistoricalRecoveryProgress
 PROOF
   <1>1. ASSUME IndexedLiveChainSpec,
+              IndexedLocalAdequateLeaderDecisionConvergenceProperty,
               IndexedHistoricalRecoveryTemporalResidualKernels
          PROVE IndexedExactHistoricalRecoveryProgress
     <2>0. IndexedChainSpec
@@ -5125,8 +6064,7 @@ PROOF
     <2>3. IndexedHistoricalDecisionTargetOwnerRankProgressProperty
       BY <1>1, <2>0,
          IndexedHistoricalDecisionPhysicalKernelsCloseTargetRank
-         DEF IndexedHistoricalRecoveryTemporalResidualKernels,
-             IndexedFiniteRunnerEpisodeClosureProperties
+         DEF IndexedHistoricalRecoveryTemporalResidualKernels
     <2>4. IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
       BY <1>1, <2>2, <2>3,
          IndexedHistoricalStrictHeightServiceCompositionClosesAuthority

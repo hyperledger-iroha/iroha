@@ -277,12 +277,12 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-The ingress reservation is useful to deadlock freedom only after proving the
-converse needed by the full-ingress branch: a fresh typed packet cannot be
-rejected by an empty recipient.  Appending the first item consumes exactly
-one of that source's four (or, for the untrusted aggregate, two) protected
-slots.  Thus a rejected fresh packet witnesses existing recipient-local
-ingress work; this is not an assumption about nominal queue capacity.
+The physical-capacity converse is deliberately conditional on the semantic,
+reservation, lifecycle, and policy gates.  Appending the first item consumes
+exactly one of that source's four (or, for the untrusted aggregate, two)
+protected slots.  Thus a fresh packet whose nonphysical gates all allow
+admission cannot be rejected by an empty recipient.  A missing leader-wire
+reservation is handled separately below and is never called productive work.
 ***************************************************************************)
 
 THEOREM ZeroIngressDepthMeansEveryLaneEmpty ==
@@ -403,6 +403,17 @@ PROOF
          DEF After, IngressProtectedSlotCountAfterAdmission
   <1> QED BY <1>1
 
+IngressAdmissionPolicyAndOwnershipGatesAllow(item) ==
+  /\ ~AsyncControlServiceAdmissionCoalesced(item)
+  /\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)
+  /\ ~AsyncCandidateServicePacketRetired(item)
+  /\ ~AsyncCandidateStageRetired(item)
+  /\ AsyncLeaderWireAtomicAdmissionAllows(item)
+  /\ AsyncServeTransportAdmissionGateAllows(
+       item.envelope.recipient, item)
+  /\ CertifiedResponseFreshClaimGateAllows(item)
+  /\ AsyncUntrustedGenericCompletionGateAllows(item)
+
 THEOREM EmptyIngressAdmitsTypedPacket ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     \A item:
@@ -411,6 +422,7 @@ THEOREM EmptyIngressAdmitsTypedPacket ==
       /\ item.envelope.recipient = recipient
       /\ item.source = source
       /\ IngressDepth(recipient) = 0
+      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(item)
       => CanAdmitIngressItem(item)
 PROOF
   <1>1. ASSUME NEW recipient \in ValidatorIds,
@@ -420,7 +432,8 @@ PROOF
                 AsyncItemTyped(item),
                 item.envelope.recipient = recipient,
                 item.source = source,
-                IngressDepth(recipient) = 0
+                IngressDepth(recipient) = 0,
+                IngressAdmissionPolicyAndOwnershipGatesAllow(item)
          PROVE CanAdmitIngressItem(item)
     <2>1. IngressLane(recipient, source) = <<>>
       BY <1>1, ZeroIngressDepthMeansEveryLaneEmpty
@@ -453,7 +466,9 @@ PROOF
              IngressLaneHasTimeoutVoteIn,
              IngressLaneHasTransportCompletionIn,
              IngressLane, SequenceSet
-    <2> QED BY <2>4, <2>5 DEF CanAdmitIngressItem
+    <2> QED BY <1>1, <2>4, <2>5
+         DEF CanAdmitIngressItem,
+             IngressAdmissionPolicyAndOwnershipGatesAllow
   <1> QED BY <1>1
 
 THEOREM RejectedFreshPacketWitnessesExistingIngress ==
@@ -464,6 +479,7 @@ THEOREM RejectedFreshPacketWitnessesExistingIngress ==
       /\ item.envelope.recipient = recipient
       /\ item.source = source
       /\ item \notin SequenceSet(IngressLane(recipient, source))
+      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(item)
       /\ ~CanAdmitIngressItem(item)
       => IngressDepth(recipient) > 0
 BY EmptyIngressAdmitsTypedPacket, SMT
@@ -2917,16 +2933,81 @@ PROOF
 
 (***************************************************************************
 The transport blocker is discharged at its authenticated recipient/source,
-never by selecting an unrelated undecided validator.  Exact duplicates take
-the coalescing admission branch.  A fresh admissible item takes the ordinary
-admission branch.  A fresh rejected item proves that recipient ingress is
-nonempty: an unapplied recipient advances its own three-phase runner; an
-applied recipient either drains a historical-safe item or, if every queued
-item is an authorized request blocked on the Serve reservation, services the
-nonempty I/O FIFO which is the exact admission blocker.
+never by selecting an unrelated undecided validator.  Exact duplicates and
+policy/tombstone exits take the admission branch.  A fresh item with every
+gate open takes the same atomic admission branch.  For a leader wire that
+single action validates the current/authenticated lifecycle slot and physical
+capacity, removes the exact packet, appends the lane occurrence, and publishes
+its immutable Ingress owner.  No separate scheduler-bookkeeping action exists.
 ***************************************************************************)
 
-THEOREM OverdueResponsivePacketEnablesConcreteCorridorProgress ==
+THEOREM EmptyAppliedOverduePacketExposesAdmission ==
+  \A initialContext \in ContextRecords,
+     recipient \in AsyncCurrentResponsiveVoters,
+     source \in AsyncIngressSources:
+    /\ AsyncStrongTypeInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+    /\ gst
+    /\ NodeHasApplication(recipient)
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ LET packet == OldestDueSourcePacket(recipient, source)
+       IN /\ packet \in OverdueResponsivePackets
+          /\ IngressDepth(recipient) = 0
+          /\ ~DueIngressPacketCanEnter(recipient, source)
+    => \E actionSource \in AsyncIngressSources:
+         ENABLED
+           (PostGstAdmitHiddenPacket(recipient, actionSource)
+              \/ PostGstAdmitHistoricalRecoveryPacket(
+                   recipient, actionSource))
+BY AsyncStrongTypeProjectsAsyncType,
+   EmptyIngressAdmitsTypedPacket,
+   OldestDueSourcePacketFacts,
+   ExpandENABLED, IsaT(3600)
+   DEF DueIngressPacketCanEnter,
+       DueIngressPacketCanCoalesce,
+       IngressAdmissionPolicyAndOwnershipGatesAllow,
+       CanAdmitIngressItem,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       DropExactActiveLeaderWireRetry,
+       PostGstAdmitHiddenPacket,
+       PostGstAdmitHistoricalRecoveryPacket,
+       AsyncLeaderWireCurrentContextItem,
+       AsyncLeaderWireAdmissionAuthenticated,
+       AsyncLeaderWireAtomicAdmissionAllows,
+       AsyncLeaderWireLifecycleExactActive,
+       AsyncLeaderWireLifecycleSlotCanAdmit,
+       AsyncLeaderWireLifecycleStateAfterIngressAdmission,
+       IngressPacketPolicyRejected,
+       AsyncPacketOwnsClockDeadline,
+       OverdueResponsivePackets,
+       DueSourcePackets, AsyncAllVars
+
+THEOREM EmptyAppliedOverduePacketEnablesProgress ==
+  \A initialContext \in ContextRecords,
+     recipient \in AsyncCurrentResponsiveVoters,
+     source \in AsyncIngressSources:
+    /\ AsyncStrongTypeInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+    /\ gst
+    /\ NodeHasApplication(recipient)
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ LET packet == OldestDueSourcePacket(recipient, source)
+       IN /\ packet \in OverdueResponsivePackets
+          /\ IngressDepth(recipient) = 0
+          /\ ~DueIngressPacketCanEnter(recipient, source)
+    => ENABLED PostGstProductiveStepWith(
+         AsyncTerminatingLocalWorkDecreaseStep)
+BY EmptyAppliedOverduePacketExposesAdmission,
+   AsyncStrongTypeProjectsAsyncType,
+   OverdueResponsivePacketUsesFairIngressPair,
+   PostGstIngressAdmissionIsConcreteTransportProgress,
+   ENABLEDaxioms, IsaT(600)
+   DEF ResponsivePacketPairAt
+
+THEOREM OverdueResponsivePacketEnablesConcreteProgress ==
   \A initialContext \in ContextRecords:
     /\ AsyncStrongTypeInvariant
     /\ PostGstReplayQuarantineExcluded
@@ -2944,7 +3025,7 @@ PROOF
                 gst,
                 OverdueResponsivePackets # {}
          PROVE ENABLED PostGstProductiveStepWith(
-                 AsyncTerminatingLocalWorkDecreaseStep)
+                   AsyncTerminatingLocalWorkDecreaseStep)
     <2>1. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>2. PICK packet \in OverdueResponsivePackets: TRUE
@@ -2986,41 +3067,30 @@ PROOF
           BY <1>1, <2>1, <2>3, <3>3, Isa
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant
-        <4>2. IngressDepth(Recipient) > 0
-          <5>1. CASE IngressHasCoalescingOwner(Item)
-            <6>1. IngressResourceSource(Item) \in AsyncIngressSources
-              BY <2>4, Isa
-                 DEF AsyncItemTyped, AsyncIngressSources
-            <6>2. ASSUME IngressDepth(Recipient) = 0
-                   PROVE FALSE
-              <7>1. IngressLane(
-                       Recipient, IngressResourceSource(Item)) = <<>>
-                BY <2>1, <2>3, <6>1, <6>2,
-                   ZeroIngressDepthMeansEveryLaneEmpty
-              <7> QED BY <5>1, <7>1
-                   DEF IngressHasCoalescingOwner, SequenceSet,
-                       IngressLane
-            <6> QED BY <2>1, <6>2, SMT
-                 DEF AsyncTypeInvariant, TypeInvariant,
-                     AsyncSchedulerTypeInvariant,
-                     AsyncIngressTypeInvariant,
-                     AsyncIngressCapacityTypeInvariant
-          <5>2. CASE ~IngressHasCoalescingOwner(Item)
-            <6>1. ~CanAdmitIngressItem(Item)
-              BY <3>1, <5>2
-            <6> QED BY <2>1, <2>3, <2>4, <6>1,
-                 EmptyIngressAdmitsTypedPacket, SMT
+        <4>2. CASE IngressDepth(Recipient) = 0
+          <5>1. OldestDueSourcePacket(Recipient, Source)
+                   \in OverdueResponsivePackets
+            BY <1>1, <2>1, <2>2, <2>3, Isa
+               DEF OverdueResponsivePackets,
+                   AsyncPacketOwnsClockDeadline,
+                   DueSourcePackets, OldestDueSourcePacket
+          <5>2. ENABLED PostGstProductiveStepWith(
+                   AsyncTerminatingLocalWorkDecreaseStep)
+            BY <1>1, <2>3, <2>6, <3>3, <4>1, <4>2, <5>1,
+               EmptyAppliedOverduePacketEnablesProgress
+          <5> QED BY <5>2
+        <4>3. CASE IngressDepth(Recipient) > 0
+          <5>1. CASE HistoricalDrainableIngressIndices(Recipient) # {}
+            BY <1>1, <4>1, <3>3, <5>1,
+               AppliedDrainableRecipientEnablesConcreteIngressProgress
+          <5>2. CASE HistoricalDrainableIngressIndices(Recipient) = {}
+            <6>1. AsyncIoQueueDepth(Recipient) > 0
+              BY <2>1, <2>3, <4>3, <5>2,
+                 NonemptyUndrainableHistoricalIngressHasIoWork
+            <6> QED BY <1>1, <2>3, <6>1,
+                 DueIoServiceEnablesConcreteLocalProgress
           <5> QED BY <5>1, <5>2
-        <4>3. CASE HistoricalDrainableIngressIndices(Recipient) # {}
-          BY <1>1, <4>1, <3>3, <4>3,
-             AppliedDrainableRecipientEnablesConcreteIngressProgress
-        <4>4. CASE HistoricalDrainableIngressIndices(Recipient) = {}
-          <5>1. AsyncIoQueueDepth(Recipient) > 0
-            BY <2>1, <2>3, <4>2, <4>4,
-               NonemptyUndrainableHistoricalIngressHasIoWork
-          <5> QED BY <1>1, <2>3, <5>1,
-               DueIoServiceEnablesConcreteLocalProgress
-        <4> QED BY <4>3, <4>4
+        <4> QED BY <2>1, <4>2, <4>3, SMT
       <3> QED BY <3>2, <3>3
     <2> QED BY <2>5, <2>6
   <1> QED BY <1>1
@@ -3044,7 +3114,7 @@ BY Isa
        AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
        AsyncIoQueueDepth
 
-THEOREM PostGstUndecidedEnablesConcreteProductiveStepAt ==
+THEOREM PostGstUndecidedEnablesConcreteProductiveAt ==
   \A initialContext \in ContextRecords:
     /\ AsyncStrongTypeInvariant
     /\ PostGstReplayQuarantineExcluded
@@ -3061,7 +3131,7 @@ PROOF
                   AsyncVotersAt(initialContext),
                 gst, ~ResponsiveNodesDecide
          PROVE ENABLED PostGstProductiveStepWith(
-                 AsyncTerminatingLocalWorkDecreaseStep)
+                   AsyncTerminatingLocalWorkDecreaseStep)
     <2>1. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>2. PICK undecided \in AsyncCurrentResponsiveVoters:
@@ -3076,7 +3146,7 @@ PROOF
            DisabledPostGstTickHasConcreteBlocker
       <3>2. CASE OverdueResponsivePackets # {}
         BY <1>1, <3>2,
-           OverdueResponsivePacketEnablesConcreteCorridorProgress
+           OverdueResponsivePacketEnablesConcreteProgress
       <3>3. CASE \E node \in LocalRunnerServiceOwners:
                        asyncNodeServiceDeadlines[node] <= asyncNow
         <4>1. PICK serviceNode \in LocalRunnerServiceOwners:
@@ -3114,13 +3184,11 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-The Entry-38 candidate proof uses the parameterized productive-step property.
-The legacy one-argument base wrapper remains semantically identical to the old
-four-way predicate; this child supplies only strict, named terminating-local-
-work steps.  In particular, an applied voter reaches the historical-server
-gate through the proved post-GST quarantine exclusion rather than an assumed
-ordinary RunNode action.  The ledger remains `specified_unproved` until this
-entire dependency cone passes the pinned strict TLAPS release invocation.
+The Entry-38 candidate proof supplies only strict, named
+terminating-local-work steps.  Atomic Fair-ingress acceptance removes the
+packet in the same step that installs the leader-wire owner, so it is ordinary
+productive transport progress.  The ledger remains `specified_unproved` until
+this entire dependency cone passes the pinned strict TLAPS release invocation.
 ***************************************************************************)
 
 THEOREM DeadlockFreedomObligation ==
@@ -3157,7 +3225,8 @@ PROOF
                     => ENABLED PostGstProductiveStepWith(
                          AsyncTerminatingLocalWorkDecreaseStep))
       BY <2>1, <2>2, <2>3, <2>5,
-         PostGstUndecidedEnablesConcreteProductiveStepAt, PTL
+         PostGstUndecidedEnablesConcreteProductiveAt,
+         PTL
     <2> QED BY <2>6
          DEF DeadlockFreedomWithLocalWorkProperty
   <1> QED BY <1>1

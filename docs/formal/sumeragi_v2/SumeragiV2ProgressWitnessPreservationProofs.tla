@@ -1505,8 +1505,8 @@ The three controller actions have different handoffs:
   * Crash makes the historical-Commit antecedent false by clearing the
     selected node's validation receipts, while durable Decision and locked
     Prepare sources acquire exact recovery authority.
-  * Restart resets both generation and recoveryGeneration to the fresh
-    process value together.  The
+  * Restart advances both generation and recoveryGeneration to the same fresh
+    process value.  The
     reachable clearing invariant prevents the framed old receipt set from
     becoming current merely because the generation changed.
   * Replay leaves the historical-Commit antecedent false.  A unique durable
@@ -1638,7 +1638,7 @@ THEOREM ResponsiveRestartPreservesDurableDecisionProgress ==
   /\ AsyncDurableDecisionProgressWitness
   /\ PreGstResponsiveRestart
   => AsyncDurableDecisionProgressWitness'
-BY ResponsiveRestartRebindsExactDurableDecisionAuthority, IsaT(150)
+BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(150)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        AsyncDurableDecisionProgressWitness,

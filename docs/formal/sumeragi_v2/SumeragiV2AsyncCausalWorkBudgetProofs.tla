@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncCausalWorkBudgetProofs ----
-EXTENDS SumeragiV2AsyncInstallRunnerProofs
+EXTENDS SumeragiV2AsyncInstallRunnerContinuationProofs
 
 (***************************************************************************
 Finite causal-successor work.
@@ -82,6 +82,91 @@ BY SMTT(180)
        InstallProposalSuccessor, AsyncCandidateFrom,
        AsyncCandidateAtConsumerWithOrigin,
        AsyncCandidateWithIdentityAndOrigin, SequenceSet
+
+(***************************************************************************
+Exact remaining command occurrences.
+
+The radix-four weight below is convenient for a generic well-foundedness
+argument, but it is intentionally too coarse for the fixed-corridor clock.
+This second weight is the exact maximum size of the closed successor subtree,
+including its root.  The largest root is BeginTimeout:
+
+  BeginTimeout -> PersistTimeout -> SignTimeout -> PersistInstallTC
+
+and the final install can emit the locked FetchBody tail, one SignVote, and
+the next-view AssembleBody tail.  Expanding every exact branch gives nineteen
+occurrences.  No arbitrary producer constant is introduced: the source
+checker pins this CASE table to `CommandSuccessors` and its closed parent-kind
+inventory.
+***************************************************************************)
+AsyncCausalExactRemainingOccurrenceBudget(kind) ==
+  CASE kind = "BeginTimeout" -> 19
+    [] kind \in {"PersistTimeout", "DeliverTC"} -> 18
+    [] kind \in
+         {"SignTimeout", "DeliverTimeout", "BeginInstallTC"} -> 17
+    [] kind = "PersistInstallTC" -> 16
+    [] kind = "DeliverProposal" -> 14
+    [] kind \in {"DeliverVote", "DeliverQC"} -> 13
+    [] kind \in {"FormCommitQC", "BeginDecision"} -> 12
+    [] kind \in {"DeliverChunk", "PersistDecision"} -> 11
+    [] kind \in
+         {"FetchBody", "RebindRetainedBody",
+          "FetchCertifiedBody"} -> 10
+    [] kind = "StoreBody" -> 9
+    [] kind = "ValidateBody" -> 8
+    [] kind = "BeginObservePrepare" -> 5
+    [] kind \in {"AssembleBody", "PersistObservePrepare"} -> 4
+    [] kind \in
+         {"BeginProposal", "BeginPrepare", "BeginLockCommit"} -> 3
+    [] kind \in
+         {"PersistProposal", "PersistPrepare",
+          "PersistLockCommit"} -> 2
+    [] OTHER -> 1
+
+THEOREM AsyncCausalExactRemainingOccurrenceBudgetIsBounded ==
+  \A kind \in AsyncWorkKinds:
+    AsyncCausalExactRemainingOccurrenceBudget(kind) \in 1..19
+BY SMT
+   DEF AsyncCausalExactRemainingOccurrenceBudget,
+       AsyncWorkKinds, AsyncCompletionTags,
+       AsyncDeliveryKinds, AsyncReducerKinds
+
+AsyncCommandExactSuccessorBatchOccurrenceBudget(command) ==
+  LET successors == CommandSuccessors(command)
+  IN CASE Len(successors) = 0 -> 0
+       [] Len(successors) = 1 ->
+            AsyncCausalExactRemainingOccurrenceBudget(successors[1].kind)
+       [] Len(successors) = 2 ->
+            AsyncCausalExactRemainingOccurrenceBudget(successors[1].kind)
+              + AsyncCausalExactRemainingOccurrenceBudget(
+                  successors[2].kind)
+       [] Len(successors) = 3 ->
+            AsyncCausalExactRemainingOccurrenceBudget(successors[1].kind)
+              + AsyncCausalExactRemainingOccurrenceBudget(
+                  successors[2].kind)
+              + AsyncCausalExactRemainingOccurrenceBudget(
+                  successors[3].kind)
+       [] OTHER ->
+            AsyncCausalExactRemainingOccurrenceBudget(command.kind)
+
+THEOREM AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget ==
+  \A command \in AsyncCandidateSet:
+    AsyncCommandExactSuccessorBatchOccurrenceBudget(command)
+      < AsyncCausalExactRemainingOccurrenceBudget(command.kind)
+BY CommandSuccessorsHaveBoundedLength,
+   SMTT(300)
+   DEF AsyncCommandExactSuccessorBatchOccurrenceBudget,
+       AsyncCausalExactRemainingOccurrenceBudget,
+       CommandSuccessors, CausalCandidate,
+       CausalCandidateWithEvidence, RetainedBodyRebindCandidate,
+       PersistDecisionRecoveryKind, PersistDecisionRecoverySuccessor,
+       InstallCommandSuccessors,
+       InstallLockedFetchSuccessors, InstallLockedFetchSuccessor,
+       InstallCommitSignSuccessors, InstallCommitSignSuccessor,
+       InstallProposalSuccessor, AsyncCandidateFrom,
+       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateWithIdentityAndOrigin,
+       SequenceSet, AsyncCandidateSet
 
 AsyncCausalRemainingWorkWeight(kind) ==
   CASE AsyncCausalRemainingWorkStage(kind) = 9 -> 262144
@@ -166,6 +251,16 @@ AsyncCausalEpisodeFrozenPredecessorOrigins(node, cutoffOrdinal) ==
      /\ record.node = node
      /\ record.ordinal <= cutoffOrdinal}
 
+\* The cut is owned by the immutable lifecycle admission, rather than by one
+\* transient parent command.  A serviced parent may disappear while its
+\* causal child is appended in the same transition; the admission survives
+\* that handoff with the same origin, slot, and ordinal.
+AsyncCausalEpisodeLifecycleCutOwned(node, origin, cutoffOrdinal) ==
+  \E record \in AsyncCandidateLifecycleAdmissions:
+    /\ record.node = node
+    /\ record.origin = origin
+    /\ record.ordinal = cutoffOrdinal
+
 AsyncCausalEpisodeCandidates(node, cutoffOrdinal) ==
   {candidate \in
        QueuedCandidates \cup DeferredCandidates
@@ -184,6 +279,57 @@ AsyncCausalEpisodeCandidateWorkTokens(node, cutoffOrdinal) ==
 AsyncCausalEpisodeCandidateWorkBudget(node, cutoffOrdinal) ==
   Cardinality(
     AsyncCausalEpisodeCandidateWorkTokens(node, cutoffOrdinal))
+
+AsyncCausalEpisodeExactCandidateOccurrenceTokens(node, cutoffOrdinal) ==
+  {<<candidate, token>>:
+     candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal),
+     token
+       \in 1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}
+
+AsyncCausalEpisodeExactCandidateOccurrenceBudget(node, cutoffOrdinal) ==
+  Cardinality(
+    AsyncCausalEpisodeExactCandidateOccurrenceTokens(
+      node, cutoffOrdinal))
+
+THEOREM AsyncCausalEpisodeCandidateCarrierHasConfiguredBound ==
+  \A node \in ValidatorIds, cutoffOrdinal \in Nat:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+               AsyncCausalEpisodeCandidates(node, cutoffOrdinal))
+         /\ Cardinality(
+              AsyncCausalEpisodeCandidates(node, cutoffOrdinal))
+              <= AsyncCandidateProducerEpisodeCapacity
+BY FS_Interval, FS_Image, FS_Union, FS_Subset,
+   FS_CardinalityType, IsaT(1800)
+   DEF AsyncCausalEpisodeCandidates,
+       AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCandidateProducerEpisodeCapacity,
+       QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       SequenceSet, AsyncQueueDepth,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoCapacityTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoWorkContentTypeInvariant,
+       AsyncDeferredTypeInvariant, AsyncDeferredContentTypeInvariant
+
+THEOREM AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode ==
+  \A node \in ValidatorIds, cutoffOrdinal \in Nat:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+               AsyncCausalEpisodeExactCandidateOccurrenceTokens(
+                 node, cutoffOrdinal))
+         /\ AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+              node, cutoffOrdinal)
+              <= AsyncCandidateProducerEpisodeBudget
+BY AsyncCausalEpisodeCandidateCarrierHasConfiguredBound,
+   AsyncCausalExactRemainingOccurrenceBudgetIsBounded,
+   FS_Interval, FS_Product, FS_Subset,
+   FS_CardinalityType, IsaT(1200)
+   DEF AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
+       AsyncCandidateProducerEpisodeBudget
 
 AsyncCausalEpisodeServeIngressIdentities(node, cutoffOrdinal) ==
   {identity \in AsyncServeIngressLifecycleOwnerIdentities(node):
@@ -264,6 +410,9 @@ THEOREM AsyncCausalEpisodeStructuralRankIsFinite ==
                  AsyncCausalEpisodeCandidateWorkTokens(
                    candidate.node, cutoffOrdinal))
           /\ IsFiniteSet(
+                 AsyncCausalEpisodeExactCandidateOccurrenceTokens(
+                   candidate.node, cutoffOrdinal))
+          /\ IsFiniteSet(
                  AsyncCausalEpisodeServeWorkTokens(
                    candidate.node, cutoffOrdinal))
           /\ AsyncCausalEpisodeStructuralRank(
@@ -276,6 +425,8 @@ BY AsyncCausalRemainingWorkWeightIsPositive,
    DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
        AsyncCausalEpisodeCandidates,
        AsyncCausalEpisodeCandidateWorkTokens,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
+       AsyncCausalExactRemainingOccurrenceBudget,
        AsyncCausalEpisodeServeIngressIdentities,
        AsyncCausalEpisodeServeIngressPrefixTokens,
        AsyncCausalEpisodeServeIoPredecessorTokens,
@@ -310,6 +461,54 @@ BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
        AsyncLogicalCandidateOwnershipInvariant,
        AsyncAllVars
 
+(***************************************************************************
+Cross-child lifecycle carry.
+
+This is the boundary the per-candidate service rank cannot express: the
+parent may leave every physical carrier while a same-origin child is appended.
+The scheduler-coverage invariant and the atomic carrier update keep the
+existing lifecycle admission active, so the child inherits the exact cut
+instead of receiving a fresh ordinal.
+***************************************************************************)
+THEOREM AsyncCausalEpisodeSameOriginHandoffRetainsLifecycleCut ==
+  \A parent, child \in AsyncCandidateSet:
+    LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(parent)
+    IN /\ gst
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
+       /\ CandidateScheduled(parent)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ AsyncCandidateLifecycleSchedulerCoverageInvariant'
+       /\ child.node = parent.node
+       /\ child.causalOrigin = parent.causalOrigin
+       /\ CandidateScheduled(child)'
+       => /\ AsyncCausalEpisodeLifecycleCutOwned(
+                parent.node, parent.causalOrigin, cutoffOrdinal)
+          /\ (AsyncCausalEpisodeLifecycleCutOwned(
+                parent.node, parent.causalOrigin, cutoffOrdinal))'
+          /\ AsyncCandidateLifecycleOrdinal(child)' = cutoffOrdinal
+BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(1800)
+   DEF AsyncCausalEpisodeLifecycleCutOwned,
+       AsyncCandidateLifecycleSchedulerCoverageInvariant,
+       AsyncCandidateLifecycleRecordCoversScheduledOrigin,
+       AsyncCandidateLifecycleActiveRecords,
+       AsyncCandidateLifecycleOrdinal,
+       AsyncCandidateLifecycleRecordsFor,
+       AsyncScheduledCandidateOriginsForNode,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateLifecycleStateAfterCarrierUpdate,
+       AsyncCandidateLifecycleCarrierUpdatedAdmissions,
+       AsyncCandidateLifecycleStateAfterCompaction,
+       AsyncCandidateLifecycleRetirementCoveredIn,
+       AsyncCandidateLifecycleStateAfterAdmission,
+       AsyncCandidateLifecycleNewAdmissions,
+       AsyncNewCandidateLifecycleOriginsForNodeIn,
+       AsyncCandidateLifecycleOriginsRecordedForNodeIn,
+       AsyncAllVars
+
 THEOREM AsyncCausalEpisodeFrozenOriginsCannotReplenish ==
   \A candidate \in AsyncCandidateSet:
     LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
@@ -330,6 +529,28 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
    IsaT(900)
    DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
        ProtectedCandidateOwned, CandidateScheduled,
+       AsyncAllVars
+
+THEOREM AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish ==
+  \A node \in ValidatorIds, origin, cutoffOrdinal \in Nat \ {0}:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCausalEpisodeLifecycleCutOwned(
+         node, origin, cutoffOrdinal)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ (AsyncCausalEpisodeLifecycleCutOwned(
+          node, origin, cutoffOrdinal))'
+      => (AsyncCausalEpisodeFrozenPredecessorOrigins(
+             node, cutoffOrdinal))'
+           \subseteq
+             AsyncCausalEpisodeFrozenPredecessorOrigins(
+               node, cutoffOrdinal)
+BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(1200)
+   DEF AsyncCausalEpisodeLifecycleCutOwned,
+       AsyncCausalEpisodeFrozenPredecessorOrigins,
        AsyncAllVars
 
 THEOREM AsyncCausalEpisodeServeCutCannotReplenish ==
@@ -362,6 +583,36 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
        ProtectedCandidateOwned, CandidateScheduled,
        AsyncAllVars
 
+THEOREM AsyncCausalEpisodeOwnedLifecycleServeCutCannotReplenish ==
+  \A node \in ValidatorIds, origin, cutoffOrdinal \in Nat \ {0}:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCausalEpisodeLifecycleCutOwned(
+         node, origin, cutoffOrdinal)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ (AsyncCausalEpisodeLifecycleCutOwned(
+          node, origin, cutoffOrdinal))'
+      => (AsyncCausalEpisodeServeIngressIdentities(
+             node, cutoffOrdinal))'
+           \subseteq
+             AsyncCausalEpisodeServeIngressIdentities(
+               node, cutoffOrdinal)
+BY AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal,
+   AsyncServeIngressAdmissionConsumesSharedSchedulerOrdinal,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(1200)
+   DEF AsyncCausalEpisodeLifecycleCutOwned,
+       AsyncCausalEpisodeServeIngressIdentities,
+       AsyncFreshServeIngressAdmissionsForNodeThisStep,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionOwned,
+       AsyncServeIngressAdmissionSchedulerOrdinal,
+       AsyncServeIngressAdmissionRecord,
+       AsyncServeIngressAdmissionRecords,
+       AsyncServeIngressAdmissionsAfterIngressDrain,
+       AsyncServeIngressAdmissionsWithout,
+       AsyncAllVars
+
 THEOREM AsyncCausalEpisodeServicedCandidateConsumesTopologicalWeight ==
   \A target, serviced \in AsyncCandidateSet:
     LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(target)
@@ -386,6 +637,66 @@ BY AsyncCausalEpisodeFrozenOriginsCannotReplenish,
    FS_CardinalityType, FS_Subset, IsaT(1200)
    DEF AsyncCausalEpisodeCandidateWorkBudget,
        AsyncCausalEpisodeCandidateWorkTokens,
+       AsyncCausalEpisodeCandidates,
+       CandidateScheduled, AsyncAllVars
+
+THEOREM AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget ==
+  \A node \in ValidatorIds,
+     origin,
+     cutoffOrdinal \in Nat \ {0},
+     serviced \in AsyncCandidateSet:
+    /\ gst
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCausalEpisodeLifecycleCutOwned(
+         node, origin, cutoffOrdinal)
+    /\ serviced
+         \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~CandidateScheduled(serviced)'
+    /\ (AsyncCausalEpisodeLifecycleCutOwned(
+          node, origin, cutoffOrdinal))'
+      => AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+           node, cutoffOrdinal)'
+           < AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+               node, cutoffOrdinal)
+BY AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish,
+   AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   FS_CardinalityType, FS_Subset, IsaT(1500)
+   DEF AsyncCausalEpisodeLifecycleCutOwned,
+       AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
+       AsyncCausalEpisodeCandidates,
+       CandidateScheduled, AsyncAllVars
+
+THEOREM AsyncCausalEpisodeServicedCandidateConsumesExactOccurrenceBudget ==
+  \A target, serviced \in AsyncCandidateSet:
+    LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(target)
+    IN /\ gst
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ ProtectedCandidateOwned(target)
+       /\ serviced
+            \in AsyncCausalEpisodeCandidates(
+                 target.node, cutoffOrdinal)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ ~CandidateScheduled(serviced)'
+       /\ ProtectedCandidateOwned(target)'
+       => AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+            target.node, cutoffOrdinal)'
+            < AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+                target.node, cutoffOrdinal)
+BY AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget,
+   AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
+   IsaT(600)
+   DEF AsyncCausalEpisodeLifecycleCutOwned,
+       ProtectedCandidateOwned,
+       AsyncCandidateLifecycleOrdinal,
+       AsyncCandidateLifecycleRecordsFor,
+       AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
        AsyncCausalEpisodeCandidates,
        CandidateScheduled, AsyncAllVars
 
@@ -418,6 +729,50 @@ AsyncCausalEpisodeFairAction(node, ownerKind) ==
 AsyncCausalEpisodeSelectedFairAction(node, cutoffOrdinal) ==
   AsyncCausalEpisodeFairAction(
     node, AsyncCausalEpisodeFairOwner(node, cutoffOrdinal))
+
+(***************************************************************************
+Concrete Serve-owner partition.
+
+The selected immutable ingress owner is always in exactly one physical
+carrier class relevant to service: already queued, resumable from its atomic
+off-queue reservation, physically full off queue, or ingress/tombstone only.
+Only the physically-full class selects the I/O worker.  The other three
+classes select the runner, which either drains/materializes the same owner or
+advances the frozen per-source prefix.  This partition is deliberately about
+the owner action, not about progress: materializing or replacing an owner is
+charged by the structural episode rank below.
+***************************************************************************)
+THEOREM AsyncCausalEpisodeSelectedServeOwnerGeometryIsComplete ==
+  \A node, cutoffOrdinal:
+    LET identities ==
+          AsyncCausalEpisodeServeIngressIdentities(node, cutoffOrdinal)
+    IN identities # {}
+         => LET identity ==
+                  CHOOSE owned \in identities:
+                    \A other \in identities:
+                      AsyncServeIngressAdmissionSchedulerOrdinal(
+                        node, owned)
+                        <= AsyncServeIngressAdmissionSchedulerOrdinal(
+                             node, other)
+            IN \/ /\ AsyncServeJobQueued(node, identity)
+                   /\ AsyncCausalEpisodeFairOwner(node, cutoffOrdinal)
+                        = "Runner"
+               \/ /\ AsyncServeLiveReservationOwned(node, identity)
+                   /\ ~AsyncServeJobQueued(node, identity)
+                   /\ CanResumeExactServeCapacity(node, identity)
+                   /\ AsyncCausalEpisodeFairOwner(node, cutoffOrdinal)
+                        = "Runner"
+               \/ /\ AsyncServeLiveReservationOwned(node, identity)
+                   /\ ~AsyncServeJobQueued(node, identity)
+                   /\ ~CanResumeExactServeCapacity(node, identity)
+                   /\ AsyncCausalEpisodeFairOwner(node, cutoffOrdinal)
+                        = "IoWorker"
+               \/ /\ ~AsyncServeLiveReservationOwned(node, identity)
+                   /\ AsyncCausalEpisodeFairOwner(node, cutoffOrdinal)
+                        = "Runner"
+BY Isa
+   DEF AsyncCausalEpisodeFairOwner,
+       AsyncCausalEpisodeIoOwnerRequired
 
 THEOREM AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled ==
   \A candidate \in AsyncCandidateSet:
@@ -511,6 +866,45 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncNext, AsyncAllVars,
+       LexPairOrdering, OpToRel
+
+(***************************************************************************
+An ingress admission may disappear before its reserved Serve job or
+tombstone leaves the downstream lifecycle.  That transfer is not a missing
+owner and it is not replenishment: the immutable admission occurrence token
+is consumed at the exact `PopSelectedIngress` cut.  A later retry receives a
+strictly larger shared scheduler ordinal, so it cannot restore this rank
+cell.  This named projection keeps that otherwise easy-to-miss case explicit
+for both the ordinary and indexed historical providers.
+***************************************************************************)
+THEOREM AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends ==
+  \A candidate \in AsyncCandidateSet, identity:
+    LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
+        rank == AsyncCausalEpisodeStructuralRank(
+                  candidate.node, cutoffOrdinal)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ ProtectedCandidateOwned(candidate)
+       /\ identity
+            \in AsyncCausalEpisodeServeIngressIdentities(
+                 candidate.node, cutoffOrdinal)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ ProtectedCandidateOwned(candidate)'
+       /\ identity
+            \notin AsyncCausalEpisodeServeIngressIdentities(
+                     candidate.node, cutoffOrdinal)'
+       => <<AsyncCausalEpisodeStructuralRank(
+               candidate.node, cutoffOrdinal)', rank>>
+            \in AsyncCausalEpisodeStructuralRankOrdering
+BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+   AsyncCausalEpisodeServeCutCannotReplenish,
+   FS_CardinalityType, FS_Subset, IsaT(1200)
+   DEF AsyncCausalEpisodeStructuralRank,
+       AsyncCausalEpisodeServeWorkBudget,
+       AsyncCausalEpisodeServeWorkTokens,
+       AsyncCausalEpisodeServeOccurrenceTokens,
+       AsyncCausalEpisodeStructuralRankOrdering,
+       AsyncCausalEpisodeServeRankOrdering,
        LexPairOrdering, OpToRel
 
 =============================================================================

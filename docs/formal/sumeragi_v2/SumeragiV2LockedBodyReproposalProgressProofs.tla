@@ -25,14 +25,20 @@ indexed by the recipient leader, its own view, the subject, and the complete
 PrepareQC identity.  This is the weakest boundary that still authorizes the
 existing certified request/Serve/response pipeline.
 
-All five release-facing temporal properties remain explicit premises of the
-deductive reduction.  They are not asserted theorems, and none treats a
-replenished transport occurrence as progress.  The lower action facts prove
-exact proposal-prefix successors and terminal proposal broadcast, while the
-protected-owner starvation theorem closes only physical candidate exit.  The
-sound replacement is an owner-neutral rank handoff whose same-origin
-lifecycle, cross-origin replacement, and exact re-entry providers remain
-visible until their proof-bearing shards are supplied.
+The four corridor properties and three separated producer-episode properties
+remain explicit direct-refinement boundaries.  None treats a replenished
+transport occurrence as progress.  The lower action facts prove exact
+proposal-prefix successors and terminal proposal broadcast, while the
+protected-owner starvation theorem closes physical candidate exit and the
+same-origin semantic handoff.  Lifecycle disposition, cross-origin
+replacement, and exact re-entry are paid for separately before the derived
+owner-neutral semantic rank may descend.  A strict higher view remains a
+non-progress handoff, so these local conditional shards are not fed into the
+release theorem.  The higher temporal module closes the advertised retained-
+lock property only after independently proving rotating-leader convergence.
+The stronger fixed-causal-origin handoff is retained only as nonrelease
+compatibility vocabulary: a legitimate replacement is not required to
+resurrect the departed origin.
 ***************************************************************************)
 
 (***************************************************************************
@@ -93,6 +99,38 @@ RetainedLockFreshLeaderAuthorityFrontierFor(
        LockedBodyFreshResponsiveLeaderAuthority(
          target, leader, lockedRound, subject,
          prepareQc, leaderView)
+
+\* A producer episode which loses its installed authority may re-enter only
+\* through the same retained target and complete PrepareQC at a strictly later
+\* fresh leader view.  Returning to the obsolete view is impossible after the
+\* monotone local view advance, while returning to an arbitrary fresh leader
+\* would forget the authority identity.  The strict view increase is an
+\* explicit handoff to the unbounded rotating-leader closure; it is not
+\* semantic-rank progress and is never charged to `AsyncMaximumView`.
+RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
+    target, lockedRound, subject, prepareQc, sourceLeaderView) ==
+  /\ RetainedLockModeActive(target, lockedRound, subject)
+  /\ sourceLeaderView \in Views
+  /\ \E nextLeader \in ValidatorIds, nextLeaderView \in Views:
+       /\ nextLeaderView > sourceLeaderView
+       /\ LockedBodyFreshResponsiveLeaderAuthority(
+            target, nextLeader, lockedRound, subject,
+            prepareQc, nextLeaderView)
+
+RetainedLockStrictHigherFreshLeaderAuthorityFrontier(
+    target, lockedRound, subject) ==
+  \E prepareQc \in QcRecordSet, sourceLeaderView \in Views:
+    RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
+      target, lockedRound, subject, prepareQc, sourceLeaderView)
+
+RetainedLockOutcomeOrHigherLeaderProgressProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds, lockedRound \in Views,
+          subject \in Subjects:
+         RetainedLockModeSource(target, lockedRound, subject)
+           ~> (RetainedLockModeGoal(target, lockedRound, subject)
+                \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontier(
+                     target, lockedRound, subject))
 
 (***************************************************************************
 One exact producer episode.
@@ -549,6 +587,195 @@ THEOREM RetainedLockSameOriginProducerEpisodeBudgetIsFiniteAndCoalesced ==
 BY AsyncTargetNeutralLifecycleEpisodeBudgetIsFiniteAndCoalesced
    DEF RetainedLockSameOriginProducerEpisodeAtBudget
 
+(***************************************************************************
+Local candidate-service lifecycle induction.
+
+The same invariant is used by higher exact-Decision and adequate-leader
+modules, but this retained-lock leaf cannot import either one without creating
+a dependency cycle.  Its initialization and preservation ingredients are all
+proved in the lower asynchronous transition modules, so the narrow induction
+is repeated here.  It supplies only transient service markers and terminal
+tombstones; it supplies no temporal protocol progress.
+***************************************************************************)
+
+THEOREM RetainedLockAsyncInitEstablishesCandidateServiceLifecycle ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncCandidateServiceLifecycleInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncInitialCandidateLifecycleAdmissions,
+       AsyncCandidateLifecycleAdmission,
+       AsyncCandidateProducerContinuationScheduledExclusionInvariant,
+       AsyncCandidateProducerContinuationBlocks,
+       AsyncCandidateProducerContinuations,
+       AsyncControlServiceStateTypeInvariant,
+       AsyncCandidateServiceTombstones,
+       AsyncCandidateServiceRecordsFor,
+       AsyncCandidateServiceRecordsForIdentity,
+       QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       SequenceSet
+
+THEOREM RetainedLockAsyncNextPreservesCandidateServiceLifecycle ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceLifecycleInvariant
+  /\ AsyncNext
+  => AsyncCandidateServiceLifecycleInvariant'
+BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
+   AsyncNextPreservesCandidateProducerContinuationScheduledExclusion,
+   AsyncCandidateServicesThisStepIsSingleton,
+   AsyncCandidateSuccessfulServiceInstallsTransientMarker,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   AsyncCandidateDiscardIsNotSemanticService,
+   AsyncCandidateTerminalRetirementsThisStepIsSingleton,
+   AsyncCandidateDiscardInstallsTerminalTombstone,
+   AsyncCandidateDiscardRetiresLogicalLifecycle,
+   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
+   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateSameHeightRestartPreservesTombstone,
+   AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction,
+   IsaT(600)
+   DEF AsyncCandidateServiceLifecycleInvariant,
+       AsyncStrongTypeInvariant,
+       AsyncProgressOwnershipInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       DrainFairIngressSelected, AdmitCausalHead,
+       AdmitProducerCompletion, ServiceIoWorkerWork,
+       FifoRuntimeStep, DeferredDrainStep,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       FreshCandidateSequence, CandidateAdmissionCoalesced,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+       FreshRestartCandidateSequence,
+       CandidateScheduled, CandidateScheduledAfter
+
+THEOREM RetainedLockAsyncSpecAlwaysCandidateServiceLifecycle ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []AsyncCandidateServiceLifecycleInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE []AsyncCandidateServiceLifecycleInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => AsyncCandidateServiceLifecycleInvariant
+      BY RetainedLockAsyncInitEstablishesCandidateServiceLifecycle
+    <2>2. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+    <2>3. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ AsyncCandidateServiceLifecycleInvariant
+           /\ [AsyncNext]_AsyncAllVars
+          => AsyncCandidateServiceLifecycleInvariant'
+      BY RetainedLockAsyncNextPreservesCandidateServiceLifecycle, Isa
+         DEF AsyncAllVars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, PTL
+         DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+(***************************************************************************
+Capacity-derived replacement bound and non-resurrection anchors.
+
+Cross-origin producer values need not be enumerated: every live or dormant
+serviced lifecycle owns an injective internal slot whose bound is derived from
+the configured queue/deferred/ingress geometry.  A serviced exact identity
+retains that reservation until a strict context/view/Decision exit, and a
+terminal identity cannot be admitted again at the retired stage.  Thus a
+replacement is charged to a finite internal slot; merely installing it is not
+semantic progress.
+***************************************************************************)
+
+THEOREM RetainedLockProducerServicedLifecycleCarrierIsCapacityBounded ==
+  \A leader \in ValidatorIds:
+    /\ AsyncCandidateServiceOwnerPartitionInvariantIn(
+         asyncControlServiceState)
+    /\ AsyncCandidateLifecycleSlotInjectionInvariantIn(
+         asyncControlServiceState)
+    => Cardinality(
+         AsyncCandidateLifecycleServiceOwnerTokensForNodeIn(
+           asyncControlServiceState, leader))
+         <= AsyncServicedCandidateLifecycleCapacity
+BY AsyncCandidateLifecycleServiceOwnerCarrierIsSlotBounded
+
+THEOREM RetainedLockServicedProducerLifecycleRetainsReservationUntilExit ==
+  \A state, record, leader, lockedRound, subject, prepareQc, leaderView:
+    /\ record \in state.candidateLifecycleAdmissions
+    /\ record.node = leader
+    /\ record.origin
+         \in RetainedLockFrozenProducerCausalOriginCarrier(
+              leader, lockedRound, subject, prepareQc, leaderView)
+    /\ record.retired
+    /\ AsyncCandidateLifecycleServiceRecordCoversIn(state, record)
+    /\ ~AsyncCandidateLifecyclePermanentlyObsoleteAfter(record)
+    => record \in
+         (AsyncCandidateLifecycleStateAfterCompaction(state))
+           .candidateLifecycleAdmissions
+BY AsyncCandidateLifecycleTransientMarkerRetainsItsReservation
+
+THEOREM RetainedLockTerminalProducerIdentityCannotResurrect ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, causalOrigin, candidate, rank:
+      LET identity == AsyncCandidateAdmissionIdentity(candidate)
+      IN /\ AsyncCandidateServiceLifecycleInvariant
+         /\ RetainedLockExactCandidateRank(
+              target, leader, lockedRound, subject, prepareQc, leaderView,
+              causalOrigin, candidate, rank)
+         /\ AsyncCandidateTerminalIdentityTombstoned(identity.service)
+         /\ identity \notin AsyncScheduledCandidateAdmissionIdentities
+         /\ gst
+         /\ [AsyncNext]_AsyncAllVars
+         => /\ AsyncCandidateAdmissionIdentityTerminallyCovered(identity)'
+            /\ identity
+                 \notin AsyncScheduledCandidateAdmissionIdentities'
+BY AsyncCandidateTerminalIdentityCannotReactivateAtGst, Isa
+   DEF RetainedLockExactCandidateRank, ExactLeaderCandidateRank,
+       AsyncCandidateAdmissionIdentitySet
+
+THEOREM RetainedLockServicedProducerIdentityCannotReplenishSameGeneration ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, causalOrigin, candidate, rank:
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ RetainedLockExactCandidateRank(
+           target, leader, lockedRound, subject, prepareQc, leaderView,
+           causalOrigin, candidate, rank)
+      /\ AsyncCandidateTransientServiceActive(candidate)
+      /\ candidate.consumerGeneration = generation[candidate.node]
+      /\ gst
+      /\ [AsyncNext]_AsyncAllVars
+      /\ ~AsyncCandidateTransientMarkerExitThisStep(candidate)
+      => /\ AsyncCandidateTransientServiceActive(candidate)'
+         /\ ~CandidateScheduled(candidate)'
+BY AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst, Isa
+   DEF RetainedLockExactCandidateRank, ExactLeaderCandidateRank
+
 THEOREM RetainedLockLeaderRankContainsOnlyExactProposalProducer ==
   \A target, leader \in ValidatorIds, lockedRound \in Views,
      subject \in Subjects, leaderView \in Views:
@@ -922,6 +1149,13 @@ PROOF
          DEF RetainedLockRankedCandidateExitProperty
   <1> QED BY <1>1
 
+THEOREM AsyncLiveProvidesRetainedLockRankedCandidateExit ==
+  \A initialContext:
+    RetainedLockRankedCandidateExitProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure,
+   AsyncLiveClosesRetainedLockRankedCandidateExit
+
 (***************************************************************************
 Explicit temporal proof boundaries.
 
@@ -930,9 +1164,9 @@ not imply that any fixed process lands on a self-leader view.  The properties
 below therefore expose the exact missing boundaries without inventing
 leader-slot fairness: source authority, authority-bearing TC transport,
 fresh target-leader activation, leader producer scheduling, and rank handoff.
-The release-facing fixed-origin handoff remains declared below for source
-compatibility; the sound decomposition separately names owner-neutral descent,
-cross-origin replacement, and exact re-entry.
+The fixed-origin handoff remains declared below only for source compatibility;
+the release decomposition instead names owner-neutral descent, cross-origin
+replacement, and exact re-entry.
 ***************************************************************************)
 
 RetainedLockSourceAuthorityExposureProperty(specification) ==
@@ -1236,6 +1470,58 @@ BY LockedBodyScheduledProposalProducerDepartureIsClassified,
        SafeProposalSignIntentAt, ProposalSignIntentsAt
 
 (***************************************************************************
+The physical exit theorem is useful only after classifying the first state in
+which the exact producer is no longer protected.  If the candidate remains
+scheduled, loss of protected ownership is a genuine terminal locked-body
+outcome (the fixed responsive owner and height cannot silently disappear after
+GST).  Otherwise the proved departure classification supplies either strict
+same-origin rank descent or the explicit lifecycle disposition.  In the latter
+case the frozen target/leader/QC/origin coordinates survive unless the target
+has already reached the terminal outcome, so the state is exactly the
+non-descent residual below.  This theorem does not call replenishment progress.
+***************************************************************************)
+
+THEOREM RetainedLockRankedProducerPhysicalExitReachesSameOriginEndpoint ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, causalOrigin, candidate, rank:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ AsyncNext
+      /\ gst
+      /\ RetainedLockModeActive(target, lockedRound, subject)
+      /\ RetainedLockExactCandidateRank(
+           target, leader, lockedRound, subject, prepareQc, leaderView,
+           causalOrigin, candidate, rank)
+      /\ ~ResponsiveProtectedCandidateOwned(candidate)'
+      => \/ RetainedLockModeGoal(target, lockedRound, subject)'
+         \/ \E lowerRank \in
+                SetLessThan(
+                  rank,
+                  ExactLeaderSemanticRankOrdering,
+                  ExactLeaderSemanticRankCarrier):
+              RetainedLockCandidateRankFrontier(
+                target, leader, lockedRound, subject,
+                prepareQc, leaderView, causalOrigin, lowerRank)'
+         \/ RetainedLockProducerNonDescentEpisodeResidual(
+              target, leader, lockedRound, subject, prepareQc, leaderView,
+              causalOrigin, candidate, rank)'
+BY RetainedLockDepartingRankedProducerMakesProgressOrDisposition,
+   IsaT(900)
+   DEF ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       RetainedLockProducerNonDescentEpisodeResidual,
+       RetainedLockProducerEpisodeCoordinates,
+       RetainedLockFrozenProducerEpisodeIdentity,
+       RetainedLockModeActive, RetainedLockModeGoal,
+       LockedBodyReproposalOutcome,
+       LockedBodyLegitimatelyDecidedOrSuperseded,
+       LockedBodySourcePrepareAuthority,
+       RetainedLockExactCandidateRank,
+       RetainedLockLeaderProducerCandidateRank,
+       CandidateScheduledAfter
+
+(***************************************************************************
 Minimal non-descent episode residual.
 
 Physical candidate exit is proved above.  What remains is the semantic
@@ -1291,6 +1577,20 @@ RetainedLockSameOriginProducerNonDescentClosureProperty(specification) ==
                            prepareQc, leaderView,
                            causalOrigin, candidate, rank)))
 
+THEOREM AsyncLiveProvidesRetainedLockSameOriginProducerNonDescentClosure ==
+  \A initialContext:
+    RetainedLockSameOriginProducerNonDescentClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesRetainedLockRankedCandidateExit,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   RetainedLockAsyncSpecAlwaysCandidateServiceLifecycle,
+   AsyncLiveSpecProjectsAsyncSpec,
+   RetainedLockRankedProducerPhysicalExitReachesSameOriginEndpoint,
+   PTL
+   DEF RetainedLockSameOriginProducerNonDescentClosureProperty,
+       RetainedLockRankedCandidateExitProperty
+
 RetainedLockProducerNonDescentEpisodeClosureProperty(specification) ==
   specification
     => \A target, leader \in ValidatorIds,
@@ -1312,7 +1612,10 @@ RetainedLockProducerNonDescentEpisodeClosureProperty(specification) ==
                          ExactLeaderSemanticRankCarrier):
                      RetainedLockOwnerNeutralCandidateRankFrontier(
                        target, leader, lockedRound, subject,
-                       prepareQc, leaderView, lowerRank))
+                       prepareQc, leaderView, lowerRank)
+                \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
+                     target, lockedRound, subject,
+                     prepareQc, leaderView))
 
 RetainedLockProducerEpisodeExitGoal(
     target, leader, lockedRound, subject, prepareQc, leaderView, rank) ==
@@ -1325,6 +1628,8 @@ RetainedLockProducerEpisodeExitGoal(
        RetainedLockOwnerNeutralCandidateRankFrontier(
          target, leader, lockedRound, subject,
          prepareQc, leaderView, lowerRank)
+  \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
+       target, lockedRound, subject, prepareQc, leaderView)
 
 \* TODO: derive these three exact providers after successful-service identity
 \* persists through strict exit.  They intentionally separate same-origin
@@ -1426,19 +1731,18 @@ RetainedLockOwnerNeutralRankHandoffProperty(specification) ==
                          ExactLeaderSemanticRankCarrier):
                      RetainedLockOwnerNeutralCandidateRankFrontier(
                        target, leader, lockedRound, subject,
-                       prepareQc, leaderView, lowerRank))
+                       prepareQc, leaderView, lowerRank)
+                \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
+                     target, lockedRound, subject,
+                     prepareQc, leaderView))
 
 THEOREM RetainedLockNonDescentClosureClosesRankHandoff ==
   \A initialContext:
-    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-         AsyncSpecAt(initialContext))
-    /\ RetainedLockSameOriginProducerNonDescentClosureProperty(
-         AsyncLiveSpecAt(initialContext))
-    /\ RetainedLockProducerNonDescentEpisodeClosureProperty(
+    RetainedLockProducerNonDescentEpisodeClosureProperty(
          AsyncLiveSpecAt(initialContext))
       => RetainedLockOwnerNeutralRankHandoffProperty(
            AsyncLiveSpecAt(initialContext))
-BY AsyncLiveClosesRetainedLockRankedCandidateExit, PTL
+BY AsyncLiveProvidesRetainedLockSameOriginProducerNonDescentClosure, PTL
    DEF RetainedLockSameOriginProducerNonDescentClosureProperty,
        RetainedLockProducerNonDescentEpisodeClosureProperty,
        RetainedLockRankedCandidateExitProperty,
@@ -1446,15 +1750,13 @@ BY AsyncLiveClosesRetainedLockRankedCandidateExit, PTL
        RetainedLockOwnerNeutralCandidateRankFrontier,
        RetainedLockCandidateRankFrontier
 
-(***************************************************************************
-Deductive rank closure.
-
-The finite lexicographic carrier closes either the legacy supplied exact-origin
-handoff or the owner-neutral handoff assembled from the separated producer
-providers.  These theorems do not supply any of the five release-facing
-temporal properties above; they only show that those narrower premises are
-sufficient for the locked-body property.
-***************************************************************************)
+THEOREM RetainedLockSeparatedProducerProvidersCloseOwnerNeutralRankHandoff ==
+  \A initialContext:
+    RetainedLockProducerNonDescentEpisodeClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+      => RetainedLockOwnerNeutralRankHandoffProperty(
+           AsyncLiveSpecAt(initialContext))
+BY RetainedLockNonDescentClosureClosesRankHandoff
 
 THEOREM RetainedLockSemanticRankOrderingWellFounded ==
   IsWellFoundedOn(
@@ -1479,11 +1781,26 @@ THEOREM RetainedLockOwnerNeutralRankHandoffClosesFixedCorridor ==
                  RetainedLockOwnerNeutralCandidateRankFrontier(
                    target, leader, lockedRound, subject,
                    prepareQc, leaderView, rank)
-                   ~> RetainedLockModeGoal(
-                        target, lockedRound, subject))
+                   ~> (RetainedLockModeGoal(
+                         target, lockedRound, subject)
+                        \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
+                             target, lockedRound, subject,
+                             prepareQc, leaderView)))
 BY RetainedLockSemanticRankOrderingWellFounded,
    WellFoundedLeadsTo
    DEF RetainedLockOwnerNeutralRankHandoffProperty
+
+(***************************************************************************
+Deductive rank closure.
+
+The finite lexicographic carrier closes either the legacy supplied exact-origin
+handoff or the owner-neutral handoff assembled from the separated producer
+providers.  Only the owner-neutral path is release-facing.  A strict higher
+view remains an explicit handoff: production uses ViewDomain = Nat, so this
+leaf must not turn a configured/TLC maximum view into a well-founded liveness
+rank.  The higher release closure composes that handoff with independently
+proved rotating-leader convergence.
+***************************************************************************)
 
 THEOREM RetainedLockOwnerNeutralRankHandoffClosesRankedFrontier ==
   \A initialContext:
@@ -1495,12 +1812,15 @@ THEOREM RetainedLockOwnerNeutralRankHandoffClosesRankedFrontier ==
                   subject \in Subjects:
                  RetainedLockRankedFrontier(
                    target, lockedRound, subject)
-                   ~> RetainedLockModeGoal(
-                        target, lockedRound, subject))
+                   ~> (RetainedLockModeGoal(
+                         target, lockedRound, subject)
+                        \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontier(
+                             target, lockedRound, subject)))
 BY RetainedLockOwnerNeutralRankHandoffClosesFixedCorridor, PTL
    DEF RetainedLockRankedFrontier,
        RetainedLockRankedEpisodeFrontier,
-       RetainedLockOwnerNeutralCandidateRankFrontier
+       RetainedLockOwnerNeutralCandidateRankFrontier,
+       RetainedLockStrictHigherFreshLeaderAuthorityFrontier
 
 THEOREM RetainedLockRankHandoffClosesExactOrigin ==
   \A initialContext:
@@ -1539,36 +1859,7 @@ BY RetainedLockRankHandoffClosesExactOrigin, PTL
    DEF RetainedLockRankedFrontier,
        RetainedLockRankedEpisodeFrontier
 
-THEOREM DirectRetainedLockDecompositionClosesLockedBodyReproposal ==
-  \A initialContext:
-    /\ TimeoutViewProgressProperty(
-         AsyncLiveSpecAt(initialContext))
-    /\ RetainedLockSourceAuthorityExposureProperty(
-         AsyncLiveSpecAt(initialContext))
-    /\ RetainedLockPrepareAuthorityTransportProperty(
-         AsyncLiveSpecAt(initialContext))
-    /\ RetainedLockTargetLeaderFreshActivationProperty(
-         AsyncLiveSpecAt(initialContext))
-    /\ RetainedLockLeaderProducerOriginProperty(
-         AsyncLiveSpecAt(initialContext))
-    /\ RetainedLockRankHandoffProperty(
-         AsyncLiveSpecAt(initialContext))
-    => LockedBodyReproposalProgressProperty(
-         AsyncLiveSpecAt(initialContext))
-BY RetainedLockRankHandoffClosesRankedFrontier, PTL
-   DEF RetainedLockSourceAuthorityExposureProperty,
-       RetainedLockPrepareAuthorityTransportProperty,
-       RetainedLockTargetLeaderFreshActivationProperty,
-       RetainedLockLeaderProducerOriginProperty,
-       RetainedLockSourceExposureFrontier,
-       RetainedLockFreshLeaderAuthorityFrontierFor,
-       RetainedLockRankedFrontier,
-       RetainedLockRankedEpisodeFrontier,
-       RetainedLockModeSource,
-       RetainedLockModeGoal,
-       LockedBodyReproposalProgressProperty
-
-THEOREM DirectRetainedLockOwnerNeutralDecompositionClosesReproposal ==
+THEOREM DirectRetainedLockDecompositionReachesOutcomeOrHigherLeader ==
   \A initialContext:
     /\ TimeoutViewProgressProperty(
          AsyncLiveSpecAt(initialContext))
@@ -1582,7 +1873,7 @@ THEOREM DirectRetainedLockOwnerNeutralDecompositionClosesReproposal ==
          AsyncLiveSpecAt(initialContext))
     /\ RetainedLockOwnerNeutralRankHandoffProperty(
          AsyncLiveSpecAt(initialContext))
-    => LockedBodyReproposalProgressProperty(
+    => RetainedLockOutcomeOrHigherLeaderProgressProperty(
          AsyncLiveSpecAt(initialContext))
 BY RetainedLockOwnerNeutralRankHandoffClosesRankedFrontier, PTL
    DEF RetainedLockSourceAuthorityExposureProperty,
@@ -1595,6 +1886,25 @@ BY RetainedLockOwnerNeutralRankHandoffClosesRankedFrontier, PTL
        RetainedLockRankedEpisodeFrontier,
        RetainedLockModeSource,
        RetainedLockModeGoal,
-       LockedBodyReproposalProgressProperty
+       RetainedLockOutcomeOrHigherLeaderProgressProperty,
+       RetainedLockStrictHigherFreshLeaderAuthorityFrontier
+
+THEOREM DirectRetainedLockOwnerNeutralDecompositionReachesHigherClosure ==
+  \A initialContext:
+    /\ TimeoutViewProgressProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockSourceAuthorityExposureProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockPrepareAuthorityTransportProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockTargetLeaderFreshActivationProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockLeaderProducerOriginProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockOwnerNeutralRankHandoffProperty(
+         AsyncLiveSpecAt(initialContext))
+    => RetainedLockOutcomeOrHigherLeaderProgressProperty(
+         AsyncLiveSpecAt(initialContext))
+BY DirectRetainedLockDecompositionReachesOutcomeOrHigherLeader
 
 =============================================================================

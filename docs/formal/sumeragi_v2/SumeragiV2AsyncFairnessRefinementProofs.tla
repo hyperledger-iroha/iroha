@@ -1131,7 +1131,69 @@ PROOF
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>16, <4>1
-      <3>17. CASE \E recipient \in Responsive,
+      <3>17. CASE \/ \E node \in AsyncVotersAt(initialContext):
+                        PostGstResolveLocalCandidateProducerContinuation(node)
+                    \/ \E node \in AsyncVotersAt(initialContext):
+                        PostGstServiceConditionalTransportProducerContinuation(
+                          node)
+                    \/ \E node \in AsyncVotersAt(initialContext):
+                        PostGstServiceVolatileBodyProducerContinuation(node)
+                    \/ \E slot \in AsyncLeaderWireLifecycleSlotSet:
+                        PostGstRetireLeaderWireLifecycleSlot(slot)
+        <4>1. \A node:
+                 PostGstResolveLocalCandidateProducerContinuation(node)
+                   => [Next]_vars
+          <5>1. ASSUME NEW node,
+                      PostGstResolveLocalCandidateProducerContinuation(node)
+                 PROVE [Next]_vars
+            <6>1. UNCHANGED vars
+              BY <5>1
+                 DEF PostGstResolveLocalCandidateProducerContinuation,
+                     ResolveLocalCandidateProducerContinuation,
+                     ResolveCandidateProducerContinuation
+            <6> QED BY <6>1, CoreStutterRefinesBracketNext
+          <5> QED BY <5>1
+        <4>2. \A node:
+                 PostGstServiceConditionalTransportProducerContinuation(node)
+                   => [Next]_vars
+          <5>1. ASSUME NEW node,
+                      PostGstServiceConditionalTransportProducerContinuation(
+                        node)
+                 PROVE [Next]_vars
+            <6>1. UNCHANGED vars
+              BY <5>1
+                 DEF PostGstServiceConditionalTransportProducerContinuation,
+                     ServiceConditionalTransportProducerContinuation,
+                     ResolveCandidateProducerContinuation
+            <6> QED BY <6>1, CoreStutterRefinesBracketNext
+          <5> QED BY <5>1
+        <4>3. \A node:
+                 PostGstServiceVolatileBodyProducerContinuation(node)
+                   => [Next]_vars
+          <5>1. ASSUME NEW node,
+                      PostGstServiceVolatileBodyProducerContinuation(node)
+                 PROVE [Next]_vars
+            <6>1. UNCHANGED vars
+              BY <5>1
+                 DEF PostGstServiceVolatileBodyProducerContinuation,
+                     ServiceVolatileBodyProducerContinuation,
+                     ResolveCandidateProducerContinuation
+            <6> QED BY <6>1, CoreStutterRefinesBracketNext
+          <5> QED BY <5>1
+        <4>4. \A slot:
+                 PostGstRetireLeaderWireLifecycleSlot(slot)
+                   => [Next]_vars
+          <5>1. ASSUME NEW slot,
+                      PostGstRetireLeaderWireLifecycleSlot(slot)
+                 PROVE [Next]_vars
+            <6>1. UNCHANGED vars
+              BY <5>1
+                 DEF PostGstRetireLeaderWireLifecycleSlot,
+                     RetireLeaderWireLifecycleSlot
+            <6> QED BY <6>1, CoreStutterRefinesBracketNext
+          <5> QED BY <5>1
+        <4> QED BY <3>17, <4>1, <4>2, <4>3, <4>4
+      <3>18. CASE \E recipient \in Responsive,
                          source \in AsyncIngressSources:
                      PostGstAdmitHiddenPacket(recipient, source)
         <4>1. \A recipient \in Responsive,
@@ -1148,8 +1210,8 @@ PROOF
                      AdmitHiddenPacket, CoalesceHiddenPacket
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
-        <4> QED BY <3>17, <4>1
-      <3>18. CASE \E recipient \in ValidatorIds,
+        <4> QED BY <3>18, <4>1
+      <3>19. CASE \E recipient \in ValidatorIds,
                          source \in AsyncIngressSources:
                      PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source)
@@ -1167,8 +1229,8 @@ PROOF
                      CoalesceHiddenPacket
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
-        <4> QED BY <3>18, <4>1
-      <3>19. CASE \E node \in Responsive:
+        <4> QED BY <3>19, <4>1
+      <3>20. CASE \E node \in Responsive:
                      AsyncActivateServiceNode(node)
         <4>1. \A node:
                  AsyncActivateServiceNode(node) => [Next]_vars
@@ -1180,10 +1242,11 @@ PROOF
                      AsyncServiceActivationFrameVars
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
-        <4> QED BY <3>19, <4>1
+        <4> QED BY <3>20, <4>1
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                    <3>7, <3>8, <3>9, <3>10, <3>11, <3>12, <3>13,
-                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19
+                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19,
+                   <3>20
            DEF AsyncFairActionAt
     <2> QED BY <2>1
   <1> QED BY <1>1
@@ -1481,7 +1544,99 @@ PROOF
                /\ AsyncNonRunnerOuterFrame
           BY <3>16, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
-      <3>17. CASE \E recipient \in Responsive,
+      <3>17. CASE \/ \E node \in AsyncVotersAt(initialContext):
+                        PostGstResolveLocalCandidateProducerContinuation(node)
+                    \/ \E node \in AsyncVotersAt(initialContext):
+                        PostGstServiceConditionalTransportProducerContinuation(
+                          node)
+                    \/ \E node \in AsyncVotersAt(initialContext):
+                        PostGstServiceVolatileBodyProducerContinuation(node)
+                    \/ \E slot \in AsyncLeaderWireLifecycleSlotSet:
+                        PostGstRetireLeaderWireLifecycleSlot(slot)
+        <4>1. \A node:
+                 PostGstResolveLocalCandidateProducerContinuation(node)
+                   => /\ AsyncNonRunnerStep
+                      /\ AsyncNonRunnerOuterFrame
+          <5>1. ASSUME NEW node,
+                      PostGstResolveLocalCandidateProducerContinuation(node)
+                 PROVE /\ AsyncNonRunnerStep
+                        /\ AsyncNonRunnerOuterFrame
+            <6>1. /\ node \in AsyncCurrentResponsiveVoters
+                   /\ ResolveCandidateProducerContinuation(node)
+                   /\ AsyncNonRunnerOuterFrame
+              BY <5>1
+                 DEF PostGstResolveLocalCandidateProducerContinuation,
+                     ResolveLocalCandidateProducerContinuation,
+                     ResolveCandidateProducerContinuation
+            <6>2. AsyncNonRunnerStep
+              BY <6>1
+                 DEF AsyncNonRunnerStep, AsyncNonRunnerOuterFrame
+            <6> QED BY <6>1, <6>2
+          <5> QED BY <5>1
+        <4>2. \A node:
+                 PostGstServiceConditionalTransportProducerContinuation(node)
+                   => /\ AsyncNonRunnerStep
+                      /\ AsyncNonRunnerOuterFrame
+          <5>1. ASSUME NEW node,
+                      PostGstServiceConditionalTransportProducerContinuation(
+                        node)
+                 PROVE /\ AsyncNonRunnerStep
+                        /\ AsyncNonRunnerOuterFrame
+            <6>1. /\ node \in AsyncCurrentResponsiveVoters
+                   /\ ResolveCandidateProducerContinuation(node)
+                   /\ AsyncNonRunnerOuterFrame
+              BY <5>1
+                 DEF PostGstServiceConditionalTransportProducerContinuation,
+                     ServiceConditionalTransportProducerContinuation,
+                     ResolveCandidateProducerContinuation
+            <6>2. AsyncNonRunnerStep
+              BY <6>1
+                 DEF AsyncNonRunnerStep, AsyncNonRunnerOuterFrame
+            <6> QED BY <6>1, <6>2
+          <5> QED BY <5>1
+        <4>3. \A node:
+                 PostGstServiceVolatileBodyProducerContinuation(node)
+                   => /\ AsyncNonRunnerStep
+                      /\ AsyncNonRunnerOuterFrame
+          <5>1. ASSUME NEW node,
+                      PostGstServiceVolatileBodyProducerContinuation(node)
+                 PROVE /\ AsyncNonRunnerStep
+                        /\ AsyncNonRunnerOuterFrame
+            <6>1. /\ node \in AsyncCurrentResponsiveVoters
+                   /\ ResolveCandidateProducerContinuation(node)
+                   /\ AsyncNonRunnerOuterFrame
+              BY <5>1
+                 DEF PostGstServiceVolatileBodyProducerContinuation,
+                     ServiceVolatileBodyProducerContinuation,
+                     ResolveCandidateProducerContinuation
+            <6>2. AsyncNonRunnerStep
+              BY <6>1
+                 DEF AsyncNonRunnerStep, AsyncNonRunnerOuterFrame
+            <6> QED BY <6>1, <6>2
+          <5> QED BY <5>1
+        <4>4. \A slot \in AsyncLeaderWireLifecycleSlotSet:
+                 PostGstRetireLeaderWireLifecycleSlot(slot)
+                   => /\ AsyncNonRunnerStep
+                      /\ AsyncNonRunnerOuterFrame
+          <5>1. ASSUME NEW slot \in AsyncLeaderWireLifecycleSlotSet,
+                      PostGstRetireLeaderWireLifecycleSlot(slot)
+                 PROVE /\ AsyncNonRunnerStep
+                        /\ AsyncNonRunnerOuterFrame
+            <6>1. /\ RetireLeaderWireLifecycleSlot(slot)
+                   /\ AsyncNonRunnerOuterFrame
+              BY <5>1 DEF PostGstRetireLeaderWireLifecycleSlot
+            <6>2. AsyncNetworkStep
+              BY <5>1, <6>1 DEF AsyncNetworkStep
+            <6>3. AsyncNonRunnerStep
+              BY <6>1, <6>2
+                 DEF AsyncNonRunnerStep, AsyncNonRunnerOuterFrame
+            <6> QED BY <6>1, <6>3
+          <5> QED BY <5>1
+        <4>5. /\ AsyncNonRunnerStep
+               /\ AsyncNonRunnerOuterFrame
+          BY <3>17, <4>1, <4>2, <4>3, <4>4
+        <4> QED BY <4>5, NonRunnerCategorySuppliesOuterFrame
+      <3>18. CASE \E recipient \in Responsive,
                          source \in AsyncIngressSources:
                      PostGstAdmitHiddenPacket(recipient, source)
         <4>1. \A recipient \in Responsive,
@@ -1512,9 +1667,9 @@ PROOF
           <5> QED BY <5>1
         <4>2. /\ AsyncNonRunnerStep
                /\ AsyncNonRunnerOuterFrame
-          BY <3>17, <4>1
+          BY <3>18, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
-      <3>18. CASE \E recipient \in ValidatorIds,
+      <3>19. CASE \E recipient \in ValidatorIds,
                          source \in AsyncIngressSources:
                      PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source)
@@ -1544,9 +1699,9 @@ PROOF
           <5> QED BY <5>1
         <4>2. /\ AsyncNonRunnerStep
                /\ AsyncNonRunnerOuterFrame
-          BY <3>18, <4>1
+          BY <3>19, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
-      <3>19. CASE \E node \in Responsive:
+      <3>20. CASE \E node \in Responsive:
                      AsyncActivateServiceNode(node)
         <4>1. \A node \in Responsive:
                  AsyncActivateServiceNode(node)
@@ -1566,10 +1721,11 @@ PROOF
                      AsyncServiceActivationFrameVars, vars
             <6> QED BY <6>2, <6>3 DEF AsyncOuterFrameSatisfied
           <5> QED BY <5>1
-        <4> QED BY <3>19, <4>1
+        <4> QED BY <3>20, <4>1
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                    <3>7, <3>8, <3>9, <3>10, <3>11, <3>12, <3>13,
-                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19
+                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19,
+                   <3>20
            DEF AsyncFairActionAt
     <2> QED BY <2>1
   <1> QED BY <1>1

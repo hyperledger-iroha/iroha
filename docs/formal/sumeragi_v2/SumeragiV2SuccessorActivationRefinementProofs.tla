@@ -242,6 +242,31 @@ THEOREM SuccessorActivationProtocolPendingRankIsInCarrier ==
 BY Isa DEF SuccessorActivationProtocolInvariant,
            SuccessorActivationRank, SuccessorActivationRankCarrier
 
+(***************************************************************************
+The ownership offset is a real tier boundary, not spare arithmetic range.
+Every reachable pending Published owner lies in 12..21; every reachable
+pending Absent owner lies in 1..10.  In particular, no pending owner can use
+rank zero or the gap between the two lifecycle tiers.
+***************************************************************************)
+THEOREM SuccessorActivationPendingRankTierClassification ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ SuccessorActivationShape
+    /\ SuccessorActivationProtocolInvariant
+    /\ SuccessorActivationPending(parentContext, node)
+    => \/ /\ successorPredecessorStatusOwnership[parentContext][node]
+                  = "Published"
+           /\ SuccessorActivationRank(parentContext, node) \in 12..21
+       \/ /\ successorPredecessorStatusOwnership[parentContext][node]
+                  = "Absent"
+           /\ SuccessorActivationRank(parentContext, node) \in 1..10
+BY Isa DEF SuccessorActivationShape,
+           SuccessorActivationProtocolInvariant,
+           SuccessorActivationPending,
+           SuccessorActivationRank,
+           IndexedSuccessorActivationPending,
+           SuccessorPredecessorOwnershipValues
+
 THEOREM IndexedInitEstablishesSuccessorActivationProtocolInvariant ==
   IndexedChainInit => SuccessorActivationProtocolInvariant
 BY Isa DEF IndexedChainInit, SuccessorActivationProtocolInvariant,
@@ -578,6 +603,12 @@ SuccessorActivationTemporalKernel(parentContext, node) ==
 SuccessorActivationFailureFreeSuffix(parentContext, node) ==
   []SuccessorActivationFailureAbsent(parentContext, node)
 
+FailedSuccessorStartupRestartStep(parentContext, node) ==
+  \E successorContext \in AdmissibleContextRecords,
+     application \in Chain!DecisionEvidenceSet:
+    RehydrateFailedSuccessorStartup(
+      parentContext, node, successorContext, application)
+
 THEOREM IndexedChainSpecEstablishesSuccessorActivationPendingStructure ==
   IndexedChainSpec => SuccessorActivationPendingStructureProperty
 PROOF
@@ -601,6 +632,67 @@ PROOF
   <1> QED BY <1>1, <1>2, PTL
        DEF SuccessorActivationPendingStructureProperty
 
+(***************************************************************************
+Failure freedom is a two-state bracket.  A fresh failure is incompatible
+with its post-state half, while a failed restart is incompatible with its
+pre-state half.  This lemma excludes both reset families without treating a
+restart, replenishment, or failure-history bit as progress.
+***************************************************************************)
+THEOREM FailureFreeBracketExcludesSuccessorResetActions ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ SuccessorActivationFailureAbsent(parentContext, node)
+    /\ SuccessorActivationFailureAbsent(parentContext, node)'
+    => /\ ~SuccessorStartupFailureStep(parentContext, node)
+       /\ ~FailedSuccessorStartupRestartStep(parentContext, node)
+BY Isa DEF SuccessorActivationFailureAbsent,
+           FailedSuccessorStartupRestartStep,
+           SuccessorStartupFailureStep,
+           LatchAppliedSuccessorStartupFailure,
+           LatchRecoveredSuccessorStartupFailure,
+           RehydrateFailedSuccessorStartup,
+           SuccessorActivationOwner
+
+(***************************************************************************
+The clean complete-tip restart is the unique failure-free cross-tier step.
+It consumes a Published pending rank in 12..21 and establishes the exact
+Absent/Queued entry rank 10 while retaining failure absence.
+***************************************************************************)
+THEOREM CleanCompleteTipRestartCrossesPublishedToAbsentTier ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive,
+     successorContext \in AdmissibleContextRecords,
+     application \in Chain!DecisionEvidenceSet:
+    /\ SuccessorActivationProtocolInvariant
+    /\ SuccessorActivationPending(parentContext, node)
+    /\ SuccessorActivationFailureAbsent(parentContext, node)
+    /\ RehydrateCleanCompleteTipSuccessorStartup(
+         parentContext, node, successorContext, application)
+    => /\ SuccessorActivationRank(parentContext, node) \in 12..21
+       /\ successorPredecessorStatusOwnership'[parentContext][node]
+            = "Absent"
+       /\ SuccessorActivationPending(parentContext, node)'
+       /\ SuccessorActivationRank(parentContext, node)' = 10
+       /\ SuccessorActivationFailureAbsent(parentContext, node)'
+BY Isa
+   DEF SuccessorActivationProtocolInvariant,
+       SuccessorActivationPending,
+       SuccessorActivationRank,
+       SuccessorActivationPipelineDistance,
+       SuccessorActivationFailureAbsent,
+       IndexedSuccessorActivationPending,
+       SuccessorPublicationOrSuperseded,
+       SuccessorHeightActivated,
+       RehydrateCleanCompleteTipSuccessorStartup,
+       ExactDurableParentApplication,
+       CompleteTipRecoveryAuthorityRecord,
+       SuccessorActivationOwner,
+       SuccessorActivationToken,
+       SuccessorActivationMarker,
+       SuccessorActivationEnvironmentStutter,
+       IndexedChainVars, SuccessorActivationVars,
+       Chain!ChainEpochVars
+
 THEOREM CleanCompleteTipRestartDescendsPublishedTier ==
   \A parentContext \in AdmissibleContextRecords,
      node \in Responsive,
@@ -614,6 +706,30 @@ THEOREM CleanCompleteTipRestartDescendsPublishedTier ==
     => /\ SuccessorActivationPending(parentContext, node)'
        /\ SuccessorActivationRank(parentContext, node)'
             < SuccessorActivationRank(parentContext, node)
+BY CleanCompleteTipRestartCrossesPublishedToAbsentTier, Isa
+
+(***************************************************************************
+Recovered authentication is an intra-Absent-tier descent.  The retained
+CompleteTip authority and exact Recovered token move the clean Queued entry
+from rank 10 directly to credential-ready rank 8; it never borrows the
+Published offset or treats the owner replacement itself as completion.
+***************************************************************************)
+THEOREM RecoveredAuthenticationDescendsAbsentTier ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive,
+     successorContext \in AdmissibleContextRecords,
+     application \in Chain!DecisionEvidenceSet:
+    /\ SuccessorActivationProtocolInvariant
+    /\ SuccessorActivationPending(parentContext, node)
+    /\ SuccessorActivationFailureAbsent(parentContext, node)
+    /\ AuthenticateRecoveredSuccessorActivation(
+         parentContext, node, successorContext, application)
+    => /\ SuccessorActivationPending(parentContext, node)'
+       /\ successorPredecessorStatusOwnership'[parentContext][node]
+            = "Absent"
+       /\ SuccessorActivationRank(parentContext, node) = 10
+       /\ SuccessorActivationRank(parentContext, node)' = 8
+       /\ SuccessorActivationFailureAbsent(parentContext, node)'
 BY Isa
    DEF SuccessorActivationProtocolInvariant,
        SuccessorActivationPending,
@@ -623,7 +739,10 @@ BY Isa
        IndexedSuccessorActivationPending,
        SuccessorPublicationOrSuperseded,
        SuccessorHeightActivated,
-       RehydrateCleanCompleteTipSuccessorStartup,
+       AuthenticateRecoveredSuccessorActivation,
+       SuccessorActivationCredentialReady,
+       ExactSuccessorActivationToken,
+       ExactCompleteTipRecoveryAuthority,
        ExactDurableParentApplication,
        CompleteTipRecoveryAuthorityRecord,
        SuccessorActivationOwner,
@@ -645,7 +764,10 @@ THEOREM SuccessorActivationFailureFreeProgressStrictlyDecreasesRank ==
          \/ /\ SuccessorActivationPending(parentContext, node)'
             /\ SuccessorActivationRank(parentContext, node)'
                  < SuccessorActivationRank(parentContext, node)
-BY CleanCompleteTipRestartDescendsPublishedTier, Isa
+BY FailureFreeBracketExcludesSuccessorResetActions,
+   SuccessorActivationPendingRankTierClassification,
+   RecoveredAuthenticationDescendsAbsentTier,
+   CleanCompleteTipRestartDescendsPublishedTier, Isa
    DEF SuccessorActivationProtocolInvariant,
        SuccessorActivationPending,
        SuccessorActivationRank,
@@ -661,6 +783,8 @@ BY CleanCompleteTipRestartDescendsPublishedTier, Isa
        LatchRecoveredSuccessorStartupFailure,
        RehydrateCleanCompleteTipSuccessorStartup,
        RehydrateFailedSuccessorStartup,
+       FailedSuccessorStartupRestartStep,
+       SuccessorStartupFailureStep,
        AuthenticateRecoveredSuccessorActivation,
        OpenDeferredSuccessorAdapter,
        ConstructSuccessorRuntime,
@@ -758,6 +882,142 @@ BY IndexedStepPreservesSuccessorActivationProtocolInvariant,
        Chain!RecordAppliedNext,
        Chain!RecordKnownApplication
 
+(***************************************************************************
+An ordinary indexed-product action cannot refill the selected pending
+owner's startup pipeline.  It either advances that node beyond the successor
+height (the explicit supersession residual) or preserves/decreases the rank.
+New durable evidence may make a retained exact recovery credential ready, so
+claiming equality here would be stronger than the inductive invariants.
+***************************************************************************)
+THEOREM IndexedProductActionDoesNotRaisePendingSuccessorRank ==
+  \A initialContext \in JoinedContexts,
+     parentContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ IndexedCompositionInvariant
+    /\ SuccessorActivationProtocolInvariant
+    /\ SuccessorActivationPending(parentContext, node)
+    /\ IndexedProductActionAt(initialContext)
+    => \/ SuccessorPublicationOrSuperseded(parentContext, node)'
+       \/ /\ SuccessorActivationPending(parentContext, node)'
+          /\ SuccessorActivationRank(parentContext, node)'
+               <= SuccessorActivationRank(parentContext, node)
+BY IndexedStepDoesNotOrphanSuccessorActivation,
+   IndexedBracketStepKeepsNodeHeightsMonotone,
+   Isa
+   DEF IndexedCompositionInvariant,
+       SuccessorActivationProtocolInvariant,
+       SuccessorActivationPending,
+       SuccessorActivationRank,
+       SuccessorActivationPipelineDistance,
+       IndexedSuccessorActivationPending,
+       SuccessorPublicationOrSuperseded,
+       SuccessorHeightActivated,
+       IndexedChainNext,
+       IndexedProductActionAt,
+       IndexedReceiptClassification,
+       IndexedReceiptFreeChainStutter,
+       IndexedDecisionReceiptHandoff,
+       IndexedApplicationReceiptHandoff,
+       QueueSuccessorActivation,
+       SuccessorActivationCredentialReady,
+       ExactSuccessorActivationToken,
+       ExactCompleteTipRecoveryAuthority,
+       ExactDurableParentApplication,
+       SuccessorActivationOwner,
+       SuccessorActivationToken,
+       SuccessorActivationMarker,
+       IndexedChainVars, SuccessorActivationVars,
+       Chain!ChainEpochVars,
+       Chain!RecordCertifiedNext,
+       Chain!RecordKnownDecision,
+       Chain!RecordAppliedNext,
+       Chain!RecordKnownApplication
+
+(***************************************************************************
+A progress action for a distinct immutable owner has the same explicit
+residual.  Equality is intentionally stated on the owner record, not merely
+on parent height: two contexts at one height or two nodes must not be allowed
+to borrow each other's descent.
+***************************************************************************)
+THEOREM OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive,
+     selectedParent \in AdmissibleContextRecords,
+     selectedNode \in ValidatorIds:
+    /\ IndexedCompositionInvariant
+    /\ SuccessorActivationProtocolInvariant
+    /\ SuccessorActivationPending(parentContext, node)
+    /\ SuccessorActivationOwner(selectedParent, selectedNode)
+         # SuccessorActivationOwner(parentContext, node)
+    /\ IndexedSuccessorActivationProgressStep(
+         selectedParent, selectedNode)
+    => \/ SuccessorPublicationOrSuperseded(parentContext, node)'
+       \/ /\ SuccessorActivationPending(parentContext, node)'
+          /\ SuccessorActivationRank(parentContext, node)'
+               = SuccessorActivationRank(parentContext, node)
+BY IndexedStepDoesNotOrphanSuccessorActivation,
+   IndexedBracketStepKeepsNodeHeightsMonotone,
+   Isa
+   DEF IndexedCompositionInvariant,
+       SuccessorActivationProtocolInvariant,
+       SuccessorActivationPending,
+       SuccessorActivationRank,
+       SuccessorActivationPipelineDistance,
+       IndexedSuccessorActivationPending,
+       SuccessorPublicationOrSuperseded,
+       SuccessorHeightActivated,
+       IndexedChainNext,
+       IndexedSuccessorActivationProgressStep,
+       BeginSuccessorActivation,
+       BindAppliedSuccessorActivationToken,
+       LatchAppliedSuccessorStartupFailure,
+       LatchRecoveredSuccessorStartupFailure,
+       RehydrateCleanCompleteTipSuccessorStartup,
+       RehydrateFailedSuccessorStartup,
+       AuthenticateRecoveredSuccessorActivation,
+       OpenDeferredSuccessorAdapter,
+       ConstructSuccessorRuntime,
+       StartSuccessorServices,
+       ApplySuccessorStartupEffects,
+       ArmSuccessorClocks,
+       PrepareSuccessorActivationMarker,
+       OpenSuccessorIngress,
+       ActivateAppliedSuccessorHeight,
+       ActivateRecoveredSuccessorHeight,
+       SuccessorActivationCredentialReady,
+       ExactSuccessorActivationToken,
+       ExactCompleteTipRecoveryAuthority,
+       ExactDurableParentApplication,
+       SuccessorActivationOwner,
+       SuccessorActivationToken,
+       SuccessorActivationMarker,
+       SuccessorActivationEnvironmentStutter,
+       SuccessorActivationEnvironmentActivatesNode,
+       IndexedChainVars, SuccessorActivationVars,
+       Chain!ChainEpochVars
+
+(***************************************************************************
+The exact durable parent witness is retained on every non-outcome chain step.
+This is the source-level preservation seam needed by the failure-free suffix:
+the proof does not replace the exact application with an arbitrary admissible
+context or a weaker height-only receipt.
+***************************************************************************)
+THEOREM IndexedStepRetainsExactDurableParentWitnessOrExits ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ IndexedCompositionInvariant
+    /\ SuccessorActivationProtocolInvariant
+    /\ SuccessorActivationPending(parentContext, node)
+    /\ [IndexedChainNext]_IndexedChainVars
+    => \/ SuccessorPublicationOrSuperseded(parentContext, node)'
+       \/ /\ SuccessorActivationPending(parentContext, node)'
+          /\ SuccessorActivationHasDurableParentWitness(
+               parentContext, node)'
+BY IndexedStepDoesNotOrphanSuccessorActivation,
+   IndexedStepPreservesSuccessorActivationProtocolInvariant,
+   Isa DEF SuccessorActivationProtocolInvariant,
+           SuccessorActivationHasDurableParentWitness
+
 THEOREM IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank ==
   \A parentContext \in AdmissibleContextRecords,
      node \in Responsive:
@@ -772,6 +1032,9 @@ THEOREM IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank ==
           /\ SuccessorActivationRank(parentContext, node)'
                <= SuccessorActivationRank(parentContext, node)
 BY IndexedStepDoesNotOrphanSuccessorActivation,
+   IndexedProductActionDoesNotRaisePendingSuccessorRank,
+   OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes,
+   FailureFreeBracketExcludesSuccessorResetActions,
    SuccessorActivationFailureFreeProgressStrictlyDecreasesRank,
    Isa
    DEF SuccessorActivationProtocolInvariant,
@@ -833,6 +1096,7 @@ THEOREM SuccessorActivationFailureFreeRankPersistsOrExits ==
     => \/ SuccessorActivationAtRank(parentContext, node, rank)'
        \/ SuccessorActivationRankExit(parentContext, node, rank)'
 BY IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank,
+   IndexedStepRetainsExactDurableParentWitnessOrExits,
    IndexedStepPreservesSuccessorActivationProtocolInvariant,
    Isa
    DEF SuccessorActivationAtRank, SuccessorActivationRankExit,
@@ -1243,6 +1507,51 @@ PROOF
     <2> QED BY <2>1, PTL
   <1> QED BY <1>1
 
+(***************************************************************************
+Before the failure-free suffix begins, resets may move the rank arbitrarily.
+They still cannot orphan an admitted activation or replace its exact durable
+parent witness.  Thus each pending occurrence reaches either the stable
+outcome or a state where it is still pending and the failure-free suffix has
+begun.  No pre-suffix reset is counted as rank progress.
+***************************************************************************)
+THEOREM SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ SuccessorActivationTemporalKernel(parentContext, node)
+    /\ <>SuccessorActivationFailureFreeSuffix(parentContext, node)
+    => (SuccessorActivationPending(parentContext, node)
+          ~> (SuccessorPublicationOrSuperseded(parentContext, node)
+               \/ /\ SuccessorActivationPending(parentContext, node)
+                  /\ SuccessorActivationFailureFreeSuffix(
+                       parentContext, node)))
+PROOF
+  <1>1. ASSUME NEW parentContext \in AdmissibleContextRecords,
+              NEW node \in Responsive,
+              SuccessorActivationTemporalKernel(parentContext, node),
+              <>SuccessorActivationFailureFreeSuffix(parentContext, node)
+         PROVE SuccessorActivationPending(parentContext, node)
+                 ~> (SuccessorPublicationOrSuperseded(
+                       parentContext, node)
+                      \/ /\ SuccessorActivationPending(parentContext, node)
+                         /\ SuccessorActivationFailureFreeSuffix(
+                              parentContext, node))
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1 DEF SuccessorActivationTemporalKernel
+    <2>2. []SuccessorActivationProtocolInvariant
+      BY <1>1 DEF SuccessorActivationTemporalKernel
+    <2>3. [][IndexedChainNext]_IndexedChainVars
+      BY <1>1 DEF SuccessorActivationTemporalKernel
+    <2>4. /\ IndexedCompositionInvariant
+            /\ SuccessorActivationProtocolInvariant
+            /\ SuccessorActivationPending(parentContext, node)
+            /\ [IndexedChainNext]_IndexedChainVars
+           => \/ SuccessorPublicationOrSuperseded(
+                    parentContext, node)'
+              \/ SuccessorActivationPending(parentContext, node)'
+      BY <1>1, IndexedStepRetainsExactDurableParentWitnessOrExits
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
 THEOREM EventualFailureFreeSuffixLiftsSuccessorConvergence ==
   \A parentContext \in AdmissibleContextRecords,
      node \in Responsive:
@@ -1267,20 +1576,14 @@ PROOF
                          parentContext, node)))
       BY <1>1,
          FailureFreeSuccessorActivationConvergenceAtEverySuffix
-    <2>3. []IndexedCompositionInvariant
-      BY <1>1 DEF SuccessorActivationTemporalKernel
-    <2>4. []SuccessorActivationProtocolInvariant
-      BY <1>1 DEF SuccessorActivationTemporalKernel
-    <2>5. [][IndexedChainNext]_IndexedChainVars
-      BY <1>1 DEF SuccessorActivationTemporalKernel
-    <2>6. /\ IndexedCompositionInvariant
-            /\ SuccessorActivationProtocolInvariant
-            /\ SuccessorActivationPending(parentContext, node)
-            /\ [IndexedChainNext]_IndexedChainVars
-           => \/ SuccessorPublicationOrSuperseded(parentContext, node)'
-              \/ SuccessorActivationPending(parentContext, node)'
-      BY <1>1, IndexedStepDoesNotOrphanSuccessorActivation
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, PTL
+    <2>3. SuccessorActivationPending(parentContext, node)
+             ~> (SuccessorPublicationOrSuperseded(parentContext, node)
+                  \/ /\ SuccessorActivationPending(parentContext, node)
+                     /\ SuccessorActivationFailureFreeSuffix(
+                          parentContext, node))
+      BY <1>1,
+         SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, PTL
   <1> QED BY <1>1
 
 THEOREM IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom ==

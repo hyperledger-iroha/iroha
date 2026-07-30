@@ -5873,6 +5873,11 @@ BY Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncInitialCandidateLifecycleAdmissions,
+       AsyncCandidateLifecycleAdmission,
        AsyncControlServiceStateTypeInvariant,
        AsyncCandidateServiceTombstones,
        AsyncCandidateServiceRecordsFor,
@@ -5888,6 +5893,7 @@ THEOREM HistoricalTemporalNextPreservesCandidateServiceTombstones ==
   /\ AsyncNext
   => AsyncCandidateServiceTombstoneLifecycleInvariant'
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
    AsyncCandidateServicesThisStepIsSingleton,
    AsyncCandidateTerminalRetirementsThisStepIsSingleton,
    AsyncCandidateSuccessfulServiceInstallsTombstone,

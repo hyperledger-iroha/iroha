@@ -2752,6 +2752,11 @@ PROOF
            /\ AsyncRuntimeCycleBudget \in Nat
            /\ AsyncIoDrainBudget \in Nat
            /\ AsyncDeferredDrainBudget \in Nat
+           /\ AsyncCausalCandidateLifecycleCapacity \in Nat
+           /\ AsyncCandidateProducerEpisodeCapacity \in Nat
+           /\ AsyncCandidateProducerEpisodeBudget \in Nat
+           /\ AsyncCandidateProducerActionEpisodeBudget \in Nat
+           /\ AsyncCandidatePhysicalServiceBudget \in Nat
            /\ AsyncRetainedControlBudget \in Nat
            /\ AsyncRetainedProposalChunkBudget \in Nat
            /\ AsyncActiveCertifiedRequestBudget \in Nat
@@ -2759,7 +2764,13 @@ PROOF
       BY <2>1, <2>2, SMT
          DEF AsyncRunnerCycleBudget, AsyncRuntimeCycleBudget,
              AsyncIoDrainBudget,
-             AsyncDeferredDrainBudget, AsyncRetainedControlBudget,
+             AsyncDeferredDrainBudget,
+             AsyncCausalCandidateLifecycleCapacity,
+             AsyncCandidateProducerEpisodeCapacity,
+             AsyncCandidateProducerEpisodeBudget,
+             AsyncCandidateProducerActionEpisodeBudget,
+             AsyncCandidatePhysicalServiceBudget,
+             AsyncRetainedControlBudget,
              AsyncRetainedProposalChunkBudget,
              AsyncActiveCertifiedRequestBudget,
              AsyncActiveCommitRequestBudget
@@ -2774,9 +2785,26 @@ PROOF
     <2>6. AsyncCertifiedRecoveryBudget \in Nat
       BY <2>2, <2>3, <2>5, SMT
          DEF AsyncCertifiedRecoveryBudget
-    <2> QED BY <2>2, <2>5, <2>6, SMT
+    <2>7. /\ AsyncViewSynchronizationBudget \in Nat
+           /\ AsyncFixedCorridorServiceBudget \in Nat
+      BY <2>2, <2>3, <2>5, SMT
+         DEF AsyncViewSynchronizationBudget,
+             AsyncFixedCorridorServiceBudget
+    <2> QED BY <2>7, SMT
          DEF AsyncWorstCaseServiceBudget
   <1> QED BY <1>1
+
+THEOREM AsyncServiceBudgetSplitReconstructsWholePipeline ==
+  AsyncWorstCaseServiceBudget
+    = AsyncProposalPipelineBudget * AsyncDeliveryBound
+        + AsyncCertifiedRecoveryBudget
+        + 4 * AsyncRetransmitPeriod
+        + AsyncProgressReserve + AsyncCompletionReserve
+BY SMT
+   DEF AsyncWorstCaseServiceBudget,
+       AsyncViewSynchronizationBudget,
+       AsyncFixedCorridorServiceBudget,
+       AsyncCertifiedRecoveryBudget
 
 THEOREM AdequateViewTimeoutExists ==
   /\ ModelConfiguration
@@ -3229,53 +3257,5 @@ BY AsyncInitEstablishesIngressTopologyType,
 THEOREM ModelResponsiveValidators ==
   ModelConfiguration => Responsive \subseteq ValidatorIds
 BY SMT DEF ModelConfiguration, QuorumConfiguration
-
-AsyncHistoricalRecoveryFrameVars ==
-  <<context, up, gst, applied, asyncHistoricalRecoveryTargets>>
-
-THEOREM HistoricalRecoveryFramePreservesType ==
-  /\ AsyncHistoricalRecoveryTypeInvariant
-  /\ UNCHANGED AsyncHistoricalRecoveryFrameVars
-  => AsyncHistoricalRecoveryTypeInvariant'
-BY SMT
-   DEF AsyncHistoricalRecoveryTypeInvariant,
-       AsyncHistoricalRecoveryFrameVars, NodeHasApplication
-
-THEOREM AsyncInitEstablishesHistoricalRecoveryType ==
-  \A initialContext:
-    (AsyncInitAt(initialContext) /\ TypeInvariant)
-      => AsyncHistoricalRecoveryTypeInvariant
-BY SMT
-   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
-       AsyncHistoricalRecoveryTypeInvariant, NodeHasApplication
-
-THEOREM HistoricalRecoveryTargetsAreValidators ==
-  AsyncTypeInvariant
-    => asyncHistoricalRecoveryTargets \subseteq ValidatorIds
-BY ModelResponsiveValidators, SMT
-   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-       AsyncHistoricalRecoveryTypeInvariant, TypeInvariant
-
-THEOREM HistoricalRecoveryOnlyChangePreservesSchedulerType ==
-  /\ AsyncSchedulerTypeInvariant
-  /\ UNCHANGED <<context, AsyncSchedulerExceptHistoricalRecoveryTargets>>
-  /\ AsyncHistoricalRecoveryTypeInvariant'
-  => AsyncSchedulerTypeInvariant'
-BY Isa
-   DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
-       AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
-       AsyncTransportTypeInvariant, AsyncIngressTypeInvariant,
-       AsyncSchedulerExceptHistoricalRecoveryTargets,
-       AsyncLocalAdmissionVars, AsyncIoVars, AsyncDeferredVars
-
-THEOREM AsyncInitEstablishesSchedulerType ==
-  \A initialContext:
-    (AsyncInitAt(initialContext) /\ TypeInvariant)
-      => AsyncSchedulerTypeInvariant
-BY AsyncInitEstablishesRuntimeType, AsyncInitEstablishesIoType,
-   AsyncInitEstablishesDeferredType, AsyncInitEstablishesTransportType,
-   AsyncInitEstablishesIngressType,
-   AsyncInitEstablishesHistoricalRecoveryType
-   DEF AsyncSchedulerTypeInvariant
 
 =============================================================================

@@ -12,7 +12,7 @@
 use std::sync::OnceLock;
 use std::sync::{
     Arc, RwLock, RwLockReadGuard, TryLockError,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 use std::thread;
 
@@ -24,6 +24,7 @@ const RESTART_REQUIRED: u8 = 2;
 #[derive(Debug)]
 pub(crate) struct ConsensusOutputGuard {
     state: AtomicU8,
+    authoritative_worker_launch_claimed: AtomicBool,
     output: RwLock<()>,
 }
 
@@ -31,6 +32,7 @@ impl Default for ConsensusOutputGuard {
     fn default() -> Self {
         Self {
             state: AtomicU8::new(OPEN),
+            authoritative_worker_launch_claimed: AtomicBool::new(false),
             output: RwLock::new(()),
         }
     }
@@ -101,6 +103,17 @@ impl ConsensusOutputGuard {
             output_guard: self,
             permit: Some(permit),
         })
+    }
+
+    /// Permanently claim the one authoritative worker launch allowed in this process.
+    ///
+    /// The claim is intentionally never released, including after orderly worker exit.
+    /// Reusing generation zero at the same height is safe only after process replacement,
+    /// which constructs a new process-global guard.
+    pub(crate) fn claim_authoritative_worker_launch(&self) -> bool {
+        self.authoritative_worker_launch_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// Permanently stop new output and, outside panic unwinding, drain admitted output.
