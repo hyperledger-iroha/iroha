@@ -5256,7 +5256,6 @@ mod signed_query_verification_tests {
 }
 
 /// Execute a previously verified query request with the provided options.
-#[cfg(test)]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) async fn execute_verified_query_with_opts(
     live_query_store: LiveQueryStoreHandle,
@@ -13769,7 +13768,6 @@ mod lane_admission_latency_tests {
 }
 
 /// Execute a signed query while honoring pagination/cursor overrides and telemetry policies.
-#[cfg(test)]
 #[iroha_futures::telemetry_future]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub async fn handle_queries_with_opts(
