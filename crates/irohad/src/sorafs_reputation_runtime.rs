@@ -15,8 +15,6 @@ use std::{
 
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
-#[cfg(test)]
-use iroha_data_model::query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId;
 use iroha_data_model::{
     ChainId,
     query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
@@ -29,7 +27,6 @@ use sorafs_manifest::{
 #[cfg(test)]
 use sorafs_node::reputation::runtime::{
     ReputationJournalCheckpointExternalErrorV1, ReputationJournalSealedCheckpointRecordV1,
-    ReputationJournalSourceFinalizedViewV1,
 };
 use sorafs_node::reputation::{
     ReputationIngestMetricsSnapshot, ReputationIngestPolicyV1, ReputationIngestService,
@@ -1319,6 +1316,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
+        query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId,
         sorafs::{
             capacity::ProviderId,
             moderation_ledger::{RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1},
@@ -1348,9 +1346,10 @@ mod tests {
         REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
         ReputationFinalizedAnchorV1, ReputationGovernanceDagPublicationRequestV1,
         ReputationGovernanceDagReadbackV1, ReputationJournalDeliveryFinalizedViewV1,
-        ReputationJournalTransactionRequestV1, ReputationJournalTransactionSubmitOutcomeV1,
-        ReputationRuntimeProviderV1, ReputationThresholdSigningRequestV1,
-        reputation_governance_dag_policy_digest_v1, reputation_journal_submitter_policy_digest_v1,
+        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionRequestV1,
+        ReputationJournalTransactionSubmitOutcomeV1, ReputationRuntimeProviderV1,
+        ReputationThresholdSigningRequestV1, reputation_governance_dag_policy_digest_v1,
+        reputation_journal_submitter_policy_digest_v1,
     };
     use tempfile::TempDir;
 

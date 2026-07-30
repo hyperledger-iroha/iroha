@@ -4,14 +4,22 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.100"
+base64 = { workspace = true, features = ["alloc"] }
+blake2 = { workspace = true }
+blake3 = { workspace = true }
 clap = { version = "4.5.51", features = ["derive"] }
+eyre = { workspace = true }
+hex = { workspace = true, features = ["alloc", "std"] }
+iroha_crypto = { workspace = true }
 iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "governance"] }
+iroha_primitives = { workspace = true, features = ["json"] }
 iroha_schema = { path = "../../crates/iroha_schema" }
 norito = { path = "../../crates/norito", features = ["json"] }
+tempfile = { workspace = true }
 time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
-
-[dev-dependencies]
-tempfile = { workspace = true }

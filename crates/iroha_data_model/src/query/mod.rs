@@ -3914,6 +3914,33 @@ mod json_roundtrip_tests {
         assert_eq!(cloned.params, original.params);
     }
 
+    #[test]
+    fn dump_current_query_wire_identifiers() {
+        macro_rules! dump {
+            ($ty:ty) => {
+                eprintln!("QUERY\t{}", std::any::type_name::<$ty>());
+            };
+        }
+
+        dump!(ErasedIterQuery<crate::domain::Domain>);
+        dump!(ErasedIterQuery<crate::account::Account>);
+        dump!(ErasedIterQuery<crate::asset::value::Asset>);
+        dump!(ErasedIterQuery<crate::asset::definition::AssetDefinition>);
+        dump!(ErasedIterQuery<crate::repo::RepoAgreement>);
+        dump!(ErasedIterQuery<crate::nft::Nft>);
+        dump!(ErasedIterQuery<crate::role::Role>);
+        dump!(ErasedIterQuery<crate::role::RoleId>);
+        dump!(ErasedIterQuery<crate::peer::PeerId>);
+        dump!(ErasedIterQuery<crate::trigger::TriggerId>);
+        dump!(ErasedIterQuery<crate::trigger::Trigger>);
+        dump!(ErasedIterQuery<CommittedTransaction>);
+        dump!(ErasedIterQuery<crate::block::SignedBlock>);
+        dump!(ErasedIterQuery<crate::block::BlockHeader>);
+        dump!(ErasedIterQuery<crate::proof::ProofRecord>);
+        dump!(ErasedIterQuery<crate::nexus::FeeSponsorProgram>);
+        dump!(ErasedIterQuery<crate::nexus::FeeSponsorProgramId>);
+    }
+
     #[cfg(feature = "fast_dsl")]
     #[test]
     fn signed_query_json_roundtrip_start_fastdsl() {

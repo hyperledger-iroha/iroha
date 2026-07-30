@@ -12,7 +12,14 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
+default = ["application"]
+# General application surface. Consensus-only consumers should use
+# `consensus` so they do not pull PQC and batch-verification helpers.
+application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
+# Cryptography required by consensus and canonical node identities.
+consensus = ["std", "rand", "bls", "bls-multi-pairing"]
+# Complete shipping node surface.
+node-crypto = ["application", "consensus"]
 std = []
 json = ["norito/json", "mv"]
 bfv-accel = []
@@ -62,7 +69,7 @@ iroha_ffi = { workspace = true, optional = true }
 iroha_schema = { workspace = true }
 
 derive_more = { workspace = true, features = ["deref", "deref_mut", "display", "debug"] }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 hex = { workspace = true, features = ["alloc", "std"] }
 hex-literal = { workspace = true }
 getset = { workspace = true }

@@ -39,17 +39,15 @@ path = "src/bin/pk2_bridge_finality_verify.rs"
 workspace = true
 
 [features]
-# Default to transparent Halo2 (IPA over Pasta)
-default = [
-    "json",
-    "bls",
-    "fast_dsl",
-    "zk-halo2",
-    "zk-halo2-ipa",
-    "zk-ipa-native",
-    "zk-stark",
-    "circuit-params",
-]
+# The node surface is selected explicitly by shipping leaves. `runtime` keeps
+# the mandatory first-release Halo2/IPA policy intact; STARK support remains a
+# named proof aggregate rather than workspace-wide inheritance.
+default = ["node"]
+runtime = ["json", "bls", "bls-multi-pairing", "fast_dsl", "proofs-halo2"]
+node = ["runtime", "proofs-stark"]
+proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
+proofs-stark = ["zk-stark"]
+proofs-full = ["proofs-halo2", "proofs-stark"]
 # Enable QUIC transport helpers for Norito Streaming.
 quic = ["iroha_p2p/quic"]
 # Enable Norito-backed JSON helpers throughout the core crate.
@@ -162,12 +160,12 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "json", "bridge", "governance"] }
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
-iroha_crypto = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_version = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
@@ -177,7 +175,7 @@ iroha_primitives = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_executor_data_model = { workspace = true }
-ivm = { workspace = true, features = ["halo2-params"] }
+ivm = { workspace = true, default-features = false, features = ["runtime", "halo2-params"] }
 fastpq_prover = { path = "../fastpq_prover" }
 mv = { workspace = true }
 iroha_schema = { workspace = true }

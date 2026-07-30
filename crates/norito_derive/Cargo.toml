@@ -23,7 +23,7 @@ workspace = true
 optional = true
 
 [dev-dependencies]
-norito = {path = "../norito"}
+norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
 [[test]]
 name = "ui"

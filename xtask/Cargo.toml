@@ -51,6 +51,7 @@ iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha = { workspace = true }
 ivm = { workspace = true }
+norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }
 fastpq_isi = { path = "../crates/fastpq_isi" }
 arrow-array = { version = "53.4.1", default-features = false }

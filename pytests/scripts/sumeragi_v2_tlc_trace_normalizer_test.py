@@ -98,6 +98,10 @@ def valid_log() -> str:
 
 
 def test_normalizes_tool_messages_and_numeric_sentinels() -> None:
+    source = NORMALIZER.read_text(encoding="utf-8")
+    assert "from typing import TypeAlias" not in source
+    assert "Scalar: TypeAlias = int | str" not in source
+
     actions = MODULE.normalize(valid_log(), 19349663)
 
     assert [action.action for action in actions] == ["SetGST", "PersistDecision"]

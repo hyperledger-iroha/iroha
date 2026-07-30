@@ -25,9 +25,19 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["build-i3"]
-build-i2 = []
-build-i3 = []
+default = ["cli-i3"]
+cli-common = [
+    "iroha_core/node",
+    "iroha_crypto/consensus",
+    "iroha_data_model/json",
+    "ivm/runtime",
+    "norito/node-codec",
+]
+cli-i2 = ["cli-common"]
+cli-i3 = ["cli-common"]
+# Compatibility aliases for existing packaging scripts.
+build-i2 = ["cli-i2"]
+build-i3 = ["cli-i3"]
 offline-visual-codecs = ["dep:image"]
 # Experimental selector support. Forwarded to client/data-model crates when enabled.
 ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
@@ -38,34 +48,34 @@ bridge = []
 [[bin]]
 name = "iroha3"
 path = "src/bin/iroha3.rs"
-required-features = ["build-i3"]
+required-features = ["cli-i3"]
 
 [[bin]]
 name = "iroha2"
 path = "src/bin/iroha2.rs"
-required-features = ["build-i2"]
+required-features = ["cli-i2"]
 
 [[bin]]
 name = "iroha"
 path = "src/bin/iroha.rs"
-required-features = ["build-i3"]
+required-features = ["cli-i3"]
 
 [[bin]]
 name = "ivm_execution_keygen"
 path = "src/bin/ivm_execution_keygen.rs"
-required-features = ["build-i3"]
+required-features = ["cli-i3"]
 
 [dependencies]
 iroha = { workspace = true }
 iroha_sccp = { workspace = true }
 iroha_primitives = { workspace = true }
-ivm = { workspace = true }
-iroha_crypto = { workspace = true, features = ["sm"] }
-iroha_core = { workspace = true }
+ivm = { workspace = true, default-features = false }
+iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
+iroha_core = { workspace = true, default-features = false }
 fastpq_prover = { path = "../fastpq_prover" }
 iroha_config = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 url = { workspace = true }
@@ -76,7 +86,7 @@ eyre = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap-markdown = "0.1.5"
 humantime = { workspace = true }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false }
 supports-color = { workspace = true }
 derive_more = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

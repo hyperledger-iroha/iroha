@@ -13,7 +13,9 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["governance", "json", "pqc"]
+default = ["application-model"]
+# Public application model; node-only additions are requested by node crates.
+application-model = ["governance", "json", "pqc"]
 bridge = []
 # Retained for compatibility dependencies; no additional behavior is gated by `std` in this crate.
 std = []
@@ -65,7 +67,7 @@ pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
 
 iroha_primitives = { workspace = true }
-iroha_crypto = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_macro = { workspace = true }
 error-stack = { workspace = true }
 iroha_version = { workspace = true, features = ["derive"] }
@@ -76,7 +78,7 @@ hex = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 
 derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 norito_derive = { workspace = true, optional = true }
 mv = { path = "../mv", optional = true }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
@@ -100,9 +102,9 @@ trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm"] }
 hex-literal = { workspace = true }
-ivm = { path = "../ivm" }
+ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
 
 tempfile = { workspace = true }
 

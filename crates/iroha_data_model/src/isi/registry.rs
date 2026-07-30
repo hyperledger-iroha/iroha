@@ -1061,6 +1061,19 @@ mod tests {
     }
 
     #[test]
+    fn dump_current_instruction_wire_identifiers() {
+        let registry = default();
+        let mut entries = registry
+            .names()
+            .map(|name| (name, registry.wire_id(name).expect("registered wire id")))
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        for (type_name, wire_id) in entries {
+            eprintln!("INSTRUCTION\t{type_name}\t{wire_id}");
+        }
+    }
+
+    #[test]
     fn bootle_lantern_governance_instructions_have_unique_canonical_registrations() {
         let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
         let registry = default();

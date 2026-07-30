@@ -12,9 +12,9 @@ categories = ["network-programming"]
 workspace = true
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_logger = { workspace = true }
-iroha_crypto = { workspace = true, default-features = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }

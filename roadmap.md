@@ -57,6 +57,20 @@ pending G-UNIT execution inventory to 280 exact tests. The fresh 24-test
 queue/configuration slice and 130-test Native AMX slice are green; the complete
 280-test archived execution receipt is still outstanding.
 
+The in-flight carrier formal corpus is now bound to the versions that
+production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
+container, QueuePlan journal V4, and reservation journal V5. Schema 3 of the
+multilane binding ledger keeps this as
+`layout_only_no_transition_refinement`, source-binds exact payload,
+reservation, queue-order, Kura persistence/recovery, runner, and release
+receipt consumers, and requires a distinct fifth layout-only Apalache result
+after the four refinement rows. The structural checker, exact 738-test/280
+G-UNIT inventory, 12 fail-closed layout tests, two receipt parser tests, and
+12 Apalache-runner contract controls are fresh and green. The TLC trace
+normalizer also imports on the supported Xcode Python 3.9 runtime again and
+passes all 15 focused tests. No TLC or Apalache execution is claimed by those
+static checks, and the total Rust transition projection remains open.
+
 The remaining work is evidence-driven and must stay in order:
 
 - Finish the current source-bound test freeze for the sole first-release

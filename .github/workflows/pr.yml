@@ -3,7 +3,7 @@ name: Pull Request CI
 on:
   pull_request:
     branches: [main]
-    paths_ignore:
+    paths-ignore:
       - ".github/workflows/publish*"
       - ".github/workflows/ci_image.yml"
       - "Dockerfile*"
@@ -31,8 +31,8 @@ jobs:
           cache-on-failure: "true"
       - name: Build binaries (irohad, iroha, kagami, koto) (release)
         run: |
-          cargo build --release --bin irohad --bin iroha --bin kagami
-          cargo build --release -p ivm --bin koto
+          cargo build --locked --release --bin irohad --bin iroha --bin kagami
+          cargo build --locked --release -p ivm --bin koto
           mkdir target/release/pre_build
           mv target/release/irohad target/release/iroha target/release/kagami target/release/koto target/release/pre_build
       - name: Upload binaries
@@ -111,7 +111,7 @@ jobs:
         with:
           cache-on-failure: "true"
       - name: Norito-RPC fixture parity
-        run: cargo xtask norito-rpc-verify
+        run: cargo run --locked -p xtask -- norito-rpc-verify
 
   numeric_v1_architecture_parity:
     name: Numeric V1 parity (${{ matrix.runner }})
@@ -155,92 +155,148 @@ jobs:
           chmod +x ./gradlew
           ./gradlew :core:test --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests
 
-  clippy:
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+  rust_changes:
+    name: Classify affected Rust lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      has_rust: ${{ steps.classify.outputs.has_rust }}
+      full: ${{ steps.classify.outputs.full }}
+      matrix: ${{ steps.classify.outputs.matrix }}
+      package_count: ${{ steps.classify.outputs.package_count }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          cache-on-failure: "true"
-      - name: Clippy (all targets, all features)
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install pinned router-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+      - name: Verify exhaustive Rust lane ownership
         run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features --message-format=json -- -D warnings | tee clippy.json
-      - name: Upload clippy report
+          python3 scripts/rust_ci.py validate
+          python3 -m pytest -q pytests/scripts/rust_ci_test.py
+          python3 -m pytest -q \
+            scripts/tests/check_source_file_budget_test.py \
+            scripts/tests/check_compile_unit_budget_test.py \
+            scripts/tests/check_generated_artifacts_test.py
+          python3 scripts/check_source_file_budget.py
+          python3 scripts/check_generated_artifacts.py
+      - name: Classify the PR reverse-dependency closure
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
+        run: |
+          mkdir -p target/ci
+          scope_args=(--base "$BASE_SHA")
+          if test "$FULL_REQUESTED" = true; then
+            scope_args=(--all)
+          fi
+          python3 scripts/rust_ci.py classify \
+            "${scope_args[@]}" \
+            --json-out target/ci/rust-classification.json \
+            --github-output "$GITHUB_OUTPUT" \
+            > target/ci/rust-classification.log
+      - name: Upload Rust classification evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: report-clippy
-          path: clippy.json
+          name: rust-classification
+          path: |
+            target/ci/rust-classification.json
+            target/ci/rust-classification.log
+          if-no-files-found: error
 
-  doc:
+  rust_affected:
+    name: Rust ${{ matrix.lane }} (${{ matrix.package_count }} packages)
+    if: needs.rust_changes.outputs.has_rust == 'true'
+    needs: [rust_changes, pre_build]
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
-      - name: Documentation (all features)
-        run: cargo doc --no-deps --quiet --all-features
-
-  test:
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    needs: pre_build
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.rust_changes.outputs.matrix) }}
     env:
-      LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
       IROHA_TEST_REQUIRE_NETWORK: "1"
       TEST_NETWORK_BIN_IROHAD: bins/irohad
       TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
-      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
-      - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955
-      - name: Download binaries
+          shared-key: rust-lane-${{ matrix.lane }}
+      - name: Download test-network binaries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: bins
           path: bins
-      - name: Make binaries executable
+      - name: Make test-network binaries executable
         run: chmod +x -R bins
-      - name: Test (full)
-        id: test
-        run: >
-          mold --run cargo llvm-cov nextest
-          --workspace --locked
-          --branch --no-report
-      - name: Test (doc)
-        id: test-doc
-        run: >
-          mold --run cargo llvm-cov --doc
-          --branch --no-report
-      - name: Generate lcov report
-        run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
-      - name: Upload lcov report
+      - name: Enforce data-model compile-unit budget
+        if: matrix.lane == 'execution'
+        run: >-
+          python3 scripts/check_compile_unit_budget.py
+          --locked
+          --lib
+          -p iroha_data_model
+          --artifact-scope workspace
+          --baseline ci/compile_unit_baselines.json
+          --baseline-key iroha_data_model_lib
+          --budget-percent 2
+          --budget-min-growth 3
+          --json-out target/ci/iroha-data-model-compile-units.json
+      - name: Upload data-model compile-unit evidence
+        if: always() && matrix.lane == 'execution'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: report-coverage
-          path: lcov.info
-      - name: Upload coverage to Coveralls
-        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b
-        with:
-          file: lcov.info
-          format: lcov
-          github-token: ${{ github.token }}
-      - name: Upload test network artifacts
-        if: failure() && (steps.test.outcome == 'failure')
+          name: compile-units-${{ matrix.lane }}
+          path: target/ci/iroha-data-model-compile-units.json
+          if-no-files-found: error
+      - name: Run locked affected checks
+        run: >
+          python3 scripts/rust_ci.py run
+          --packages "${{ matrix.packages }}"
+          --checks clippy,build,test,doc
+      - name: Upload failed test-network artifacts
+        if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: test_network_runs
+          name: test-network-${{ matrix.lane }}
           path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
+          if-no-files-found: ignore
           retention-days: 3
+
+  rust_required:
+    name: Required affected Rust validation
+    if: always()
+    needs: [rust_changes, rust_affected]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate dynamic Rust lane results
+        env:
+          CLASSIFIER_RESULT: ${{ needs.rust_changes.result }}
+          AFFECTED_RESULT: ${{ needs.rust_affected.result }}
+          HAS_RUST: ${{ needs.rust_changes.outputs.has_rust }}
+        run: |
+          set -euo pipefail
+          test "$CLASSIFIER_RESULT" = success
+          if test "$HAS_RUST" = true; then
+            test "$AFFECTED_RESULT" = success
+          else
+            test "$AFFECTED_RESULT" = skipped
+          fi
 
   pytests:
     needs: pre_build

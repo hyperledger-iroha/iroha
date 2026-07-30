@@ -151,7 +151,13 @@ name = "dump_tape"
 name = "norito_regen_goldens"
 path = "src/bin/norito_regen_goldens.rs"
 [features]
-default = ["derive", "compression", "columnar", "json", "json-std-io", "strict-safe"]
+default = ["node-codec"]
+# Minimum currently compilable codec surface. `json` remains here until the
+# existing unconditional JSON helpers are made feature-independent.
+base-codec = ["json", "strict-safe"]
+# Canonical codec surface used by node, CLI, and network-facing crates.
+# Hardware backends remain explicit leaf features.
+node-codec = ["base-codec", "derive", "compression", "columnar", "json-std-io"]
 simd-accel = []
 strict-safe = []
 derive = []

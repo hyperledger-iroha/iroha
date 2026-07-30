@@ -20,9 +20,25 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = ["telemetry", "schema-endpoint", "build-i3"]
-build-i2 = []
-build-i3 = []
+default = ["daemon-i3"]
+daemon-common = [
+    "telemetry",
+    "schema-endpoint",
+    "iroha_core/node",
+    "iroha_torii/node-api",
+    "iroha_crypto/consensus",
+    "iroha_data_model/json",
+    "ivm/runtime",
+    "norito/node-codec",
+]
+daemon-i2 = ["daemon-common"]
+daemon-i3 = ["daemon-common"]
+# Compatibility aliases for existing build scripts; shipping binaries use the
+# explicit daemon profile names above.
+build-i2 = ["daemon-i2"]
+build-i3 = ["daemon-i3"]
+accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
+accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
 embedded-soracloud-runtime = []
 # Test-network-only inbound consensus message control. This feature is never
 # enabled by a production/default build; `iroha_test_network` builds a separate
@@ -61,17 +77,17 @@ profiling-endpoint = ["iroha_torii/profiling"]
 [[bin]]
 name = "iroha3d"
 path = "src/bin/iroha3d.rs"
-required-features = ["build-i3"]
+required-features = ["daemon-i3"]
 
 [[bin]]
 name = "iroha2d"
 path = "src/bin/iroha2d.rs"
-required-features = ["build-i2"]
+required-features = ["daemon-i2"]
 
 [[bin]]
 name = "irohad"
 path = "src/bin/irohad.rs"
-required-features = ["build-i3"]
+required-features = ["daemon-i3"]
 
 [[bin]]
 name = "taira_privacy_prebundle_gate"
@@ -84,18 +100,18 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-iroha_core = { workspace = true }
+iroha_core = { workspace = true, default-features = false }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true, optional = true }
 iroha_config = { workspace = true }
-iroha_crypto = { workspace = true }
-iroha_torii = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false }
+iroha_torii = { workspace = true, default-features = false }
 iroha_genesis = { workspace = true }
 iroha_version = { workspace = true }
-ivm = { workspace = true }
+ivm = { workspace = true, default-features = false }
 iroha_p2p = { workspace = true }
 mv = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
@@ -116,7 +132,7 @@ tracing = { workspace = true }
 tokio = { workspace = true, features = ["macros", "signal"] }
 supports-color = { workspace = true }
 toml = { workspace = true }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false }
 iroha_i18n = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 rand = { workspace = true }
@@ -124,7 +140,7 @@ x25519-dalek = { version = "2.0.1", default-features = false, features = ["stati
 blake3 = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 serial_test = "3.5.0"
 tempfile = { workspace = true }

@@ -31,7 +31,7 @@ bench = []
 simd-accel = []
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_primitives_derive = { path = "../iroha_primitives_derive" }
 
 iroha_macro = { workspace = true }

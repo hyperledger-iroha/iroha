@@ -85,6 +85,18 @@ def main() -> int:
     )
     _must_reject(
         source,
+        "inflight_first_release_fixed.cfg \\\n  10 \\",
+        "inflight_first_release_fixed.cfg \\\n  9 \\",
+        "in-flight layout bound reduction",
+    )
+    _must_reject(
+        source,
+        "inflight_first_release_fixed.cfg",
+        "inflight_first_release_payload_conflict_bug.cfg",
+        "in-flight mutation substitution",
+    )
+    _must_reject(
+        source,
         'grep -Fc "The outcome is: NoError"',
         'grep -Fc "The outcome is:"',
         "weakened outcome marker",
@@ -94,7 +106,7 @@ def main() -> int:
         raise AssertionError("runner contract accepted a length override")
 
     print(
-        "Sumeragi v2 multilane Apalache runner contract passed 10 "
+        "Sumeragi v2 multilane Apalache runner contract passed 12 "
         "fail-closed negative controls"
     )
     return 0

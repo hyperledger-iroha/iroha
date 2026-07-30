@@ -20,7 +20,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
+from typing import Union
 
 
 MESSAGE_START = re.compile(r"^@!@!@STARTMSG ([0-9]+):([0-9]+) @!@!@$")
@@ -29,7 +29,9 @@ STATE_HEADER = re.compile(r"^([0-9]+): <.+>$")
 SIMULATION_START = re.compile(r"^Running Random Simulation with seed (-?[0-9]+)\b")
 WITNESS_ASSIGNMENT = "/\\ witnessAction = "
 
-Scalar: TypeAlias = int | str
+# `typing.TypeAlias` and runtime PEP 604 unions are unavailable in the
+# repository's supported Xcode Python 3.9 interpreter.
+Scalar = Union[int, str]
 
 REPLAY_ACTIONS = frozenset(
     {

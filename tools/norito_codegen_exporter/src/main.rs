@@ -1,9 +1,9 @@
-//! Export Norito metadata for the Android codegen documentation pipeline (AND3).
+//! Export Norito metadata for SDK code generation and documentation.
 //!
-//! The current implementation focuses on surfacing a deterministic manifest of
-//! all built-in instructions plus placeholder builder metadata. Follow-ups will
-//! extend this binary with richer doc extraction, Kotlin references, and live
-//! Norito payload fixtures.
+//! This binary emits deterministic instruction and builder metadata. The
+//! package library also owns canonical Norito RPC fixture generation and
+//! verification so SDK pipelines and repository automation share one
+//! implementation.
 
 use std::{
     any::TypeId,

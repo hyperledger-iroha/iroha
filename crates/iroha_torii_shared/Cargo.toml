@@ -18,8 +18,8 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-norito.workspace = true
-iroha_crypto = { workspace = true, default-features = false, features = [] }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["governance", "json"] }
 blake3.workspace = true
 rand.workspace = true

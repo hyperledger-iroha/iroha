@@ -13,6 +13,7 @@ readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
 readonly MULTILANE_CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 readonly MULTILANE_MUTATION_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_multilane_mutations.sh"
+readonly INFLIGHT_FIRST_RELEASE_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_inflight_first_release.sh"
 readonly MULTILANE_APALACHE_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_multilane_apalache.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -248,8 +249,9 @@ for config in "${configs[@]}"; do
 done
 if ((run_multilane_mutations)); then
   bash "$MULTILANE_MUTATION_RUNNER"
+  bash "$INFLIGHT_FIRST_RELEASE_RUNNER"
   bash "$MULTILANE_APALACHE_RUNNER"
-  echo "[tlc] all exhaustive searches, deterministic simulations, the recovery witness, and the pinned multilane Apalache gate had their exact expected outcomes; no proof status was changed"
+  echo "[tlc] all exhaustive searches, deterministic simulations, the recovery witness, the layout-only in-flight carrier corpus, and the pinned multilane Apalache gate had their exact expected outcomes; no proof status was changed"
 else
   echo "[tlc] all requested exhaustive searches, deterministic simulations, and recovery witnesses had their exact expected outcomes; no proof status was changed"
 fi
