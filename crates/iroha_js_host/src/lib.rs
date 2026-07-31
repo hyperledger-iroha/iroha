@@ -210,7 +210,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core},
+    core::{self as norito_core, DecodeFromSlice},
     decode_from_bytes,
     json::{self, JsonDeserialize, Map, Value},
 };
