@@ -3763,7 +3763,7 @@ pub struct ProductionSchedulerTraceProjection {
     pub fifo_owed_after: bool,
 }
 
-/// Verus-side primitive ingress identity and service-class trace.
+/// Verus-side primitive ingress identity, ordinal, and service-class trace.
 #[derive(Copy, Clone)]
 pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub incoming_height: u64,
@@ -3777,6 +3777,40 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub queue_len_before: u64,
     pub queue_len_after: u64,
     pub queue_capacity: u64,
+    pub ordinal_source_before: u128,
+    pub physical_admission_ordinal: u128,
+    pub lifecycle_ordinal: u128,
+    pub ordinal_source_after: u128,
+    pub dormant_reservations_before: u64,
+    pub dormant_reservations_after: u64,
+    pub dormant_owner_ordinal: u128,
+    pub ordinal_minted: bool,
+}
+
+/// Verus-side exact replacement of one unpublished reservation by its
+/// reducer-visible command.
+#[derive(Copy, Clone)]
+pub struct ProductionIngressReservationMaterializationTraceProjection {
+    pub incoming_height: u64,
+    pub incoming_view: u64,
+    pub incoming_generation: u64,
+    pub incoming_class: u8,
+    pub stored_height: u64,
+    pub stored_view: u64,
+    pub stored_generation: u64,
+    pub stored_class: u8,
+    pub queue_len_before: u64,
+    pub queue_len_after: u64,
+    pub reserved_slots_before: u8,
+    pub reserved_slots_after: u8,
+    pub queue_capacity: u64,
+    pub ordinal_source_before: u128,
+    pub physical_admission_ordinal: u128,
+    pub lifecycle_ordinal: u128,
+    pub ordinal_source_after: u128,
+    pub dormant_reservations_before: u64,
+    pub dormant_reservations_after: u64,
+    pub dormant_owner_ordinal: u128,
 }
 
 /// Verus-side total durable leader-wire admission transition.
@@ -4276,6 +4310,19 @@ pub closed spec fn check_production_ingress_transition(
     }
 }
 
+/// Total exact reservation-materialization gate mirrored by production.
+pub closed spec fn check_production_ingress_reservation_materialization_transition(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+) -> Option<ProductionIngressReservationMaterializationTraceProjection> {
+    if production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+        projection,
+    ) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
 /// Total durable leader-wire admission gate mirrored by production.
 pub closed spec fn check_production_leader_wire_admission_transition(
     projection: ProductionLeaderWireAdmissionTraceProjection,
@@ -4450,6 +4497,13 @@ pub closed spec fn production_ingress_identity_and_class_trace_refines_protected
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> bool {
     production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the reservation-materialization ownership kernel.
+pub closed spec fn production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+) -> bool {
+    production_ingress_reservation_materialization_trace_body!(projection)
 }
 
 /// Exact Verus mirror of the durable leader-wire admission kernel.
@@ -4769,7 +4823,8 @@ pub proof fn production_scheduler_trace_refines_protected_ownership(
     reveal(production_scheduler_trace_refines_protected_ownership_kernel);
 }
 
-/// One bounded ingress admission preserves its complete tag and service class.
+/// One bounded ingress admission preserves its complete tag, service class,
+/// immutable lifecycle owner, and atomic ordinal/dormant-slot transition.
 pub proof fn production_ingress_identity_and_class_trace_refines_protected_ownership(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 )
@@ -4784,10 +4839,77 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
             && projection.incoming_class == projection.stored_class
             && projection.queue_len_after > projection.queue_len_before
             && projection.queue_len_after <= projection.queue_capacity
+            && projection.dormant_reservations_after <= projection.queue_capacity
+            && projection.queue_len_after
+                <= projection.queue_capacity - projection.dormant_reservations_after
+            && projection.physical_admission_ordinal > 0u128
+            && projection.lifecycle_ordinal > 0u128
+            && projection.lifecycle_ordinal <= projection.physical_admission_ordinal
+            && projection.ordinal_minted
+            && projection.ordinal_source_before
+                == projection.physical_admission_ordinal
+            && projection.ordinal_source_after
+                == projection.ordinal_source_before + 1u128
+            && (
+                projection.dormant_owner_ordinal == 0u128 ==>
+                    projection.dormant_reservations_after
+                        == projection.dormant_reservations_before
+            )
+            && (
+                projection.dormant_owner_ordinal != 0u128 ==> (
+                    projection.ordinal_minted
+                    && projection.dormant_owner_ordinal == projection.lifecycle_ordinal
+                    && projection.dormant_reservations_before
+                        == projection.dormant_reservations_after + 1u64
+                )
+            )
         ),
 {
     reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+}
+
+/// One exact reservation materialization preserves source and effective
+/// occupancy while replacing the token (and optional dormant backing) with
+/// one reducer-visible command.
+pub proof fn production_ingress_reservation_materialization_refines_protected_ownership(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+)
+    ensures
+        check_production_ingress_reservation_materialization_transition(projection)
+            == Some(projection) ==> (
+            production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+                projection
+            )
+            && projection.incoming_height == projection.stored_height
+            && projection.incoming_view == projection.stored_view
+            && projection.incoming_generation == projection.stored_generation
+            && projection.incoming_class == projection.stored_class
+            && projection.queue_len_after == projection.queue_len_before + 1u64
+            && projection.reserved_slots_before == 1u8
+            && projection.reserved_slots_after == 0u8
+            && projection.queue_len_after <= projection.queue_capacity
+            && projection.queue_len_after
+                <= projection.queue_capacity - projection.dormant_reservations_after
+            && projection.ordinal_source_after == projection.ordinal_source_before
+            && projection.physical_admission_ordinal
+                < projection.ordinal_source_before
+            && (
+                projection.dormant_owner_ordinal == 0u128 ==>
+                    projection.dormant_reservations_after
+                        == projection.dormant_reservations_before
+            )
+            && (
+                projection.dormant_owner_ordinal != 0u128 ==> (
+                    projection.dormant_owner_ordinal == projection.lifecycle_ordinal
+                    && projection.dormant_reservations_before
+                        == projection.dormant_reservations_after + 1u64
+                )
+            )
+        ),
+{
+    reveal(check_production_ingress_reservation_materialization_transition);
+    reveal(production_ingress_reservation_materialization_refines_protected_ownership_kernel);
 }
 
 /// One durable leader-wire admission preserves immutable identity and ordinal

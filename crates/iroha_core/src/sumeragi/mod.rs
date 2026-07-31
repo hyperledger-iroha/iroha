@@ -5680,6 +5680,7 @@ impl FairV2Ingress {
     /// becomes admissible, the head-first search selects it before later
     /// entries. When every entry is rejected, the source order and total length
     /// remain unchanged.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -5695,6 +5696,7 @@ impl FairV2Ingress {
         self.try_recv_if_at_checked(Instant::now(), predicate)
     }
 
+    #[cfg(test)]
     fn try_recv_if_at(
         &self,
         service_attempt_at: Instant,

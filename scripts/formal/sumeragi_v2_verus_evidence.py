@@ -66,6 +66,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs",
     "crates/iroha_sumeragi_core/src/lib.rs",
     "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+    "crates/iroha_sumeragi_core/src/verus_proofs/production_kernel_tail.rs",
     "crates/iroha_core/src/sumeragi/v2.rs",
     "crates/iroha_core/src/sumeragi/status.rs",
     "crates/iroha_core/src/sumeragi/v2_apply.rs",

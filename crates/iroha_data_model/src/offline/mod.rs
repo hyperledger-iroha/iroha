@@ -401,6 +401,7 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 443;
 /// Reviewed first-release advice-column profile for compact degree-16 generation.
+///
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [443];
 /// Reviewed first-release lookup-column profile for compact degree-16 generation.
 ///

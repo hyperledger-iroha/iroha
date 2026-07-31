@@ -1572,10 +1572,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown
   sumeragi::v2_worker::tests::selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle
   sumeragi::v2_worker::tests::checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal
-  sumeragi::v2_worker::tests::dormant_exact_head_reattaches_after_saturated_fair_prefix_and_drains_frozen_predecessor
-  sumeragi::v2_worker::tests::dormant_serve_waiters_reattach_strictly_by_durable_scheduler_ordinal
+  sumeragi::v2_worker::tests::dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair
+  sumeragi::v2_worker::tests::dormant_serve_waiters_fail_stop_without_requester_ordinal_repair
   sumeragi::v2_worker::tests::durable_raw_admission_restart_reuses_lifecycle_and_excludes_family_replacement
-  sumeragi::v2_worker::tests::durable_raw_higher_view_drop_retains_admitted_owner_and_displaced_terminal
+  sumeragi::v2_worker::tests::durable_raw_higher_view_drop_restarts_into_local_successor_completion
   sumeragi::v2_worker::tests::durable_raw_waiter_rejects_mutated_logical_lineage
   sumeragi::v2_worker::tests::durable_serve_state_v4_rejects_v3_header_and_payload_layouts
   sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity
@@ -1587,13 +1587,13 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission
   sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle
   sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source
-  sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_retry_only_without_runnable_work
+  sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion
   sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay
   sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack
   sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset
   sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes
   sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart
-  sumeragi::v2_worker::tests::durable_higher_view_admission_crash_retains_lower_terminal_family
+  sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union
   sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement
   sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root
   sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment

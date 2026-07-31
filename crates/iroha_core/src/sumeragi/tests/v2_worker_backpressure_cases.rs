@@ -642,8 +642,8 @@
         assert!(
             pending
                 .can_enqueue_owned_reply_transfer(reconnect())
-                .expect("terminal source reattachment preflight observes no new reservation"),
-            "a terminal source reattachment must fit even when shared capacity is full"
+                .expect("terminal replay reconnect preflight observes no new reservation"),
+            "a terminal replay reconnect must fit even when shared capacity is full"
         );
         assert_eq!(
             pending

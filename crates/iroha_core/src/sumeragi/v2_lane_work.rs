@@ -25974,6 +25974,74 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn autonomous_restart_rejects_conflicting_in_memory_payload_for_durable_slot() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+
+        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+        let journal_path = journal_dir.path().join("lane-reservations.norito");
+        let queue =
+            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+        adapter
+            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+            .expect("produce durable autonomous payload");
+        let payload = adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .next()
+            .expect("pending autonomous payload")
+            .clone();
+        let payload_key = AutonomousLanePayloadKey::from(&payload.origin_proposal);
+
+        let context = adapter.context.clone();
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let adapter_limits = adapter.limits;
+        drop(adapter);
+        drop(queue);
+
+        let mut recovered = V2LaneWorkAdapter::new(
+            context,
+            local_peer,
+            local_key,
+            true,
+            state,
+            kura,
+            adapter_limits,
+            None,
+        )
+        .expect("reopen autonomous lane adapter");
+        recovered
+            .pending_autonomous_anchor_payloads
+            .get_mut(&payload_key)
+            .expect("startup hydration installed the exact durable payload")
+            .producer_signature
+            .push(0xA5);
+
+        let error = recovered
+            .hydrate_canonical_lane_artifacts()
+            .expect_err("same-slot payload substitution must fail closed");
+        assert!(
+            matches!(
+                &error,
+                V2LaneWorkError::InvalidContext(reason)
+                    if reason.contains("conflicting bytes for the current slot")
+            ),
+            "unexpected conflicting-payload error: {error}"
+        );
+        assert!(
+            recovered.output_guard.restart_required(),
+            "conflicting same-slot hydration must close authoritative admission"
+        );
+    }
+
+    #[test]
     fn autonomous_small_payload_and_scan_limits_cannot_over_reserve() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let lane_id = LaneId::new(1);

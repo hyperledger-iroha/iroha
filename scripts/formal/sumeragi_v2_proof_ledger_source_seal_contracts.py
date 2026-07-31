@@ -67,13 +67,13 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
     "runtime_step": (
-        "5851f7e8fa8223c1de6ca54101426bca28c00c4e1d32c78762bd84c3b6e1767c"
+        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
     ),
     "runtime_step_recovery": (
-        "f3a91673b74b2b256c52ba84d82881bb2404b2726966b91049c11bc450965c5d"
+        "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
     ),
     "dispatch_one_adapter_deferred": (
-        "846b96585974bcb291e314e9ae144c2bda24d1f4f7291eb376252dad2ab4713e"
+        "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -103,7 +103,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "638d44eae201d3477a987e857d3c9318c7a525347cddb9d5bbce704d9bbc7985"
     ),
     "runtime_ingress_validate_exact": (
-        "f6b5867d05815113ca449e0bf4c29fbca5b4f706a71788e5584c00a1b4b89f9e"
+        "5076de66c0c2a3b01f31c65ff4ea3af8177e4bd372861d6e14585087fb6714d3"
     ),
     "runtime_ingress_matches_authenticated": (
         "e9d5c8bfa0cbdc71f42f9858ee00e73f663c2bed53f573c3e06a9144feaad5f8"
@@ -112,31 +112,46 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "0a9b6424c76b8d53a6e630431e3e9153d20e25d755abbe38384c5f59e9064553"
     ),
     "runtime_ingress_merge_downstream": (
-        "67f103ccdbc31a5d7527545b1ce023569c199de002ef9697d4ae525702cf8690"
+        "55f59286a356c0cd1c47b572db72660dcdedcc40f3946c2e3b62c7eb5c805e92"
     ),
     "runtime_driver_dispatch": (
-        "77f833ff3dbd893008febf65d5e9626f04d9b55b0260294b3d4a027382ca9cf3"
+        "a20f3f9675cacba345a174bba5fa8370f0f76225f8e3e040971c2d7f15800990"
     ),
     "runtime_driver_dispatch_deferred": (
-        "64777f8713b464364612f8662b48bcb494c1870a8776e4d10a18dcc70976ff60"
+        "f80c271a6766106b620e6b0dcbd7fb3a37db63fece634c09818ddb74498202d9"
     ),
     "reconcile_deferred_ingress_ownership": (
-        "0356614757c038665d820bcaa92474b6ec3d30ad0ee8e2c6652e0a88662ecbb6"
+        "fb8ac9defb961830528e67b3c05e92e7a72368c4c592f5594285f937cfb81f01"
     ),
     "accept_driver_dispatch": (
-        "2d2fe4b456bce5c808588e4c54cc637466de9f674dcb3f30df700a11f00c30b2"
+        "2862df8110e056352a64680616e131393c4eab44be5f9e091f43ccc23d6fab65"
     ),
     "enqueue_network_with_ingress_ownership": (
-        "708305b7037a4fae5e8d796ee08a80f46065ec2fe73ecc498a5e806c7efe33bc"
+        "db05791e686e2c8b4a84e09707c83b767f3bc7eef1da189060801cf86dfc5927"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "20fdb8057db53f88bced2eef196421432d2db968f475af444ec08c65bb5c3f11"
+        "24903fdc43ff249788662132bdf1c260917a8243b260e67ba5e8224a013d361d"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
     ),
     "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
         "29cc0769d5f9224ea11e10410b05b97a4e33fb75b9327ee4a18f19e12babbfe9"
+    ),
+}
+
+_PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
+        "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
+    ),
+    "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it": (
+        "b69ec152b545fb4e705335eeaecaa5785b1736349fa1494b383f18c257aa8d18"
+    ),
+    "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum": (
+        "dc5f365edfc9bbd31d0f8f595c34673a779e85aac7dfe517316792bd2c70a235"
+    ),
+    "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
+        "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
     ),
 }
 
@@ -188,7 +203,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 806
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "1873bbd68c9736db1991842c5f34b0ff4b98460567a76649619d256d4e510700"
+    "0c1ee4be74b736dba126c0eeedd1f39ccaf6cbd6eed0e6374f158e3457f2eff5"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -801,13 +816,13 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
     "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
     "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
-    "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_retry_only_without_runnable_work",
+    "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
     "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
     "sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack",
     "sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset",
     "sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes",
     "sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart",
-    "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_retains_lower_terminal_family",
+    "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union",
     "sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement",
     "sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root",
     "sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment",
