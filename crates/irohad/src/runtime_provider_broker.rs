@@ -35482,12 +35482,12 @@ mod protocol {
                     "shutdown prevents every later operation admission"
                 );
                 assert_eq!(
-                    lifecycle.active_provider_calls.load(Ordering::Acquire),
+                    lifecycle.active_provider_call_count(),
                     1,
                     "the already-admitted synchronous call remains explicitly in flight"
                 );
                 drop(admitted);
-                assert_eq!(lifecycle.active_provider_calls.load(Ordering::Acquire), 0);
+                assert_eq!(lifecycle.active_provider_call_count(), 0);
             }
 
             #[test]
