@@ -190,6 +190,55 @@ def test_record_and_verify_bind_exact_artifact_and_clean_revision(
     )
 
 
+def test_stage_artifact_dealiases_a_cargo_style_hardlink(tmp_path: Path) -> None:
+    cargo_dependency_artifact = native_artifact(tmp_path)
+    cargo_top_level_artifact = tmp_path / "cargo-top-level-native.bin"
+    os.link(cargo_dependency_artifact, cargo_top_level_artifact)
+    assert cargo_top_level_artifact.stat().st_nlink == 2
+    staged = tmp_path / "staged" / "native.bin"
+
+    checker.stage_artifact(cargo_top_level_artifact, staged)
+
+    assert staged.read_bytes() == cargo_top_level_artifact.read_bytes()
+    assert staged.stat().st_nlink == 1
+    assert (staged.stat().st_dev, staged.stat().st_ino) != (
+        cargo_top_level_artifact.stat().st_dev,
+        cargo_top_level_artifact.stat().st_ino,
+    )
+    assert checker.stable_artifact_identity(staged)[1] == staged.stat().st_size
+
+
+def test_stage_artifact_rejects_aliases_and_existing_destinations(
+    tmp_path: Path,
+) -> None:
+    artifact = native_artifact(tmp_path)
+    source_symlink = tmp_path / "source-link.bin"
+    source_symlink.symlink_to(artifact)
+    with pytest.raises(checker.ArtifactContractError, match="staging source"):
+        checker.stage_artifact(source_symlink, tmp_path / "staged.bin")
+
+    destination = tmp_path / "already-present.bin"
+    destination.write_bytes(b"must not be overwritten")
+    with pytest.raises(checker.ArtifactContractError, match="must be fresh"):
+        checker.stage_artifact(artifact, destination)
+    assert destination.read_bytes() == b"must not be overwritten"
+
+
+def test_record_rejects_a_hardlinked_artifact(tmp_path: Path) -> None:
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    os.link(artifact, tmp_path / "artifact-alias.bin")
+
+    with pytest.raises(checker.ArtifactContractError, match="one hard link"):
+        checker.build_manifest(
+            sdk="c-jni",
+            target="x86_64-unknown-linux-gnu",
+            artifact_path=artifact,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
 def test_record_and_verify_reject_missing_artifact(tmp_path: Path) -> None:
     source = clean_source(tmp_path)
     missing = tmp_path / "missing-native.bin"
@@ -692,6 +741,9 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
     jni_lane = read("ci/check_kagemusha_jvm_native_bridge.sh")
     assert 'ABI21_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi21_artifact.py"' in jni_lane
+    assert '"$ABI21_ARTIFACT_CHECKER" stage' in jni_lane
+    assert '--artifact "$CARGO_NATIVE_LIBRARY"' in jni_lane
+    assert '--destination "$NATIVE_LIBRARY"' in jni_lane
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane
     assert "sys.version_info[:2] != (3, 12)" in jni_lane

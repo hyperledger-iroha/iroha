@@ -175,6 +175,119 @@ def stable_artifact_identity(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), opened.st_size
 
 
+def stage_artifact(source_path: Path, destination_path: Path) -> None:
+    """Copy a Cargo output into one fresh, single-link artifact inode.
+
+    Cargo may publish the top-level ``cdylib`` as a hard link to its copy in
+    ``target/*/deps``.  Evidence verification intentionally rejects such
+    aliases, so native lanes first stream the completed output into an
+    isolated file and authenticate that exact staged file.
+    """
+
+    try:
+        before = source_path.lstat()
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native artifact staging source is unavailable: {source_path}"
+        ) from error
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_size <= 0
+    ):
+        fail("native artifact staging source must be one non-empty regular file")
+
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    source_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    destination_flags = (
+        os.O_CREAT
+        | os.O_EXCL
+        | os.O_WRONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        source_descriptor = os.open(source_path, source_flags)
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native artifact staging source could not be opened: {source_path}"
+        ) from error
+    try:
+        opened_source = os.fstat(source_descriptor)
+        if (opened_source.st_dev, opened_source.st_ino) != (
+            before.st_dev,
+            before.st_ino,
+        ):
+            fail("native artifact staging source changed while it was opened")
+        try:
+            destination_descriptor = os.open(
+                destination_path,
+                destination_flags,
+                0o500,
+            )
+        except OSError as error:
+            raise ArtifactContractError(
+                "native artifact staging destination must be fresh: "
+                f"{destination_path}"
+            ) from error
+        try:
+            while True:
+                chunk = os.read(source_descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                remaining = memoryview(chunk)
+                while remaining:
+                    written = os.write(destination_descriptor, remaining)
+                    if written <= 0:
+                        fail("native artifact staging destination write made no progress")
+                    remaining = remaining[written:]
+            os.fsync(destination_descriptor)
+            staged = os.fstat(destination_descriptor)
+        finally:
+            os.close(destination_descriptor)
+        after_source = os.fstat(source_descriptor)
+    finally:
+        os.close(source_descriptor)
+
+    def identity(metadata: os.stat_result) -> tuple[int, ...]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+            metadata.st_nlink,
+        )
+
+    try:
+        current_source = source_path.lstat()
+        current_destination = destination_path.lstat()
+    except OSError as error:
+        raise ArtifactContractError(
+            "native artifact changed while its isolated copy was staged"
+        ) from error
+    source_identity = identity(before)
+    if (
+        identity(opened_source) != source_identity
+        or identity(after_source) != source_identity
+        or identity(current_source) != source_identity
+    ):
+        fail("native artifact staging source changed while it was copied")
+    if (
+        identity(current_destination) != identity(staged)
+        or not stat.S_ISREG(staged.st_mode)
+        or stat.S_ISLNK(staged.st_mode)
+        or staged.st_nlink != 1
+        or staged.st_size != before.st_size
+    ):
+        fail("staged native artifact must be one complete regular file with one hard link")
+
+
 def stable_bounded_file_bytes(
     path: Path,
     *,
@@ -561,13 +674,14 @@ def _exclusive_write(path: Path, payload: bytes) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse the record/verify command line."""
+    """Parse the stage/record/verify command line."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("record", "verify"))
+    parser.add_argument("mode", choices=("stage", "record", "verify"))
     parser.add_argument("--artifact", required=True, type=Path)
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--source-root", required=True, type=Path)
+    parser.add_argument("--destination", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--source-root", type=Path)
     parser.add_argument("--node", default="node")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--sdk", choices=tuple(sorted(SDK_VALUES)))
@@ -584,6 +698,22 @@ def main() -> int:
     artifact = Path(os.path.abspath(args.artifact))
     if not artifact.exists() and not artifact.is_symlink():
         fail(f"native artifact is unavailable: {artifact}")
+    if args.mode == "stage":
+        if args.destination is None:
+            fail("stage mode requires --destination")
+        if args.manifest is not None or args.source_root is not None:
+            fail("stage mode does not accept --manifest or --source-root")
+        if args.sdk is not None or args.target is not None:
+            fail("stage mode does not accept --sdk or --target")
+        destination = Path(os.path.abspath(args.destination))
+        if destination == artifact:
+            fail("native artifact staging source and destination must differ")
+        stage_artifact(artifact, destination)
+        return 0
+    if args.destination is not None:
+        fail("record and verify modes do not accept --destination")
+    if args.manifest is None or args.source_root is None:
+        fail("record and verify modes require --manifest and --source-root")
     source_root = args.source_root.resolve(strict=True)
     probe = lambda sdk, path: probe_artifact(
         sdk,

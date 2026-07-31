@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_no_legacy_codec.sh"
+BASH = shutil.which("bash") or "bash"
 RETIRED_HYPHEN_DEP = "parity" + "-" + "scale" + "-codec"
 RETIRED_UNDERSCORE_DEP = "parity" + "_" + "scale" + "_codec"
 RETIRED_NATIVE_AMX_V1_SOURCES = (
@@ -69,15 +71,31 @@ norito = "0.1"
     return repo
 
 
-def _run_guard(repo: Path) -> subprocess.CompletedProcess[str]:
+def _run_guard(
+    repo: Path, *, path: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    if path is not None:
+        env["PATH"] = path
     return subprocess.run(
-        ["bash", "check_no_legacy_codec.sh"],
+        [BASH, "check_no_legacy_codec.sh"],
         cwd=repo,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
     )
+
+
+def _path_with_tools(tmp_path: Path, *tool_names: str) -> str:
+    bin_dir = tmp_path / "tools"
+    bin_dir.mkdir()
+    for tool_name in tool_names:
+        tool = shutil.which(tool_name)
+        assert tool is not None, f"test host must provide {tool_name}"
+        (bin_dir / tool_name).symlink_to(tool)
+    return str(bin_dir)
 
 
 def test_guard_allows_clean_root_and_crate_manifests(tmp_path: Path) -> None:
@@ -90,6 +108,54 @@ def test_guard_allows_clean_root_and_crate_manifests(tmp_path: Path) -> None:
     assert "No retired Native AMX V1 consensus codecs found." in result.stdout
     assert "No retired lane executable payload handoff codecs found." in result.stdout
     assert "No retired PK2 multilane compatibility paths found." in result.stdout
+
+
+def test_guard_falls_back_to_grep_when_ripgrep_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    source = repo / "crates" / "demo" / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(RETIRED_NATIVE_AMX_V1_SOURCES[0], encoding="utf-8")
+
+    result = _run_guard(
+        repo,
+        path=_path_with_tools(tmp_path, "git", "find", "grep"),
+    )
+
+    assert result.returncode == 1
+    assert "retired Native AMX V1 consensus codec detected in:" in result.stderr
+    assert str(source) in result.stderr
+
+
+def test_guard_fails_closed_when_no_supported_scanner_is_available(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+
+    result = _run_guard(
+        repo,
+        path=_path_with_tools(tmp_path, "git", "find"),
+    )
+
+    assert result.returncode == 2
+    assert "requires either ripgrep (rg) or grep" in result.stderr
+
+
+def test_guard_fails_closed_when_the_selected_scanner_errors(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    bin_dir = tmp_path / "broken-scanner"
+    bin_dir.mkdir()
+    fake_rg = bin_dir / "rg"
+    fake_rg.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    fake_rg.chmod(0o755)
+
+    result = _run_guard(repo, path=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    assert result.returncode == 2
+    assert "retired-codec scanner failed (rg exit 2)" in result.stderr
 
 
 def test_guard_rejects_root_manifest_dependency(tmp_path: Path) -> None:
