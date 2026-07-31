@@ -265,9 +265,9 @@ public final class ContractJsonParser {
     if (!(value instanceof String string)) {
       throw new IllegalStateException(path + " must be a base64 string when present");
     }
-    final String literal = string.trim();
-    if (literal.isEmpty()) {
-      throw new IllegalStateException(path + " must be a non-empty base64 string");
+    final String literal = string;
+    if (literal.isEmpty() || !literal.equals(literal.trim())) {
+      throw new IllegalStateException(path + " must be exact standard-base64");
     }
     final byte[] decoded;
     try {
@@ -277,6 +277,9 @@ public final class ContractJsonParser {
     }
     if (decoded.length == 0) {
       throw new IllegalStateException(path + " must not decode to empty bytes");
+    }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(literal)) {
+      throw new IllegalStateException(path + " must be exact standard-base64");
     }
     return literal;
   }

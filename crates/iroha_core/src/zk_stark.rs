@@ -67,6 +67,7 @@ const GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR: &str =
     "generic STARK AIR prover cannot target the retired ZK-ACE relation; use SubmitPrivacyProofV1";
 const GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the IVM execution circuit; use the IVM execution STARK prover";
 const GENERIC_STARK_AIR_SORACLOUD_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target a Soracloud FHE relation; a dedicated typed Soracloud verifier is required";
+const GENERIC_STARK_AIR_GOVERNANCE_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target a governance vote role; a dedicated semantic governance circuit is required";
 
 fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
     if label.is_empty() {
@@ -123,6 +124,15 @@ fn stark_air_circuit_id_targets_ivm_execution(circuit_id: &str) -> bool {
     )
 }
 
+fn stark_air_circuit_id_targets_governance_vote_relation(circuit_id: &str) -> bool {
+    [
+        crate::zk::GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
+        crate::zk::GOVERNANCE_TALLY_CIRCUIT_ID_V1,
+    ]
+    .into_iter()
+    .any(|canonical| stark_air_circuit_id_targets_reserved_circuit(circuit_id, canonical))
+}
+
 fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool {
     [
         iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
@@ -146,6 +156,9 @@ fn validate_generic_stark_air_circuit_id(circuit_id: &str) -> Result<(), String>
     }
     if stark_air_circuit_id_targets_ivm_execution(circuit_id) {
         return Err(GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR.to_owned());
+    }
+    if stark_air_circuit_id_targets_governance_vote_relation(circuit_id) {
+        return Err(GENERIC_STARK_AIR_GOVERNANCE_RESERVED_ERROR.to_owned());
     }
     if stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id) {
         return Err(GENERIC_STARK_AIR_SORACLOUD_RESERVED_ERROR.to_owned());
@@ -1800,7 +1813,8 @@ fn stark_air_context_matches_statement(
 ) -> bool {
     match context {
         StarkAirVerificationContext::Binding => {
-            !stark_air_circuit_id_targets_soracloud_fhe_relation(&air.circuit_id)
+            !stark_air_circuit_id_targets_governance_vote_relation(&air.circuit_id)
+                && !stark_air_circuit_id_targets_soracloud_fhe_relation(&air.circuit_id)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
             statement_hash,

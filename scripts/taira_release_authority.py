@@ -95,6 +95,8 @@ EVIDENCE_PATHS = {
     "exact12_matrix": "provenance/privacy-native/exact12-v1.tsv",
     "expectations_json": "provenance/privacy-native/expectations-v1.json",
     "expectations_norito": "provenance/privacy-native/expectations-v1.norito",
+    "x509_resource_json": ("provenance/privacy-native/zk-x509-resource-v1.json"),
+    "x509_resource_norito": ("provenance/privacy-native/zk-x509-resource-v1.norito"),
     "receipt_json": "provenance/privacy-native/receipt-v1.json",
     "receipt_norito": "provenance/privacy-native/receipt-v1.norito",
     "runner_binary": "bin/taira_privacy_release_runner",

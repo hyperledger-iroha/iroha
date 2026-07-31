@@ -24,7 +24,9 @@ use iroha_data_model::sorafs::{
 };
 use sorafs_manifest::{
     AdmissionRecord,
-    potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1},
+    potr::{PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm, PotrSignatureV1},
+    proof_stream::ProofStreamTier,
+    provider_advert::AvailabilityTier,
 };
 use sorafs_node::{
     PotrAdmissionPolicyBindingError, PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError,
@@ -1193,6 +1195,9 @@ impl PotrRuntimeSignersV1 {
         mut receipt: PotrReceiptV1,
         durable_policy_floor: Option<&PotrAdmissionPolicyBindingV1>,
     ) -> Result<SignedPotrReceiptV1, PotrReceiptRuntimeSigningError> {
+        receipt
+            .validate_unsigned()
+            .map_err(PotrReceiptRuntimeSigningError::InvalidUnsignedReceipt)?;
         // A runtime adapter may rotate credentials behind a stable object, but
         // it may not silently replace either administrative signer identity.
         // Re-check the identities before consulting keys so a drifting or
@@ -1353,7 +1358,22 @@ fn validate_admission_snapshot(
     {
         return Err(PotrReceiptRuntimeSigningError::InactiveAdmission);
     }
+    let qos = snapshot.admission.envelope().advert_body.qos;
+    if receipt.deadline_ms != qos.max_retrieval_latency_ms {
+        return Err(PotrReceiptRuntimeSigningError::AdmissionDeadlineMismatch);
+    }
+    if receipt.tier != proof_stream_tier_for_availability(qos.availability) {
+        return Err(PotrReceiptRuntimeSigningError::AdmissionTierMismatch);
+    }
     Ok(())
+}
+
+const fn proof_stream_tier_for_availability(availability: AvailabilityTier) -> ProofStreamTier {
+    match availability {
+        AvailabilityTier::Hot => ProofStreamTier::Hot,
+        AvailabilityTier::Warm => ProofStreamTier::Warm,
+        AvailabilityTier::Cold => ProofStreamTier::Archive,
+    }
 }
 
 fn validate_gateway_public_key(
@@ -1492,6 +1512,15 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
     /// The admission was not active when the request began.
     #[error("PoTR provider admission is not active")]
     InactiveAdmission,
+    /// The signed deadline differs from the council-verified provider QoS.
+    #[error("PoTR receipt deadline does not match governed provider QoS")]
+    AdmissionDeadlineMismatch,
+    /// The signed storage tier differs from the council-verified provider QoS.
+    #[error("PoTR receipt tier does not match governed provider QoS")]
+    AdmissionTierMismatch,
+    /// The unsigned receipt violates canonical semantic invariants.
+    #[error("PoTR unsigned receipt is invalid: {0}")]
+    InvalidUnsignedReceipt(PotrReceiptValidationError),
     /// Runtime gateway service failure.
     #[error("PoTR gateway signer service failed")]
     GatewayService(PotrSignerServiceError),
@@ -2032,12 +2061,13 @@ mod tests {
         let admission = AdmissionRecord::new(envelope, &policy)
             .expect("council-verified PoTR provider admission");
         let requested_at_ms = admission.envelope().issued_at.saturating_add(10) * 1_000;
+        let qos = admission.envelope().advert_body.qos;
         let receipt = PotrReceiptV1 {
             version: POTR_RECEIPT_VERSION_V1,
             manifest_digest: [0x77; 32],
             provider_id: *admission.provider_id(),
-            tier: ProofStreamTier::Hot,
-            deadline_ms: 500,
+            tier: proof_stream_tier_for_availability(qos.availability),
+            deadline_ms: qos.max_retrieval_latency_ms,
             latency_ms: 42,
             status: PotrStatus::Success,
             requested_at_ms,
@@ -2746,6 +2776,44 @@ mod tests {
             .expect("receipt remains governed");
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn runtime_signing_rejects_caller_selected_deadline_and_tier() {
+        let fixture = fixture();
+        let (signers, gateway_calls, provider_calls) = runtime_signers(&fixture, false, false);
+
+        let mut wrong_deadline = fixture.receipt.clone();
+        wrong_deadline.deadline_ms = wrong_deadline.deadline_ms.saturating_add(1);
+        assert_eq!(
+            signers
+                .sign_receipt(wrong_deadline, None)
+                .expect_err("caller deadline must not override governed QoS"),
+            PotrReceiptRuntimeSigningError::AdmissionDeadlineMismatch
+        );
+
+        let mut wrong_tier = fixture.receipt.clone();
+        wrong_tier.tier = match wrong_tier.tier {
+            ProofStreamTier::Hot => ProofStreamTier::Warm,
+            ProofStreamTier::Warm | ProofStreamTier::Archive => ProofStreamTier::Hot,
+        };
+        assert_eq!(
+            signers
+                .sign_receipt(wrong_tier, None)
+                .expect_err("caller tier must not override governed QoS"),
+            PotrReceiptRuntimeSigningError::AdmissionTierMismatch
+        );
+
+        let mut invalid_status = fixture.receipt.clone();
+        invalid_status.status = PotrStatus::MissedDeadline;
+        assert!(matches!(
+            signers.sign_receipt(invalid_status, None),
+            Err(PotrReceiptRuntimeSigningError::InvalidUnsignedReceipt(
+                PotrReceiptValidationError::MissedDeadlineWithoutBreach { .. }
+            ))
+        ));
+        assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -21,6 +21,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
 
+/// P-256 ES256 signing key used by first-release wallet-side device proofs.
+pub use p256::ecdsa::SigningKey as DeviceSigningKeyV1;
+
 /// Maximum chain-id bytes accepted by a privacy transcript.
 pub const MAX_TRANSCRIPT_CHAIN_ID_BYTES_V1: usize = 255;
 /// Maximum opaque proof bytes accepted before Norito decoding.

@@ -208,7 +208,7 @@ run_positive \
   "$AUTONOMOUS_MODULE" \
   multilane_autonomous_reservation_carrier_fixed.cfg \
   10 \
-  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLStageEvidenceMonotonic"
+  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic"
 run_positive \
   queue-plan-admission-registry \
   "$QUEUE_PLAN_ADMISSION_MODULE" \

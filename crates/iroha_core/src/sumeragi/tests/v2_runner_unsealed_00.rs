@@ -211,6 +211,7 @@
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -909,4 +910,3 @@
                 .expect("inspect direct CloseAck route in worker ownership")
         );
     }
-

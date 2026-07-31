@@ -331,6 +331,36 @@ pub mod fixed_u32_limbs {
     }
 }
 
+/// Serialize fixed-size arrays of JSON values as canonical JSON arrays.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod fixed_array {
+    use super::*;
+
+    pub fn serialize<T: JsonSerialize, const N: usize>(values: &[T; N], out: &mut String) {
+        out.push('[');
+        for (index, value) in values.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            JsonSerialize::json_serialize(value, out);
+        }
+        out.push(']');
+    }
+
+    pub fn deserialize<T: JsonDeserialize, const N: usize>(
+        parser: &mut Parser<'_>,
+    ) -> Result<[T; N], json::Error> {
+        let values = Vec::<T>::json_deserialize(parser)?;
+        values.try_into().map_err(|values: Vec<T>| {
+            json::Error::Message(format!(
+                "expected exactly {N} array elements, got {}",
+                values.len()
+            ))
+        })
+    }
+}
+
 /// Serialize and deserialize fixed-size byte arrays as hex strings.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
@@ -560,6 +590,12 @@ mod tests {
         limbs: [u32; 4],
     }
 
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct FixedStringArrayWrapper {
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+        values: [String; 2],
+    }
+
     #[test]
     fn fixed_u64_limbs_roundtrip_and_reject_wrong_length() {
         let wrapper = FixedU64LimbsWrapper {
@@ -600,6 +636,32 @@ mod tests {
 
         json::from_str::<FixedU32LimbsWrapper>(r#"{"limbs":[1,2,-1,4]}"#)
             .expect_err("non-u32 limb must fail");
+    }
+
+    #[test]
+    fn fixed_array_roundtrips_non_byte_values_and_rejects_wrong_length() {
+        let wrapper = FixedStringArrayWrapper {
+            values: ["source".to_owned(), "destination".to_owned()],
+        };
+        let encoded = json::to_json(&wrapper).expect("serialize fixed string array");
+        assert_eq!(encoded, r#"{"values":["source","destination"]}"#);
+        let decoded: FixedStringArrayWrapper =
+            json::from_str(&encoded).expect("decode fixed string array");
+        assert_eq!(decoded, wrapper);
+
+        for malformed in [
+            r#"{"values":["source"]}"#,
+            r#"{"values":["source","destination","extra"]}"#,
+        ] {
+            let error = json::from_str::<FixedStringArrayWrapper>(malformed)
+                .expect_err("wrong fixed array length must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("expected exactly 2 array elements"),
+                "unexpected fixed-array error: {error}"
+            );
+        }
     }
 
     #[test]

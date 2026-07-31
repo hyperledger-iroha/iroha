@@ -403,7 +403,7 @@ fn inbound_sumeragi_topic(
     if view.schema() != <BlockMessage as norito::NoritoSerialize>::schema_hash() {
         return Err(norito::core::Error::SchemaMismatch);
     }
-    let align = core::mem::align_of::<norito::core::Archived<BlockMessage>>();
+    let align = norito::core::archived_payload_align::<BlockMessage>();
     let padding = if align <= 1 {
         0
     } else {
@@ -569,7 +569,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         use std::borrow::Cow;
 
-        let min_size = core::mem::size_of::<norito::core::Archived<Self>>();
+        let min_size = norito::core::archived_payload_size::<Self>();
         let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
             let mut padded = Vec::with_capacity(min_size);
             padded.extend_from_slice(bytes);
@@ -1862,6 +1862,7 @@ mod tests {
                 Hash::new(b"v2-safety-topic-parent-state"),
                 Hash::new(b"v2-safety-topic-post-state"),
                 Hash::new(b"v2-safety-topic-ordinary-writes"),
+                1,
                 Hash::new(b"v2-safety-topic-executed-block-wire"),
             ),
             signer: 0,

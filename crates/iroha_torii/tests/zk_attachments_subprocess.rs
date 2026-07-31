@@ -93,11 +93,15 @@ fn gzip_compress(input: &[u8]) -> Vec<u8> {
 fn run_attachment_sanitizer_binary(
     stdin_bytes: &[u8],
     enable_env_gate: bool,
+    enable_sandbox_marker: bool,
     max_input_bytes: Option<&str>,
 ) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_attachment_sanitizer"));
     if enable_env_gate {
         cmd.env("IROHA_ATTACHMENT_SANITIZER", "1");
+    }
+    if enable_sandbox_marker {
+        cmd.env("IROHA_ATTACHMENT_SANITIZER_OS_SANDBOXED", "1");
     }
     if let Some(max_input_bytes) = max_input_bytes {
         cmd.env(
@@ -427,7 +431,7 @@ async fn attachments_sanitize_via_subprocess_rejects_malformed_zstd_payload() {
 
 #[test]
 fn attachment_sanitizer_binary_requires_env_gate() {
-    let output = run_attachment_sanitizer_binary(&[], false, None);
+    let output = run_attachment_sanitizer_binary(&[], false, false, None);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
     assert!(
@@ -439,8 +443,21 @@ fn attachment_sanitizer_binary_requires_env_gate() {
 }
 
 #[test]
+fn attachment_sanitizer_binary_requires_os_sandbox_marker() {
+    let output = run_attachment_sanitizer_binary(&[], true, false, Some("1024"));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("attachment sanitizer refuses to run outside its OS sandbox"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn attachment_sanitizer_binary_rejects_oversized_stdin_request() {
-    let output = run_attachment_sanitizer_binary(b"0123456789", true, Some("4"));
+    let output = run_attachment_sanitizer_binary(b"0123456789", true, true, Some("4"));
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
     assert!(
@@ -453,7 +470,7 @@ fn attachment_sanitizer_binary_rejects_oversized_stdin_request() {
 
 #[test]
 fn attachment_sanitizer_binary_writes_error_response_for_invalid_request() {
-    let output = run_attachment_sanitizer_binary(b"not-a-norito-request", true, Some("1024"));
+    let output = run_attachment_sanitizer_binary(b"not-a-norito-request", true, true, Some("1024"));
     assert!(output.status.success(), "{:?}", output.status);
     assert!(
         !output.stdout.is_empty(),

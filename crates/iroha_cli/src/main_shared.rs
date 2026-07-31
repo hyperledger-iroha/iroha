@@ -7854,7 +7854,7 @@ mod settlement {
         use eyre::{Context, eyre};
         use iroha_config::parameters::actual::IsoReferenceData;
         use iroha_core::iso_bridge::reference_data::{
-            ReferenceDataError, ReferenceDataSnapshots, SnapshotState, ValidationOutcome,
+            ReferenceDataError, ReferenceDataSnapshots, SnapshotState,
         };
         use ivm::iso20022::{
             MsgError, msg_add, msg_clear, msg_create, msg_serialize, msg_set, msg_validate,
@@ -7969,7 +7969,7 @@ mod settlement {
                     .ok_or_else(|| eyre!("--delivery-instrument-id is required for ISO preview"))?;
                 if let Some(snapshots) = reference_data {
                     match snapshots.validate_isin(fin_instr) {
-                        Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => {}
+                        Ok(()) => {}
                         Err(err) => return Err(instrument_reference_error(fin_instr, err)),
                     }
                 }
@@ -8069,6 +8069,9 @@ mod settlement {
 
         fn instrument_reference_error(id: &str, err: ReferenceDataError) -> eyre::Report {
             match err {
+                ReferenceDataError::DatasetUnavailable { .. } => {
+                    eyre!("cannot validate `{id}` because no ISO reference crosswalk was supplied")
+                }
                 ReferenceDataError::DatasetFailed { diagnostics, .. } => eyre!(
                     "failed to validate `{id}` against ISO reference crosswalk: {}",
                     diagnostics.unwrap_or_else(|| "unknown error".to_string())

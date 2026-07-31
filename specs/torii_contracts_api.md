@@ -15,6 +15,11 @@ the standard transaction pipeline.
 - POST `/v1/contracts/aliases/resolve`
   - Resolves an active contract alias using canonical account-signed request
     headers and returns the exact consensus binding and contract subject.
+- POST `/v1/contracts/aliases`
+  - Validates an alias bind, update, or clear request and returns a canonical
+    unsigned transaction draft. The strict body contains `authority`,
+    `contract_address`, optional `contract_alias`, and optional
+    `lease_expiry_ms`; it never contains a private key.
 - POST `/v1/contracts/call` and POST `/v1/contracts/view`
   - Invoke or read an already registered contract by canonical address or active
     alias.
@@ -42,6 +47,11 @@ A deployment client must:
 artifact, and alias compare-and-swap in one consensus transition. Rotation
 clears and deactivates the previous address and binds the new one atomically.
 Generic account metadata writes cannot modify the reserved deployment nonce.
+
+Alias-write draft responses set `submitted: false` and include
+`transaction_payload_b64` plus the exact `signing_message_b64`. The caller must
+verify the decoded payload, sign it locally, construct a `SignedTransaction`,
+and submit through the standard transaction pipeline.
 
 ### Type encodings (JSON)
 

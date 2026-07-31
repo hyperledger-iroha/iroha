@@ -7,12 +7,10 @@ use iroha_crypto::{
 use iroha_data_model::{
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierResolutionReceipt},
     prelude::*,
-    proof::VerifyingKeyBox,
     ram_lfe::{
         RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramPolicy,
         RamLfeReceiptAttestation,
     },
-    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_telemetry::metrics;
 
@@ -155,7 +153,12 @@ pub mod isi {
                     "Identifier receipt hash must not be zero".to_owned().into(),
                 ));
             }
-            validate_program_receipt(&receipt, &policy, &program_policy)?;
+            validate_program_receipt(
+                &receipt,
+                &policy,
+                &program_policy,
+                crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
+            )?;
 
             let uaid = *state_transaction
                 .world
@@ -429,6 +432,7 @@ pub mod isi {
         receipt: &IdentifierResolutionReceipt,
         policy: &IdentifierPolicy,
         program_policy: &RamLfeProgramPolicy,
+        guardrails: crate::zk::ZkVerifyGuardrails,
     ) -> Result<(), Error> {
         let execution = &receipt.payload.execution;
         if execution.program_id != policy.program_id
@@ -609,6 +613,7 @@ pub mod isi {
                             .into(),
                         )
                     })?,
+                    guardrails,
                 )?;
             }
         }
@@ -712,136 +717,12 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
         execution: &RamLfeExecutionReceiptPayload,
         verifier: &iroha_crypto::RamLfeProofVerifierMetadata,
+        guardrails: crate::zk::ZkVerifyGuardrails,
     ) -> Result<(), Error> {
-        let envelope: OpenVerifyEnvelope =
-            norito::decode_canonical(&proof.bytes).map_err(|err| {
-                Error::InvariantViolation(
-                    format!(
-                        "RAM-LFE proof receipt must use a canonical OpenVerifyEnvelope payload: {err}"
-                    )
-                    .into(),
-                )
-            })?;
-        if proof.backend.as_str() != verifier.proof_backend {
-            return Err(Error::InvariantViolation(
-                format!(
-                    "RAM-LFE proof backend {} does not match verifier backend {}",
-                    proof.backend.as_str(),
-                    verifier.proof_backend
-                )
-                .into(),
-            ));
-        }
-        let expected_backend_tag =
-            crate::zk::verifier_backend_registry_tag_v1(&verifier.proof_backend).ok_or_else(|| {
-                Error::InvariantViolation(
-                    format!(
-                        "RAM-LFE proof verifier backend {} is not admitted by the native verifier registry",
-                        verifier.proof_backend
-                    )
-                    .into(),
-                )
-            })?;
-        if expected_backend_tag != BackendTag::Halo2IpaPasta {
-            return Err(Error::InvariantViolation(
-                format!(
-                    "RAM-LFE proof verifier backend {} must use Halo2 IPA Pasta envelopes",
-                    verifier.proof_backend
-                )
-                .into(),
-            ));
-        }
-        if envelope.backend != expected_backend_tag {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof envelope backend tag must be Halo2 IPA Pasta"
-                    .to_owned()
-                    .into(),
-            ));
-        }
-        if envelope.circuit_id != verifier.circuit_id {
-            return Err(Error::InvariantViolation(
-                format!(
-                    "RAM-LFE proof circuit {} does not match verifier circuit {}",
-                    envelope.circuit_id, verifier.circuit_id
-                )
-                .into(),
-            ));
-        }
-        if Hash::new(&envelope.public_inputs) != verifier.public_inputs_schema_hash {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof public-input schema hash does not match verifier metadata"
-                    .to_owned()
-                    .into(),
-            ));
-        }
-        if !envelope.aux.is_empty() {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof envelope auxiliary bytes must be empty"
-                    .to_owned()
-                    .into(),
-            ));
-        }
-
-        let verifying_key = VerifyingKeyBox::new(
-            verifier.proof_backend.clone().into(),
-            verifier.verifying_key_bytes.clone(),
-        );
-        if envelope.vk_hash == [0u8; Hash::LENGTH] {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof envelope verifier-key hash must be non-zero"
-                    .to_owned()
-                    .into(),
-            ));
-        }
-        if envelope.vk_hash != crate::zk::hash_vk(&verifying_key) {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE verifier metadata contains a mismatched verifying key"
-                    .to_owned()
-                    .into(),
-            ));
-        }
-        let expected_instances =
-            expected_execution_payload_hash_instances(execution.payload_hash().map_err(|err| {
-                Error::InvariantViolation(
-                    format!("Failed to encode RAM-LFE execution receipt payload: {err}").into(),
-                )
-            })?);
-        let actual_instances = crate::zk::extract_pasta_instance_columns_bytes(
-            &envelope.proof_bytes,
+        crate::smartcontracts::isi::ram_lfe::verify_execution_proof(
+            proof, execution, verifier, guardrails,
         )
-        .ok_or_else(|| {
-            Error::InvariantViolation(
-                "RAM-LFE proof does not expose the expected Halo2 public instances"
-                    .to_owned()
-                    .into(),
-            )
-        })?;
-        if actual_instances != expected_instances {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof public instances do not match the execution payload hash"
-                    .to_owned()
-                    .into(),
-            ));
-        }
-        if !crate::zk::verify_backend(&verifier.proof_backend, proof, Some(&verifying_key)) {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof verification failed".to_owned().into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8; 32]>> {
-        let bytes: &[u8; 32] = payload_hash.as_ref();
-        (0..4)
-            .map(|index| {
-                let mut scalar = [0u8; 32];
-                let start = index * 8;
-                let end = start + 8;
-                scalar[..8].copy_from_slice(&bytes[start..end]);
-                vec![scalar]
-            })
-            .collect()
+        .map_err(|err| Error::InvariantViolation(err.into()))
     }
 
     #[cfg(test)]
@@ -850,9 +731,9 @@ pub mod isi {
 
         use iroha_crypto::RamLfeProofVerifierMetadata;
         use iroha_data_model::{
-            proof::ProofBox,
+            proof::{ProofBox, VerifyingKeyBox},
             ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
-            zk::OpenVerifyEnvelope,
+            zk::{BackendTag, OpenVerifyEnvelope},
         };
 
         use super::*;
@@ -881,6 +762,17 @@ pub mod isi {
                 circuit_id: "halo2/pasta/ipa/tiny-add".to_owned(),
                 public_inputs_schema_hash: Hash::new(b"identifier-ram-lfe-proof-schema"),
                 verifying_key_bytes: b"identifier-ram-lfe-proof-vk".to_vec(),
+            }
+        }
+
+        fn test_guardrails() -> crate::zk::ZkVerifyGuardrails {
+            crate::zk::ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: usize::MAX,
+                halo2_max_proof_bytes: usize::MAX,
+                stark_enabled: true,
+                stark_max_envelope_bytes: usize::MAX,
+                stark_max_proof_bytes: usize::MAX,
             }
         }
 
@@ -915,8 +807,9 @@ pub mod isi {
             let bad_backend = sample_proof_box(&verifier, |envelope| {
                 envelope.backend = BackendTag::Stark;
             });
-            let err = verify_execution_proof(&bad_backend, &execution, &verifier)
-                .expect_err("wrong envelope backend tag must reject before proof parsing");
+            let err =
+                verify_execution_proof(&bad_backend, &execution, &verifier, test_guardrails())
+                    .expect_err("wrong envelope backend tag must reject before proof parsing");
             let message = err.to_string();
             assert!(
                 message.contains("backend tag"),
@@ -930,10 +823,13 @@ pub mod isi {
                 let mut backend_verifier = verifier.clone();
                 backend_verifier.proof_backend = backend.to_owned();
                 let backend_proof = sample_proof_box(&backend_verifier, |_| {});
-                let err = verify_execution_proof(&backend_proof, &execution, &backend_verifier)
-                    .expect_err(
-                        "unexpected RAM-LFE verifier backend must reject before proof parsing",
-                    );
+                let err = verify_execution_proof(
+                    &backend_proof,
+                    &execution,
+                    &backend_verifier,
+                    test_guardrails(),
+                )
+                .expect_err("unexpected RAM-LFE verifier backend must reject before proof parsing");
                 let message = err.to_string();
                 assert!(
                     message.contains(expected_message),
@@ -944,7 +840,7 @@ pub mod isi {
             let aux = sample_proof_box(&verifier, |envelope| {
                 envelope.aux = b"unbound-identifier-proof-metadata".to_vec();
             });
-            let err = verify_execution_proof(&aux, &execution, &verifier)
+            let err = verify_execution_proof(&aux, &execution, &verifier, test_guardrails())
                 .expect_err("non-empty auxiliary bytes must reject before proof parsing");
             let message = err.to_string();
             assert!(
@@ -955,16 +851,18 @@ pub mod isi {
             let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
                 envelope.vk_hash = [0u8; Hash::LENGTH];
             });
-            let err = verify_execution_proof(&zero_vk_hash, &execution, &verifier)
-                .expect_err("zero verifier-key hash must reject before proof parsing");
+            let err =
+                verify_execution_proof(&zero_vk_hash, &execution, &verifier, test_guardrails())
+                    .expect_err("zero verifier-key hash must reject before proof parsing");
             let message = err.to_string();
             assert!(message.contains("non-zero"), "unexpected error: {message}");
 
             let schema_drift = sample_proof_box(&verifier, |envelope| {
                 envelope.public_inputs.extend_from_slice(b":schema-drift");
             });
-            let err = verify_execution_proof(&schema_drift, &execution, &verifier)
-                .expect_err("public-input schema drift must reject before proof parsing");
+            let err =
+                verify_execution_proof(&schema_drift, &execution, &verifier, test_guardrails())
+                    .expect_err("public-input schema drift must reject before proof parsing");
             let message = err.to_string();
             assert!(
                 message.contains("public-input schema hash"),
@@ -974,8 +872,9 @@ pub mod isi {
             let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
                 envelope.vk_hash = [0xA5; Hash::LENGTH];
             });
-            let err = verify_execution_proof(&wrong_vk_hash, &execution, &verifier)
-                .expect_err("wrong verifier-key hash must reject before proof parsing");
+            let err =
+                verify_execution_proof(&wrong_vk_hash, &execution, &verifier, test_guardrails())
+                    .expect_err("wrong verifier-key hash must reject before proof parsing");
             let message = err.to_string();
             assert!(
                 message.contains("mismatched verifying key"),
@@ -1000,10 +899,26 @@ pub mod isi {
             assert_ne!(alternate_bytes, canonical.bytes);
             let alternate = ProofBox::new(canonical.backend, alternate_bytes);
 
-            let err = verify_execution_proof(&alternate, &execution, &verifier)
+            let err = verify_execution_proof(&alternate, &execution, &verifier, test_guardrails())
                 .expect_err("alternate-layout identifier proof envelope must reject");
             assert!(
                 err.to_string().contains("canonical OpenVerifyEnvelope"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn identifier_verify_execution_proof_propagates_node_guardrails() {
+            let verifier = sample_proof_verifier();
+            let execution = sample_proof_payload();
+            let proof = sample_proof_box(&verifier, |_| {});
+            let mut guardrails = test_guardrails();
+            guardrails.halo2_enabled = false;
+
+            let err = verify_execution_proof(&proof, &execution, &verifier, guardrails)
+                .expect_err("identifier claim verification must honor disabled Halo2");
+            assert!(
+                err.to_string().contains("disabled in node configuration"),
                 "unexpected error: {err}"
             );
         }

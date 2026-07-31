@@ -79,6 +79,7 @@
             Hash::new(b"runtime parent state"),
             Hash::new(b"runtime post state"),
             Hash::new(b"runtime ordinary writes"),
+            1,
             Hash::new(b"runtime executed block wire"),
         );
         let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {

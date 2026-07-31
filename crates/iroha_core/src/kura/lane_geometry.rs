@@ -18,8 +18,8 @@ use iroha_data_model::{
         execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
     },
     merge::{LaneDrainFrontierV1, MergeLedgerEntry},
-    name::Name,
     nexus::{DataSpaceId, LaneId},
+    state_path::StatePath,
     transaction::signed::TransactionEntrypoint,
 };
 use norito::codec::{Decode, DecodeAll, Encode};
@@ -102,8 +102,12 @@ const MAX_BLOCK_STORE_COMMIT_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR: usize = 65_536;
 const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = 5;
 const LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE: usize = 2;
+// In addition to the five regular data/index pairs, every route may retain
+// the certified frontier, Native latest index, and merge-application frontier.
+const LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE: usize = 3;
 const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
-    LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + 2;
+    LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2
+        + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;
 
 /// Bound the aggregate retirement scan without treating legitimate route
 /// multiplicity as corruption.
@@ -127,6 +131,14 @@ fn lane_retirement_aggregate_work_item_limit(
     let native_per_route =
         native_retention.checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)?;
     route_count.checked_mul(regular_per_route.checked_add(native_per_route)?)
+}
+
+/// Bound one route's complete retirement artifact namespace.
+fn lane_retirement_per_route_artifact_file_limit(native_retention: usize) -> Option<usize> {
+    native_retention
+        .checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)?
+        .checked_add(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)?
+        .checked_add(LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE)
 }
 
 /// Return whether Native manifest and receipt windows are the same complete,
@@ -3467,7 +3479,7 @@ impl Kura {
         snapshot_height: u64,
         snapshot_block_hash: Option<HashOf<BlockHeader>>,
         snapshot_state_hash: Hash,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<LaneGeometryGcSummary> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
@@ -3495,7 +3507,7 @@ impl Kura {
         snapshot_height: u64,
         snapshot_block_hash: Option<HashOf<BlockHeader>>,
         snapshot_state_hash: Hash,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<LaneGeometryGcSummary> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
@@ -3867,7 +3879,7 @@ impl Kura {
     fn geometry_merge_releases_proven_by_snapshot(
         &self,
         snapshot_height: u64,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<Vec<LaneGeometryMergeRelease>> {
         let entries = self.merge_ledger_all_entries()?;
         let carriers = self.geometry_merge_carrier_map()?;
@@ -3962,48 +3974,27 @@ impl Kura {
                 "merge execution context height differs from its canonical carrier mapping",
             ));
         }
-        let height = NonZeroUsize::new(usize::try_from(record.block_height)?).ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::InvalidData,
-                "merge execution carrier block height is zero",
-            )
-        })?;
-        let durable_hash = self.get_durable_block_hash(height).ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::NotFound,
-                "merge execution carrier block is not durable",
-            )
-        })?;
-        let carrier = self.get_block(height).ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::NotFound,
-                "merge execution carrier block payload is unavailable",
-            )
-        })?;
-        if durable_hash != record.block_hash || carrier.hash() != record.block_hash {
-            return Err(Error::BlockHeightConflict {
-                height: record.block_height,
-                expected: record.block_hash,
-                actual: carrier.hash(),
-            });
-        }
-        let reference = carrier
-            .execution_context()
-            .and_then(|bundle| bundle.merge_entry.as_ref())
+        let (carrier_header, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                record.block_height,
+            )?
             .ok_or_else(|| {
                 self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "merge execution carrier block has no certified merge reference",
+                    ErrorKind::NotFound,
+                    "merge execution carrier has no retained finality evidence",
                 )
             })?;
-        if !reference.matches_entry(entry)
-            || reference.entry_hash != entry_hash
-            || reference.execution_batch_hash != Some(batch.batch_hash)
-            || reference.epoch_id != entry.epoch_id
+        let expected_commitment =
+            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(entry_hash);
+        if carrier_header.hash() != record.block_hash
+            || finality.block_hash != record.block_hash
+            || finality.commit_qc.execution_commitment.merge_carrier != Some(expected_commitment)
+            || crate::merge::merge_application_header_from_carrier(&carrier_header)
+                != batch.application_block_header
         {
             return Err(self.geometry_error(
                 ErrorKind::InvalidData,
-                "merge execution carrier reference does not identify its durable merge entry",
+                "merge execution carrier finality does not identify its durable merge entry",
             ));
         }
         Ok(LaneGeometryMergeCarrier {
@@ -4016,7 +4007,7 @@ impl Kura {
     fn geometry_merge_carrier_map(
         &self,
     ) -> Result<BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerCarrierRecord>> {
-        let records = self.merge_carrier_records()?;
+        let records = self.merge_carrier_records_under_prune_and_canonical_guards()?;
         let mut carriers = BTreeMap::new();
         for record in records {
             if carriers.insert(record.entry_hash, record).is_some() {
@@ -4723,23 +4714,15 @@ impl Kura {
                 "configured lane retirement work-item bound overflows",
             )
         })?;
-        let per_route_artifact_file_limit = self
-            .native_amx_participant_evidence_retention()
-            .get()
-            .checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)
-            .and_then(|native_files| {
-                native_files
-                    .checked_add(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)
-                    .and_then(|files| {
-                        files.checked_add(LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE)
-                    })
-            })
-            .ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "configured per-route lane retirement artifact-file bound overflows",
-                )
-            })?;
+        let per_route_artifact_file_limit = lane_retirement_per_route_artifact_file_limit(
+            self.native_amx_participant_evidence_retention().get(),
+        )
+        .ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured per-route lane retirement artifact-file bound overflows",
+            )
+        })?;
         let aggregate_artifact_file_limit = entries
             .len()
             .checked_mul(per_route_artifact_file_limit)
@@ -4863,7 +4846,9 @@ impl Kura {
                 self.decode_lane_merge_application_frontier(&entry, &merge_application_frontier)?
             {
                 if self
-                    .lane_merge_application_frontier_expected_receipt(&frontier)
+                    .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                        &frontier,
+                    )
                     .is_none()
                 {
                     return Err(self.geometry_error(
@@ -5510,7 +5495,9 @@ impl Kura {
                         == Some(receipt)
                 }
                 LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                    self.lane_block_application_receipt_matches_merge_log(receipt)
+                    self.lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                        receipt,
+                    )
                 }
             };
             if !valid {
@@ -8237,7 +8224,9 @@ impl Kura {
                 ));
             }
             let expected = self
-                .lane_merge_application_frontier_expected_receipt(&frontier)
+                .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                    &frontier,
+                )
                 .ok_or_else(|| {
                     self.geometry_error(
                         ErrorKind::InvalidData,
@@ -8644,7 +8633,10 @@ impl Kura {
                 })?;
             if receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution
                 || receipt.proposal != certified.proposal
-                || !self.lane_block_application_receipt_matches_merge_log(&receipt)
+                || !self
+                    .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                        &receipt,
+                    )
             {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
@@ -12872,7 +12864,7 @@ fn geometry_pending_archive_gc_root(pending: &[LaneGeometryPendingArchiveGc]) ->
     Hash::new_from_chunks(&[PENDING_GC_DOMAIN, pending.to_vec().encode().as_slice()])
 }
 
-fn geometry_merge_marker_set_root(markers: &[(Name, Vec<u8>)]) -> Hash {
+fn geometry_merge_marker_set_root(markers: &[(StatePath, Vec<u8>)]) -> Hash {
     Hash::new_from_chunks(&[
         MERGE_RELEASE_MARKERS_DOMAIN,
         markers.to_vec().encode().as_slice(),
@@ -13135,6 +13127,91 @@ mod tests {
         assert_eq!(
             MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR, 65_536,
             "aggregate scaling must not weaken the per-sidecar corruption cap"
+        );
+    }
+
+    #[test]
+    fn retirement_artifact_file_bound_counts_every_fixed_frontier() {
+        assert_eq!(
+            LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE, 13,
+            "five data/index pairs plus three independent frontier/index files are fixed per route"
+        );
+        for native_retention in [0_usize, 1, 4_096] {
+            let expected = MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
+                + LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE
+                + native_retention * LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE;
+            assert_eq!(
+                lane_retirement_per_route_artifact_file_limit(native_retention),
+                Some(expected),
+            );
+        }
+        assert!(lane_retirement_per_route_artifact_file_limit(usize::MAX).is_none());
+    }
+
+    #[test]
+    fn retirement_artifact_snapshot_accepts_the_exact_fixed_file_boundary() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("retirement-fixed-file-boundary");
+        let (_, configured) = retirement_test_configs();
+        let kura = open_kura(&root, &configured);
+        let artifact_dir =
+            Kura::lane_artifact_dir(&configured.primary().blocks_dir(kura.store_root()));
+        fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
+        let fixed_files = [
+            LANE_ARTIFACTS_DATA_FILE,
+            LANE_ARTIFACTS_INDEX_FILE,
+            CERTIFIED_LANE_BLOCKS_DATA_FILE,
+            CERTIFIED_LANE_BLOCKS_INDEX_FILE,
+            LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE,
+            LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
+            LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
+            LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
+            LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
+            LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+            LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
+            LANE_MERGE_APPLICATION_FRONTIER_FILE,
+        ];
+        assert_eq!(
+            fixed_files.len(),
+            LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE,
+            "the scanner fixture must enumerate every allowed fixed artifact"
+        );
+        for name in fixed_files {
+            fs::write(artifact_dir.join(name), b"fixed retirement artifact")
+                .expect("write fixed retirement artifact");
+        }
+
+        let directory = Kura::open_bound_progress_directory(kura.store_root(), &artifact_dir)
+            .expect("bind exact fixed retirement namespace");
+        let snapshot = kura
+            .geometry_bound_progress_directory_snapshot(
+                &directory,
+                LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE,
+                "retirement fixed artifact scan",
+            )
+            .expect("the exact fixed-file boundary must fit");
+        assert_eq!(
+            snapshot.len(),
+            LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE
+        );
+        drop(directory);
+
+        fs::write(artifact_dir.join("one-file-over-bound"), b"overflow")
+            .expect("write one excess artifact");
+        let directory = Kura::open_bound_progress_directory(kura.store_root(), &artifact_dir)
+            .expect("rebind oversized retirement namespace");
+        let error = kura
+            .geometry_bound_progress_directory_snapshot(
+                &directory,
+                LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE,
+                "retirement fixed artifact scan",
+            )
+            .expect_err("one file beyond the exact scanner boundary must fail");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "retirement fixed artifact scan exceeds its bounded directory-entry count",
         );
     }
 
@@ -14136,6 +14213,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1_024,
@@ -14316,6 +14394,7 @@ mod tests {
             0,
             iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             manifest_root,
+            1,
             1,
             executed_block_wire_hash,
         )
@@ -14783,6 +14862,7 @@ mod tests {
         );
         kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
             .expect("store merge-applied retirement carrier");
+        let _ = crate::kura::tests::persist_v2_finality_chain_through(kura, nonzero!(2_usize));
         kura.persist_merge_lane_block_application_receipts(
             &entry,
             carrier.header().height().get(),
@@ -14980,14 +15060,17 @@ mod tests {
                 .expect("geometry participant settlement hashes");
         let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
             .expect("geometry retirement participant PoP");
-        let qc = |body| NativeAmxAttestationQcV2 {
-            body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&participant_validator_set),
-            validator_set: participant_validator_set.clone(),
-            validator_set_pops: vec![participant_pop.clone()],
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
+        let qc = |body| {
+            NativeAmxAttestationQcV2::try_new(
+                body,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&participant_validator_set),
+                participant_validator_set.clone(),
+                vec![participant_pop.clone()],
+                vec![1],
+                vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
+            )
+            .expect("geometry fixture validator set and proofs must align")
         };
         let prepare_qc = qc(prepare_body);
         let mut commit_body = prepare_body;

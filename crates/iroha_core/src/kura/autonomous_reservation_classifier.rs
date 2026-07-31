@@ -595,6 +595,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     fn autonomous_reservation_certified_lane_snapshot_locked(
         &self,
         entry: &LaneConfigEntry,
+        inventory: &AutonomousReservationLaneInventory,
         requested_heights: &BTreeSet<u64>,
         scanned_entries: &mut usize,
         decoded_bytes: &mut u64,
@@ -604,6 +605,22 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     > {
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        if !inventory.directory_present {
+            let directory = data_path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "certified reservation data path has no artifact directory",
+                )
+            })?;
+            let before = self.stable_sidecar_directory_metadata(directory)?;
+            let after = self.stable_sidecar_directory_metadata(directory)?;
+            if before.metadata.is_none()
+                && Self::stable_sidecar_directory_metadata_unchanged(&before, &after)
+            {
+                return Ok(AutonomousReservationCertifiedLaneSnapshot::default());
+            }
+            return Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict);
+        }
         let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
         let temporary_paths = [
             data_path.with_extension("norito.tmp"),
@@ -965,8 +982,12 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             let entry = entries
                 .get(lane_id)
                 .expect("requested certification lane has a storage entry");
+            let inventory = inventories
+                .get(lane_id)
+                .expect("requested certification lane has an inventory");
             let snapshot = self.autonomous_reservation_certified_lane_snapshot_locked(
                 entry,
+                inventory,
                 requested_heights,
                 &mut scanned_entries,
                 &mut decoded_bytes,

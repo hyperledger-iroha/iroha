@@ -1704,7 +1704,7 @@
           "creation_time_ms": {
             "description": "Unix timestamp in milliseconds when the block was created.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -1743,7 +1743,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -1803,7 +1803,7 @@
           "view_change_index": {
             "description": "Consensus view index assigned to the block.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           }
@@ -2108,7 +2108,7 @@
           },
           "block_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -2216,7 +2216,7 @@
       },
       "BridgeFinalityProof": {
         "additionalProperties": false,
-        "description": "Version-one bridge proof carrying only a canonical block header and the exact independently-verifiable durable v2 artifact.",
+        "description": "Version-two bridge proof carrying only a canonical block header and the exact independently-verifiable durable v2 artifact.",
         "properties": {
           "block_header": {
             "$ref": "#/components/schemas/BlockHeader"
@@ -2226,7 +2226,7 @@
           },
           "version": {
             "enum": [
-              1
+              2
             ],
             "format": "uint8",
             "type": "integer"
@@ -2244,7 +2244,7 @@
         "properties": {
           "multihash_code": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -2784,12 +2784,101 @@
         ],
         "type": "object"
       },
+      "DaCommitmentKey": {
+        "additionalProperties": false,
+        "description": "Canonical DA commitment ordering key.",
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "epoch",
+          "sequence"
+        ],
+        "type": "object"
+      },
+      "DaCommitmentListCursor": {
+        "additionalProperties": false,
+        "description": "Server-issued forward-only commitment cursor. Torii rejects noncanonical, unknown, or stale cursors.",
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/DaCommitmentKey"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/DaListSnapshot"
+          }
+        },
+        "required": [
+          "snapshot",
+          "after"
+        ],
+        "type": "object"
+      },
+      "DaCommitmentListRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/DaCommitmentListCursor"
+          },
+          "limit": {
+            "default": 100,
+            "description": "Maximum raw index rows to inspect. Defaults to 100; larger values are capped at 1,000. Filtered rows still consume the bound.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "DaCommitmentListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "commitments": {
+            "items": {
+              "$ref": "#/components/schemas/DaCommitmentWithLocation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaCommitmentListCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Continuation for the next bounded scan, or null when the raw index is exhausted."
+          },
+          "policies": {
+            "$ref": "#/components/schemas/DaProofPolicyBundle"
+          }
+        },
+        "required": [
+          "policies",
+          "commitments",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
       "DaCommitmentLocation": {
         "additionalProperties": false,
         "properties": {
           "block_height": {
             "description": "Height of the block that sealed the commitment.",
             "format": "uint64",
+            "minimum": 1,
             "type": "integer"
           },
           "index_in_bundle": {
@@ -2808,12 +2897,17 @@
         "additionalProperties": false,
         "properties": {
           "bundle_hash": {
-            "description": "Hash of the full DA commitment bundle embedded in the block.",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DaIrohaHash"
+              }
+            ],
+            "description": "Header commitment to the V1 tree version, leaf count, and Merkle root; this is not a hash of the full encoded bundle."
           },
           "bundle_len": {
             "description": "Total number of commitments in the bundle.",
             "format": "uint32",
+            "minimum": 1,
             "type": "integer"
           },
           "commitment": {
@@ -2827,11 +2921,11 @@
             "items": {
               "$ref": "#/components/schemas/MerklePathItem"
             },
+            "maxItems": 32,
             "type": "array"
           },
           "root": {
-            "description": "Merkle root over the bundle commitments.",
-            "type": "string"
+            "$ref": "#/components/schemas/DaIrohaHash"
           }
         },
         "required": [
@@ -2844,28 +2938,37 @@
         ],
         "type": "object"
       },
+      "DaCommitmentProofPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "policies": {
+            "$ref": "#/components/schemas/DaProofPolicyBundle"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/DaCommitmentProof"
+          }
+        },
+        "required": [
+          "policies",
+          "proof"
+        ],
+        "type": "object"
+      },
       "DaCommitmentProofRequest": {
         "additionalProperties": false,
         "properties": {
           "epoch": {
-            "description": "Epoch number for the commitment.",
             "format": "uint64",
             "type": "integer"
           },
           "lane_id": {
-            "description": "Lane identifier for the commitment.",
             "format": "uint32",
             "type": "integer"
           },
           "manifest_hash": {
-            "description": "Hex-encoded manifest digest to look up.",
-            "type": "string"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/DaPagination"
+            "$ref": "#/components/schemas/DaDigest32"
           },
           "sequence": {
-            "description": "Monotonic sequence within the lane/epoch.",
             "format": "uint64",
             "type": "integer"
           }
@@ -2875,7 +2978,7 @@
       "DaCommitmentProofResponse": {
         "anyOf": [
           {
-            "$ref": "#/components/schemas/DaCommitmentProof"
+            "$ref": "#/components/schemas/DaCommitmentProofPayload"
           },
           {
             "type": "null"
@@ -2886,50 +2989,39 @@
         "additionalProperties": false,
         "properties": {
           "acknowledgement_sig": {
-            "description": "Hex-encoded Torii acknowledgement signature.",
+            "description": "Canonical uppercase Ed25519 acknowledgement signature.",
+            "pattern": "^[0-9A-F]{128}$",
             "type": "string"
           },
           "chunk_root": {
-            "description": "Hex-encoded Merkle root over blob chunks.",
-            "type": "string"
+            "$ref": "#/components/schemas/DaIrohaHash"
           },
           "client_blob_id": {
-            "description": "Hex-encoded blob identifier.",
-            "type": "string"
+            "$ref": "#/components/schemas/DaDigest32"
           },
           "epoch": {
             "format": "uint64",
             "type": "integer"
-          },
-          "kzg_commitment": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Optional KZG commitment in compressed hex form."
           },
           "lane_id": {
             "format": "uint32",
             "type": "integer"
           },
           "manifest_hash": {
-            "description": "Hex-encoded manifest digest (BLAKE3-256).",
-            "type": "string"
+            "$ref": "#/components/schemas/DaDigest32"
           },
           "proof_digest": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/DaIrohaHash"
               },
               {
                 "type": "null"
               }
-            ],
-            "description": "Optional digest covering PDP/PoTR scheduling metadata."
+            ]
+          },
+          "proof_scheme": {
+            "$ref": "#/components/schemas/DaTaggedProofScheme"
           },
           "retention_class": {
             "$ref": "#/components/schemas/DaRetentionPolicy"
@@ -2939,8 +3031,7 @@
             "type": "integer"
           },
           "storage_ticket": {
-            "description": "Hex-encoded storage ticket binding the blob to SoraFS.",
-            "type": "string"
+            "$ref": "#/components/schemas/DaDigest32"
           }
         },
         "required": [
@@ -2949,7 +3040,9 @@
           "sequence",
           "client_blob_id",
           "manifest_hash",
+          "proof_scheme",
           "chunk_root",
+          "proof_digest",
           "retention_class",
           "storage_ticket",
           "acknowledgement_sig"
@@ -2957,22 +3050,42 @@
         "type": "object"
       },
       "DaCommitmentVerifyResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "description": "Optional error string describing the verification failure.",
-            "nullable": true,
-            "type": "string"
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "null"
+              },
+              "valid": {
+                "const": true
+              }
+            },
+            "required": [
+              "valid",
+              "error"
+            ],
+            "type": "object"
           },
-          "valid": {
-            "description": "Whether the supplied commitment matches the node's index.",
-            "type": "boolean"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "description": "Deterministic commitment-proof verification failure.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "valid": {
+                "const": false
+              }
+            },
+            "required": [
+              "valid",
+              "error"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "valid"
-        ],
-        "type": "object"
+        ]
       },
       "DaCommitmentWithLocation": {
         "additionalProperties": false,
@@ -2990,59 +3103,400 @@
         ],
         "type": "object"
       },
-      "DaCommitmentWithLocationList": {
+      "DaDigest32": {
+        "description": "Canonical Norito JSON layout for a transparent 32-byte digest wrapper.",
         "items": {
-          "$ref": "#/components/schemas/DaCommitmentWithLocation"
-        },
-        "type": "array"
-      },
-      "DaPagination": {
-        "additionalProperties": false,
-        "properties": {
-          "limit": {
-            "description": "Maximum number of commitments to return.",
-            "format": "uint64",
-            "nullable": true,
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
             "type": "integer"
           },
-          "offset": {
-            "description": "Number of commitments to skip from the start of the ordered index.",
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array"
+      },
+      "DaGovernanceTag": {
+        "description": "Canonical Norito JSON layout for the transparent governance-tag wrapper.",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array"
+      },
+      "DaIrohaHash": {
+        "description": "Canonical checksummed Iroha hash literal. Decoders also verify the CRC-16 checksum and marked-hash bit.",
+        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+        "type": "string"
+      },
+      "DaListSnapshot": {
+        "additionalProperties": false,
+        "description": "Exact canonical ledger tip that binds every continuation cursor to one immutable view.",
+        "oneOf": [
+          {
+            "properties": {
+              "block_hash": {
+                "type": "null"
+              },
+              "block_height": {
+                "const": 0
+              }
+            }
+          },
+          {
+            "properties": {
+              "block_hash": {
+                "$ref": "#/components/schemas/DaIrohaHash"
+              },
+              "block_height": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "block_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaIrohaHash"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical block hash at `block_height`; null only when `block_height` is zero."
+          },
+          "block_height": {
+            "description": "Committed chain height observed when the first page was constructed.",
             "format": "uint64",
             "type": "integer"
           }
         },
+        "required": [
+          "block_height",
+          "block_hash"
+        ],
+        "type": "object"
+      },
+      "DaPinIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
+            "maxLength": 256,
+            "nullable": true,
+            "type": "string",
+            "x-iroha-maxUtf8Bytes": 256
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "owner": {
+            "description": "Optional canonical I105 universal account identifier.",
+            "nullable": true,
+            "type": "string"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          }
+        },
+        "required": [
+          "lane_id",
+          "epoch",
+          "sequence",
+          "storage_ticket",
+          "manifest_hash",
+          "alias",
+          "owner"
+        ],
+        "type": "object"
+      },
+      "DaPinIntentListCursor": {
+        "additionalProperties": false,
+        "description": "Server-issued forward-only pin-intent cursor. Torii rejects noncanonical, unknown, or stale cursors.",
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/DaCommitmentLocation"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/DaListSnapshot"
+          }
+        },
+        "required": [
+          "snapshot",
+          "after"
+        ],
+        "type": "object"
+      },
+      "DaPinIntentListRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/DaPinIntentListCursor"
+          },
+          "limit": {
+            "default": 100,
+            "description": "Maximum raw index rows to inspect. Defaults to 100; larger values are capped at 1,000. Filtered or inactive rows still consume the bound.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "DaPinIntentListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "intents": {
+            "items": {
+              "$ref": "#/components/schemas/DaPinIntentWithLocation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaPinIntentListCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Continuation for the next bounded scan, or null when the raw index is exhausted."
+          }
+        },
+        "required": [
+          "intents",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "DaPinIntentProof": {
+        "additionalProperties": false,
+        "properties": {
+          "bundle_hash": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DaIrohaHash"
+              }
+            ],
+            "description": "Header commitment to the V1 tree version, leaf count, and Merkle root; this is not a hash of the full encoded bundle."
+          },
+          "bundle_len": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/DaPinIntent"
+          },
+          "location": {
+            "$ref": "#/components/schemas/DaCommitmentLocation"
+          },
+          "path": {
+            "items": {
+              "$ref": "#/components/schemas/MerklePathItem"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "root": {
+            "$ref": "#/components/schemas/DaIrohaHash"
+          }
+        },
+        "required": [
+          "intent",
+          "location",
+          "bundle_hash",
+          "bundle_len",
+          "root",
+          "path"
+        ],
+        "type": "object"
+      },
+      "DaPinIntentProofResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/DaPinIntentProof"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "DaPinIntentQueryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Pin-alias lookup key; at most 256 UTF-8 bytes.",
+            "maxLength": 256,
+            "type": "string",
+            "x-iroha-maxUtf8Bytes": 256
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          }
+        },
+        "type": "object"
+      },
+      "DaPinIntentVerifyResponse": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "null"
+              },
+              "valid": {
+                "const": true
+              }
+            },
+            "required": [
+              "valid",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "description": "Deterministic pin-intent proof verification failure.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "valid": {
+                "const": false
+              }
+            },
+            "required": [
+              "valid",
+              "error"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DaPinIntentWithLocation": {
+        "additionalProperties": false,
+        "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/DaPinIntent"
+          },
+          "location": {
+            "$ref": "#/components/schemas/DaCommitmentLocation"
+          }
+        },
+        "required": [
+          "intent",
+          "location"
+        ],
+        "type": "object"
+      },
+      "DaProofPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "proof_scheme": {
+            "$ref": "#/components/schemas/DaTaggedProofScheme"
+          }
+        },
+        "required": [
+          "lane_id",
+          "dataspace_id",
+          "alias",
+          "proof_scheme"
+        ],
+        "type": "object"
+      },
+      "DaProofPolicyBundle": {
+        "additionalProperties": false,
+        "properties": {
+          "policies": {
+            "items": {
+              "$ref": "#/components/schemas/DaProofPolicy"
+            },
+            "type": "array"
+          },
+          "policy_hash": {
+            "$ref": "#/components/schemas/DaIrohaHash"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "policy_hash",
+          "policies"
+        ],
         "type": "object"
       },
       "DaRetentionPolicy": {
         "additionalProperties": false,
         "properties": {
           "cold_retention_secs": {
-            "description": "Retention period in seconds for the cold tier.",
             "format": "uint64",
             "type": "integer"
           },
           "governance_tag": {
-            "description": "Governance tag anchoring the retention decision.",
-            "type": "string"
+            "$ref": "#/components/schemas/DaGovernanceTag"
           },
           "hot_retention_secs": {
-            "description": "Retention period in seconds for the hot tier.",
             "format": "uint64",
             "type": "integer"
           },
           "required_replicas": {
-            "description": "Replica count requested for the blob.",
-            "format": "uint32",
+            "format": "uint16",
             "type": "integer"
           },
           "storage_class": {
-            "description": "Storage class requested for the primary replicas.",
-            "enum": [
-              "Hot",
-              "Warm",
-              "Cold"
-            ],
-            "type": "string"
+            "$ref": "#/components/schemas/DaTaggedStorageClass"
           }
         },
         "required": [
@@ -3051,6 +3505,47 @@
           "required_replicas",
           "storage_class",
           "governance_tag"
+        ],
+        "type": "object"
+      },
+      "DaTaggedProofScheme": {
+        "additionalProperties": false,
+        "description": "First-release DA V1 supports MerkleSha256 only; unknown proof-scheme discriminants are rejected.",
+        "properties": {
+          "type": {
+            "enum": [
+              "MerkleSha256"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object"
+      },
+      "DaTaggedStorageClass": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": [
+              "Hot",
+              "Warm",
+              "Cold"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "type",
+          "value"
         ],
         "type": "object"
       },
@@ -5408,12 +5903,25 @@
         "type": "array"
       },
       "MerkleDirection": {
-        "description": "Position of the sibling hash within the Merkle path.",
-        "enum": [
-          "Left",
-          "Right"
+        "additionalProperties": false,
+        "description": "Canonical tagged Norito JSON direction of a sibling node.",
+        "properties": {
+          "direction": {
+            "enum": [
+              "Left",
+              "Right"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "direction",
+          "value"
         ],
-        "type": "string"
+        "type": "object"
       },
       "MerklePathItem": {
         "additionalProperties": false,
@@ -5422,8 +5930,7 @@
             "$ref": "#/components/schemas/MerkleDirection"
           },
           "sibling": {
-            "description": "Hex-encoded sibling hash for this tree level.",
-            "type": "string"
+            "$ref": "#/components/schemas/DaIrohaHash"
           }
         },
         "required": [
@@ -7488,21 +7995,6 @@
         ],
         "type": "object"
       },
-      "OfflineLanePrivacySnarkWitness": {
-        "properties": {
-          "proof": {
-            "$ref": "#/components/schemas/OfflineBase64Bytes"
-          },
-          "public_inputs": {
-            "$ref": "#/components/schemas/OfflineBase64Bytes"
-          }
-        },
-        "required": [
-          "public_inputs",
-          "proof"
-        ],
-        "type": "object"
-      },
       "OfflineLanePrivacyWitness": {
         "discriminator": {
           "propertyName": "kind"
@@ -7525,40 +8017,18 @@
               "payload"
             ],
             "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "snark"
-                ],
-                "type": "string"
-              },
-              "payload": {
-                "$ref": "#/components/schemas/OfflineLanePrivacySnarkWitness"
-              }
-            },
-            "required": [
-              "kind",
-              "payload"
-            ],
-            "type": "object"
           }
         ]
       },
       "OfflineMerkleProof": {
         "properties": {
           "audit_path": {
+            "description": "Complete leaf-to-root path. Lane privacy proofs require at least one sibling and reject omitted/null siblings.",
             "items": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/OfflineHashLiteral"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/OfflineHashLiteral"
             },
+            "maxItems": 255,
+            "minItems": 1,
             "type": "array"
           },
           "leaf_index": {
@@ -8034,11 +8504,8 @@
           "halo2/ipa",
           "halo2/pasta/kaigi-roster-v1",
           "halo2/pasta/kaigi-usage-v1",
-          "halo2/pasta/ivm-overlay-bind",
           "halo2/pasta/ivm-execution-v1",
           "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-          "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-          "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
           "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -9088,6 +9555,9 @@
             "minimum": 1,
             "type": "integer"
           },
+          "execution_policy_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "height": {
             "format": "uint64",
             "minimum": 1,
@@ -9110,7 +9580,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -9125,6 +9595,7 @@
           "epoch_end_height",
           "mode",
           "nexus_amx_context_hash",
+          "execution_policy_hash",
           "da_layout",
           "leader_seed"
         ],
@@ -9689,7 +10160,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           }
@@ -9739,7 +10210,7 @@
           },
           "content_length": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -9788,7 +10259,7 @@
           },
           "submitted_epoch": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -9892,7 +10363,7 @@
           },
           "retention_epoch": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -9936,7 +10407,7 @@
               },
               "value": {
                 "format": "uint64",
-                "maximum": 18446744073709551615,
+                "maximum": 18446744073709552000,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -9956,7 +10427,7 @@
               },
               "value": {
                 "format": "uint64",
-                "maximum": 18446744073709551615,
+                "maximum": 18446744073709552000,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -13333,13 +13804,13 @@
         "properties": {
           "lower": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
           "upper": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           }
@@ -13398,7 +13869,7 @@
           },
           "creation_time_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": [
               "integer",
@@ -13438,7 +13909,7 @@
           "creation_time_ms": {
             "description": "Exact timestamp returned with the prepared payload.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -13490,7 +13961,7 @@
           },
           "creation_time_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": [
               "integer",
@@ -13530,7 +14001,7 @@
           "creation_time_ms": {
             "description": "Exact timestamp returned with the prepared payload.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -13644,7 +14115,7 @@
           },
           "creation_time_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -13656,13 +14127,13 @@
           },
           "range_end_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
           "range_start_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -14227,7 +14698,7 @@
           "max_anchor_interval_height": {
             "description": "Inclusive successor-checkpoint boundary in the backend's authenticated consensus-progress coordinate.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -14477,7 +14948,7 @@
           "checkpoint_height": {
             "description": "Backend-specific consensus-progress coordinate: finalized beacon slot for Ethereum, finalized block height for BSC and TRON.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           }
@@ -14865,7 +15336,7 @@
           },
           "from": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           }
@@ -14920,7 +15391,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -15569,7 +16040,7 @@
           },
           "native_verifier_program_data_slot": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -15587,7 +16058,7 @@
           },
           "route_program_data_slot": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -15672,7 +16143,7 @@
           },
           "program_data_slot": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -15713,13 +16184,13 @@
           },
           "checkpoint_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "type": "integer"
           },
@@ -16725,7 +17196,7 @@
           },
           "chunk_offset": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -16773,13 +17244,13 @@
           },
           "leaf_offset": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
           "payload_len": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -16814,7 +17285,7 @@
           },
           "segment_offset": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           }
@@ -17132,7 +17603,7 @@
           },
           "committed_at_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -17164,7 +17635,7 @@
           },
           "finalized_block_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -17230,7 +17701,7 @@
           },
           "recorded_at_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -17295,7 +17766,7 @@
           "expected_finalized_height": {
             "description": "Optional finalized height; when present it must be paired with expected_finalized_block_hash_hex.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -17353,7 +17824,7 @@
           "expected_finalized_height": {
             "description": "Required finalized height authorizing the manifest projection.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -17386,7 +17857,7 @@
           },
           "sample_seed": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -17439,7 +17910,7 @@
           "expected_finalized_height": {
             "description": "Optional finalized height; when present it must be paired with expected_finalized_block_hash_hex.",
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19189,8 +19660,8 @@
             "$ref": "#/components/schemas/SumeragiV2StatusPhase"
           },
           "protocol_version": {
-            "maximum": 3,
-            "minimum": 3,
+            "maximum": 4,
+            "minimum": 4,
             "type": "integer"
           },
           "restart_required": {
@@ -19321,7 +19792,7 @@
           },
           "signed_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19333,7 +19804,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19425,13 +19896,13 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
           "view": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           }
@@ -19525,7 +19996,7 @@
           },
           "max_payload_size_bytes": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19558,7 +20029,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           }
@@ -19566,6 +20037,25 @@
         "required": [
           "min_signers",
           "total_power"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2MergeCarrierCommitment": {
+        "additionalProperties": false,
+        "description": "Exact first-release merge-ledger entry identity authenticated by global finality.",
+        "properties": {
+          "entry_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "entry_hash"
         ],
         "type": "object"
       },
@@ -19600,7 +20090,7 @@
             ]
           }
         ],
-        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root.",
+        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root. merge_carrier is mandatory and is null for an ordinary block or an exact V1 merge-ledger entry commitment. executed_block_wire_len is the non-zero exact byte length paired with executed_block_wire_hash.",
         "oneOf": [
           {
             "not": {
@@ -19630,6 +20120,12 @@
           "executed_block_wire_hash": {
             "$ref": "#/components/schemas/Hash"
           },
+          "executed_block_wire_len": {
+            "format": "uint64",
+            "maximum": 18446744073709552000,
+            "minimum": 1,
+            "type": "integer"
+          },
           "native_amx_application_manifest_count": {
             "format": "uint32",
             "maximum": 1024,
@@ -19643,6 +20139,16 @@
             "const": 1,
             "format": "uint16",
             "type": "integer"
+          },
+          "merge_carrier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiV2MergeCarrierCommitment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ordinary_writes_root": {
             "$ref": "#/components/schemas/Hash"
@@ -19671,6 +20177,8 @@
           "native_amx_application_manifest_version",
           "native_amx_application_manifest_root",
           "native_amx_application_manifest_count",
+          "merge_carrier",
+          "executed_block_wire_len",
           "executed_block_wire_hash"
         ],
         "type": "object"
@@ -19687,14 +20195,14 @@
           },
           "format_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
           },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19703,7 +20211,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -19739,13 +20247,13 @@
         "properties": {
           "epoch": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
           "epoch_end_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19833,19 +20341,22 @@
           },
           "epoch": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
           "epoch_end_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
+          "execution_policy_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19866,7 +20377,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -19895,6 +20406,7 @@
           "roster",
           "quorum",
           "nexus_amx_context_hash",
+          "execution_policy_hash",
           "da_layout",
           "leader_seed"
         ],
@@ -19914,13 +20426,13 @@
         "properties": {
           "epoch": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
           "epoch_end_height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -19957,7 +20469,7 @@
         "properties": {
           "count": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20042,7 +20554,7 @@
           },
           "generation": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20058,7 +20570,7 @@
           },
           "no_progress_age_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20264,13 +20776,13 @@
         "properties": {
           "age_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
           "generation": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20334,7 +20846,7 @@
           },
           "oldest_age_ms": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20343,7 +20855,7 @@
           },
           "service_debt": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           }
@@ -20486,7 +20998,7 @@
           },
           "signed_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20498,7 +21010,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           }
@@ -20518,7 +21030,7 @@
         "properties": {
           "power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           },
@@ -20552,7 +21064,7 @@
           },
           "signed_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 0,
             "type": "integer"
           },
@@ -20567,7 +21079,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
+            "maximum": 18446744073709552000,
             "minimum": 1,
             "type": "integer"
           }
@@ -28220,13 +28732,13 @@
     },
     "/v1/da/commitments": {
       "post": {
-        "description": "Returns DA commitments captured from recent blocks. Results can be filtered by manifest hash or lane/epoch/sequence and paginated.",
+        "description": "Traverse DA commitments in canonical `(lane_id, epoch, sequence)` order. Each page scans at most `limit` raw index rows (default 100, maximum 1,000). Continue only with the server-issued forward cursor, which is bound to the exact canonical ledger tip and is rejected after the tip changes.",
         "operationId": "daCommitmentsList",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DaCommitmentProofRequest"
+                "$ref": "#/components/schemas/DaCommitmentListRequest"
               }
             }
           },
@@ -28237,11 +28749,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DaCommitmentWithLocationList"
+                  "$ref": "#/components/schemas/DaCommitmentListResponse"
                 }
               }
             },
             "description": "Commitments retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed JSON, a zero list limit, or a noncanonical, stale, or unknown commitment cursor."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The canonical ledger tip changed while the page was being read; restart from the first page."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run."
           },
           "500": {
             "content": {
@@ -28286,6 +28828,26 @@
             },
             "description": "Commitment proof response (null when not found)."
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed JSON or an invalid commitment proof selector."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run."
+          },
           "500": {
             "content": {
               "application/json": {
@@ -28306,13 +28868,13 @@
     },
     "/v1/da/commitments/verify": {
       "post": {
-        "description": "Validates a provided DA commitment Merkle proof against the node's indexed bundle, block header commitment hash, and configured lane proof policy.",
+        "description": "Loads the referenced canonical block from local Kura and validates the DA commitment Merkle proof against that block's header commitment and historical proof-policy sidecar. This endpoint does not return or independently verify block-finality material.",
         "operationId": "daCommitmentsVerify",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DaCommitmentWithLocation"
+                "$ref": "#/components/schemas/DaCommitmentProof"
               }
             }
           },
@@ -28329,6 +28891,26 @@
             },
             "description": "Verification result."
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed JSON or an invalid commitment proof payload."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run."
+          },
           "500": {
             "content": {
               "application/json": {
@@ -28340,7 +28922,7 @@
             "description": "Internal server error."
           }
         },
-        "summary": "Stateless verification helper for DA commitments.",
+        "summary": "Verify a DA commitment against locally stored block state.",
         "tags": [
           "DataAvailability"
         ],
@@ -28414,12 +28996,13 @@
     },
     "/v1/da/pin-intents": {
       "post": {
-        "description": "List pin intent commitments indexed by the node.",
+        "description": "Traverse pin intent commitments in canonical block-location order. Each page scans at most `limit` raw index rows (default 100, maximum 1,000); filtered rows still consume that bound. Continue only with the server-issued forward cursor, which is bound to the exact canonical ledger tip and is rejected after the tip changes.",
+        "operationId": "daPinIntentsList",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/DaPinIntentListRequest"
               }
             }
           },
@@ -28430,11 +29013,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaPinIntentListResponse"
                 }
               }
             },
             "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed JSON, a zero list limit, or a noncanonical, stale, or unknown pin-intent cursor."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The canonical ledger tip changed while the page was being read; restart from the first page."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run."
           }
         },
         "summary": "List DA pin intents.",
@@ -28446,12 +29059,13 @@
     },
     "/v1/da/pin-intents/prove": {
       "post": {
-        "description": "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return the indexed block location payload.",
+        "description": "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return a Merkle membership proof bound to the V1 tree descriptor recorded in its canonical locally stored block header.",
+        "operationId": "daPinIntentsProve",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/DaPinIntentQueryRequest"
               }
             }
           },
@@ -28462,14 +29076,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaPinIntentProofResponse"
                 }
               }
             },
             "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed JSON or an invalid proof selector, including an alias longer than 256 UTF-8 bytes."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run."
           }
         },
-        "summary": "Fetch indexed DA pin intent location data.",
+        "summary": "Build a DA pin-intent Merkle proof.",
         "tags": [
           "DataAvailability"
         ],
@@ -28478,12 +29112,13 @@
     },
     "/v1/da/pin-intents/verify": {
       "post": {
-        "description": "Check that a provided DA pin intent location payload matches the node's current pin-intent index.",
+        "description": "Load the referenced canonical block from local Kura and verify a DA pin-intent Merkle membership proof against the V1 tree descriptor (version, leaf count, and Merkle root) recorded in its header. This endpoint does not return or independently verify block-finality material.",
+        "operationId": "daPinIntentsVerify",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/DaPinIntentProof"
               }
             }
           },
@@ -28494,14 +29129,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaPinIntentVerifyResponse"
                 }
               }
             },
             "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed JSON or an invalid pin-intent proof payload."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run."
           }
         },
-        "summary": "Verify indexed DA pin intent location data.",
+        "summary": "Verify a DA pin-intent Merkle proof.",
         "tags": [
           "DataAvailability"
         ],
@@ -28511,12 +29166,13 @@
     "/v1/da/proof-policies": {
       "get": {
         "description": "Return the configured DA proof policy set.",
+        "operationId": "daProofPoliciesList",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaProofPolicyBundle"
                 }
               }
             },
@@ -28533,12 +29189,13 @@
     "/v1/da/proof-policies/snapshot": {
       "get": {
         "description": "Return the active DA proof policy snapshot bundle.",
+        "operationId": "daProofPolicySnapshot",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaProofPolicyBundle"
                 }
               }
             },
@@ -53611,70 +54268,6 @@
           }
         },
         "summary": "Fetch ZK roots.",
-        "tags": [
-          "ZK"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/zk/submit-proof": {
-      "post": {
-        "description": "Submit a proof for verification and recording.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit a ZK proof.",
-        "tags": [
-          "ZK"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/zk/verify": {
-      "post": {
-        "description": "Verify a zero-knowledge proof envelope.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Verify a ZK proof.",
         "tags": [
           "ZK"
         ],

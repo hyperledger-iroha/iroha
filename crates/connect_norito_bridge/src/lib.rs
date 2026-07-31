@@ -16212,7 +16212,7 @@ mod kagemusha_bridge_tests {
                 ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding,
                 QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
             },
-            bridge::{BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeFinalityProof},
+            bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
             peer::PeerId,
         };
 
@@ -16271,6 +16271,7 @@ mod kagemusha_bridge_tests {
                 quorum,
                 roster: roster.clone(),
                 nexus_amx_context_hash: Hash::new(b"receiver-offer size fixture nexus context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
                     encoding: PayloadEncoding::Plain,
                     chunk_size_bytes: 1_024,
@@ -16295,6 +16296,7 @@ mod kagemusha_bridge_tests {
                 Hash::new(b"receiver-offer size fixture parent state"),
                 Hash::new(b"receiver-offer size fixture post state"),
                 ordinary_writes_root,
+                1,
                 Hash::new(b"receiver-offer size fixture executed wire"),
             );
             let mut commit_qc = QuorumCertificate {
@@ -16331,7 +16333,7 @@ mod kagemusha_bridge_tests {
                 .verify()
                 .expect("realistic finality artifact verifies");
             proofs.push(BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
                 block_header: header,
                 finality_artifact: artifact,
             });
@@ -19147,6 +19149,7 @@ mod kagemusha_bridge_tests {
                     Hash::new(b"production SBD acceptance parent parent state"),
                     Hash::new(b"production SBD acceptance parent post state"),
                     Hash::new(b"production SBD acceptance parent ordinary writes"),
+                    1,
                     Hash::new(b"production SBD acceptance parent executed wire"),
                 ),
                 signers: vec![0, 1, 2],
@@ -19156,6 +19159,7 @@ mod kagemusha_bridge_tests {
             quorum: DualQuorum::from_roster(&window.validator_set)
                 .expect("production top-up finality quorum"),
             nexus_amx_context_hash: Hash::new(b"production SBD acceptance nexus"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1_024,
@@ -19191,6 +19195,7 @@ mod kagemusha_bridge_tests {
             commitment.post_state_root,
             commitment.ordinary_writes_root,
             Some(commitment.topup_anchor_root),
+            1,
             1,
             Hash::new(b"production SBD acceptance finalized executed wire"),
         )
@@ -19251,6 +19256,7 @@ mod kagemusha_bridge_tests {
             parent_commit_qc: context.parent_commit_qc.clone(),
             snapshot_bootstrap: context.snapshot_bootstrap,
             nexus_amx_context_hash: context.nexus_amx_context_hash,
+            execution_policy_hash: context.execution_policy_hash,
             da_layout: context.da_layout,
             leader_seed: context.leader_seed,
         };

@@ -110,6 +110,7 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
             raise ValueError(message)
 
     require(execution["native_amx_application_manifest_version"] == 1, "manifest version")
+    require("merge_carrier" in execution and execution["merge_carrier"] is None, "merge carrier")
     require(
         execution["native_amx_application_manifest_count"] == len(artifacts) == 1,
         "manifest count",
@@ -130,6 +131,12 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     require(
         leaf["executed_block_wire_hash"] == execution["executed_block_wire_hash"],
         "executed wire",
+    )
+    require(
+        isinstance(execution.get("executed_block_wire_len"), int)
+        and not isinstance(execution["executed_block_wire_len"], bool)
+        and execution["executed_block_wire_len"] == 49,
+        "executed wire length",
     )
     require(
         leaf["predecessor_height"] + 1 == leaf["participant_height"],
@@ -241,6 +248,10 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
         "golden"
     ]["ordered_source_ids"]
     assert 1 <= len(parsed.native_amx_receipts) <= 4096
+    expected_settlement_hashes = {
+        (7, 11): "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+        (8, 12): "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+    }
     for receipt in parsed.native_amx_receipts:
         assert len(receipt.legs) == 2
         assert receipt.lane_block_view == 9
@@ -259,6 +270,9 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
             == receipt.coordinator_proposal_hash
         )
         for leg in receipt.legs:
+            assert leg.participant_settlement_hash == expected_settlement_hashes[
+                (leg.lane_id, leg.dataspace_id)
+            ]
             assert not leg.requires_mixed_role_anchor_validation
             assert leg.prepare_qc.body.phase is SumeragiNativeAmxPhase.PREPARE
             assert leg.commit_qc.body.phase is SumeragiNativeAmxPhase.COMMIT

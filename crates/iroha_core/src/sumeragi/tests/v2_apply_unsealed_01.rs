@@ -157,7 +157,6 @@
             );
         }
     );
-
     v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         let fixture = ApplyFixture::new();
         let transaction = fixture
@@ -454,7 +453,10 @@
                 .store_block_with_merge_entry(Arc::new(first_carrier), &first_entry)
                 .expect("persist exact valid-prefix merge binding");
             fixture.state.record_direct_committed_transactions(
-                [first.signed_transaction_hash, second.signed_transaction_hash],
+                [
+                    first.signed_transaction_hash,
+                    second.signed_transaction_hash,
+                ],
                 NonZeroUsize::new(1).expect("committed height"),
             );
             let before = queue
@@ -587,133 +589,136 @@
         assert!(queue.lane_reservation_commit_barriers().is_empty());
     });
 
-    v2_apply_test!(mixed_commit_barrier_group_preflights_malformed_later_group, {
-        let fixture = ApplyFixture::new();
-        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-        let queue = Queue::from_config(QueueConfig::default(), events_sender);
-        let journal_dir = tempfile::tempdir().expect("mixed commit barrier journal directory");
-        queue
-            .install_plan_journal(
-                journal_dir.path().join("queue-plans.norito"),
-                1024 * 1024,
-                true,
+    v2_apply_test!(
+        mixed_commit_barrier_group_preflights_malformed_later_group,
+        {
+            let fixture = ApplyFixture::new();
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Queue::from_config(QueueConfig::default(), events_sender);
+            let journal_dir = tempfile::tempdir().expect("mixed commit barrier journal directory");
+            queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install mixed commit barrier QueuePlan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install mixed commit barrier reservation journal");
+            let first_owner = Hash::new(b"mixed commit barrier first owner");
+            let first_proposal = Hash::new(b"mixed commit barrier first proposal");
+            let first_transactions = std::iter::once(
+                fixture
+                    .body
+                    .external_transactions()
+                    .next()
+                    .expect("fixture transaction")
+                    .clone(),
             )
-            .expect("install mixed commit barrier QueuePlan journal");
-        queue
-            .install_lane_reservation_journal(
-                journal_dir.path().join("lane-reservations.norito"),
-                1024 * 1024,
-            )
-            .expect("install mixed commit barrier reservation journal");
-        let first_owner = Hash::new(b"mixed commit barrier first owner");
-        let first_proposal = Hash::new(b"mixed commit barrier first proposal");
-        let first_transactions = std::iter::once(
-            fixture
-                .body
-                .external_transactions()
-                .next()
-                .expect("fixture transaction")
-                .clone(),
-        )
-        .chain((1_u8..=2).map(|index| {
-            TransactionBuilder::new(
+            .chain((1_u8..=2).map(|index| {
+                TransactionBuilder::new(
+                    fixture.context.chain_id.clone(),
+                    fixture.service.genesis_account.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(
+                    Level::INFO,
+                    format!("mixed commit barrier member {index}"),
+                )])
+                .sign(fixture.genesis_key.private_key())
+            }))
+            .map(|transaction| {
+                let (key, entrypoint) = reserve_transaction_for_test_with_identity(
+                    fixture.state.as_ref(),
+                    &queue,
+                    transaction,
+                    first_owner,
+                    first_proposal,
+                );
+                (entrypoint, key)
+            })
+            .collect::<Vec<_>>();
+            let first_keys = first_transactions
+                .iter()
+                .map(|(_, key)| *key)
+                .collect::<Vec<_>>();
+            let later_transaction = TransactionBuilder::new(
                 fixture.context.chain_id.clone(),
                 fixture.service.genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(
                 Level::INFO,
-                format!("mixed commit barrier member {index}"),
+                "mixed commit barrier malformed later group".to_owned(),
             )])
-            .sign(fixture.genesis_key.private_key())
-        }))
-        .map(|transaction| {
-            let (key, entrypoint) = reserve_transaction_for_test_with_identity(
+            .sign(fixture.genesis_key.private_key());
+            let (later_key, _) = reserve_transaction_for_test_with_identity(
                 fixture.state.as_ref(),
                 &queue,
-                transaction,
-                first_owner,
-                first_proposal,
+                later_transaction,
+                Hash::new(b"mixed commit barrier later owner"),
+                Hash::new(b"mixed commit barrier later proposal"),
             );
-            (entrypoint, key)
-        })
-        .collect::<Vec<_>>();
-        let first_keys = first_transactions
-            .iter()
-            .map(|(_, key)| *key)
-            .collect::<Vec<_>>();
-        let later_transaction = TransactionBuilder::new(
-            fixture.context.chain_id.clone(),
-            fixture.service.genesis_account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "mixed commit barrier malformed later group".to_owned(),
-        )])
-        .sign(fixture.genesis_key.private_key());
-        let (later_key, _) = reserve_transaction_for_test_with_identity(
-            fixture.state.as_ref(),
-            &queue,
-            later_transaction,
-            Hash::new(b"mixed commit barrier later owner"),
-            Hash::new(b"mixed commit barrier later proposal"),
-        );
-        queue.hold_next_lane_reservation_commit_after_barrier_for_test();
-        assert_eq!(
-            queue
-                .commit_lane_reservation(&first_keys[0])
-                .expect("stop first member at durable Commit barrier"),
-            LaneQueueReservationOutcome::Finalized
-        );
-        assert_eq!(
-            queue.lane_reservation_commit_barriers(),
-            vec![first_keys[0]]
-        );
+            queue.hold_next_lane_reservation_commit_after_barrier_for_test();
+            assert_eq!(
+                queue
+                    .commit_lane_reservation(&first_keys[0])
+                    .expect("stop first member at durable Commit barrier"),
+                LaneQueueReservationOutcome::Finalized
+            );
+            assert_eq!(
+                queue.lane_reservation_commit_barriers(),
+                vec![first_keys[0]]
+            );
 
-        let (parent, entry) =
-            merge_entry_with_reservations(&fixture.context, first_transactions);
-        let carrier = body_with_exact_merge_execution_header(&entry);
-        fixture
-            .kura
-            .store_block(Arc::new(parent))
-            .expect("persist mixed commit barrier carrier parent");
-        fixture
-            .kura
-            .store_block_with_merge_entry(Arc::new(carrier), &entry)
-            .expect("persist exact first committed group");
-        fixture.state.record_direct_committed_transactions(
-            first_keys
-                .iter()
-                .map(|key| key.signed_transaction_hash)
-                .chain([later_key.signed_transaction_hash]),
-            NonZeroUsize::new(1).expect("mixed committed State height"),
-        );
-        let before = queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("capture mixed owner preflight snapshot");
-        let barriers_before = queue.lane_reservation_commit_barriers();
-
-        let error = reconcile_lane_reservation_ownership(
-            fixture.state.as_ref(),
-            &queue,
-            fixture.kura.as_ref(),
-            &verified_context_for_fixture(&fixture, &fixture.context),
-        )
-        .expect_err("malformed later group must stop before consuming mixed first group");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::MissingCommittedBinding { transaction_hash }
-                if transaction_hash == later_key.signed_transaction_hash
-        ));
-        assert_eq!(
-            queue
+            let (parent, entry) =
+                merge_entry_with_reservations(&fixture.context, first_transactions);
+            let carrier = body_with_exact_merge_execution_header(&entry);
+            fixture
+                .kura
+                .store_block(Arc::new(parent))
+                .expect("persist mixed commit barrier carrier parent");
+            fixture
+                .kura
+                .store_block_with_merge_entry(Arc::new(carrier), &entry)
+                .expect("persist exact first committed group");
+            fixture.state.record_direct_committed_transactions(
+                first_keys
+                    .iter()
+                    .map(|key| key.signed_transaction_hash)
+                    .chain([later_key.signed_transaction_hash]),
+                NonZeroUsize::new(1).expect("mixed committed State height"),
+            );
+            let before = queue
                 .lane_reservation_reconciliation_snapshot()
-                .expect("capture mixed owner post-error snapshot"),
-            before
-        );
-        assert_eq!(queue.lane_reservation_commit_barriers(), barriers_before);
-    });
+                .expect("capture mixed owner preflight snapshot");
+            let barriers_before = queue.lane_reservation_commit_barriers();
+
+            let error = reconcile_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                &queue,
+                fixture.kura.as_ref(),
+                &verified_context_for_fixture(&fixture, &fixture.context),
+            )
+            .expect_err("malformed later group must stop before consuming mixed first group");
+            assert!(matches!(
+                error,
+                V2ReservationLifecycleError::MissingCommittedBinding { transaction_hash }
+                    if transaction_hash == later_key.signed_transaction_hash
+            ));
+            assert_eq!(
+                queue
+                    .lane_reservation_reconciliation_snapshot()
+                    .expect("capture mixed owner post-error snapshot"),
+                before
+            );
+            assert_eq!(queue.lane_reservation_commit_barriers(), barriers_before);
+        }
+    );
 
     v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
         let fixture = ApplyFixture::new();
@@ -761,10 +766,7 @@
             (entrypoint, key)
         })
         .collect::<Vec<_>>();
-        let keys = transactions
-            .iter()
-            .map(|(_, key)| *key)
-            .collect::<Vec<_>>();
+        let keys = transactions.iter().map(|(_, key)| *key).collect::<Vec<_>>();
         queue.hold_next_lane_reservation_commit_after_barrier_for_test();
         queue
             .commit_lane_reservation(&keys[0])
@@ -818,59 +820,62 @@
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
     });
 
-    v2_apply_test!(startup_reconciliation_rejects_partial_state_group_without_mutation, {
-        let fixture = ApplyFixture::new();
-        let producer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::BlsNormal)
-            .expect("derive partial-state autonomous producer");
-        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
-        let journal_dir = tempfile::tempdir().expect("partial-state journal directory");
-        queue
-            .install_plan_journal(
-                journal_dir.path().join("queue-plans.norito"),
-                1024 * 1024,
-                true,
-            )
-            .expect("install partial-state queue-plan journal");
-        queue
-            .install_lane_reservation_journal(
-                journal_dir.path().join("lane-reservations.norito"),
-                1024 * 1024,
-            )
-            .expect("install partial-state reservation journal");
-        let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
-        let keys = payload.reservation_keys.clone();
-        fixture.state.record_direct_committed_transactions(
-            [keys[0].signed_transaction_hash],
-            NonZeroUsize::new(1).expect("partial committed height"),
-        );
-        let before = queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("capture partial-state ownership snapshot");
-
-        let error = reconcile_lane_reservation_ownership(
-            fixture.state.as_ref(),
-            queue.as_ref(),
-            fixture.kura.as_ref(),
-            &verified_context_for_fixture(&fixture, &fixture.context),
-        )
-        .expect_err("partial atomic reservation group must fail closed");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::PartialCommittedGroup {
-                lane_id: LaneId::SINGLE,
-                proposal_height: 1,
-            }
-        ));
-        assert_eq!(
+    v2_apply_test!(
+        startup_reconciliation_rejects_partial_state_group_without_mutation,
+        {
+            let fixture = ApplyFixture::new();
+            let producer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::BlsNormal)
+                .expect("derive partial-state autonomous producer");
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let journal_dir = tempfile::tempdir().expect("partial-state journal directory");
             queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install partial-state queue-plan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install partial-state reservation journal");
+            let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
+            let keys = payload.reservation_keys.clone();
+            fixture.state.record_direct_committed_transactions(
+                [keys[0].signed_transaction_hash],
+                NonZeroUsize::new(1).expect("partial committed height"),
+            );
+            let before = queue
                 .lane_reservation_reconciliation_snapshot()
-                .expect("capture partial-state post-error snapshot"),
-            before
-        );
-        assert!(queue.lane_reservation_commit_barriers().is_empty());
-        assert!(queue.lane_reservation_release_barriers().is_empty());
-    });
+                .expect("capture partial-state ownership snapshot");
+
+            let error = reconcile_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                &verified_context_for_fixture(&fixture, &fixture.context),
+            )
+            .expect_err("partial atomic reservation group must fail closed");
+            assert!(matches!(
+                error,
+                V2ReservationLifecycleError::PartialCommittedGroup {
+                    lane_id: LaneId::SINGLE,
+                    proposal_height: 1,
+                }
+            ));
+            assert_eq!(
+                queue
+                    .lane_reservation_reconciliation_snapshot()
+                    .expect("capture partial-state post-error snapshot"),
+                before
+            );
+            assert!(queue.lane_reservation_commit_barriers().is_empty());
+            assert!(queue.lane_reservation_release_barriers().is_empty());
+        }
+    );
 
     v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
         let fixture = ApplyFixture::new();
@@ -1021,84 +1026,158 @@
         );
     });
 
-    v2_apply_test!(finalized_hash_only_carrier_fails_closed_without_releasing_owner, {
-        let fixture = ApplyFixture::new();
-        let producer = KeyPair::try_from_seed(vec![0xBA; 32], Algorithm::BlsNormal)
-            .expect("derive pruned-carrier autonomous producer");
-        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
-        let journal_dir = tempfile::tempdir().expect("pruned-carrier journal directory");
-        queue
-            .install_plan_journal(
-                journal_dir.path().join("queue-plans.norito"),
-                1024 * 1024,
-                true,
-            )
-            .expect("install pruned-carrier queue-plan journal");
-        queue
-            .install_lane_reservation_journal(
-                journal_dir.path().join("lane-reservations.norito"),
-                1024 * 1024,
-            )
-            .expect("install pruned-carrier reservation journal");
-        let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
-        let descriptor = &payload.origin_proposal.descriptor;
-        fixture
-            .kura
-            .install_lane_incarnation_marker_for_test(
-                RuntimeLaneConfig::default().primary(),
-                descriptor.lane_incarnation,
-                0,
-            )
-            .expect("install pruned-carrier lane marker");
-        fixture
-            .kura
-            .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
-            .expect("persist exact pruned-carrier payload");
-        let mut store = fixture.reopen_body_store();
-        fixture
-            .execute(&mut store)
-            .expect("finalize carrier before body pruning");
-        fixture
-            .kura
-            .force_hash_only_block_for_testing(
-                NonZeroUsize::new(1).expect("non-zero pruned carrier height"),
-            )
-            .expect("evict exact finalized carrier body");
-        let before = queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("capture pruned-carrier ownership snapshot");
-
-        let error = reconcile_lane_reservation_ownership(
-            fixture.state.as_ref(),
-            queue.as_ref(),
-            fixture.kura.as_ref(),
-            &verified_context_for_fixture(&fixture, &fixture.context),
-        )
-        .expect_err("hash-only finality cannot prove terminal payload absence");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::MissingCanonicalBody { height: 1 }
-        ));
-        assert_eq!(
+    v2_apply_test!(
+        finalized_hash_only_carrier_plans_recovery_before_queue_mutation,
+        {
+            let fixture = ApplyFixture::new();
+            let producer = KeyPair::try_from_seed(vec![0xBA; 32], Algorithm::BlsNormal)
+                .expect("derive pruned-carrier autonomous producer");
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let journal_dir = tempfile::tempdir().expect("pruned-carrier journal directory");
             queue
-                .lane_reservation_reconciliation_snapshot()
-                .expect("capture pruned-carrier post-error snapshot"),
-            before
-        );
-        assert!(
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install pruned-carrier queue-plan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install pruned-carrier reservation journal");
+            let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
+            let descriptor = &payload.origin_proposal.descriptor;
             fixture
                 .kura
-                .read_autonomous_lane_slot_retirement(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    payload.chain_id_hash,
-                    payload.epoch,
+                .install_lane_incarnation_marker_for_test(
+                    RuntimeLaneConfig::default().primary(),
+                    descriptor.lane_incarnation,
+                    0,
                 )
-                .expect("read pruned-carrier retirement state")
-                .is_none()
-        );
-    });
+                .expect("install pruned-carrier lane marker");
+            fixture
+                .kura
+                .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+                .expect("persist exact pruned-carrier payload");
+            let mut store = fixture.reopen_body_store();
+            fixture
+                .execute(&mut store)
+                .expect("finalize carrier before body pruning");
+            let carrier_height = NonZeroUsize::new(1).expect("non-zero pruned carrier height");
+            let canonical_body = fixture
+                .kura
+                .get_block_without_merge_sidecar(carrier_height)
+                .expect("capture canonical carrier before body pruning");
+            fixture
+                .kura
+                .force_hash_only_block_for_testing(carrier_height)
+                .expect("evict exact finalized carrier body");
+            let before = queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("capture pruned-carrier ownership snapshot");
+
+            let planning = plan_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                &verified_context_for_fixture(&fixture, &fixture.context),
+            )
+            .expect("hash-only finality produces an authenticated recovery plan");
+            let LaneReservationReconciliationPlanning::RecoverCanonicalBodies(needs) = planning
+            else {
+                panic!("hash-only finality must not produce a Queue mutation plan");
+            };
+            assert_eq!(needs.len(), 1);
+            let need = needs[0];
+            let finality = fixture
+                .kura
+                .v2_finality_artifact(1)
+                .expect("read pruned-carrier finality")
+                .expect("pruned carrier retains finality");
+            assert_eq!(need.height, 1);
+            assert_eq!(need.block_hash, canonical_body.hash());
+            assert_eq!(need.finality_artifact_hash, HashOf::new(&finality));
+            assert_eq!(
+                need.execution_commitment,
+                finality.commit_qc.execution_commitment
+            );
+            assert_eq!(
+                need.executed_block_wire_hash,
+                canonical_body
+                    .executed_block_wire_hash()
+                    .expect("hash canonical executed block wire")
+            );
+            let mut collected = BTreeMap::new();
+            let mut later = need;
+            later.height = 2;
+            later.block_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"later canonical executed-block need"));
+            collect_canonical_executed_block_need(&mut collected, later)
+                .expect("collect later recovery need");
+            collect_canonical_executed_block_need(&mut collected, need)
+                .expect("collect earlier recovery need");
+            collect_canonical_executed_block_need(&mut collected, need)
+                .expect("deduplicate byte-identical recovery need");
+            assert_eq!(
+                collected.keys().copied().collect::<Vec<_>>(),
+                vec![1, 2],
+                "recovery needs are unique and ordered by canonical height"
+            );
+            let mut conflicting = need;
+            conflicting.executed_block_wire_hash = Hash::new(b"conflicting same-height wire");
+            assert!(matches!(
+                collect_canonical_executed_block_need(&mut collected, conflicting),
+                Err(V2ReservationLifecycleError::CanonicalContextMismatch { height: 1 })
+            ));
+            assert_eq!(
+                queue
+                    .lane_reservation_reconciliation_snapshot()
+                    .expect("capture pruned-carrier post-error snapshot"),
+                before
+            );
+            assert!(
+                queue.lane_reservation_startup_reconciliation_pending(),
+                "recovery planning must leave Queue publication closed"
+            );
+            assert!(
+                fixture
+                    .kura
+                    .read_autonomous_lane_slot_retirement(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                        payload.chain_id_hash,
+                        payload.epoch,
+                    )
+                    .expect("read pruned-carrier retirement state")
+                    .is_none()
+            );
+
+            fixture
+                .kura
+                .cache_block_body(&canonical_body)
+                .expect("restore the exact finality-authenticated carrier body");
+            let replanned = plan_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                &verified_context_for_fixture(&fixture, &fixture.context),
+            )
+            .expect("replan after exact body recovery");
+            let LaneReservationReconciliationPlanning::Ready(plan) = replanned else {
+                panic!("exact recovered body must make the mutation plan ready");
+            };
+            assert!(queue.lane_reservation_startup_reconciliation_pending());
+            apply_lane_reservation_reconciliation_plan(queue.as_ref(), fixture.kura.as_ref(), plan)
+                .expect("apply only the fully ready reconciliation plan");
+            assert!(
+                !queue.lane_reservation_startup_reconciliation_pending(),
+                "Queue publication opens only after recovered evidence is replanned and applied"
+            );
+        }
+    );
 
     v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
         let fixture = ApplyFixture::new();
@@ -1343,99 +1422,181 @@
         );
     });
 
-    v2_apply_test!(prior_height_canonical_uncertified_owner_requires_historical_recovery, {
-        let fixture = ApplyFixture::new();
-        let mut genesis_store = fixture.reopen_body_store();
-        fixture
-            .execute(&mut genesis_store)
-            .expect("commit parent before historical autonomous successor");
-        let context = successor_height_context(&fixture);
-        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
-        let journal_dir = tempfile::tempdir().expect("historical autonomous journal directory");
-        queue
-            .install_plan_journal(
-                journal_dir.path().join("queue-plans.norito"),
-                1024 * 1024,
-                true,
-            )
-            .expect("install historical autonomous queue-plan journal");
-        queue
-            .install_lane_reservation_journal(
-                journal_dir.path().join("lane-reservations.norito"),
-                1024 * 1024,
-            )
-            .expect("install historical autonomous reservation journal");
-        let (payload, _) =
-            reserve_canonical_successor_autonomous_batch(&fixture, &queue, &context, 2);
-        let descriptor = &payload.origin_proposal.descriptor;
-        fixture
-            .kura
-            .install_lane_incarnation_marker_for_test(
-                RuntimeLaneConfig::default().primary(),
-                descriptor.lane_incarnation,
-                0,
-            )
-            .expect("install historical autonomous lane marker");
-        fixture
-            .kura
-            .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
-            .expect("persist historical autonomous payload");
-        let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
-            &payload,
-            payload.chain_id_hash,
-            payload.epoch,
-        )
-        .expect("encode historical autonomous envelope");
-        let mut successor =
-            build_successor_apply_fixture_with_autonomous_payloads(&fixture, vec![envelope]);
-        fixture
-            .service
-            .execute(&successor.context, &mut successor.store, &successor.task)
-            .expect("finalize historical autonomous carrier");
-        let mut next_context = successor.context.clone();
-        next_context.height = 3;
-        next_context.parent_commit_qc = Some(successor.task.certificate().clone());
-        next_context
-            .validate()
-            .expect("valid next context for historical recovery");
-        let before = queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("capture historical ownership snapshot");
-
-        let error = reconcile_lane_reservation_ownership(
-            fixture.state.as_ref(),
-            queue.as_ref(),
-            fixture.kura.as_ref(),
-            &verified_context_for_fixture(&fixture, &next_context),
-        )
-        .expect_err("prior-height exact carrier without certification needs bounded recovery");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::HistoricalCarrierRecoveryRequired {
-                lane_id: LaneId::SINGLE,
-                height: 2,
-            }
-        ));
-        assert_eq!(
+    v2_apply_test!(
+        prior_height_canonical_uncertified_owner_requires_historical_recovery,
+        {
+            let fixture = ApplyFixture::new();
+            let mut genesis_store = fixture.reopen_body_store();
+            fixture
+                .execute(&mut genesis_store)
+                .expect("commit parent before historical autonomous successor");
+            let context = successor_height_context(&fixture);
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let journal_dir = tempfile::tempdir().expect("historical autonomous journal directory");
             queue
-                .lane_reservation_reconciliation_snapshot()
-                .expect("capture historical post-error ownership snapshot"),
-            before
-        );
-        assert!(
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install historical autonomous queue-plan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install historical autonomous reservation journal");
+            let (payload, _) =
+                reserve_canonical_successor_autonomous_batch(&fixture, &queue, &context, 2);
+            let descriptor = &payload.origin_proposal.descriptor;
             fixture
                 .kura
-                .read_autonomous_lane_slot_retirement(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    payload.chain_id_hash,
-                    payload.epoch,
+                .install_lane_incarnation_marker_for_test(
+                    RuntimeLaneConfig::default().primary(),
+                    descriptor.lane_incarnation,
+                    0,
                 )
-                .expect("read historical retirement state")
-                .is_none()
-        );
-    });
+                .expect("install historical autonomous lane marker");
+            fixture
+                .kura
+                .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+                .expect("persist historical autonomous payload");
+            let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
+                &payload,
+                payload.chain_id_hash,
+                payload.epoch,
+            )
+            .expect("encode historical autonomous envelope");
+            let mut successor =
+                build_successor_apply_fixture_with_autonomous_payloads(&fixture, vec![envelope]);
+            fixture
+                .service
+                .execute(&successor.context, &mut successor.store, &successor.task)
+                .expect("finalize historical autonomous carrier");
+            let mut next_context = successor.context.clone();
+            next_context.height = 3;
+            next_context.parent_commit_qc = Some(successor.task.certificate().clone());
+            next_context
+                .validate()
+                .expect("valid next context for historical recovery");
+            let before = queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("capture historical ownership snapshot");
+
+            let planning = plan_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                &verified_context_for_fixture(&fixture, &next_context),
+            )
+            .expect("classify prior-height autonomous recovery without mutating Queue");
+            let LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(
+                installs,
+            ) = planning
+            else {
+                panic!("prior-height exact autonomous carrier must plan durable installation");
+            };
+            assert_eq!(installs.len(), 1);
+            let install = &installs[0];
+            assert!(install.has_valid_identity());
+            assert_eq!(install.canonical_body.height, 2);
+            assert_eq!(install.historical_context, successor.context);
+            assert_eq!(install.historical_context_id, successor.context.id());
+            assert_eq!(install.payload.origin_proposal.descriptor, *descriptor);
+            assert_eq!(install.payload.entrypoint_hashes, payload.entrypoint_hashes);
+            assert_eq!(install.payload.reservation_keys, payload.reservation_keys);
+            assert_eq!(
+                install.reservation_group,
+                LaneQueueReservationReconciliationGroupV1 {
+                    identity: reservation_group_identity(&payload.reservation_keys[0]),
+                    ordered_keys: payload.reservation_keys.clone(),
+                }
+            );
+            assert_eq!(
+                queue
+                    .lane_reservation_reconciliation_snapshot()
+                    .expect("capture historical post-error ownership snapshot"),
+                before
+            );
+            assert!(queue.lane_reservation_startup_reconciliation_pending());
+            assert!(
+                fixture
+                    .kura
+                    .read_autonomous_lane_slot_retirement(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                        payload.chain_id_hash,
+                        payload.epoch,
+                    )
+                    .expect("read historical retirement state")
+                    .is_none()
+            );
+
+            fixture
+                .kura
+                .persist_historical_autonomous_lane_recovery(install)
+                .expect("install historical autonomous recovery");
+            fixture
+                .kura
+                .persist_historical_autonomous_lane_recovery(install)
+                .expect("historical autonomous recovery retry is idempotent");
+            assert!(
+                fixture
+                    .kura
+                    .historical_autonomous_lane_recovery_matches(install)
+                    .expect("read back historical autonomous recovery")
+            );
+            let recovery_path = fixture
+                .kura
+                .store_root()
+                .join("historical_autonomous_recoveries_v1")
+                .join(format!(
+                    "{}.norito",
+                    hex::encode(install.recovery_id.as_ref())
+                ));
+            let recovery_bytes =
+                std::fs::read(&recovery_path).expect("read historical recovery seal");
+            let mut corrupt_recovery = recovery_bytes.clone();
+            corrupt_recovery[0] ^= 0x80;
+            std::fs::write(&recovery_path, corrupt_recovery)
+                .expect("corrupt historical recovery seal");
+            assert!(
+                fixture
+                    .kura
+                    .historical_autonomous_lane_recovery_matches(install)
+                    .is_err(),
+                "corrupt immutable recovery evidence must fail closed"
+            );
+            std::fs::write(&recovery_path, recovery_bytes)
+                .expect("restore historical recovery seal");
+
+            let replanning = plan_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                &verified_context_for_fixture(&fixture, &next_context),
+            )
+            .expect("replan with durable historical recovery");
+            let LaneReservationReconciliationPlanning::Ready(plan) = replanning else {
+                panic!("durable historical recovery must make the immutable plan ready");
+            };
+            assert_eq!(
+                apply_lane_reservation_reconciliation_plan(
+                    queue.as_ref(),
+                    fixture.kura.as_ref(),
+                    plan,
+                )
+                .expect("publish historical reservation reconciliation"),
+                LaneReservationReconciliationSummary {
+                    recovered: payload.reservation_keys.len(),
+                    retained_historical_recovery: payload.reservation_keys.len(),
+                    ..LaneReservationReconciliationSummary::default()
+                }
+            );
+            assert!(!queue.lane_reservation_startup_reconciliation_pending());
+        }
+    );
 
     v2_apply_test!(pending_merge_split_group_is_rejected, {
         let fixture = ApplyFixture::new();
@@ -1541,55 +1702,58 @@
         ));
     });
 
-    v2_apply_test!(canonical_overlap_detects_same_transaction_under_substituted_key, {
-        let fixture = ApplyFixture::new();
-        let producer = KeyPair::try_from_seed(vec![0xBD; 32], Algorithm::BlsNormal)
-            .expect("derive canonical-overlap autonomous producer");
-        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
-        let journal_dir = tempfile::tempdir().expect("canonical-overlap journal directory");
-        queue
-            .install_plan_journal(
-                journal_dir.path().join("queue-plans.norito"),
-                1024 * 1024,
-                true,
-            )
-            .expect("install canonical-overlap queue-plan journal");
-        queue
-            .install_lane_reservation_journal(
-                journal_dir.path().join("lane-reservations.norito"),
-                1024 * 1024,
-            )
-            .expect("install canonical-overlap reservation journal");
-        let (mut substituted, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
-        let snapshot = queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("capture canonical-overlap ownership snapshot");
-        let group = snapshot
-            .ordered_groups
-            .first()
-            .expect("one canonical-overlap group");
-        substituted.reservation_keys[0].queue_plan_admission_binding_hash =
-            Hash::new(b"substituted canonical QueuePlan binding");
-
-        assert!(
-            autonomous_payload_overlaps_group_transaction_identity(&substituted, group),
-            "same signed transaction or typed entrypoint must make a substituted key relevant"
-        );
-        assert!(
-            !canonical_payload_contains_group_in_order(&substituted, group),
-            "the substituted key must remain ineligible for exact canonical classification"
-        );
-        assert_eq!(
+    v2_apply_test!(
+        canonical_overlap_detects_same_transaction_under_substituted_key,
+        {
+            let fixture = ApplyFixture::new();
+            let producer = KeyPair::try_from_seed(vec![0xBD; 32], Algorithm::BlsNormal)
+                .expect("derive canonical-overlap autonomous producer");
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let journal_dir = tempfile::tempdir().expect("canonical-overlap journal directory");
             queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install canonical-overlap queue-plan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install canonical-overlap reservation journal");
+            let (mut substituted, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
+            let snapshot = queue
                 .lane_reservation_reconciliation_snapshot()
-                .expect("capture canonical-overlap post-check snapshot"),
-            snapshot,
-            "conflict preflight must not mutate Queue ownership"
-        );
-        assert!(queue.lane_reservation_commit_barriers().is_empty());
-        assert!(queue.lane_reservation_release_barriers().is_empty());
-    });
+                .expect("capture canonical-overlap ownership snapshot");
+            let group = snapshot
+                .ordered_groups
+                .first()
+                .expect("one canonical-overlap group");
+            substituted.reservation_keys[0].queue_plan_admission_binding_hash =
+                Hash::new(b"substituted canonical QueuePlan binding");
+
+            assert!(
+                autonomous_payload_overlaps_group_transaction_identity(&substituted, group),
+                "same signed transaction or typed entrypoint must make a substituted key relevant"
+            );
+            assert!(
+                !canonical_payload_contains_group_in_order(&substituted, group),
+                "the substituted key must remain ineligible for exact canonical classification"
+            );
+            assert_eq!(
+                queue
+                    .lane_reservation_reconciliation_snapshot()
+                    .expect("capture canonical-overlap post-check snapshot"),
+                snapshot,
+                "conflict preflight must not mutate Queue ownership"
+            );
+            assert!(queue.lane_reservation_commit_barriers().is_empty());
+            assert!(queue.lane_reservation_release_barriers().is_empty());
+        }
+    );
 
     v2_apply_test!(
         autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once,
@@ -2185,13 +2349,13 @@
             let mut store = fixture.reopen_body_store();
 
             assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::FinalityCryptography(
-                wire::finality::V2QuorumCertificateVerificationError::InvalidProofOfPossession {
-                    index: 3
-                }
-            ))
-        ));
+                fixture.execute(&mut store),
+                Err(V2ApplyError::FinalityCryptography(
+                    wire::finality::V2QuorumCertificateVerificationError::InvalidProofOfPossession {
+                        index: 3
+                    }
+                ))
+            ));
             fixture.assert_no_apply_mutation();
         }
     );
@@ -2548,6 +2712,7 @@
                 Hash::new(b"wrong parent state"),
                 Hash::new(b"wrong post state"),
                 Hash::new(b"wrong ordinary writes"),
+                1,
                 Hash::new(b"wrong executed block wire"),
             );
             let task = ApplyTask::for_test(
@@ -2577,6 +2742,7 @@
                 Hash::new(b"forged parent state"),
                 Hash::new(b"forged post state"),
                 Hash::new(b"forged ordinary writes"),
+                1,
                 Hash::new(b"forged executed block wire"),
             );
             let mut certificate = fixture.task.certificate().clone();
@@ -2635,888 +2801,5 @@
                 Err(V2ApplyError::ExecutionCommitmentMismatch)
             ));
             fixture.assert_no_apply_mutation();
-        }
-    );
-
-    v2_apply_test!(
-        checkpoint_write_failure_keeps_wsv_behind_durable_kura_tip,
-        {
-            let fixture = ApplyFixture::new();
-            let mut store = fixture.reopen_body_store();
-            fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
-            let error = fixture
-                .execute(&mut store)
-                .expect_err("checkpoint failure follows the durable Kura boundary");
-            assert!(
-                matches!(
-                    &error,
-                    V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                        if *stage == "pre-WSV recovery checkpoint"
-                ),
-                "unexpected committed recovery classification: {error:?}"
-            );
-            assert!(error.requires_restart_recovery());
-            assert_eq!(
-                fixture.state.committed_height(),
-                0,
-                "live WSV must not advance without its durable recovery checkpoint"
-            );
-            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            assert!(
-                fixture
-                    .kura
-                    .commit_manifest(fixture.context.height)
-                    .expect("read absent manifest")
-                    .is_none()
-            );
-            assert_eq!(
-                fixture
-                    .kura
-                    .v2_finality_artifact(fixture.context.height)
-                    .expect("read pre-WSV finality")
-                    .expect("finality must precede the WSV checkpoint")
-                    .block_hash,
-                fixture.body.hash()
-            );
-
-            drop(store);
-            let mut reopened = fixture.reopen_body_store();
-            assert!(
-                reopened
-                    .validated_recovery_catalog()
-                    .contains_key(&(fixture.manifest.round, fixture.manifest.subject)),
-                "restart must recover the exact durable validation marker"
-            );
-            fixture
-                .execute(&mut reopened)
-                .expect("replay the exact durable tip and publish WSV once");
-            fixture.assert_complete();
-        }
-    );
-
-    v2_apply_test!(
-        provider_ingest_archive_failure_after_kura_and_checkpoint_keeps_state_unpublished,
-        {
-            let mut fixture = ApplyFixture::new();
-            let archive_root = direct_archive_tempdir();
-            let archive = Arc::new(
-                ProviderIngestFinalizedArchiveV1::try_open(
-                    archive_root.path(),
-                    provider_ingest_archive_bounds(32, 32),
-                )
-                .expect("open deliberately tiny provider-ingest archive"),
-            );
-            fixture.service.provider_ingest_finalized_archive = Some(Arc::clone(&archive));
-            let mut store = fixture.reopen_body_store();
-
-            let error = fixture
-                .execute(&mut store)
-                .expect_err("provider-ingest capture must exceed the tiny record bound");
-            assert!(
-                matches!(
-                    &error,
-                    V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                        if *stage == "provider-ingest finalized archive capture"
-                ),
-                "unexpected committed recovery classification: {error:?}"
-            );
-            assert!(error.requires_restart_recovery());
-            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            assert!(
-                fixture
-                    .kura
-                    .wsv_checkpoint(1)
-                    .expect("read staged checkpoint")
-                    .is_some(),
-                "WSV checkpoint must precede provider-ingest archive capture"
-            );
-            assert!(
-                fixture
-                    .kura
-                    .v2_finality_artifact(1)
-                    .expect("read durable finality")
-                    .is_some(),
-                "authenticated Kura finality must precede provider-ingest capture"
-            );
-            assert_eq!(
-                fixture.state.committed_height(),
-                0,
-                "provider-ingest archive failure must precede live State publication"
-            );
-            assert!(
-                archive
-                    .activation_floor(&fixture.service.chain_id)
-                    .expect("read empty activation floor")
-                    .is_none()
-            );
-        }
-    );
-
-    v2_apply_test!(
-        provider_ingest_archive_recovery_replays_exact_capture_without_duplicate_generation,
-        {
-            let mut fixture = ApplyFixture::new();
-            let archive_root = direct_archive_tempdir();
-            let archive = Arc::new(
-                ProviderIngestFinalizedArchiveV1::try_open(
-                    archive_root.path(),
-                    provider_ingest_archive_bounds(4 * 1024 * 1024, 64 * 1024 * 1024),
-                )
-                .expect("open provider-ingest archive"),
-            );
-            fixture.service.provider_ingest_finalized_archive = Some(Arc::clone(&archive));
-            fixture
-                .service
-                .fail_after_provider_ingest_archive_capture_for_test();
-            let mut first_store = fixture.reopen_body_store();
-
-            let error = fixture
-                .execute(&mut first_store)
-                .expect_err("inject crash after provider-ingest archive capture");
-            assert!(
-                matches!(
-                    &error,
-                    V2ApplyError::InjectedCrashAfterProviderIngestArchiveCapture
-                ),
-                "unexpected provider-ingest capture result: {error:?}"
-            );
-            assert!(error.requires_restart_recovery());
-            assert_eq!(fixture.state.committed_height(), 0);
-            let generation_after_capture = archive
-                .health_generation()
-                .expect("read first provider-ingest archive generation");
-            let qualification = archive
-                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
-                .expect("provider-ingest archive is exact at the durable Kura tip");
-            assert_eq!(qualification.activation_floor().height, 1);
-            assert_eq!(qualification.archive_tip().height, 1);
-            assert_eq!(qualification.kura_tip_height(), 1);
-            assert_eq!(qualification.lag_blocks(), 0);
-            drop(first_store);
-
-            let (restarted_service, restarted_state) =
-                fixture.restart_service_from_last_finalized_snapshot();
-            let mut restarted_store = fixture.reopen_body_store();
-            restarted_service
-                .execute(&fixture.context, &mut restarted_store, &fixture.task)
-                .expect("restart replays the exact provider-ingest capture and publishes WSV");
-            assert_eq!(restarted_state.committed_height(), 1);
-            assert_eq!(
-                archive
-                    .health_generation()
-                    .expect("read replayed provider-ingest archive generation"),
-                generation_after_capture,
-                "an exact replay must not publish another archive generation"
-            );
-
-            let (_, receipt) = restarted_service
-                .kura
-                .v2_finality_artifact_with_receipt(1)
-                .expect("read exact finality receipt")
-                .expect("height-one finality receipt");
-            let restarted_view = restarted_state.query_view();
-            let outcome = archive
-                .capture_kura_authenticated_view(&restarted_view, fixture.kura.as_ref(), &receipt)
-                .expect("same exact provider-ingest committed view is replay-safe");
-            assert_eq!(
-                outcome,
-                ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
-            );
-        }
-    );
-
-    v2_apply_test!(
-        reputation_archive_failure_after_kura_and_checkpoint_keeps_state_unpublished,
-        {
-            let mut fixture = ApplyFixture::new_with_reputation_archive();
-            let archive_root = direct_archive_tempdir();
-            let bounds = ReputationFinalizedArchiveBounds::try_new(32, 16, 32)
-                .expect("valid deliberately tiny archive bounds");
-            let archive = Arc::new(
-                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
-                    .expect("open tiny archive"),
-            );
-            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-            let mut store = fixture.reopen_body_store();
-
-            let error = fixture
-                .execute(&mut store)
-                .expect_err("archive capture must exceed the deliberately tiny bound");
-            assert!(
-                matches!(
-                    &error,
-                    V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                        if *stage == "reputation finalized archive capture"
-                ),
-                "unexpected committed recovery classification: {error:?}"
-            );
-            assert!(error.requires_restart_recovery());
-            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            assert!(
-                fixture
-                    .kura
-                    .wsv_checkpoint(1)
-                    .expect("read staged checkpoint")
-                    .is_some(),
-                "WSV checkpoint must precede archive capture"
-            );
-            assert!(
-                fixture
-                    .kura
-                    .v2_finality_artifact(1)
-                    .expect("read durable finality")
-                    .is_some(),
-                "authenticated Kura finality must precede archive capture"
-            );
-            assert_eq!(
-                fixture.state.committed_height(),
-                0,
-                "archive failure must precede live State publication"
-            );
-            assert!(
-                archive
-                    .activation_floor(&fixture.service.chain_id)
-                    .expect("read empty activation floor")
-                    .is_none()
-            );
-        }
-    );
-
-    v2_apply_test!(
-        crash_after_reputation_archive_capture_precedes_state_block_commit,
-        {
-            let mut fixture = ApplyFixture::new_with_reputation_archive();
-            let archive_root = direct_archive_tempdir();
-            let bounds =
-                ReputationFinalizedArchiveBounds::try_new(4 * 1024 * 1024, 16, 64 * 1024 * 1024)
-                    .expect("valid archive bounds");
-            let archive = Arc::new(
-                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
-                    .expect("open archive"),
-            );
-            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-            fixture
-                .service
-                .fail_after_reputation_archive_capture_for_test();
-            let mut store = fixture.reopen_body_store();
-
-            let error = fixture
-                .execute(&mut store)
-                .expect_err("injected post-capture crash");
-            assert!(
-                matches!(
-                    &error,
-                    V2ApplyError::InjectedCrashAfterReputationArchiveCapture
-                ),
-                "unexpected post-capture result: {error:?}"
-            );
-            assert_eq!(
-                fixture.state.committed_height(),
-                0,
-                "injected archive-boundary crash must precede StateBlock::commit"
-            );
-            let qualification = archive
-                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
-                .expect("captured archive is exact at the durable Kura tip");
-            assert_eq!(qualification.activation_floor().height, 1);
-            assert_eq!(qualification.archive_tip().height, 1);
-            assert_eq!(qualification.kura_tip_height(), 1);
-            assert_eq!(qualification.lag_blocks(), 0);
-            assert!(
-                fixture
-                    .kura
-                    .commit_manifest(1)
-                    .expect("read absent post-apply manifest")
-                    .is_none(),
-                "post-apply metadata must remain behind State publication"
-            );
-        }
-    );
-
-    v2_apply_test!(
-        reputation_archive_recovery_is_idempotent_without_skipping_height,
-        {
-            let mut fixture = ApplyFixture::new_with_reputation_archive();
-            let archive_root = direct_archive_tempdir();
-            let bounds =
-                ReputationFinalizedArchiveBounds::try_new(4 * 1024 * 1024, 16, 64 * 1024 * 1024)
-                    .expect("valid archive bounds");
-            let archive = Arc::new(
-                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
-                    .expect("open archive"),
-            );
-            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-            fixture
-                .service
-                .fail_after_reputation_archive_capture_for_test();
-            let mut first_store = fixture.reopen_body_store();
-            let error = fixture
-                .execute(&mut first_store)
-                .expect_err("injected post-capture crash");
-            assert!(
-                matches!(
-                    &error,
-                    V2ApplyError::InjectedCrashAfterReputationArchiveCapture
-                ),
-                "unexpected post-capture result: {error:?}"
-            );
-            let generation_after_capture = archive
-                .health_generation()
-                .expect("read first archive generation");
-            let staged_checkpoint = fixture
-                .kura
-                .wsv_checkpoint(1)
-                .expect("read pre-retry staged checkpoint")
-                .expect("archive-boundary crash retains its staged checkpoint");
-            assert!(
-                fixture
-                    .kura
-                    .commit_manifest(1)
-                    .expect("read pre-retry commit manifest")
-                    .is_none(),
-                "archive-boundary crash must precede commit-manifest publication"
-            );
-            drop(first_store);
-
-            let (restarted_service, restarted_state) =
-                fixture.restart_service_from_last_finalized_snapshot();
-            let mut restarted_store = fixture.reopen_body_store();
-            if let Err(error) =
-                restarted_service.execute(&fixture.context, &mut restarted_store, &fixture.task)
-            {
-                let checkpoint_after_retry = fixture.kura.wsv_checkpoint(1);
-                let manifest_after_retry = fixture.kura.commit_manifest(1);
-                let replay_state_hash =
-                    crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
-                panic!(
-                    "exact durable replay reuses the archived height: {error:?}; \
-                     staged_state_hash={:?}; replay_state_hash={replay_state_hash:?}; \
-                     checkpoint_after_retry={checkpoint_after_retry:?}; \
-                     manifest_after_retry={manifest_after_retry:?}",
-                    staged_checkpoint.state_hash(),
-                );
-            }
-            assert_eq!(restarted_state.committed_height(), 1);
-            assert_eq!(
-                archive
-                    .health_generation()
-                    .expect("read replayed archive generation"),
-                generation_after_capture,
-                "an exact replay must not publish a second archive generation"
-            );
-            let projection = archive
-                .latest_at_or_before(&fixture.service.chain_id, 1)
-                .expect("read recovered projection")
-                .expect("height one remains archived");
-            assert_eq!(projection.key.height, 1);
-            let qualification = archive
-                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
-                .expect("recovered archive remains contiguous and exact");
-            assert_eq!(qualification.activation_floor().height, 1);
-            assert_eq!(qualification.archive_tip().height, 1);
-
-            let (_, receipt) = restarted_service
-                .kura
-                .v2_finality_artifact_with_receipt(1)
-                .expect("read exact finality receipt")
-                .expect("height one finality receipt");
-            let restarted_view = restarted_state.query_view();
-            let outcome = archive
-                .capture_kura_authenticated_view(&restarted_view, fixture.kura.as_ref(), &receipt)
-                .expect("same exact committed view is replay-safe");
-            assert_eq!(
-                outcome,
-                ReputationFinalizedArchiveInsertOutcome::ExactReplay
-            );
-        }
-    );
-
-    v2_apply_test!(
-        reputation_archive_virtual_base_allows_commit_owned_successor_capture,
-        {
-            let mut fixture = ApplyFixture::new_with_reputation_archive();
-            let archive_root = direct_archive_tempdir();
-            let bounds =
-                ReputationFinalizedArchiveBounds::try_new(4 * 1024 * 1024, 16, 64 * 1024 * 1024)
-                    .expect("valid retained-capture archive bounds");
-            let archive = Arc::new(
-                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
-                    .expect("open retained-capture archive"),
-            );
-            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-
-            let mut parent_store = fixture.reopen_body_store();
-            fixture
-                .execute(&mut parent_store)
-                .expect("commit and archive the retention-floor block");
-            drop(parent_store);
-            let parent = archive
-                .latest_at_or_before(&fixture.service.chain_id, 1)
-                .expect("read retention-floor projection")
-                .expect("height-one archive anchor");
-            let fence = archive
-                .retention_fence_for(&parent.key)
-                .expect("freeze exact authenticated retention fence");
-            let retention_authority = ReputationRetentionAuthorityForTest::new();
-            let retention_binding = retention_authority.binding();
-            let proposal = archive
-                .prepare_kura_authenticated_compaction(&fence, fixture.kura.as_ref())
-                .expect("prepare exact Kura-authenticated checkpoint");
-            let compaction = archive
-                .approve_and_install_kura_authenticated_compaction(
-                    &proposal,
-                    fixture.kura.as_ref(),
-                    &retention_binding,
-                    &retention_authority,
-                )
-                .expect("approve and compact the Kura-authenticated height-one prefix");
-            assert_eq!(compaction.retention_floor(), &parent.key);
-            assert_eq!(
-                compaction.generation(),
-                fence.expected_generation() + 1,
-                "checkpoint-head publication advances the archive generation"
-            );
-            assert_eq!(
-                archive
-                    .retention_floor(&fixture.service.chain_id)
-                    .expect("read active virtual base"),
-                Some(parent.key.clone())
-            );
-
-            let mut successor = build_successor_apply_fixture(&fixture);
-            let completion = match fixture.service.execute(
-                &successor.context,
-                &mut successor.store,
-                &successor.task,
-            ) {
-                Ok(completion) => completion,
-                Err(error) => {
-                    assert!(
-                        !matches!(
-                            &error,
-                            V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                                if *stage == "reputation finalized archive capture"
-                        ),
-                        "retained capture must not degrade to committed recovery: {error:?}"
-                    );
-                    panic!(
-                        "commit-owned H+1 capture failed after virtual-base compaction: {error:?}"
-                    );
-                }
-            };
-            assert_eq!(completion.receipt().height(), 2);
-            assert_eq!(fixture.state.committed_height(), 2);
-            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 2);
-            assert_eq!(
-                fixture
-                    .kura
-                    .get_durable_block_hash(NonZeroUsize::new(2).expect("height two")),
-                Some(successor.body.hash())
-            );
-            let qualification = archive
-                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
-                .expect("qualify retained successor against exact Kura tip");
-            assert_eq!(qualification.activation_floor().height, 1);
-            assert_eq!(qualification.archive_tip().height, 2);
-            assert_eq!(
-                qualification.checkpoint_digest(),
-                Some(compaction.checkpoint_digest())
-            );
-            assert_eq!(qualification.kura_tip_height(), 2);
-            assert_eq!(qualification.lag_blocks(), 0);
-            let generation = archive
-                .health_generation()
-                .expect("read post-successor archive generation");
-
-            drop(successor);
-            fixture.service.reputation_finalized_archive = None;
-            drop(archive);
-            let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
-                archive_root.path(),
-                bounds,
-                &fixture.service.chain_id,
-                fixture.kura.as_ref(),
-                &retention_binding,
-                &retention_authority,
-            )
-            .expect("reopen compacted successor archive through sealed authority");
-            assert_eq!(
-                reopened
-                    .health_generation()
-                    .expect("read reopened archive generation"),
-                generation
-            );
-            assert_eq!(
-                reopened
-                    .retention_floor(&fixture.service.chain_id)
-                    .expect("read reopened virtual base"),
-                Some(parent.key)
-            );
-            let reopened_qualification = reopened
-                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
-                .expect("reopened archive preserves exact predecessor continuity");
-            assert_eq!(reopened_qualification.archive_tip().height, 2);
-            assert_eq!(
-                reopened_qualification.checkpoint_digest(),
-                Some(compaction.checkpoint_digest())
-            );
-            assert_eq!(reopened_qualification.kura_tip_height(), 2);
-
-            let (_, receipt) = fixture
-                .kura
-                .v2_finality_artifact_with_receipt(2)
-                .expect("read height-two finality receipt")
-                .expect("height-two finality is durable");
-            let view = fixture.state.query_view();
-            assert_eq!(
-                reopened
-                    .capture_kura_authenticated_view(&view, fixture.kura.as_ref(), &receipt)
-                    .expect("replay retained H+1 capture after reopen"),
-                ReputationFinalizedArchiveInsertOutcome::ExactReplay
-            );
-            assert_eq!(
-                reopened
-                    .health_generation()
-                    .expect("exact replay preserves archive generation"),
-                generation
-            );
-        }
-    );
-
-    v2_apply_test!(
-        reputation_retention_restart_recovers_both_cas_publication_boundaries,
-        {
-            for (failed_load_after_cas, checkpoint_was_published) in [(1, false), (3, true)] {
-                let mut fixture = ApplyFixture::new_with_reputation_archive();
-                let archive_root = direct_archive_tempdir();
-                let bounds = ReputationFinalizedArchiveBounds::try_new(
-                    4 * 1024 * 1024,
-                    16,
-                    64 * 1024 * 1024,
-                )
-                .expect("valid retention-recovery archive bounds");
-                let archive = Arc::new(
-                    ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
-                        .expect("open retention-recovery archive"),
-                );
-                fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-
-                let mut parent_store = fixture.reopen_body_store();
-                fixture
-                    .execute(&mut parent_store)
-                    .expect("commit and archive the retention-floor block");
-                drop(parent_store);
-                let parent = archive
-                    .latest_at_or_before(&fixture.service.chain_id, 1)
-                    .expect("read retention-floor projection")
-                    .expect("height-one archive anchor");
-                let fence = archive
-                    .retention_fence_for(&parent.key)
-                    .expect("freeze exact retention fence");
-                let authority = ReputationRetentionAuthorityForTest::new();
-                let binding = authority.binding();
-                let proposal = archive
-                    .prepare_kura_authenticated_compaction(&fence, fixture.kura.as_ref())
-                    .expect("prepare exact retention proposal");
-                authority.fail_nth_load_after_next_cas(failed_load_after_cas);
-
-                assert!(matches!(
-                    archive.approve_and_install_kura_authenticated_compaction(
-                        &proposal,
-                        fixture.kura.as_ref(),
-                        &binding,
-                        &authority,
-                    ),
-                    Err(ReputationFinalizedArchiveError::RetentionAuthorityCasAmbiguous)
-                ));
-                assert_eq!(
-                    archive
-                        .retention_floor(&fixture.service.chain_id)
-                        .expect("read ambiguous local retention floor"),
-                    checkpoint_was_published.then(|| parent.key.clone())
-                );
-                assert_eq!(
-                    std::fs::read_dir(archive.root().join("anchors"))
-                        .expect("read ambiguous anchor namespace")
-                        .count(),
-                    1,
-                    "no physical anchor may be unlinked before the post-publication readback"
-                );
-                assert_eq!(
-                    std::fs::read_dir(archive.root().join("checkpoints"))
-                        .expect("read ambiguous checkpoint namespace")
-                        .count(),
-                    usize::from(checkpoint_was_published)
-                );
-
-                fixture.service.reputation_finalized_archive = None;
-                drop(archive);
-                let recovered = ReputationFinalizedArchive::try_open_with_retention_authority(
-                    archive_root.path(),
-                    bounds,
-                    &fixture.service.chain_id,
-                    fixture.kura.as_ref(),
-                    &binding,
-                    &authority,
-                )
-                .expect("recover exact externally approved retention state");
-                assert_eq!(
-                    recovered
-                        .retention_floor(&fixture.service.chain_id)
-                        .expect("read recovered retention floor"),
-                    Some(parent.key.clone())
-                );
-                assert_eq!(
-                    std::fs::read_dir(recovered.root().join("anchors"))
-                        .expect("read recovered anchor namespace")
-                        .count(),
-                    0,
-                    "recovery must clean the exact approved physical prefix"
-                );
-                assert_eq!(
-                    std::fs::read_dir(recovered.root().join("checkpoints"))
-                        .expect("read recovered checkpoint namespace")
-                        .count(),
-                    1
-                );
-                let recovered_generation = recovered
-                    .health_generation()
-                    .expect("read recovered archive generation");
-
-                drop(recovered);
-                let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
-                    archive_root.path(),
-                    bounds,
-                    &fixture.service.chain_id,
-                    fixture.kura.as_ref(),
-                    &binding,
-                    &authority,
-                )
-                .expect("repeat exact retention recovery");
-                assert_eq!(
-                    reopened
-                        .health_generation()
-                        .expect("read replayed archive generation"),
-                    recovered_generation,
-                    "recovery replay must be deterministic"
-                );
-                assert_eq!(
-                    reopened
-                        .retention_floor(&fixture.service.chain_id)
-                        .expect("read replayed retention floor"),
-                    Some(parent.key)
-                );
-            }
-        }
-    );
-
-    v2_apply_test!(
-        crash_after_staged_checkpoint_replays_exact_tip_without_double_apply,
-        {
-            let fixture = ApplyFixture::new();
-            let mut first_process_store = fixture.reopen_body_store();
-            fixture.service.fail_after_wsv_checkpoint_for_test();
-            let first_error = fixture
-                .service
-                .execute(&fixture.context, &mut first_process_store, &fixture.task)
-                .expect_err("inject crash after checkpoint fsync and before WSV publication");
-            assert!(matches!(
-                &first_error,
-                V2ApplyError::InjectedCrashAfterWsvCheckpoint
-            ));
-            assert!(first_error.requires_restart_recovery());
-            assert_eq!(fixture.state.committed_height(), 0);
-            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            let staged_checkpoint = fixture
-                .kura
-                .wsv_checkpoint(1)
-                .expect("read staged checkpoint")
-                .expect("checkpoint must be durable before WSV publication");
-            assert!(
-                fixture
-                    .kura
-                    .commit_manifest(1)
-                    .expect("read absent manifest")
-                    .is_none(),
-                "the pre-WSV checkpoint must remain unbound until State commits"
-            );
-            assert_eq!(
-                fixture
-                    .kura
-                    .v2_finality_artifact(1)
-                    .expect("read pre-WSV finality")
-                    .expect("finality must be durable before WSV publication")
-                    .block_hash,
-                fixture.body.hash()
-            );
-            let staged_state_hash = staged_checkpoint.state_hash();
-            drop(first_process_store);
-
-            // Snapshot publication is gated on the complete
-            // checkpoint/manifest/finality tuple, so a process crash reloads
-            // the last finalized snapshot (height zero here). The exact
-            // durable checkpoint authenticates the overlay replay before live
-            // State can cross its commit boundary.
-            let (restarted_service, restarted_state) =
-                fixture.restart_service_from_last_finalized_snapshot();
-            assert_eq!(restarted_state.committed_height(), 0);
-            let mut restarted_store = fixture.reopen_body_store();
-            restarted_service
-                .execute(&fixture.context, &mut restarted_store, &fixture.task)
-                .expect("authenticated WAL/body retry reapplies the sole Kura tip");
-            assert_eq!(restarted_state.committed_height(), 1);
-            let first_artifact = fixture
-                .kura
-                .v2_finality_artifact(1)
-                .expect("read recovered finality")
-                .expect("recovery publishes finality");
-            assert_eq!(first_artifact.block_hash, fixture.body.hash());
-            assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
-                staged_state_hash,
-                "recovery must reproduce the exact pre-commit checkpointed WSV"
-            );
-
-            let durable_state_hash =
-                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
-            restarted_service
-                .execute(&fixture.context, &mut restarted_store, &fixture.task)
-                .expect("an exact post-finality retry is idempotent");
-            assert_eq!(
-                fixture
-                    .kura
-                    .v2_finality_artifact(1)
-                    .expect("read repeated finality")
-                    .as_ref(),
-                Some(&first_artifact)
-            );
-            assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
-                durable_state_hash,
-                "idempotent retry must not execute the block twice"
-            );
-            fixture.assert_complete_for_state(restarted_state.as_ref());
-        }
-    );
-
-    v2_apply_test!(restart_recovers_manifest_after_pre_wsv_finality, {
-        let fixture = ApplyFixture::new();
-        let mut store = fixture.reopen_body_store();
-        fixture.kura.fail_next_commit_manifest_write_for_tests();
-        let error = fixture
-            .execute(&mut store)
-            .expect_err("manifest failure follows the irreversible commit boundary");
-        assert!(
-            matches!(
-                &error,
-                V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                    if *stage == "post-apply metadata"
-            ),
-            "unexpected committed recovery classification: {error:?}"
-        );
-        assert!(error.requires_restart_recovery());
-        assert_eq!(fixture.state.committed_height(), 1);
-        assert!(
-            fixture
-                .kura
-                .wsv_checkpoint(1)
-                .expect("read checkpoint")
-                .is_some()
-        );
-        assert!(
-            fixture
-                .kura
-                .commit_manifest(1)
-                .expect("read manifest")
-                .is_none()
-        );
-        assert!(
-            fixture
-                .kura
-                .v2_finality_artifact(1)
-                .expect("read finality")
-                .is_some()
-        );
-
-        drop(store);
-        let mut reopened = fixture.reopen_body_store();
-        fixture.execute(&mut reopened).expect("complete manifest");
-        fixture.assert_complete();
-    });
-
-    v2_apply_test!(restart_recovers_kura_block_before_pre_wsv_finality, {
-        let fixture = ApplyFixture::new();
-        let mut store = fixture.reopen_body_store();
-        fixture.kura.fail_next_v2_finality_write_for_tests();
-        let error = fixture
-            .execute(&mut store)
-            .expect_err("finality failure follows the irreversible commit boundary");
-        assert!(
-            matches!(
-                &error,
-                V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                    if *stage == "pre-WSV v2 finality artifact"
-            ),
-            "unexpected committed recovery classification: {error:?}"
-        );
-        assert!(error.requires_restart_recovery());
-        assert_eq!(fixture.state.committed_height(), 0);
-        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-        assert!(
-            fixture
-                .kura
-                .wsv_checkpoint(1)
-                .expect("read checkpoint")
-                .is_none()
-        );
-        assert!(
-            fixture
-                .kura
-                .commit_manifest(1)
-                .expect("read manifest")
-                .is_none()
-        );
-        assert!(
-            fixture
-                .kura
-                .v2_finality_artifact(1)
-                .expect("read finality")
-                .is_none()
-        );
-
-        drop(store);
-        let mut reopened = fixture.reopen_body_store();
-        fixture
-            .execute(&mut reopened)
-            .expect("complete pre-WSV finality and apply");
-        fixture.assert_complete();
-    });
-
-    v2_apply_test!(
-        complete_apply_replay_is_idempotent_and_never_advances_twice,
-        {
-            let fixture = ApplyFixture::new();
-            let mut store = fixture.reopen_body_store();
-            fixture.execute(&mut store).expect("initial apply");
-            let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
-            let artifact = fixture
-                .kura
-                .v2_finality_artifact(1)
-                .expect("read finality")
-                .expect("finality exists");
-
-            fixture.execute(&mut store).expect("idempotent replay");
-            fixture.assert_complete();
-            assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
-                state_hash
-            );
-            assert_eq!(
-                fixture
-                    .kura
-                    .v2_finality_artifact(1)
-                    .expect("read repeated finality"),
-                Some(artifact)
-            );
         }
     );

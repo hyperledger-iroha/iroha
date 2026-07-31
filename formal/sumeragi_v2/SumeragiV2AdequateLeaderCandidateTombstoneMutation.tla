@@ -86,45 +86,56 @@ CandidateIdentity(
    kind |-> "Candidate",
    payload |-> payload]
 
+CandidatePayload(payloadKind, identity) ==
+  [kind |-> payloadKind, identity |-> identity]
+
 CandidateA ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "subject", "Prepare/4", "target", "payload-A")
+    "subject", "Prepare/4", "target",
+    CandidatePayload("Opaque", "payload-A"))
 
 CandidateB ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "subject", "Prepare/4", "target", "payload-B")
+    "subject", "Prepare/4", "target",
+    CandidatePayload("Opaque", "payload-B"))
 
 CandidateC ==
   CandidateIdentity(
     "target", 0, "leader", 2,
-    "subject", "Prepare/4", "target", "payload-C")
+    "subject", "Prepare/4", "target",
+    CandidatePayload("Opaque", "payload-C"))
 
 CandidateD ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "subject", "Prepare/4", "target", "durable-replay-D")
+    "subject", "Prepare/4", "target",
+    CandidatePayload("Opaque", "durable-replay-D"))
 
 CandidateS ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "subject", "SignVote", "target", "durable-signature-S")
+    "subject", "SignVote", "target",
+    CandidatePayload("Opaque", "durable-signature-S"))
 
 CandidateE ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "subject", "Nondispatchable", "target", "terminal-discard-E")
+    "subject", "Nondispatchable", "target",
+    CandidatePayload("Opaque", "terminal-discard-E"))
 
 CandidateK ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "chunk-subject-K", "Chunk", "target", "held-chunk-K")
+    "chunk-subject-K", "Chunk", "target",
+    CandidatePayload("Opaque", "held-chunk-K"))
 
 CandidateJ ==
   CandidateIdentity(
     "target", 0, "leader", 1,
-    "chunk-subject-J", "Chunk", "target", "decided-chunk-J")
+    "chunk-subject-J", "Chunk", "target",
+    CandidatePayload("Opaque", "decided-chunk-J"))
 
 AggregateCertificateReference ==
   [context |-> [height |-> 0],
@@ -143,9 +154,13 @@ AggregateEvidenceSuperset ==
      {"signer-1", "signer-2", "signer-3", "signer-4"}]
 
 AggregateCandidatePayload(evidence) ==
-  IF NormalizeAggregateEvidence
-  THEN evidence.reference
-  ELSE evidence
+  CandidatePayload(
+    "Aggregate",
+    IF NormalizeAggregateEvidence
+    THEN "semantic-reference"
+    ELSE IF evidence = AggregateEvidenceA
+         THEN "evidence-A"
+         ELSE "evidence-superset")
 
 CandidateQa ==
   CandidateIdentity(

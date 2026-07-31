@@ -544,6 +544,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding,
                 chunk_size_bytes: 8,
@@ -570,6 +571,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(roster).expect("quorum"),
             roster: roster.to_vec(),
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 8,
@@ -602,6 +604,7 @@ mod tests {
                 Hash::new(b"chunk fixture parent state"),
                 Hash::new(b"chunk fixture post state"),
                 Hash::new(b"chunk fixture ordinary writes"),
+                1,
                 Hash::new(b"chunk fixture executed block wire"),
             ),
             signers: vec![0, 1, 2],

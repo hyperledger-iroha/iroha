@@ -119,7 +119,7 @@ frame, and validation receipt to equal that authenticated round exactly. A
 local lock is only a consistency/cache input and is never used to guess a
 missing origin. Conflicting body, manifest, frame, or execution-commitment
 identities fail closed, while a lockless validator can request the exact
-certified round directly from any signer. Revision 3 has no legacy decoder
+certified round directly from any signer. Revision 4 has no legacy decoder
 which fills a missing proposal origin.
 
 The canonical height-one genesis header is the only header-origin exception.
@@ -1912,7 +1912,7 @@ Duplicate object keys and non-finite numbers, including finite-syntax exponent
 overflow such as `1e10000`, are rejected recursively before schema validation.
 Retained status snapshots preserve their original validator
 index and must contain at least three distinct responsive validators, wire
-protocol 3, no restart-required node, the complete liveness object, and bounded
+protocol 4, no restart-required node, the complete liveness object, and bounded
 queue evidence. Every retained no-progress interval is accepted only when its
 canonical classification set exactly matches the blockers in its authoritative
 status snapshots. A checkout-manifest checkpoint immediately after the

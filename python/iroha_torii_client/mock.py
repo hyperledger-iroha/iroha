@@ -328,32 +328,38 @@ class _MockState:
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
 
+            scaffold = b"\x01\x02\x03"
+            signing_message = bytearray(
+                hashlib.blake2b(scaffold, digest_size=32).digest()
+            )
+            signing_message[-1] |= 1
+            scaffold_b64 = base64.b64encode(scaffold).decode("ascii")
             self.contract_call_response = {
                 "ok": True,
-                "submitted": True,
+                "submitted": False,
                 "dataspace": "universal",
                 "code_hash_hex": "22" * 32,
                 "abi_hash_hex": "33" * 32,
                 "creation_time_ms": 0,
                 "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                "tx_hash_hex": "44" * 32,
-                "pipeline_status": self._queued_pipeline_status("44" * 32),
+                "tx_hash_hex": None,
+                "pipeline_status": None,
                 "entrypoint": "ping",
                 "transaction_ttl_ms": 60_000,
                 "entrypoint_hash_hex": "55" * 32,
-                "transaction_scaffold_b64": "AQID",
-                "signed_transaction_b64": "BAUG",
-                "signing_message_b64": "BwgJ",
+                "transaction_scaffold_b64": scaffold_b64,
+                "signed_transaction_b64": scaffold_b64,
+                "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
                 "operation_receipt": {
                     "operation_kind": "contract_call",
-                    "status": "submitted",
+                    "status": "pending_signature",
                     "transport": "torii",
                     "dataspace": "universal",
                     "contract_alias": "router::universal",
                     "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                     "code_hash_hex": "22" * 32,
                     "abi_hash_hex": "33" * 32,
-                    "tx_hash_hex": "44" * 32,
+                    "tx_hash_hex": None,
                     "entrypoint": "ping",
                     "entrypoint_hash_hex": "55" * 32,
                     "gas_limit": 5_000,
@@ -1020,7 +1026,9 @@ class _MockState:
             raise ValueError(f"invalid contract call payload: {err}") from err
         if not isinstance(payload, dict):
             raise ValueError("contract call payload must be an object")
-        for key in ("authority", "private_key", "entrypoint"):
+        if "private_key" in payload:
+            raise ValueError("contract call payload must not contain private_key")
+        for key in ("authority", "entrypoint"):
             value = payload.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"contract call payload missing '{key}'")
@@ -1033,14 +1041,12 @@ class _MockState:
         if not isinstance(gas_limit, int) or isinstance(gas_limit, bool) or gas_limit <= 0:
             raise ValueError("contract call fee_payment missing positive 'gas_limit'")
         response = dict(self.contract_call_response)
-        tx_hash_hex = response.get("tx_hash_hex")
-        if isinstance(tx_hash_hex, str):
-            response.setdefault("pipeline_status", self._queued_pipeline_status(tx_hash_hex))
+        tx_hash_hex = None
         response.setdefault(
             "operation_receipt",
             {
                 "operation_kind": "contract_call",
-                "status": "submitted",
+                "status": "pending_signature",
                 "transport": "torii",
                 "dataspace": response.get("dataspace", "universal"),
                 "contract_alias": payload.get("contract_alias"),
@@ -1056,7 +1062,7 @@ class _MockState:
                 "payload_digest_hex": "00" * 32,
             },
         )
-        return _json_response(HTTPStatus.ACCEPTED, response)
+        return _json_response(HTTPStatus.OK, response)
 
     def _gov_proposals_get(self, proposal_id: str) -> _Response:
         key = proposal_id.lower()
@@ -1577,7 +1583,7 @@ class _MockState:
             "payload_hash": _canonical_hash(0x33),
         }
         self.sumeragi_status = {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": _canonical_hash(0x11),
             "build_fingerprint": _canonical_hash(0x12),
             "config_fingerprint": _canonical_hash(0x13),
@@ -1626,6 +1632,8 @@ class _MockState:
                             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
                         ),
                         "native_amx_application_manifest_count": 0,
+                        "merge_carrier": None,
+                        "executed_block_wire_len": 123,
                         "executed_block_wire_hash": _canonical_hash(0x53),
                     },
                 },

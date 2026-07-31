@@ -2423,6 +2423,7 @@ mod v2_liveness_watchdog_tests {
                     Hash::new(b"watchdog-network-ingress-parent-state"),
                     Hash::new(b"watchdog-network-ingress-post-state"),
                     Hash::new(b"watchdog-network-ingress-writes"),
+                    1,
                     Hash::new(b"watchdog-network-ingress-executed-wire"),
                 ),
                 signer: 0,
@@ -2489,6 +2490,7 @@ mod v2_liveness_watchdog_tests {
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
+            1,
             Hash::new([seed, 5]),
         )
     }
@@ -5559,17 +5561,6 @@ pub enum LanePrivacyCommitmentSchemeSnapshot {
         /// Maximum Merkle proof depth the lane operator promises to serve.
         max_depth: u8,
     },
-    /// zk-SNARK circuit commitment exposing the hash bindings.
-    Snark {
-        /// Circuit identifier within the manifest's SNARK registry.
-        circuit_id: u16,
-        /// BLAKE3 digest of the verifying key used for audits.
-        verifying_key_digest: [u8; 32],
-        /// Hash of the public statement constrained by the circuit.
-        statement_hash: [u8; 32],
-        /// Hash of the proof artifact stored alongside the commitment.
-        proof_hash: [u8; 32],
-    },
 }
 
 impl From<&LanePrivacyCommitment> for LanePrivacyCommitmentSnapshot {
@@ -5578,12 +5569,6 @@ impl From<&LanePrivacyCommitment> for LanePrivacyCommitmentSnapshot {
             CommitmentScheme::Merkle(merkle) => LanePrivacyCommitmentSchemeSnapshot::Merkle {
                 root: hash_of_bytes(*merkle.root()),
                 max_depth: merkle.max_depth(),
-            },
-            CommitmentScheme::Snark(snark) => LanePrivacyCommitmentSchemeSnapshot::Snark {
-                circuit_id: snark.circuit_id().get(),
-                verifying_key_digest: *snark.verifying_key_digest(),
-                statement_hash: *snark.statement_hash(),
-                proof_hash: *snark.proof_hash(),
             },
         };
         Self {
@@ -6538,7 +6523,7 @@ fn record_relay_error(err: &LaneRelayError) {
 fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
     match envelope.verify().and_then(|()| {
         if envelope.fastpq_proof.is_some() {
-            envelope.verify_fastpq_proof_material()
+            envelope.validate_fastpq_proof_metadata()
         } else {
             Ok(())
         }
@@ -6563,7 +6548,9 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
         .iter()
         .position(|candidate| lane_relay_key(candidate) == key)
     {
-        if storage[existing].is_merge_admissible() && !envelope.is_merge_admissible() {
+        if storage[existing].has_merge_admission_material()
+            && !envelope.has_merge_admission_material()
+        {
             return;
         }
         storage[existing] = envelope;

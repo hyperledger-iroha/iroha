@@ -6,7 +6,7 @@
 //! uses fixed operation rows for sigma, choice, majority, and modular
 //! addition. Its local identities have degree at most three. Every word
 //! definition and operand read is additionally bound by four independently
-//! challenged address-sorted grand products. The complete 16 KiB CRL,
+//! challenged address-sorted grand products. The complete 4 KiB CRL,
 //! including those copy rows, fits the compiled SHA segment row ceiling.
 //!
 //! This module deliberately does not claim activation readiness. A segmented
@@ -1530,9 +1530,9 @@ mod tests {
             .expect("CRL memory rows");
         let total_rows = sha256_word_total_rows_for_message_len_v1(ZK_X509_MAX_CRL_BYTES_V1)
             .expect("CRL total rows");
-        assert_eq!(local_rows, 444_104);
-        assert_eq!(memory_rows, 548_968);
-        assert_eq!(total_rows, 993_072);
+        assert_eq!(local_rows, 112_328);
+        assert_eq!(memory_rows, 138_856);
+        assert_eq!(total_rows, 251_184);
         let capacity =
             SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1 * SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1;
         assert_eq!(capacity, 2_621_440);
@@ -1540,7 +1540,7 @@ mod tests {
         let (segment_rows, max_segments) = compiled_sha_segment_shape_v1();
         assert_eq!(segment_rows, 524_288);
         assert_eq!(max_segments, 5);
-        assert_eq!(total_rows.div_ceil(segment_rows), 2);
+        assert_eq!(total_rows.div_ceil(segment_rows), 1);
 
         // For a nonzero multiset-difference polynomial, Schwartz-Zippel gives
         // at most N/p per independent lane. Here N < 2^20, Goldilocks p >

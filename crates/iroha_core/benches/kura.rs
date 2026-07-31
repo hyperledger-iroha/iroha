@@ -107,6 +107,13 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
             Hash::new(b"eviction bench ordinary writes"),
             None,
             0,
+            u64::try_from(
+                block
+                    .encode_wire()
+                    .expect("eviction bench block wire")
+                    .len(),
+            )
+            .expect("eviction bench block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("hash eviction-benchmark executed block wire"),
@@ -127,6 +134,7 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
             quorum: DualQuorum::from_roster(&roster).expect("eviction-benchmark quorum"),
             roster: roster.clone(),
             nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,

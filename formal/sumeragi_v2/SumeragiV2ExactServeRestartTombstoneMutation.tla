@@ -35,14 +35,14 @@ DrainedLogicalRequestCannotRecreateOldServeStage ==
 Init ==
   /\ phase = "Active"
   /\ nextOrdinal = 2
-  /\ ~tombstoneOwned
-  /\ serveStageOwned
+  /\ tombstoneOwned = FALSE
+  /\ serveStageOwned = TRUE
 
 DrainRequest ==
   /\ phase = "Active"
   /\ phase' = "Drained"
-  /\ tombstoneOwned'
-  /\ ~serveStageOwned'
+  /\ tombstoneOwned' = TRUE
+  /\ serveStageOwned' = FALSE
   /\ UNCHANGED nextOrdinal
 
 RestartSameHeight ==
@@ -52,7 +52,7 @@ RestartSameHeight ==
        IF PreserveServeTombstoneOnRestart THEN tombstoneOwned ELSE FALSE
   /\ nextOrdinal' =
        IF PreserveServeTombstoneOnRestart THEN nextOrdinal ELSE 1
-  /\ ~serveStageOwned'
+  /\ serveStageOwned' = FALSE
 
 RetransmitExactRequest ==
   /\ phase = "Restarted"

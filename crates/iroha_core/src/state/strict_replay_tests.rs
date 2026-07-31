@@ -61,6 +61,7 @@ struct CorruptedKuraRetainedBlockRecord {
     block_hash: iroha_crypto::HashOf<BlockHeader>,
     block_header: BlockHeader,
     proposal_wire_hash: Hash,
+    executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
     sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
 }
@@ -318,6 +319,7 @@ impl StrictReplayFixture {
             quorum: wire::DualQuorum::from_roster(&roster).expect("derive fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"strict replay fixture pending state"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 2 * 1024 * 1024,
@@ -523,6 +525,10 @@ impl StrictReplayFixture {
             nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                 self.materialized_state.as_ref(),
             ),
+            execution_policy_hash: crate::sumeragi::v2_recovery::committed_execution_policy_hash(
+                self.materialized_state.as_ref(),
+            )
+            .expect("derive strict-replay execution policy"),
             da_layout: self.context.da_layout,
             leader_seed: [0; 32],
         };
@@ -758,6 +764,16 @@ impl StrictReplayFixture {
         artifact
             .commit_qc
             .execution_commitment
+            .executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("encode forked executed block")
+                .len(),
+        )
+        .expect("forked executed block length fits u64");
+        artifact
+            .commit_qc
+            .execution_commitment
             .executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("encode forked executed block");
@@ -787,6 +803,16 @@ impl StrictReplayFixture {
         artifact
             .commit_qc
             .execution_commitment
+            .executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("encode malformed-SCCP executed block")
+                .len(),
+        )
+        .expect("malformed-SCCP executed block length fits u64");
+        artifact
+            .commit_qc
+            .execution_commitment
             .executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("encode malformed-SCCP executed block");
@@ -812,13 +838,20 @@ impl StrictReplayFixture {
         let retained_dir = blocks_dir.join("retained_blocks");
         std::fs::create_dir_all(&retained_dir).expect("create retained-block directory");
         let retained = CorruptedKuraRetainedBlockRecord {
-            format_version: 2,
+            format_version: 3,
             height: HEIGHT,
             block_hash: block.hash(),
             block_header: block.header(),
             proposal_wire_hash: block
                 .canonical_proposal_wire_hash()
                 .expect("encode malformed-SCCP proposal"),
+            executed_block_wire_len: u64::try_from(
+                block
+                    .encode_wire()
+                    .expect("encode malformed-SCCP executed block")
+                    .len(),
+            )
+            .expect("malformed-SCCP executed block length fits u64"),
             executed_block_wire_hash: block
                 .executed_block_wire_hash()
                 .expect("encode malformed-SCCP executed block"),
@@ -833,7 +866,7 @@ impl StrictReplayFixture {
         let finality_dir = blocks_dir.join("v2_finality");
         std::fs::create_dir_all(&finality_dir).expect("create v2-finality directory");
         let finality = CorruptedKuraV2FinalityRecord {
-            format_version: 2,
+            format_version: 3,
             block_header: block.header(),
             artifact,
         };

@@ -52,6 +52,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
         ordinary_writes_root,
         Some(topup_anchor_root),
         1,
+        1,
         Hash::new([seed, 5]),
     )
     .expect("fixture execution commitment must be canonical")
@@ -129,6 +130,7 @@ fn finality_evidence(
                 parent_commit_qc: None,
                 snapshot_bootstrap: None,
                 nexus_amx_context_hash: Hash::new([seed, 11]),
+                execution_policy_hash: Hash::new([seed, 12]),
                 da_layout: DataAvailabilityLayout {
                     encoding: PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,

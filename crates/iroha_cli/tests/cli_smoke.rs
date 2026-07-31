@@ -4198,7 +4198,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
         mock.base_url(),
         &norito::json!({
             "status": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "node_fingerprint": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
                 "build_fingerprint": "hash:1212121212121212121212121212121212121212121212121212121212121213#E183",
                 "config_fingerprint": "hash:1313131313131313131313131313131313131313131313131313131313131313#9CE1",

@@ -54,12 +54,12 @@ TargetOnlyTurnStrictlyLowersExactRank ==
 
 Init ==
   /\ phase = "TicketAtRuntime"
-  /\ ticketOwned
+  /\ ticketOwned = TRUE
   /\ targetCapacityDebt = 0
   /\ runnerReach = 2
   /\ frozenPreTicketOwners = 1
   /\ laterRuntimeOwners = 0
-  /\ ~targetDrained
+  /\ targetDrained = FALSE
 
 FirstRunnerTurn ==
   /\ phase = "TicketAtRuntime"
@@ -78,8 +78,8 @@ DrainExactTarget ==
   /\ targetCapacityDebt = 0
   /\ runnerReach = 0
   /\ phase' = "TargetDrained"
-  /\ ~ticketOwned'
-  /\ targetDrained'
+  /\ ticketOwned' = FALSE
+  /\ targetDrained' = TRUE
   /\ UNCHANGED <<targetCapacityDebt, runnerReach,
                  frozenPreTicketOwners, laterRuntimeOwners>>
 

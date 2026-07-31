@@ -133,6 +133,31 @@
     }
 
     #[test]
+    fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_absence() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        let artifact_directory = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+        assert!(!artifact_directory.exists());
+
+        assert!(matches!(
+            kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+            Ok(AutonomousLaneReservationEvidenceV1::StrictlyAbsent)
+        ));
+        assert!(
+            !artifact_directory.exists(),
+            "read-only strict absence classification must not create storage"
+        );
+    }
+
+    #[test]
     fn strict_reservation_classifier_exposes_exact_certification() {
         let temp_dir = TempDir::new().expect("temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -187,13 +212,15 @@
         let temp_path = attempt_path.with_extension("norito.tmp");
         let staged = b"unresolved exact-attempt crash stage";
         fs::write(&temp_path, staged).expect("write unresolved attempt temp");
+        let canonical_temp_path =
+            fs::canonicalize(&temp_path).expect("canonicalize unresolved attempt temp");
 
         let outcome =
             kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch);
         assert!(matches!(
             &outcome,
             Err(AutonomousLaneReservationEvidenceError::UnresolvedTemporary { path })
-                if path == &temp_path
+                if path == &canonical_temp_path
         ), "unexpected unresolved-attempt classification: {outcome:?}");
         assert_eq!(
             fs::read(&temp_path).expect("read unresolved temp after classification"),
@@ -513,13 +540,15 @@
         let temp_bytes =
             norito::encode_canonical(&conflicting_claim).expect("encode conflicting claim temp");
         fs::write(&temp_path, &temp_bytes).expect("write conflicting claim temp");
+        let canonical_temp_path =
+            fs::canonicalize(&temp_path).expect("canonicalize conflicting claim temp");
 
         let outcome =
             kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch);
         assert!(matches!(
             &outcome,
             Err(AutonomousLaneReservationEvidenceError::EntrypointClaimConflict { path })
-                if path == &temp_path
+                if path == &canonical_temp_path
         ), "unexpected conflicting-claim classification: {outcome:?}");
         assert_eq!(
             fs::read(&temp_path).expect("read unchanged conflicting claim temp"),

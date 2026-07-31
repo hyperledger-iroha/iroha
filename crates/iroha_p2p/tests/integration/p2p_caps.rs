@@ -342,7 +342,7 @@ async fn topic_cap_violation_disconnects() {
     let started1 = NetworkHandle::<BigMsg>::start(
         kp1.clone(),
         cfg(a1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -355,7 +355,7 @@ async fn topic_cap_violation_disconnects() {
     let started2 = NetworkHandle::<BigMsg>::start(
         kp2.clone(),
         cfg(a2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -452,7 +452,7 @@ async fn tcp_global_frame_cap_disconnects() {
     let started_listener = NetworkHandle::<BigMsg>::start(
         kp_listener.clone(),
         listener_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -466,7 +466,7 @@ async fn tcp_global_frame_cap_disconnects() {
     let started_dialer = NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -586,7 +586,7 @@ async fn tls_global_frame_cap_disconnects() {
     let started_listener = NetworkHandle::<BigMsg>::start(
         kp_listener.clone(),
         listener_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -600,7 +600,7 @@ async fn tls_global_frame_cap_disconnects() {
     let started_dialer = NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -724,7 +724,7 @@ async fn quic_global_frame_cap_disconnects() {
     let started_listener = NetworkHandle::<BigMsg>::start(
         kp_listener.clone(),
         listener_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -738,7 +738,7 @@ async fn quic_global_frame_cap_disconnects() {
     let started_dialer = NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -843,7 +843,7 @@ async fn ws_global_frame_cap_disconnects() {
     let (network_listener, _child_listener) = NetworkHandle::<BigMsg>::start(
         kp_listener.clone(),
         listener_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -862,7 +862,7 @@ async fn ws_global_frame_cap_disconnects() {
     let (net_dialer, _child_dialer) = NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),

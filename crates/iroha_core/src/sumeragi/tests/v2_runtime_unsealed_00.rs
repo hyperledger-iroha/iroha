@@ -389,6 +389,7 @@
             quorum: wire::DualQuorum::from_roster(&roster).expect("runtime fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"runtime ingress nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -539,6 +540,7 @@
             Hash::new([marker, 7]),
             Hash::new([marker, 8]),
             Hash::new([marker, 9]),
+            1,
             Hash::new([marker, 10]),
         );
         let signers = vec![0, 1, 2];
@@ -2771,4 +2773,3 @@
             "collision validation must run before reserving physical positions"
         );
     }
-

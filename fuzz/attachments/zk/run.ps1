@@ -22,36 +22,10 @@ try {
   Write-Error "Torii health check failed. Verify config and that the server is running."; exit 1
 }
 
-Write-Host "[1/7] VK register/update/deprecate (requires AUTHORITY and PRIVATE_KEY)"
-if ($env:AUTHORITY -and $env:PRIVATE_KEY) {
-  $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath()) -Name ("zk_" + [System.Guid]::NewGuid())
-  try {
-    # Register
-    $reg = Get-Content -Raw -Path (Join-Path $ScriptDir 'vk_register.json') | ConvertFrom-Json
-    $reg.authority = $env:AUTHORITY
-    $reg.private_key = $env:PRIVATE_KEY
-    $reg | ConvertTo-Json -Depth 8 | Set-Content -NoNewline -Path (Join-Path $tmp.FullName 'vk_register.eff.json')
-    iroha @ConfigArg zk vk register --json (Join-Path $tmp.FullName 'vk_register.eff.json')
-    # Update
-    $upd = Get-Content -Raw -Path (Join-Path $ScriptDir 'vk_update.json') | ConvertFrom-Json
-    $upd.authority = $env:AUTHORITY
-    $upd.private_key = $env:PRIVATE_KEY
-    $upd | ConvertTo-Json -Depth 8 | Set-Content -NoNewline -Path (Join-Path $tmp.FullName 'vk_update.eff.json')
-    iroha @ConfigArg zk vk update --json (Join-Path $tmp.FullName 'vk_update.eff.json')
-    # Deprecate
-    $dep = Get-Content -Raw -Path (Join-Path $ScriptDir 'vk_deprecate.json') | ConvertFrom-Json
-    $dep.authority = $env:AUTHORITY
-    $dep.private_key = $env:PRIVATE_KEY
-    $dep | ConvertTo-Json -Depth 8 | Set-Content -NoNewline -Path (Join-Path $tmp.FullName 'vk_deprecate.eff.json')
-    iroha @ConfigArg zk vk deprecate --json (Join-Path $tmp.FullName 'vk_deprecate.eff.json')
-    # Read
-    iroha @ConfigArg zk vk get --backend 'halo2/ipa' --name 'vk_add'
-  } finally {
-    Remove-Item -Recurse -Force $tmp.FullName
-  }
-} else {
-  Write-Host "  Skipping VK ops: set AUTHORITY and PRIVATE_KEY env vars to enable."
-}
+Write-Host "[1/7] VK register/update with the configured signer"
+iroha @ConfigArg zk vk register --json (Join-Path $ScriptDir 'vk_register.json')
+iroha @ConfigArg zk vk update --json (Join-Path $ScriptDir 'vk_update.json')
+iroha @ConfigArg zk vk get --backend 'halo2/ipa' --name 'vk_add'
 
 Write-Host "[2/7] Upload JSON attachment"
 $attMetaJson = iroha @ConfigArg zk attachments upload --file (Join-Path $ScriptDir 'proof.json') --content-type application/json

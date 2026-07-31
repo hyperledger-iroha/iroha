@@ -23,7 +23,10 @@ macro_rules! kura_autonomous_reservation_inventory_methods {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Default::default()),
             Err(error) => return Err(Error::IO(error, directory).into()),
         };
-        let mut inventory = AutonomousReservationLaneInventory::default();
+        let mut inventory = AutonomousReservationLaneInventory {
+            directory_present: true,
+            ..Default::default()
+        };
         let mut autonomous_files = 0_usize;
         let mut autonomous_bytes = 0_u64;
         for directory_entry in entries {

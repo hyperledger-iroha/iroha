@@ -155,7 +155,7 @@ function finalityAnchor() {
   return {
     version: 1,
     source_network: network("sora-taira"),
-    protocol_version: 3,
+    protocol_version: 4,
     chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
     checkpoint_height: 7,
     checkpoint_block_hash: UPPER(0xa1, 32),
@@ -1099,15 +1099,15 @@ test("registry destination hashes match the canonical Rust EVM and TRON layouts"
   const vectors = [
     {
       source: "bsc-mainnet",
-      destinationBindingHash: "CF29FF20DED900EE5571D1D2DED8CD14C85018FD63AF0DA89A040B4BFDE30280",
-      deploymentConfigHash: "50542CF770B037DC5762D23945B3F7985E41BA0D431DAA92EBEF76A2313F021E",
-      routeConfigurationHash: "57F92589F513D0DDA3EDB5BAAF7490B32937320971D7DC4EFC579ABD1E84787D",
+      destinationBindingHash: "0D3F2789F19AF900584D24BAB4148AC32AC1532E85748845646CA032E43C0757",
+      deploymentConfigHash: "C96A33A74F1E4134A7D6D63CB2EE4EAFFE7D2007D4189BDDCE6D39F5AA97BC5C",
+      routeConfigurationHash: "DDF6B59EE7DAE1F134455EAA19B166F951AF30188E1ADC2CF9D68DD8734789C1",
     },
     {
       source: "tron-mainnet",
-      destinationBindingHash: "229E90F2529AC2726DCB4294A938F695678808B3C6534251A07869166EAD0DAA",
-      deploymentConfigHash: "C799A8D172845B3D7E15BE95A119EEA0B798666186F0250BE1CCD472EB68F664",
-      routeConfigurationHash: "5475A14BFDBF9E8726B61BE7CE544F5775E0EBE87A607283DEC82E6B347E4760",
+      destinationBindingHash: "F0D778ECB625C27DEAE6ADCFCD14167DF0E4934EB167F34BA6ADFCD9750A797F",
+      deploymentConfigHash: "CF8C2A47D3F54928B688A118E49AA066577DB2A5DCAD73D1BDEE9D25A365C13C",
+      routeConfigurationHash: "EB5CB094A22C5424716A64693E35F6C21B95D654E609121E40CFE13EEEC31969",
     },
   ];
   for (const vector of vectors) {
@@ -1129,23 +1129,23 @@ test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
   const deployment = solanaDeployment();
   assert.equal(
     deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1),
-    "0xbcb83baf2f2ab57a56b72529cf749da6175f8e65a048287eae217b61a2c84669",
+    "0x81acbcf95363017aabb1cf1edbc0f3f85d3ddb0529666870e653894fee567d98",
   );
   const hashes = deriveSccpSolanaDestinationHashesV1(deployment, UPPER(0x31, 32), 1);
   assert.deepEqual(hashes, {
     destination_binding_hash:
-      "0xcd1ff581301bd31b583b835ec71f185139ce1af2376dfe656216481f7a77ba2c",
+      "0x647aa3dfb00a102f4fbbac9f00c0b5828b4851212df46aaa302d416b43feaa18",
     deployment_config_hash:
-      "0x39256215e4432d59fc8a9ff0f89db0027f7256cae0fdef10179fba89612c6473",
+      "0x08af60c35a8f65810b1f537d0e21cf30b50c574f7a8bc80596c54bdb9c1e71df",
     route_configuration_hash:
-      "0x3f2c81fe59637d4a9af916dfce1b623ef59f44087db3ee0c25e42ad8ec1bf958",
+      "0x72f9cc2bfa3bb4064777315ef6288e74052849f842fba0c84b4557d939fdc9d1",
   });
   const route = solanaGovernedRoute();
   assert.deepEqual(deriveSccpSolanaSourceIdentityHashesV1(route.source_identity), {
     source_emitter_identity_hash:
-      "0xf0c6b976d69c3d0e001b5ee87d7d2fabd068db424c1e261cf8e9e1d8b1f4cbfa",
+      "0x714bd05afa96ae367e08d4daed9632b208f6c432660f106dd10a8d616d17929c",
     source_identity_hash:
-      "0x6c62bd033e5beb7848c66c10ae1be0a6fc1960b239f7b04b31bb3c5a7b1efa69",
+      "0x8577e67ddc7f0bb8f0058e23449a811dfb04ab0808b696af66cd2d75fa714771",
   });
   assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
 

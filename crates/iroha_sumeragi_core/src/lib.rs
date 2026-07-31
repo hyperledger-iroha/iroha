@@ -45,7 +45,7 @@ pub use reducer::{
 pub use scheduler::{ScheduleState, ScheduledWork};
 pub use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PROTOCOL_VERSION_V3,
+    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PROTOCOL_VERSION_V4,
     PayloadChunk, PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate,
     Round, SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject,
     TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote,

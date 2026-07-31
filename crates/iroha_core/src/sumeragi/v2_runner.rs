@@ -42,14 +42,17 @@ use thiserror::Error;
 use super::{
     FairV2Ingress, FairV2IngressCapacityError, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
     InboundBlockMessage, SumeragiWorker,
-    message::BlockMessage,
+    message::{BlockMessage, CanonicalExecutedBlockNeedV1},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     serviced_candidate_store::LeaderWireLifecycleStoreGate,
     v2::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
         ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
     },
-    v2_apply::{V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
+    v2_apply::{
+        LaneReservationReconciliationPlanning, V2ReservationLifecycleError,
+        apply_lane_reservation_reconciliation_plan, plan_lane_reservation_ownership,
+    },
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -65,7 +68,7 @@ use super::{
         PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
-        AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
+        AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery, GlobalBodyLockOutcome,
         HistoricalRecoveryServiceOutcome, MergeSidecarDeferralDisposition, RetainedMergeSidecars,
         V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError,
         V2LaneWorkLimits, require_validator_storage_platform,
@@ -839,6 +842,24 @@ fn snapshot_successor_logical_time(
     Ok(Duration::from_millis(successor_ms))
 }
 
+fn canonical_executed_block_recovery_batches(
+    needs: &[CanonicalExecutedBlockNeedV1],
+    capacity: usize,
+) -> Result<std::slice::Chunks<'_, CanonicalExecutedBlockNeedV1>, V2RunnerError> {
+    if capacity == 0
+        || needs.is_empty()
+        || needs
+            .windows(2)
+            .any(|pair| pair[0].height >= pair[1].height)
+    {
+        return Err(V2RunnerError::Service(
+            "canonical executed-block recovery needs are empty, unordered, duplicated, or have zero batch capacity"
+                .to_owned(),
+        ));
+    }
+    Ok(needs.chunks(capacity))
+}
+
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
@@ -1292,16 +1313,135 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             authenticated_genesis_nexus_amx_context = None;
         }
         if reservation_reconciliation_pending {
-            let reservation_recovery = output_guard
-                .begin_fail_stop_operation()
-                .ok_or(V2RunnerError::RestartRequired)?;
-            let summary = reconcile_lane_reservation_ownership(
-                state.as_ref(),
-                queue.as_ref(),
-                kura.as_ref(),
-                &verified_context,
-            )?;
-            reservation_recovery.complete();
+            let summary = loop {
+                match plan_lane_reservation_ownership(
+                    state.as_ref(),
+                    queue.as_ref(),
+                    kura.as_ref(),
+                    &verified_context,
+                )? {
+                    LaneReservationReconciliationPlanning::Ready(plan) => {
+                        let reservation_recovery = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        let summary = apply_lane_reservation_reconciliation_plan(
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            plan,
+                        )?;
+                        reservation_recovery.complete();
+                        break summary;
+                    }
+                    LaneReservationReconciliationPlanning::RecoverCanonicalBodies(needs) => {
+                        if !queue.lane_reservation_startup_reconciliation_pending() {
+                            return Err(V2RunnerError::Service(
+                                "reservation body recovery was requested after the Queue startup gate opened"
+                                    .to_owned(),
+                            ));
+                        }
+                        iroha_logger::info!(
+                            body_count = needs.len(),
+                            "starting authenticated recovery of pruned canonical executed blocks"
+                        );
+                        open_ingress_for_active_height(
+                            output_guard.as_ref(),
+                            &ingress_ready,
+                            &block_rx,
+                            None,
+                        )?;
+                        let recovery_capacity =
+                            CanonicalExecutedBlockRecovery::need_capacity(lane_work_limits);
+                        let recovery_batches =
+                            canonical_executed_block_recovery_batches(&needs, recovery_capacity)?;
+                        for bounded_needs in recovery_batches {
+                            let mut body_recovery = CanonicalExecutedBlockRecovery::new(
+                                context.clone(),
+                                local_peer.clone(),
+                                Arc::clone(&state),
+                                Arc::clone(&kura),
+                                Arc::clone(&output_guard),
+                                lane_work_limits,
+                                bounded_needs.to_vec(),
+                            )?;
+                            let mut next_retry = Instant::now();
+                            while body_recovery.has_pending() {
+                                if output_guard.restart_required() {
+                                    return Err(V2RunnerError::RestartRequired);
+                                }
+                                if shutdown_signal.is_sent() {
+                                    certified_serve_ingress_binding.retire()?;
+                                    leader_wire_ingress_binding.retire()?;
+                                    services.allow_clean_shutdown();
+                                    return Ok(());
+                                }
+                                let now = Instant::now();
+                                if now >= next_retry {
+                                    body_recovery.service_next()?;
+                                    next_retry = deadline_after(now, retransmit_interval);
+                                }
+                                let drained = drain_canonical_executed_block_recovery_ingress(
+                                    &block_rx,
+                                    &mut body_recovery,
+                                    control_queue_capacity,
+                                )?;
+                                if drained != 0 && body_recovery.has_pending() {
+                                    body_recovery.service_next()?;
+                                }
+                                let dispatched =
+                                    dispatch_canonical_executed_block_recovery_effects(
+                                        &mut body_recovery,
+                                        &services,
+                                        control_queue_capacity,
+                                    )?;
+                                if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
+                                    let wait = next_retry
+                                        .saturating_duration_since(Instant::now())
+                                        .min(IDLE_POLL);
+                                    if !wait.is_zero() {
+                                        let _ = wake_rx.recv_timeout(wait);
+                                    }
+                                }
+                            }
+                        }
+                        close_ingress_for_rollover(&ingress_ready, &block_rx);
+                        iroha_logger::info!(
+                            "cached authenticated canonical executed blocks; rebuilding the complete immutable reconciliation plan"
+                        );
+                    }
+                    LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(
+                        installs,
+                    ) => {
+                        if installs.is_empty() {
+                            return Err(V2RunnerError::Service(
+                                "reservation reconciliation requested an empty historical recovery installation"
+                                    .to_owned(),
+                            ));
+                        }
+                        if !queue.lane_reservation_startup_reconciliation_pending() {
+                            return Err(V2RunnerError::Service(
+                                "historical reservation recovery was requested after the Queue startup gate opened"
+                                    .to_owned(),
+                            ));
+                        }
+                        let historical_recovery = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        iroha_logger::info!(
+                            install_count = installs.len(),
+                            "installing finalized historical autonomous recovery inputs"
+                        );
+                        for install in &installs {
+                            kura.persist_historical_autonomous_lane_recovery(install)
+                                .map_err(V2ReservationLifecycleError::from)?;
+                        }
+                        historical_recovery.complete();
+                        iroha_logger::info!(
+                            install_count = installs.len(),
+                            "installed historical autonomous recovery inputs; rebuilding the complete immutable reconciliation plan"
+                        );
+                    }
+                }
+            };
             reservation_reconciliation_pending = false;
             if summary != Default::default() {
                 iroha_logger::info!(
@@ -1310,6 +1450,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     retained_current = summary.retained_current,
                     retained_certified = summary.retained_certified,
                     retained_pending_merge = summary.retained_pending_merge,
+                    retained_historical_recovery = summary.retained_historical_recovery,
                     released_strictly_absent = summary.released_strictly_absent,
                     released_terminal_loser = summary.released_terminal_loser,
                     resumed_retirement = summary.resumed_retirement,
@@ -1569,7 +1710,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             executor.current_tag().view(),
                             output_guard.as_ref(),
                             kura.as_ref(),
-                            &context_store,
                             &common_config.key_pair,
                             block_sync_server
                                 .as_mut()
@@ -1583,7 +1723,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut lane_work,
                             output_guard.as_ref(),
                             kura.as_ref(),
-                            &context_store,
                             &common_config.key_pair,
                             block_sync_server
                                 .as_mut()
@@ -1688,7 +1827,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut lane_work,
                     output_guard.as_ref(),
                     kura.as_ref(),
-                    &context_store,
                     &common_config.key_pair,
                     block_sync_server
                         .as_mut()
@@ -1756,7 +1894,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     executor.current_tag().view(),
                     output_guard.as_ref(),
                     kura.as_ref(),
-                    &context_store,
                     &common_config.key_pair,
                     block_sync_server
                         .as_mut()
@@ -2565,7 +2702,6 @@ fn drain_v2_ingress(
     lane_work: &mut V2LaneWorkAdapter,
     output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
@@ -2931,13 +3067,8 @@ fn drain_v2_ingress(
                     match serve_block_sync_while_guarded(
                         output_guard,
                         || {
-                            block_sync_server.serve_historical_body(
-                                kura,
-                                context_store,
-                                request,
-                                &sender,
-                                local_key,
-                            )
+                            block_sync_server
+                                .serve_historical_body(kura, request, &sender, local_key)
                         },
                         |response, permit| {
                             services.post_durable_history_response_on_reply_routes_with_permit(
@@ -3129,7 +3260,6 @@ fn drain_decided_lane_recovery_ingress(
     active_view: wire::View,
     output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<(), V2RunnerError> {
@@ -3326,15 +3456,7 @@ fn drain_decided_lane_recovery_ingress(
                 let response_peer = sender.clone();
                 match serve_block_sync_while_guarded(
                     output_guard,
-                    || {
-                        block_sync_server.serve_historical_body(
-                            kura,
-                            context_store,
-                            request,
-                            &sender,
-                            local_key,
-                        )
-                    },
+                    || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
                     |response, permit| {
                         services.post_durable_history_response_on_reply_routes_with_permit(
                             response_peer,
@@ -4015,6 +4137,71 @@ fn require_peeked_lane_work_effect(
     drained.ok_or(V2RunnerError::RestartRequired)
 }
 
+fn drain_canonical_executed_block_recovery_ingress(
+    receiver: &FairV2Ingress,
+    recovery: &mut CanonicalExecutedBlockRecovery,
+    limit: usize,
+) -> Result<usize, V2RunnerError> {
+    let mut drained = 0usize;
+    for _ in 0..limit.max(1) {
+        let Some(inbound) = receiver
+            .try_recv_if_checked(|inbound| recovery.admits_message(inbound.message()))
+            .map_err(V2RunnerError::Service)?
+        else {
+            break;
+        };
+        let _ = recovery.accept_with_ingress_ownership(inbound)?;
+        drained = drained.saturating_add(1);
+    }
+    Ok(drained)
+}
+
+fn dispatch_canonical_executed_block_recovery_effects(
+    recovery: &mut CanonicalExecutedBlockRecovery,
+    services: &ProductionV2Services,
+    limit: usize,
+) -> Result<usize, V2RunnerError> {
+    let scan_limit = recovery.effect_count();
+    let mut dispatched = 0usize;
+    for _ in 0..scan_limit.min(limit.max(1)) {
+        let Some(effect) = recovery.drain_effects(1).pop() else {
+            break;
+        };
+        if !matches!(&effect, V2LaneWorkEffect::PostLaneBlock { .. }) {
+            return Err(V2RunnerError::Service(
+                "canonical executed-block recovery emitted a non-recovery lane effect".to_owned(),
+            ));
+        }
+        if !services
+            .can_retain_lane_work_effect(&effect)
+            .map_err(V2RunnerError::Service)?
+        {
+            if !recovery.requeue_effect(effect) {
+                return Err(V2RunnerError::Service(
+                    "canonical executed-block recovery could not retain a backpressured effect"
+                        .to_owned(),
+                ));
+            }
+            break;
+        }
+        match dispatch_lane_work_effect(services, effect)? {
+            LaneWorkEffectDispatch::Complete => {
+                dispatched = dispatched.saturating_add(1);
+            }
+            LaneWorkEffectDispatch::SourceRetained(effect) => {
+                if !recovery.requeue_effect(effect) {
+                    return Err(V2RunnerError::Service(
+                        "canonical executed-block recovery lost a source-retained effect"
+                            .to_owned(),
+                    ));
+                }
+                break;
+            }
+        }
+    }
+    Ok(dispatched)
+}
+
 fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -4509,6 +4696,54 @@ pub(super) enum V2RunnerError {
 #[cfg(test)]
 mod tests {
     include!("tests/v2_runner_unsealed_00.rs");
+
+    #[test]
+    fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
+        let need = |height: u64| {
+            let executed_block_wire_hash = Hash::new(&height.to_le_bytes());
+            CanonicalExecutedBlockNeedV1 {
+                height,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    &[b"block".as_slice(), &height.to_le_bytes()].concat(),
+                )),
+                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    &[b"finality".as_slice(), &height.to_le_bytes()].concat(),
+                )),
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"parent state"),
+                    Hash::new(b"post state"),
+                    Hash::new(b"writes"),
+                    1,
+                    executed_block_wire_hash,
+                ),
+                executed_block_wire_hash,
+            }
+        };
+        let needs = (1..=8).map(need).collect::<Vec<_>>();
+        let mut startup_gate_pending = true;
+        let mut observed_heights = Vec::new();
+        let batches = canonical_executed_block_recovery_batches(&needs, 3)
+            .expect("ordered distinct recovery plan is batchable");
+        for batch in batches {
+            assert!(
+                startup_gate_pending,
+                "the Queue startup gate remains closed for every recovery batch"
+            );
+            assert!(batch.len() <= 3);
+            observed_heights.extend(batch.iter().map(|need| need.height));
+        }
+        assert_eq!(observed_heights, (1..=8).collect::<Vec<_>>());
+        startup_gate_pending = false;
+        assert!(
+            !startup_gate_pending,
+            "the gate opens only after all batches"
+        );
+
+        let mut duplicated = needs;
+        duplicated[4] = duplicated[3];
+        assert!(canonical_executed_block_recovery_batches(&duplicated, 3).is_err());
+    }
+
     #[test]
     fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
         let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();

@@ -70,8 +70,8 @@ pub enum Error {
     #[error("invalid encoding")]
     InvalidEncoding,
 
-    /// Encountered parameters that are neither canonical nor registered.
-    #[error("unknown parameter set")]
+    /// Encountered parameters that do not match the deterministic V1 derivation.
+    #[error("non-canonical parameter set")]
     UnknownParams,
 
     /// Generator was invalid (e.g., identity element or duplicate point).

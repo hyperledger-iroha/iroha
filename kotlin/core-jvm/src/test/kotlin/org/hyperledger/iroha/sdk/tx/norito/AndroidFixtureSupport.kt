@@ -21,7 +21,7 @@ internal data class TransactionPayloadFixture(
     val chain: String,
     val authority: String,
     val creationTimeMs: Long,
-    val timeToLiveMs: Long?,
+    val timeToLiveMs: Long,
     val nonce: Long?,
     val payload: Map<String, Any?>?,
     val encodedBase64: String?,
@@ -50,7 +50,7 @@ internal data class TransactionManifestFixture(
     val chain: String,
     val authority: String,
     val creationTimeMs: Long,
-    val timeToLiveMs: Long?,
+    val timeToLiveMs: Long,
     val nonce: Long?,
     val payloadBase64: String,
     val payloadHash: String,
@@ -80,9 +80,19 @@ internal object AndroidFixtureSupport {
         val chain = requiredString(map["chain"], "$name.chain")
         val authority = requiredString(map["authority"], "$name.authority")
         val creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms")
-        val timeToLiveMs = optionalLong(map["time_to_live_ms"], "$name.time_to_live_ms")
+        val timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms")
         val nonce = optionalLong(map["nonce"], "$name.nonce")
         val payload = map["payload"]?.let { asMap(it, "$name.payload") }
+        payload?.let {
+            val payloadTimeToLiveMs = requiredPositiveLong(
+                it,
+                "time_to_live_ms",
+                "$name.payload.time_to_live_ms",
+            )
+            check(payloadTimeToLiveMs == timeToLiveMs) {
+                "$name: top-level and payload time_to_live_ms values must match"
+            }
+        }
         val encodedBase64 = optionalString(map["encoded"]) ?: optionalString(map["payload_base64"])
         return TransactionPayloadFixture(
             name = name,
@@ -103,27 +113,31 @@ internal object AndroidFixtureSupport {
         val path = resolveSharedResource("transaction_fixtures.manifest.json")
         val parsed = JsonParser.parse(path.readText())
         val manifest = asMap(parsed, path.toString())
-        val fixtures = asList(manifest["fixtures"], "manifest.fixtures").map { entry ->
-            val map = asMap(entry, "manifest.fixture")
-            val name = requiredString(map["name"], "manifest.fixture.name")
-            TransactionManifestFixture(
-                name = name,
-                chain = requiredString(map["chain"], "$name.chain"),
-                authority = requiredString(map["authority"], "$name.authority"),
-                creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms"),
-                timeToLiveMs = optionalLong(map["time_to_live_ms"], "$name.time_to_live_ms"),
-                nonce = optionalLong(map["nonce"], "$name.nonce"),
-                payloadBase64 = requiredString(map["payload_base64"], "$name.payload_base64"),
-                payloadHash = requiredString(map["payload_hash"], "$name.payload_hash"),
-                encodedFile = requiredString(map["encoded_file"], "$name.encoded_file"),
-                encodedLen = requiredLong(map["encoded_len"], "$name.encoded_len"),
-                signedBase64 = requiredString(map["signed_base64"], "$name.signed_base64"),
-                signedHash = requiredString(map["signed_hash"], "$name.signed_hash"),
-                signedLen = requiredLong(map["signed_len"], "$name.signed_len"),
-            )
+        val fixtures = asList(manifest["fixtures"], "manifest.fixtures").map {
+            manifestFixtureFromValue(it)
         }
         validateManifestFixtureIdentities(fixtures)
         return fixtures
+    }
+
+    internal fun manifestFixtureFromValue(value: Any?): TransactionManifestFixture {
+        val map = asMap(value, "manifest.fixture")
+        val name = requiredString(map["name"], "manifest.fixture.name")
+        return TransactionManifestFixture(
+            name = name,
+            chain = requiredString(map["chain"], "$name.chain"),
+            authority = requiredString(map["authority"], "$name.authority"),
+            creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms"),
+            timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms"),
+            nonce = optionalLong(map["nonce"], "$name.nonce"),
+            payloadBase64 = requiredString(map["payload_base64"], "$name.payload_base64"),
+            payloadHash = requiredString(map["payload_hash"], "$name.payload_hash"),
+            encodedFile = requiredString(map["encoded_file"], "$name.encoded_file"),
+            encodedLen = requiredLong(map["encoded_len"], "$name.encoded_len"),
+            signedBase64 = requiredString(map["signed_base64"], "$name.signed_base64"),
+            signedHash = requiredString(map["signed_hash"], "$name.signed_hash"),
+            signedLen = requiredLong(map["signed_len"], "$name.signed_len"),
+        )
     }
 
     internal fun decodeCanonicalBase64(value: String, field: String): ByteArray {
@@ -297,7 +311,11 @@ internal object AndroidFixtureSupport {
             authority = requiredString(payload["authority"], "$name.payload.authority"),
             creationTimeMs = requiredLong(payload["creation_time_ms"], "$name.payload.creation_time_ms"),
             executable = executable,
-            timeToLiveMs = optionalLong(payload["time_to_live_ms"], "$name.payload.time_to_live_ms"),
+            timeToLiveMs = requiredPositiveLong(
+                payload,
+                "time_to_live_ms",
+                "$name.payload.time_to_live_ms",
+            ),
             nonce = optionalLong(payload["nonce"], "$name.payload.nonce"),
             feePayment = FeePaymentJson.parse(
                 payload["fee_payment"],
@@ -397,6 +415,23 @@ internal object AndroidFixtureSupport {
     private fun optionalLong(value: Any?, field: String): Long? {
         if (value == null) return null
         return requiredLong(value, field)
+    }
+
+    private fun requiredPositiveLong(
+        map: Map<String, Any?>,
+        key: String,
+        field: String,
+    ): Long {
+        check(map.containsKey(key)) { "$field is required" }
+        val value = when (val raw = map[key]) {
+            is Byte -> raw.toLong()
+            is Short -> raw.toLong()
+            is Int -> raw.toLong()
+            is Long -> raw
+            else -> error("$field must be an integer")
+        }
+        check(value > 0) { "$field must be positive" }
+        return value
     }
 
     private fun asMap(value: Any?, field: String): Map<String, Any?> {

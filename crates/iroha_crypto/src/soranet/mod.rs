@@ -1,8 +1,7 @@
 //! `SoraNet`-specific cryptography helpers.
 //!
-//! Currently exposes CID blinding primitives that derive per-circuit keys from
-//! the `SoraNet` handshake, enabling request-level unlinkability while preserving
-//! deterministic cache lookups on the exit gateway.
+//! Includes handshake, admission, certificate/directory, CID blinding, and
+//! post-handshake authenticated-record primitives shared by relays and clients.
 
 #![allow(clippy::module_name_repetitions)]
 
@@ -12,4 +11,6 @@ pub mod directory;
 pub mod handshake;
 pub mod pow;
 pub mod puzzle;
+pub mod record;
+mod replay_lock;
 pub mod token;

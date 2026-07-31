@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -26,8 +27,18 @@ import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
  *
  * <p>The loader keeps the manifest structure available via {@link ManifestContext} so callers can
  * inspect the inputs alongside the built {@link ClientConfig}.
+ *
+ * <p>Genesis {@code confidential_features} and {@code zk_policy_hash} values are consensus
+ * fingerprints, not client proof policy. They are rejected at any depth so a customizer cannot
+ * accidentally treat them as authoritative; proof capabilities must come from committed Torii
+ * state and the on-chain verifying-key registry.
  */
 public final class ClientConfigManifestLoader {
+
+  private static final List<String> NON_AUTHORITATIVE_PRIVACY_POLICY_FIELDS =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "confidential_features", "confidentialFeatures", "zk_policy_hash", "zkPolicyHash"));
 
   private ClientConfigManifestLoader() {}
 
@@ -57,7 +68,15 @@ public final class ClientConfigManifestLoader {
       final String digest,
       final Customizer customizer) {
     final Map<String, Object> root = parseRoot(payload);
+    rejectNonAuthoritativePrivacyPolicyFields(root, "manifest");
     final ClientConfig.Builder builder = ClientConfig.builder();
+    final String chainId = optionalString(root.get("chain_id"), "chain_id");
+    if (chainId != null) {
+      if (chainId.isEmpty()) {
+        throw new IllegalStateException("chain_id must be a non-empty string");
+      }
+      builder.setLocalSigningContext(new LocalSigningContext(chainId));
+    }
     applyTorii(manifestPath, builder, root);
     applyRetry(builder, root);
     applyPendingQueue(manifestPath, builder, root);
@@ -281,6 +300,29 @@ public final class ClientConfigManifestLoader {
       return Collections.unmodifiableList(copy);
     }
     return value;
+  }
+
+  private static void rejectNonAuthoritativePrivacyPolicyFields(
+      final Object value, final String path) {
+    if (value instanceof Map<?, ?> map) {
+      for (final Map.Entry<?, ?> entry : map.entrySet()) {
+        if (!(entry.getKey() instanceof String key)) {
+          continue;
+        }
+        final String fieldPath = path + "." + key;
+        if (NON_AUTHORITATIVE_PRIVACY_POLICY_FIELDS.contains(key)) {
+          throw new IllegalStateException(
+              fieldPath
+                  + " is not authoritative client proof policy; use committed "
+                  + "/v1/privacy/capabilities and the on-chain verifying-key registry");
+        }
+        rejectNonAuthoritativePrivacyPolicyFields(entry.getValue(), fieldPath);
+      }
+    } else if (value instanceof List<?> list) {
+      for (int index = 0; index < list.size(); index++) {
+        rejectNonAuthoritativePrivacyPolicyFields(list.get(index), path + "[" + index + "]");
+      }
+    }
   }
 
   private static Map<String, Object> expectObject(final Object value, final String path) {

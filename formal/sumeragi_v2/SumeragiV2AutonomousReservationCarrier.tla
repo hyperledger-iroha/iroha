@@ -7,6 +7,15 @@ unchanged from the ordinary queue through a control-only global anchor, lane
 certification, durable full-candidate authorization, canonical application,
 and reservation finalization.
 
+The restart path models the production startup gate for a globally finalized
+autonomous anchor whose canonical body is not local:
+
+  1. close ordinary Queue selection while retaining the exact reservation;
+  2. recover one canonical body from a single authenticated Commit-QC signer;
+  3. durably install the exact historical route/incarnation/context task;
+  4. preflight every reservation group before mutating Queue ownership;
+  5. reopen the Queue gate before historical committee certification.
+
 The losing-owner path models the durable cross-store release protocol:
 
   1. retire the exact autonomous slot and move its Kura claim to
@@ -50,7 +59,10 @@ ReservationModes ==
    "DigestOnlyAuthorization", "OrdinaryAnchorExecution",
    "ReserveBeforeDurable", "NonCanonicalMergePrefix",
    "SkipCanonicalReexecution", "RestartDropsOwnership",
-   "VolatileStageDiagnostics"}
+   "VolatileStageDiagnostics", "UnauthenticatedRecoveryBody",
+   "MixedSignerRecoveryBody", "InflatedRecoveryWireLength",
+   "HistoricalContextDrift",
+   "PartialRecoveryGroupPreflight", "OpenQueueBeforeRecoveryInstall"}
 
 ReservationStages ==
   {"Queued", "Reserved", "Anchored", "Certified", "CandidateDurable",
@@ -58,6 +70,12 @@ ReservationStages ==
    "Forgotten"}
 
 ClaimStates == {"None", "Active", "ReleasePending", "Released", "Committed"}
+
+RecoveryStages ==
+  {"Normal", "NeedBody", "BodyVerified", "BodyAcceptedUnauthenticated",
+   "TaskExact", "TaskUnauthenticated", "TaskDrifted",
+   "UnauthenticatedPreflight", "ContextDriftPreflight",
+   "PartialPreflight", "GroupsPreflight", "HistoricalCertified"}
 
 ReservationIdentities ==
   {"None", ExactReservationIdentity, DriftedReservationIdentity,
@@ -123,6 +141,14 @@ VARIABLES
   mergeCandidateExact,
   \* @type: Bool;
   canonicalReexecuted,
+  \* @type: Str;
+  recoveryStage,
+  \* @type: Bool;
+  queueGateOpen,
+  \* @type: Bool;
+  recoverySignerStable,
+  \* @type: Bool;
+  recoveryWireLengthExact,
   \* @type: Int;
   durableStageRank,
   \* @type: Int;
@@ -141,6 +167,10 @@ carrierVars ==
 diagnosticVars ==
   <<durableStageRank, diagnosticStageRank, diagnosticsAuthorizeState>>
 
+recoveryVars ==
+  <<recoveryStage, queueGateOpen, recoverySignerStable,
+    recoveryWireLengthExact>>
+
 vars ==
   <<stage, reservationIdentity, carrierIdentity, incarnation, claimState,
     queueOwns, laneOwns, mergeOwns, releaseOwns, committedOwner,
@@ -148,6 +178,8 @@ vars ==
     candidateAuthorized, slotRetired, releaseBarrier, releaseCompletion,
     released, releaseAfterApply, recreated, staleRelease,
     reservationDurable, mergeCandidateExact, canonicalReexecuted,
+    recoveryStage, queueGateOpen, recoverySignerStable,
+    recoveryWireLengthExact,
     durableStageRank, diagnosticStageRank, diagnosticsAuthorizeState>>
 
 Init ==
@@ -176,12 +208,18 @@ Init ==
   /\ reservationDurable = FALSE
   /\ mergeCandidateExact = FALSE
   /\ canonicalReexecuted = FALSE
+  /\ recoveryStage = "Normal"
+  /\ queueGateOpen = TRUE
+  /\ recoverySignerStable = TRUE
+  /\ recoveryWireLengthExact = TRUE
   /\ durableStageRank = 0
   /\ diagnosticStageRank = 0
   /\ diagnosticsAuthorizeState = FALSE
 
 ReserveFifoTransaction ==
   /\ stage = "Queued"
+  /\ recoveryStage = "Normal"
+  /\ queueGateOpen
   /\ queueOwns
   /\ ~released
   /\ ~recreated
@@ -212,6 +250,7 @@ ReserveFifoTransaction ==
        IF Mode = "ReserveBeforeDurable" THEN 0 ELSE 1
   /\ UNCHANGED <<executionCount, recreated>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 AnchorAutonomousControl ==
   /\ stage = "Reserved"
@@ -232,9 +271,11 @@ AnchorAutonomousControl ==
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 CertifyAutonomousBundle ==
   /\ stage = "Anchored"
+  /\ recoveryStage = "Normal"
   /\ laneOwns
   /\ stage' = "Certified"
   /\ carrierIdentity' =
@@ -250,6 +291,7 @@ CertifyAutonomousBundle ==
                  staleRelease, reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 PersistFullMergeCandidate ==
   /\ stage = "Certified"
@@ -265,6 +307,7 @@ PersistFullMergeCandidate ==
                  staleRelease, reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 AuthorizeExactMergeCandidate ==
   /\ \/ /\ stage = "CandidateDurable"
@@ -287,6 +330,7 @@ AuthorizeExactMergeCandidate ==
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, canonicalReexecuted>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 ApplyCanonicalCarrier ==
   /\ stage = "CandidateAuthorized"
@@ -311,6 +355,7 @@ ApplyCanonicalCarrier ==
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 ForgetCommittedReservation ==
   /\ stage = "Applied"
@@ -328,9 +373,11 @@ ForgetCommittedReservation ==
                  staleRelease, reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED recoveryVars
 
 BeginLosingSlotRetirement ==
   /\ stage \in {"Reserved", "Anchored", "Certified", "CandidateDurable"}
+  /\ recoveryStage = "Normal"
   /\ laneOwns
   /\ claimState = "Active"
   /\ stage' = "ReleasePending"
@@ -347,6 +394,7 @@ BeginLosingSlotRetirement ==
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
 
 PrepareQueueReleaseBarrier ==
   /\ stage = "ReleasePending"
@@ -362,6 +410,7 @@ PrepareQueueReleaseBarrier ==
                  staleRelease, reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
 
 PublishReleasedClaim ==
   /\ stage = "ReleasePending"
@@ -379,6 +428,7 @@ PublishReleasedClaim ==
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
 
 CompleteQueueRelease ==
   /\ stage = "Released"
@@ -397,9 +447,12 @@ CompleteQueueRelease ==
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
 
 ReserveRecreatedIncarnation ==
   /\ stage = "Queued"
+  /\ recoveryStage = "Normal"
+  /\ queueGateOpen
   /\ queueOwns
   /\ released
   /\ releaseCompletion
@@ -430,6 +483,7 @@ ReserveRecreatedIncarnation ==
   /\ diagnosticStageRank' = 0
   /\ diagnosticsAuthorizeState' = FALSE
   /\ UNCHANGED <<executionCount, releaseBarrier, releaseCompletion>>
+  /\ UNCHANGED recoveryVars
 
 ReplayStaleReleaseMutation ==
   /\ Mode = "AbaRelease"
@@ -453,6 +507,7 @@ ReplayStaleReleaseMutation ==
   /\ UNCHANGED <<reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
 
 ReleaseCommittedMutation ==
   /\ Mode = "ReleaseAfterApplication"
@@ -472,6 +527,7 @@ ReleaseCommittedMutation ==
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
 
 RestartDropsOwnershipMutation ==
   /\ Mode = "RestartDropsOwnership"
@@ -492,6 +548,121 @@ RestartDropsOwnershipMutation ==
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted>>
   /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
+
+\* A globally finalized autonomous control survived, but this peer pruned or
+\* never received its canonical body. Queue selection closes before recovery;
+\* the exact reservation remains lane-owned throughout the startup repair.
+RestartNeedsCanonicalCarrierBody ==
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ claimState = "Active"
+  /\ reservationDurable
+  /\ recoveryStage = "Normal"
+  /\ queueGateOpen
+  /\ recoveryStage' = "NeedBody"
+  /\ queueGateOpen' = FALSE
+  /\ recoverySignerStable' = TRUE
+  /\ recoveryWireLengthExact' = TRUE
+  /\ UNCHANGED <<carrierVars, diagnosticVars>>
+
+\* One signer owns a whole fixed-chunk assembly. Changing signer or accepting a
+\* body not authenticated by the retained Commit QC is a modeled mutation.
+AcceptRecoveredCanonicalCarrierBody ==
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ recoveryStage = "NeedBody"
+  /\ ~queueGateOpen
+  /\ recoveryStage' =
+       IF Mode = "UnauthenticatedRecoveryBody"
+       THEN "BodyAcceptedUnauthenticated"
+       ELSE "BodyVerified"
+  /\ recoverySignerStable' = (Mode # "MixedSignerRecoveryBody")
+  /\ recoveryWireLengthExact' = (Mode # "InflatedRecoveryWireLength")
+  /\ UNCHANGED queueGateOpen
+  /\ UNCHANGED <<carrierVars, diagnosticVars>>
+
+\* Installation abstracts one versioned, fsynced, read-back Kura task carrying
+\* the canonical finality/body binding, exact historical route/incarnation,
+\* predecessor, proposal, committee/quorum, and validator-aligned PoPs.
+InstallHistoricalAutonomousRecovery ==
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ recoveryStage \in {"BodyVerified", "BodyAcceptedUnauthenticated"}
+  /\ ~queueGateOpen
+  /\ recoveryStage' =
+       IF recoveryStage = "BodyAcceptedUnauthenticated"
+       THEN "TaskUnauthenticated"
+       ELSE IF Mode = "HistoricalContextDrift"
+            THEN "TaskDrifted"
+            ELSE "TaskExact"
+  /\ UNCHANGED <<queueGateOpen, recoverySignerStable>>
+  /\ UNCHANGED <<carrierVars, diagnosticVars>>
+
+\* The production planner validates every reservation group before applying
+\* any Queue transition. A partial prefix never becomes a publishable owner.
+PreflightAllHistoricalReservationGroups ==
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ recoveryStage \in
+       {"TaskExact", "TaskUnauthenticated", "TaskDrifted"}
+  /\ ~queueGateOpen
+  /\ recoveryStage' =
+       CASE recoveryStage = "TaskUnauthenticated"
+              -> "UnauthenticatedPreflight"
+         [] recoveryStage = "TaskDrifted"
+              -> "ContextDriftPreflight"
+         [] Mode = "PartialRecoveryGroupPreflight"
+              -> "PartialPreflight"
+         [] OTHER -> "GroupsPreflight"
+  /\ UNCHANGED <<queueGateOpen, recoverySignerStable>>
+  /\ UNCHANGED <<carrierVars, diagnosticVars>>
+
+OpenQueueAfterHistoricalInstall ==
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ recoveryStage \in
+       {"GroupsPreflight", "UnauthenticatedPreflight",
+        "ContextDriftPreflight", "PartialPreflight"}
+  /\ ~queueGateOpen
+  /\ queueGateOpen' = TRUE
+  /\ UNCHANGED <<recoveryStage, recoverySignerStable>>
+  /\ UNCHANGED <<carrierVars, diagnosticVars>>
+
+\* ML-MUT-AUT-06: ordinary selection becomes visible before authenticated
+\* recovery, durable historical-task installation, and all-group preflight.
+OpenQueueBeforeHistoricalInstallMutation ==
+  /\ Mode = "OpenQueueBeforeRecoveryInstall"
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ recoveryStage \in {"NeedBody", "BodyVerified", "TaskExact"}
+  /\ ~queueGateOpen
+  /\ queueGateOpen' = TRUE
+  /\ UNCHANGED <<recoveryStage, recoverySignerStable>>
+  /\ UNCHANGED <<carrierVars, diagnosticVars>>
+
+\* Historical certification is deliberately after Queue reopening: startup
+\* must not deadlock waiting for the old committee before ordinary work starts.
+CertifyInstalledHistoricalAutonomousBundle ==
+  /\ stage = "Anchored"
+  /\ laneOwns
+  /\ queueGateOpen
+  /\ recoveryStage \in
+       {"GroupsPreflight", "UnauthenticatedPreflight",
+        "ContextDriftPreflight", "PartialPreflight"}
+  /\ stage' = "Certified"
+  /\ recoveryStage' = "HistoricalCertified"
+  /\ durableStageRank' = 4
+  /\ UNCHANGED <<reservationIdentity, carrierIdentity, incarnation,
+                 claimState, queueOwns, laneOwns, mergeOwns, releaseOwns,
+                 committedOwner, executionCount, controlOnlyAnchor,
+                 candidateBodyDurable, candidateAuthorized, slotRetired,
+                 releaseBarrier, releaseCompletion, released,
+                 releaseAfterApply, recreated, staleRelease,
+                 reservationDurable, mergeCandidateExact,
+                 canonicalReexecuted>>
+  /\ UNCHANGED <<queueGateOpen, recoverySignerStable>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
 
 \* Diagnostics may catch up to the highest revalidated durable stage for the
 \* exact route/incarnation/proposal identity. They are observers: publishing a
@@ -501,6 +672,7 @@ PublishDurableStageDiagnostic ==
   /\ diagnosticStageRank' = durableStageRank
   /\ diagnosticsAuthorizeState' = FALSE
   /\ UNCHANGED <<carrierVars, durableStageRank>>
+  /\ UNCHANGED recoveryVars
 
 \* ML-MUT-LIFE-05: report one stage beyond durable evidence and let that
 \* volatile projection become an authorization input.
@@ -511,6 +683,7 @@ PublishVolatileStageDiagnosticMutation ==
   /\ diagnosticStageRank' = durableStageRank + 1
   /\ diagnosticsAuthorizeState' = TRUE
   /\ UNCHANGED <<carrierVars, durableStageRank>>
+  /\ UNCHANGED recoveryVars
 
 Next ==
   \/ ReserveFifoTransaction
@@ -528,6 +701,13 @@ Next ==
   \/ ReplayStaleReleaseMutation
   \/ ReleaseCommittedMutation
   \/ RestartDropsOwnershipMutation
+  \/ RestartNeedsCanonicalCarrierBody
+  \/ AcceptRecoveredCanonicalCarrierBody
+  \/ InstallHistoricalAutonomousRecovery
+  \/ PreflightAllHistoricalReservationGroups
+  \/ OpenQueueAfterHistoricalInstall
+  \/ OpenQueueBeforeHistoricalInstallMutation
+  \/ CertifyInstalledHistoricalAutonomousBundle
   \/ PublishDurableStageDiagnostic
   \/ PublishVolatileStageDiagnosticMutation
 
@@ -557,6 +737,10 @@ ReservationCarrierTypeInvariant ==
   /\ reservationDurable \in BOOLEAN
   /\ mergeCandidateExact \in BOOLEAN
   /\ canonicalReexecuted \in BOOLEAN
+  /\ recoveryStage \in RecoveryStages
+  /\ queueGateOpen \in BOOLEAN
+  /\ recoverySignerStable \in BOOLEAN
+  /\ recoveryWireLengthExact \in BOOLEAN
   /\ durableStageRank \in 0..9
   /\ diagnosticStageRank \in 0..9
   /\ diagnosticsAuthorizeState \in BOOLEAN
@@ -648,6 +832,48 @@ MLRestartOwnershipPartition ==
   /\ QueueReleaseCompletionInvariant
   /\ (recreated => incarnation = IncarnationB)
 
+\* A recovered canonical body is usable only when one retained Commit-QC
+\* signer supplied the whole bounded assembly and the final body revalidated.
+MLRecoveredCarrierBodyAuthenticated ==
+  /\ recoverySignerStable
+  /\ recoveryStage \notin
+       {"BodyAcceptedUnauthenticated", "TaskUnauthenticated",
+        "UnauthenticatedPreflight"}
+
+\* The complete-wire length is part of the Commit-QC-signed execution
+\* commitment. A recovery signer cannot choose a larger assembly length even
+\* when it remains below the generic canonical block ceiling.
+MLRecoveredCarrierLengthAuthenticated == recoveryWireLengthExact
+
+\* The durable historical task cannot project a stale route, incarnation,
+\* predecessor, proposal context, committee, quorum, or validator PoP set.
+MLHistoricalRecoveryContextExact ==
+  recoveryStage \notin {"TaskDrifted", "ContextDriftPreflight"}
+
+\* Queue visibility follows the startup publication order. It remains closed
+\* through body recovery and durable task installation, and may open after the
+\* all-group preflight but before quorum certification.
+MLHistoricalQueueGateOrder ==
+  /\ (recoveryStage = "Normal" => queueGateOpen)
+  /\ (recoveryStage \in
+        {"NeedBody", "BodyVerified", "TaskExact"} =>
+        ~queueGateOpen)
+  /\ (queueGateOpen /\ recoveryStage # "Normal" =>
+        recoveryStage \in {"GroupsPreflight", "HistoricalCertified"})
+
+\* No prefix of a multi-group reconciliation is publishable. The exact
+\* reservation remains the sole durable lane owner until all groups preflight.
+MLHistoricalAllGroupsPreflight ==
+  /\ recoveryStage # "PartialPreflight"
+  /\ (recoveryStage \in
+        {"NeedBody", "BodyVerified", "TaskExact", "GroupsPreflight"} =>
+        /\ stage = "Anchored"
+        /\ laneOwns
+        /\ claimState = "Active"
+        /\ reservationDurable
+        /\ reservationIdentity = ExactReservationIdentity
+        /\ incarnation = IncarnationA)
+
 \* Ranks 1..9 abstract the ordered durable diagnostics chain from exact
 \* reservations through Queue finalization. Rank 0 means that no row is
 \* publishable. A decrease is permitted only when the modeled identity changes
@@ -674,6 +900,11 @@ AutonomousReservationCarrierSafetyInvariant ==
   /\ MLMergeCandidateExactPrefix
   /\ MLCarrierExactlyOnce
   /\ MLRestartOwnershipPartition
+  /\ MLRecoveredCarrierBodyAuthenticated
+  /\ MLRecoveredCarrierLengthAuthenticated
+  /\ MLHistoricalRecoveryContextExact
+  /\ MLHistoricalQueueGateOrder
+  /\ MLHistoricalAllGroupsPreflight
   /\ MLStageEvidenceMonotonic
 
 ReservationCarrierSpec == Init /\ [][Next]_vars

@@ -139,9 +139,8 @@ use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, 
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree};
 #[cfg(not(feature = "ffi_import"))]
 pub use privacy::{
-    CommitmentScheme, CommitmentSchemeKind, LaneCommitmentId, LanePrivacyCommitment,
-    MerkleCommitment, MerkleWitness, PrivacyError, PrivacyWitness, PrivacyWitnessKind,
-    SnarkCircuit, SnarkCircuitId, SnarkWitness, hash_proof, hash_public_inputs,
+    CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
+    PrivacyError, PrivacyWitness, lane_merkle_leaf_hash, lane_merkle_node_hash,
 };
 #[cfg(not(feature = "ffi_import"))]
 pub use ram_lfe::*;

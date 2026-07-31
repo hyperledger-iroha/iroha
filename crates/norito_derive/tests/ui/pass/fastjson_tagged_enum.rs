@@ -25,7 +25,7 @@ enum Tagged {
     #[norito(rename = "record")]
     Record {
         id: u32,
-        #[norito(default)]
+        #[norito(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
 }

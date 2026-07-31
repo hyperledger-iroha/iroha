@@ -328,6 +328,7 @@
                     Hash::new(b"fair-v2-ingress-parent-state"),
                     Hash::new(b"fair-v2-ingress-post-state"),
                     Hash::new(b"fair-v2-ingress-writes"),
+                    1,
                     Hash::new(b"fair-v2-ingress-executed-wire"),
                 ),
                 signer: 0,
@@ -421,6 +422,7 @@
                 ordinary_writes_root,
                 Some(topup_anchor_root),
                 topup_anchor_count,
+                1,
                 Hash::new(b"fair-v2-ingress-max-executed-wire"),
             )
             .expect("maximum top-up projection is canonical"),
@@ -471,6 +473,7 @@
             ordinary_writes_root,
             Some(topup_anchor_root),
             topup_anchor_count,
+            1,
             Hash::new(b"fair-v2-ingress-max-proposal-executed-wire"),
         )
         .expect("maximum top-up projection is canonical");

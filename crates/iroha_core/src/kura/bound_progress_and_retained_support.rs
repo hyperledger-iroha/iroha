@@ -458,6 +458,8 @@ struct KuraRetainedBlockRecord {
     block_header: BlockHeader,
     /// Hash of the canonical resultless proposal wire authenticated by the subject.
     proposal_wire_hash: Hash,
+    /// Exact byte length of the complete result-bearing canonical block wire.
+    executed_block_wire_len: u64,
     /// Hash of the complete result-bearing canonical `SignedBlock::encode_wire()` bytes.
     executed_block_wire_hash: Hash,
     /// Successful outbound SCCP messages in exact commitment-index order.
@@ -468,6 +470,7 @@ impl KuraRetainedBlockRecord {
     fn new(
         block_header: BlockHeader,
         proposal_wire_hash: Hash,
+        executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
         sccp_archive: Vec<KuraRetainedSccpMessage>,
     ) -> Self {
@@ -477,6 +480,7 @@ impl KuraRetainedBlockRecord {
             block_hash: block_header.hash(),
             block_header,
             proposal_wire_hash,
+            executed_block_wire_len,
             executed_block_wire_hash,
             sccp_archive,
         }

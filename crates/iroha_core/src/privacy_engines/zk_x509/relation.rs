@@ -7,9 +7,9 @@
 //! CA membership, complete CRL, projections, and holder ownership are checked
 //! here.
 //!
-//! The reference relation is not itself a privacy proof.  Consensus activation
-//! remains gated until a purpose-built AIR proves the same predicates without
-//! exposing this private witness.
+//! The reference relation is not itself a privacy proof. The purpose-built AIR
+//! proves the same predicates without exposing this private witness, while
+//! governance separately controls consensus activation.
 
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
@@ -1414,6 +1414,9 @@ fn parse_crl_extensions_v1(
         crl_number.ok_or(ZkX509RelationErrorV1::InvalidCrl)?,
     ))
 }
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) mod release_fixture;
 
 #[cfg(test)]
 pub(crate) mod tests {

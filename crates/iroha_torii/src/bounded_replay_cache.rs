@@ -1,0 +1,189 @@
+//! Fail-closed in-memory replay protection shared by Torii authentication paths.
+
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
+    num::NonZeroUsize,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
+/// Reason a nonce could not be admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InsertError {
+    /// The nonce is already live in the cache.
+    Replay,
+    /// All configured slots contain live nonces.
+    Capacity,
+    /// The configured lifetime cannot be represented by the monotonic clock.
+    LifetimeOverflow,
+}
+
+#[derive(Debug)]
+struct Inner {
+    ttl: Duration,
+    capacity: NonZeroUsize,
+    entries: HashMap<String, Instant>,
+    expirations: BinaryHeap<Reverse<(Instant, String)>>,
+}
+
+impl Inner {
+    fn prune_expired(&mut self, now: Instant) {
+        while let Some(Reverse((expires_at, _))) = self.expirations.peek() {
+            if *expires_at > now {
+                break;
+            }
+            let Some(Reverse((expires_at, key))) = self.expirations.pop() else {
+                break;
+            };
+            if self.entries.get(&key) == Some(&expires_at) {
+                self.entries.remove(&key);
+            }
+        }
+    }
+}
+
+/// Bounded replay cache that never evicts an unexpired nonce.
+#[derive(Debug)]
+pub(crate) struct ReplayCache {
+    inner: Mutex<Inner>,
+}
+
+impl ReplayCache {
+    /// Create a cache with a fixed nonce lifetime and capacity.
+    pub(crate) fn new(ttl: Duration, capacity: NonZeroUsize) -> Self {
+        debug_assert!(!ttl.is_zero());
+        Self {
+            inner: Mutex::new(Inner {
+                ttl,
+                capacity,
+                entries: HashMap::new(),
+                expirations: BinaryHeap::new(),
+            }),
+        }
+    }
+
+    /// Reconfigure future inserts without discarding live replay evidence.
+    pub(crate) fn configure(&self, ttl: Duration, capacity: NonZeroUsize) {
+        debug_assert!(!ttl.is_zero());
+        let now = Instant::now();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.prune_expired(now);
+        inner.ttl = ttl;
+        inner.capacity = capacity;
+    }
+
+    /// Admit a new nonce, rejecting replay and saturated live state.
+    pub(crate) fn check_and_insert(&self, key: String) -> Result<(), InsertError> {
+        self.check_and_insert_at(key, Instant::now())
+    }
+
+    fn check_and_insert_at(&self, key: String, now: Instant) -> Result<(), InsertError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.prune_expired(now);
+
+        if inner.entries.contains_key(&key) {
+            return Err(InsertError::Replay);
+        }
+        if inner.entries.len() >= inner.capacity.get() {
+            return Err(InsertError::Capacity);
+        }
+
+        let expires_at = now
+            .checked_add(inner.ttl)
+            .ok_or(InsertError::LifetimeOverflow)?;
+        inner.entries.insert(key.clone(), expires_at);
+        inner.expirations.push(Reverse((expires_at, key)));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_cache_preserves_every_live_nonce() {
+        let cache = ReplayCache::new(
+            Duration::from_secs(300),
+            NonZeroUsize::new(2).expect("non-zero"),
+        );
+
+        cache
+            .check_and_insert("protected-a".to_owned())
+            .expect("first nonce");
+        cache
+            .check_and_insert("protected-b".to_owned())
+            .expect("second nonce");
+        assert_eq!(
+            cache.check_and_insert("overflow".to_owned()),
+            Err(InsertError::Capacity)
+        );
+        assert_eq!(
+            cache.check_and_insert("protected-a".to_owned()),
+            Err(InsertError::Replay)
+        );
+        assert_eq!(
+            cache.check_and_insert("protected-b".to_owned()),
+            Err(InsertError::Replay)
+        );
+    }
+
+    #[test]
+    fn expired_nonce_releases_capacity_without_sleeping() {
+        let cache = ReplayCache::new(
+            Duration::from_secs(1),
+            NonZeroUsize::new(1).expect("non-zero"),
+        );
+        let start = Instant::now();
+
+        cache
+            .check_and_insert_at("expired".to_owned(), start)
+            .expect("first nonce");
+        cache
+            .check_and_insert_at("replacement".to_owned(), start + Duration::from_secs(1))
+            .expect("expired nonce must release its slot");
+        assert_eq!(
+            cache.check_and_insert_at("expired".to_owned(), start + Duration::from_secs(1)),
+            Err(InsertError::Capacity)
+        );
+    }
+
+    #[test]
+    fn shrinking_capacity_never_evicts_live_evidence() {
+        let cache = ReplayCache::new(
+            Duration::from_secs(300),
+            NonZeroUsize::new(2).expect("non-zero"),
+        );
+        cache
+            .check_and_insert("protected-a".to_owned())
+            .expect("first nonce");
+        cache
+            .check_and_insert("protected-b".to_owned())
+            .expect("second nonce");
+
+        cache.configure(
+            Duration::from_secs(300),
+            NonZeroUsize::new(1).expect("non-zero"),
+        );
+
+        assert_eq!(
+            cache.check_and_insert("protected-a".to_owned()),
+            Err(InsertError::Replay)
+        );
+        assert_eq!(
+            cache.check_and_insert("protected-b".to_owned()),
+            Err(InsertError::Replay)
+        );
+        assert_eq!(
+            cache.check_and_insert("new".to_owned()),
+            Err(InsertError::Capacity)
+        );
+    }
+}

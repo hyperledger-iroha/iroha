@@ -2,7 +2,7 @@
 
 This directory is the first-release formal corridor for the production
 Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
-The model fixes protocol revision 3 and is parameterized over arbitrary finite
+The model fixes protocol revision 4 and is parameterized over arbitrary finite
 frozen rosters; production separately enforces the release limit of 128
 validators. Mechanization status is recorded per obligation in the proof
 ledger. The first-release implementation likewise has one canonical decoder:
@@ -95,15 +95,18 @@ certificate round.
   `specified_unproved`.
 - `SumeragiV2TypedRolloverHandoff.tla`,
   `SumeragiV2TypedRolloverHandoffProofs.tla`, the shared mutation module, and
+  `SumeragiV2TypedRolloverHandoffLivenessMutation.tla` plus
   `SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla` isolate the
   move-only service/transport owner pair, final empty-corridor seal, exact
   predecessor and immediate-successor receipt, retry preservation, and
-  late-callback isolation. The source seal covers these four modules, one fixed
-  config, and 43 mutation configs (48 artifacts total). The shared matrix owns
-  42 mutations; the dedicated repeated-handoff mutant bypasses the one-shot
+  late-callback isolation. The source seal covers these five modules, three
+  repaired configs, and 45 mutation configs (53 artifacts total). The shared
+  safety/action matrix owns 42 mutations, the liveness module owns two fairness
+  mutations, and the dedicated repeated-handoff mutant bypasses the one-shot
   predecessor-transport gate after restart restore. The proof module contains
-  38 theorem declarations: 29 retain proof bodies and 9 remain proofless
-  (7 safety and 2 liveness). Bootstrap root replacement now binds the selected
+  134 theorem declarations: 38 root model/safety theorems and 96 liveness
+  helpers, all with explicit proof directives. Bootstrap root replacement now
+  binds the selected
   durable snapshot to the exact initial snapshot for the current target roster;
   the existing wrong-bootstrap-projection mutant changes that target while
   publishing the old candidate and is rejected by this exact binding.
@@ -114,11 +117,12 @@ certificate round.
   lifecycle journal; it commits the changed-roster generation and empty
   responder projection before clearing memory and never invents an
   authenticated close prefix. Same-roster rehydration preserves generation and
-  responder ownership. The earlier strict and bounded receipts predate this
+  responder ownership. The earlier strict TLAPS receipts predate this
   authority-gated relation, V3 bootstrap adoption, cleanup ordering, and root
-  trust boundary, so fresh validation remains pending. The proofless typed
-  support stays transitively bound to its reviewed `specified_unproved`
-  top-level consumer; no support row is promoted into the ledger.
+  trust boundary, so fresh strict proof validation remains pending. These typed
+  proof-script claims stay transitively bound to their reviewed
+  `specified_unproved` top-level consumer; no support row is promoted into the
+  ledger.
   Neither the model nor historical bounded evidence proves eventual finality
   validation, network delivery, writer flush, recovery after failure, repeated
   rollover, or Rust-to-TLA refinement.
@@ -375,10 +379,11 @@ certificate round.
   contiguous active routes, exact grouped application, authenticated
   manifests, startup repair/latest-index exactness, durable reservation
   ownership, route/incarnation-first merge prefixes, canonical re-execution,
-  restart ownership partitioning, and observer-only monotonic stage evidence
-  derived from durable State/Kura artifacts. Thirty-seven `_bug.cfg` controls
-  deliberately weaken one boundary each and must produce the named invariant
-  counterexample.
+  restart ownership partitioning, single-signer authenticated canonical-body
+  recovery, exact historical-context installation, Queue-gated all-group
+  reconciliation, and observer-only monotonic stage evidence derived from
+  durable State/Kura artifacts. Fifty-one `_bug.cfg` controls deliberately
+  weaken one boundary each and must produce the named invariant counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
   semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
   structure before the default TLC matrix. The Native binding includes the
@@ -387,7 +392,9 @@ certificate round.
   Kura-before-WSV application boundary. The autonomous binding includes
   exclusion-aware FIFO reservation, the durable Queue/Kura release barrier,
   route/incarnation-first canonical source ordering, startup ownership
-  reconciliation, and exact full-candidate signing authorization.
+  reconciliation, bounded canonical-body recovery whose complete-wire length
+  is Commit-QC-signed, durable historical-task installation before Queue
+  publication, and exact full-candidate signing authorization.
   The QueuePlan binding covers the shared V2 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
   Exact-gated autonomous ownership, restart/TTL retention, and exact
@@ -395,8 +402,8 @@ certificate round.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
-  The same version-3 ledger machine-maps every conceptual `ML-MUT-*` ID from
-  the closure ledger. `tla_counterexample` entries cover every and only the 37
+  The same schema-4 ledger machine-maps every conceptual `ML-MUT-*` ID from
+  the closure ledger. `tla_counterexample` entries cover every and only the 52
   production-refinement `_bug.cfg` files. Its separate
   `layout_only_no_transition_refinement` contract binds the accepted payload
   schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal V4, reservation
@@ -438,7 +445,7 @@ certificate round.
   in-flight mutation substitution, a weakened success marker, and a length
   override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  thirty-seven exact refinement-kernel TLC mutation witnesses and the twenty
+  fifty-two exact refinement-kernel TLC mutation witnesses and the twenty
   exact in-flight layout mutation witnesses. Apalache does not run those
   mutations: their named-counterexample contract is owned by the deterministic
   TLC runners, while the Apalache leg accepts positive `NoError` only.

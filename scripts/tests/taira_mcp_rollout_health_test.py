@@ -181,7 +181,7 @@ def _healthy_base_payload() -> dict[str, object]:
         "payload_hash": "hash:" + "F" * 64,
     }
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "restart_required": False,
         "node_fingerprint": "hash:" + "A" * 64,
         "build_fingerprint": "hash:" + "B" * 64,
@@ -460,7 +460,7 @@ def test_sumeragi_checker_rejects_legacy_rbc_status(tmp_path: Path) -> None:
 
 def test_sumeragi_checker_rejects_wrong_protocol_version(tmp_path: Path) -> None:
     payload = _healthy_base_payload()
-    payload["protocol_version"] = 1
+    payload["protocol_version"] = 3
 
     result = _run_checker(tmp_path, payload)
 

@@ -804,6 +804,20 @@ fn authenticate_snapshot_bootstrap_record(
             record.context.nexus_amx_context_hash
         )));
     }
+    let live_execution_policy = state
+        .execution_policy_digest_v1()
+        .map(Hash::prehashed)
+        .map_err(|error| {
+            snapshot_bootstrap_error(format!(
+                "failed to derive restored execution-policy identity: {error}"
+            ))
+        })?;
+    if record.context.execution_policy_hash != live_execution_policy {
+        return Err(snapshot_bootstrap_error(format!(
+            "snapshot bootstrap execution-policy hash {:?} differs from restored local policy {live_execution_policy:?}",
+            record.context.execution_policy_hash
+        )));
+    }
 
     let commit_topology = state.commit_topology_snapshot();
     let roster_matches = commit_topology.len() == record.context.roster.len()
@@ -1314,6 +1328,7 @@ pub(crate) fn recover_active_height_with_plan(
         }
         let fresh_genesis = fresh_genesis.ok_or(V2RecoveryError::MissingFreshGenesis)?;
         let (verified_context, staged_genesis_nexus_amx_context) = fresh_genesis.into_parts();
+        ensure_execution_policy_matches_context(state, verified_context.context())?;
         context_store.persist(&PersistedHeightContext::from_verified(&verified_context))?;
         return Ok(RecoveredV2Height {
             verified_context,
@@ -1348,6 +1363,7 @@ pub(crate) fn recover_active_height_with_plan(
         let bootstrap = state
             .authenticated_snapshot_v2_bootstrap()
             .ok_or(V2RecoveryError::MissingSnapshotBootstrap)?;
+        ensure_execution_policy_matches_context(state, &bootstrap.context)?;
         let record = context_store.load(bootstrap.context.height)?.ok_or(
             V2RecoveryError::MissingActiveContext(bootstrap.context.height),
         )?;
@@ -1483,6 +1499,7 @@ pub(crate) fn build_verified_successor(
     parent_artifact: &wire::finality::V2FinalityArtifact,
     parent_receipt: &KuraV2CommitReceipt,
 ) -> Result<VerifiedSuccessorHeight, V2RecoveryError> {
+    ensure_execution_policy_matches_context(state, &parent_artifact.height_context)?;
     let parent_height = parent_artifact.height;
     let predecessor = DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;
     let state_height = u64::try_from(state.committed_height())?;
@@ -1562,6 +1579,7 @@ fn verify_persisted_height(
     record: PersistedHeightContext,
     height: wire::Height,
 ) -> Result<VerifiedHeightContext, V2RecoveryError> {
+    ensure_execution_policy_matches_context(state, record.context())?;
     if height == 1 {
         return VerifiedHeightContext::genesis(
             record.context().clone(),
@@ -1715,6 +1733,27 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
     )
 }
 
+pub(crate) fn committed_execution_policy_hash(state: &State) -> Result<Hash, V2RecoveryError> {
+    state
+        .execution_policy_digest_v1()
+        .map(Hash::prehashed)
+        .map_err(|error| V2RecoveryError::ExecutionPolicy(error.to_string()))
+}
+
+fn ensure_execution_policy_matches_context(
+    state: &State,
+    context: &wire::HeightContext,
+) -> Result<(), V2RecoveryError> {
+    let actual = committed_execution_policy_hash(state)?;
+    if context.execution_policy_hash != actual {
+        return Err(V2RecoveryError::ExecutionPolicyMismatch {
+            expected: context.execution_policy_hash,
+            actual,
+        });
+    }
+    Ok(())
+}
+
 /// Fail-closed active-height selection error.
 #[derive(Debug, Error)]
 pub(crate) enum V2RecoveryError {
@@ -1736,6 +1775,19 @@ pub(crate) enum V2RecoveryError {
     /// Local storage height cannot be represented on the wire.
     #[error(transparent)]
     Integer(#[from] std::num::TryFromIntError),
+    /// Local execution policy could not be represented canonically.
+    #[error("failed to derive the local V1 execution-policy identity: {0}")]
+    ExecutionPolicy(String),
+    /// Authenticated recovery context was created under a different boot execution policy.
+    #[error(
+        "authenticated execution-policy hash {expected:?} differs from local policy {actual:?}"
+    )]
+    ExecutionPolicyMismatch {
+        /// Hash carried by signed genesis or persisted authenticated context.
+        expected: Hash,
+        /// Hash derived from the restored process-local policy snapshot.
+        actual: Hash,
+    },
     /// Empty Kura/WSV startup did not carry the signed genesis bootstrap.
     #[error("fresh Sumeragi v2 storage is missing its signed genesis bootstrap")]
     MissingFreshGenesis,
@@ -1865,7 +1917,7 @@ pub(crate) enum V2RecoveryError {
 mod tests {
     use std::{
         io::Write,
-        num::{NonZeroU64, NonZeroUsize},
+        num::{NonZeroU16, NonZeroU64, NonZeroUsize},
         path::{Path, PathBuf},
         sync::Arc,
     };
@@ -1890,8 +1942,8 @@ mod tests {
         RecoveredSuccessorActivationAuthority, V2RecoveryError, V2StartupReplayError,
         authenticate_v2_snapshot_replay_boundary, authenticate_v2_snapshot_startup,
         authenticated_v2_snapshot_startup_mode, build_verified_successor,
-        committed_nexus_amx_context_hash, plan_v2_startup_replay, recover_active_height,
-        recover_active_height_with_plan, successor_proofs_of_possession,
+        committed_execution_policy_hash, committed_nexus_amx_context_hash, plan_v2_startup_replay,
+        recover_active_height, recover_active_height_with_plan, successor_proofs_of_possession,
     };
     use crate::{
         block::{CommittedBlock, ValidBlock},
@@ -1921,8 +1973,11 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let chain_id = ChainId::from("sumeragi-v2-recovery-test");
+        let policy_kura = Kura::blank_kura_for_testing();
+        let policy_state = state_for(&policy_kura, chain_id.clone());
         let context = wire::HeightContext {
-            chain_id: ChainId::from("sumeragi-v2-recovery-test"),
+            chain_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1934,6 +1989,8 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"recovery fixture Nexus/AMX"),
+            execution_policy_hash: committed_execution_policy_hash(&policy_state)
+                .expect("derive fixture execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -2136,6 +2193,7 @@ mod tests {
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            1,
             Hash::new([seed, 4]),
         )
     }
@@ -2158,6 +2216,13 @@ mod tests {
             view: 0,
         };
         let mut exact_execution_commitment = execution_commitment(0xB6);
+        exact_execution_commitment.executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("canonical executed block wire")
+                .len(),
+        )
+        .expect("canonical executed block wire length fits u64");
         exact_execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical executed block wire");
@@ -2299,6 +2364,8 @@ mod tests {
             snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
         });
         context.nexus_amx_context_hash = committed_nexus_amx_context_hash(&state);
+        context.execution_policy_hash =
+            committed_execution_policy_hash(state).expect("derive snapshot execution policy");
         let record = wire::SnapshotV2BootstrapRecord {
             version: wire::SnapshotV2BootstrapRecord::VERSION,
             context,
@@ -2697,6 +2764,7 @@ mod tests {
             quorum: attacker_quorum,
             roster: attacker_roster,
             nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+            execution_policy_hash: parent_context.execution_policy_hash,
             da_layout: parent_context.da_layout,
             leader_seed: transitioned_leader_seed,
         };
@@ -3235,6 +3303,58 @@ mod tests {
                 .expect("read exact durable height"),
             1
         );
+    }
+
+    #[test]
+    fn durable_context_recovery_rejects_local_execution_policy_drift() {
+        let (verified, keys) = verified_context();
+        let context = verified.context().clone();
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_for(&kura, context.chain_id.clone());
+        state.pipeline.overlay_max_bytes = state.pipeline.overlay_max_bytes.saturating_add(1);
+        let block = dummy_block(&keys[0], 1, None);
+        kura.store_block(block).expect("persist canonical block");
+        V2ContextStore::open(kura.sumeragi_v2_storage_root())
+            .expect("open context store")
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist active context");
+
+        assert!(matches!(
+            recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
+            Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn durable_context_recovery_rejects_local_autoscale_policy_drift() {
+        let (verified, keys) = verified_context();
+        let context = verified.context().clone();
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_for(&kura, context.chain_id.clone());
+        let mut nexus = state.nexus_snapshot();
+        nexus.autoscale.cooldown_blocks = NonZeroU16::new(
+            nexus
+                .autoscale
+                .cooldown_blocks
+                .get()
+                .checked_add(1)
+                .expect("fixture cooldown remains representable"),
+        )
+        .expect("fixture cooldown remains non-zero");
+        state
+            .set_nexus(nexus)
+            .expect("pre-genesis autoscale policy drift is structurally valid");
+        let block = dummy_block(&keys[0], 1, None);
+        kura.store_block(block).expect("persist canonical block");
+        V2ContextStore::open(kura.sumeragi_v2_storage_root())
+            .expect("open context store")
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist active context");
+
+        assert!(matches!(
+            recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
+            Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
+        ));
     }
 
     #[test]

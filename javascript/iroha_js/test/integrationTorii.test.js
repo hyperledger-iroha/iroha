@@ -182,7 +182,7 @@ test(
     assert.notEqual(metricsText.length, 0);
 
     const sumeragiStatus = await client.getSumeragiStatusTyped();
-    assert.equal(sumeragiStatus.protocol_version, 3);
+    assert.equal(sumeragiStatus.protocol_version, 4);
     assert.ok(sumeragiStatus.leader < sumeragiStatus.height_context.validator_count);
     assert.ok(Array.isArray(sumeragiStatus.committed_lane_blocks));
 
@@ -2359,14 +2359,8 @@ test(
       CONTRACT_CALL_OPTIONS.authority ??
       CONTRACT_CALL_OPTIONS.account ??
       AUTHORITY_ACCOUNT_ID;
-    const privateKeyHex =
-      CONTRACT_CALL_OPTIONS.privateKeyHex ??
-      CONTRACT_CALL_OPTIONS.private_key ??
-      PRIVATE_KEY_HEX;
-
     const request = {
       authority,
-      privateKey: privateKeyHex,
     };
     if (contractAddress) {
       request.contractAddress = contractAddress;
@@ -2403,10 +2397,10 @@ test(
 
     let response;
     try {
-      response = await client.callContract(request);
+      response = await client.prepareContractCall(request);
     } catch (error) {
       t.diagnostic(
-        `callContract failed: ${error instanceof Error ? error.message : String(error)}`,
+        `prepareContractCall failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       throw error;
     }
@@ -2418,19 +2412,16 @@ test(
         "contract call response must echo contract address",
       );
     }
-    assertHexString(response.tx_hash_hex, "contract call response.tx_hash_hex");
+    assert.equal(response.submitted, false);
+    assert.equal(response.tx_hash_hex, null);
+    assert.equal(
+      response.transaction_scaffold_b64,
+      response.signed_transaction_b64,
+      "contract call preparation must return one exact scaffold",
+    );
+    assert.ok(response.signing_message_b64);
     assertHexString(response.code_hash_hex, "contract call response.code_hash_hex");
     assertHexString(response.abi_hash_hex, "contract call response.abi_hash_hex");
-
-    const status = await client.waitForTransactionStatusTyped(response.tx_hash_hex, {
-      intervalMs: 1_000,
-      timeoutMs: 30_000,
-    });
-    assert.ok(status, "waitForTransactionStatusTyped must return a payload");
-    assert.ok(
-      SUCCESS_STATUSES.has(status.status),
-      `expected contract call to succeed but observed status=${status.status}`,
-    );
   },
 );
 
@@ -4904,7 +4895,7 @@ function assertSumeragiStatusEvent(event) {
     "sumeragi status event must expose a JSON payload",
   );
   const snapshot = event.data;
-  assert.equal(snapshot.protocol_version, 3, "sumeragi status event must use wire revision 3");
+  assert.equal(snapshot.protocol_version, 4, "sumeragi status event must use wire revision 4");
   assert.ok(
     snapshot.height_context && typeof snapshot.height_context === "object",
     "sumeragi status event must include height_context",

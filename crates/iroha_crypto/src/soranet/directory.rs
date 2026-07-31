@@ -69,7 +69,7 @@ impl GuardDirectorySnapshotV2 {
     /// Returns an error if decoding or intrinsic validation fails.
     pub fn inspect_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         let snapshot: Self = decode_from_bytes(bytes)?;
-        snapshot.validate(None)?;
+        snapshot.validate(None, false)?;
         Ok(snapshot)
     }
 
@@ -98,12 +98,24 @@ impl GuardDirectorySnapshotV2 {
             )));
         }
         let snapshot: Self = decode_from_bytes(bytes)?;
-        snapshot.validate(Some(at_unix))?;
+        snapshot.validate(Some(at_unix), true)?;
         Ok(snapshot)
     }
 
-    fn validate(&self, at_unix: Option<i64>) -> Result<(), norito::Error> {
+    fn validate(
+        &self,
+        at_unix: Option<i64>,
+        require_first_release_policy: bool,
+    ) -> Result<(), norito::Error> {
         let validation_phase = self.validate_header()?;
+        if require_first_release_policy
+            && validation_phase != CertificateValidationPhase::Phase3RequireDual
+        {
+            return Err(norito::Error::Message(format!(
+                "authenticated guard directory requires phase 3 dual signatures in the first release (got validation_phase {})",
+                self.validation_phase
+            )));
+        }
         if let Some(at_unix) = at_unix {
             self.validate_at(at_unix)?;
         }
@@ -551,7 +563,9 @@ mod tests {
             published_at_unix: 1_734_000_000,
             valid_after_unix: 1_734_000_000,
             valid_until_unix: 1_734_086_400,
-            validation_phase: encode_validation_phase(CertificateValidationPhase::Phase2PreferDual),
+            validation_phase: encode_validation_phase(
+                CertificateValidationPhase::Phase3RequireDual,
+            ),
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint,
                 ed25519_public,
@@ -791,6 +805,28 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_snapshot_rejects_pre_release_validation_phase() {
+        let mut snapshot = sample_snapshot();
+        snapshot.validation_phase =
+            encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
+        let bytes = snapshot.to_bytes().expect("serialize");
+        let digest = compute_snapshot_digest(&bytes);
+
+        GuardDirectorySnapshotV2::inspect_bytes(&bytes)
+            .expect("phase 2 remains available for structural diagnostics");
+        let err = GuardDirectorySnapshotV2::authenticate_bytes_at(
+            &bytes,
+            digest,
+            snapshot.valid_after_unix,
+        )
+        .expect_err("authenticated first-release snapshots must require dual signatures");
+        assert!(
+            err.to_string().contains("phase 3 dual signatures"),
+            "unexpected authentication error: {err}"
+        );
+    }
+
+    #[test]
     fn snapshot_rejects_unknown_validation_phase() {
         let mut snapshot = sample_snapshot();
         snapshot.validation_phase = 0;
@@ -924,7 +960,7 @@ mod tests {
         .expect("sample issuer fingerprint should compute");
         let bytes = snapshot.to_bytes().expect("serialize");
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
-            .expect_err("phase 2 requires ML-DSA-65 issuer key");
+            .expect_err("phase 3 requires ML-DSA-65 issuer key");
         assert!(err.to_string().contains("required"));
     }
 
@@ -939,6 +975,8 @@ mod tests {
     #[test]
     fn snapshot_phase2_accepts_single_signature_relay() {
         let mut snapshot = sample_snapshot();
+        snapshot.validation_phase =
+            encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
         mutate_first_relay_bundle(&mut snapshot, |bundle| {
             bundle.signatures.mldsa65 = None;
         });

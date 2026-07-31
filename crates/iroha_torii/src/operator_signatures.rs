@@ -19,14 +19,14 @@
 //! <nonce>
 //! ```
 //!
-//! Replay protection is enforced via a bounded in-memory nonce cache.
+//! Replay protection is enforced via a bounded in-memory nonce cache. Capacity
+//! pressure rejects new requests and never evicts a live nonce.
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::HashSet,
     fmt,
     num::NonZeroUsize,
-    sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -37,7 +37,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::peer::PeerId;
@@ -46,7 +45,11 @@ use rand::{
     rngs::OsRng,
 };
 
-use crate::{JsonBody, SharedAppState, canonical_request_message, json_entry, json_object};
+use crate::{
+    JsonBody, SharedAppState,
+    bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache},
+    canonical_request_message, json_entry, json_object,
+};
 
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
@@ -187,6 +190,14 @@ impl OperatorSignatureError {
         )
     }
 
+    fn replay_cache_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "operator_signature_replay_cache_unavailable",
+            "operator request replay protection is at capacity",
+        )
+    }
+
     fn bad_signature() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -260,68 +271,6 @@ impl IntoResponse for OperatorSignatureError {
     }
 }
 
-#[derive(Debug)]
-struct ReplayCache {
-    ttl: Duration,
-    capacity: NonZeroUsize,
-    // key -> expiry
-    entries: DashMap<String, Instant>,
-    // FIFO for bounded pruning; duplicates allowed.
-    order: Mutex<VecDeque<(String, Instant)>>,
-}
-
-impl ReplayCache {
-    fn new(ttl: Duration, capacity: NonZeroUsize) -> Self {
-        Self {
-            ttl: ttl.max(Duration::from_secs(1)),
-            capacity,
-            entries: DashMap::new(),
-            order: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    fn check_and_insert(&self, key: String) -> bool {
-        let now = Instant::now();
-        let expires_at = now + self.ttl;
-
-        match self.entries.entry(key.clone()) {
-            Entry::Occupied(mut occ) => {
-                if *occ.get() > now {
-                    return false;
-                }
-                occ.insert(expires_at);
-            }
-            Entry::Vacant(vac) => {
-                vac.insert(expires_at);
-            }
-        }
-
-        if let Ok(mut guard) = self.order.lock() {
-            guard.push_back((key, expires_at));
-            self.prune_locked(&mut guard, now);
-        }
-
-        true
-    }
-
-    fn prune_locked(&self, order: &mut VecDeque<(String, Instant)>, now: Instant) {
-        let cap = self.capacity.get();
-        while let Some((_key, expiry)) = order.front() {
-            if *expiry > now && order.len() <= cap {
-                break;
-            }
-            let (key, expiry) = order
-                .pop_front()
-                .expect("front is Some so pop_front must succeed");
-            // Avoid `DashMap` shard deadlocks: don't hold a read guard (`get`) while attempting
-            // a write lock (`remove`) on the same shard.
-            let _ = self
-                .entries
-                .remove_if(&key, |_k, existing| *existing == expiry);
-        }
-    }
-}
-
 /// Signature-based operator authentication state.
 pub struct OperatorSignatures {
     enabled: bool,
@@ -335,22 +284,49 @@ pub struct OperatorSignatures {
     max_body_bytes: usize,
 }
 
+/// Invalid relationship between operator-request freshness and replay retention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OperatorSignatureConfigError;
+
+impl fmt::Display for OperatorSignatureConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "operator signature nonce TTL must be greater than twice the maximum clock skew",
+        )
+    }
+}
+
+impl std::error::Error for OperatorSignatureConfigError {}
+
 /// Public key whose request signature was authenticated by the operator middleware.
 #[derive(Clone, Debug)]
 pub(crate) struct AuthenticatedOperatorPublicKey(pub PublicKey);
 
 impl OperatorSignatures {
+    /// Build operator-signature authentication with a replay-safe freshness window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when nonce retention does not cover the complete
+    /// accepted timestamp-skew window.
     pub fn new(
         config: ToriiOperatorSignatures,
         node_public_key: PublicKey,
         max_body_bytes: u64,
         _telemetry: crate::routing::MaybeTelemetry,
-    ) -> Self {
+    ) -> Result<Self, OperatorSignatureConfigError> {
+        let replay_window = config
+            .max_clock_skew
+            .checked_mul(2)
+            .ok_or(OperatorSignatureConfigError)?;
+        if config.nonce_ttl <= replay_window {
+            return Err(OperatorSignatureConfigError);
+        }
         let max_body_bytes = usize::try_from(max_body_bytes).unwrap_or(usize::MAX);
         let nonce_ttl = config.nonce_ttl;
         let replay_cache_capacity = config.replay_cache_capacity;
         let allowed_public_keys = config.allowed_public_keys.into_iter().collect();
-        Self {
+        Ok(Self {
             enabled: config.enabled,
             allow_node_key: config.allow_node_key,
             allowed_public_keys,
@@ -360,7 +336,7 @@ impl OperatorSignatures {
             identity_bound_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
             torii_proxy_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
             max_body_bytes,
-        }
+        })
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -461,10 +437,13 @@ impl OperatorSignatures {
         public_key: &PublicKey,
     ) -> Result<(), OperatorSignatureError> {
         let replay_key = format!("{public_key}:{nonce}");
-        if !replay_cache.check_and_insert(replay_key) {
-            return Err(OperatorSignatureError::replay());
+        match replay_cache.check_and_insert(replay_key) {
+            Ok(()) => Ok(()),
+            Err(ReplayInsertError::Replay) => Err(OperatorSignatureError::replay()),
+            Err(ReplayInsertError::Capacity | ReplayInsertError::LifetimeOverflow) => {
+                Err(OperatorSignatureError::replay_cache_unavailable())
+            }
         }
-        Ok(())
     }
 
     fn operator_request_message(
@@ -977,6 +956,7 @@ mod tests {
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
+        .expect("valid operator-signature test config")
     }
 
     #[test]
@@ -990,6 +970,25 @@ mod tests {
                 "IrohaOperatorSignature realm=\"torii\""
             ))
         );
+    }
+
+    #[test]
+    fn operator_signatures_reject_short_nonce_retention() {
+        let key_pair = checked_ed25519_keypair();
+        let mut config = ToriiOperatorSignatures::default();
+        config.max_clock_skew = Duration::from_secs(60);
+        config.nonce_ttl = Duration::from_secs(120);
+
+        let error = match OperatorSignatures::new(
+            config,
+            key_pair.public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        ) {
+            Ok(_) => panic!("nonce retention must cover the full skew window"),
+            Err(error) => error,
+        };
+        assert_eq!(error, OperatorSignatureConfigError);
     }
 
     fn signed_headers_with_nonce(
@@ -1065,7 +1064,8 @@ mod tests {
             key_pair.public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration".parse().unwrap();
         let body = b"{}";
         let ts = OperatorSignatures::now_unix_ms();
@@ -1504,6 +1504,51 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_capacity_pressure_preserves_live_operator_nonces() {
+        let key_pair = checked_ed25519_keypair();
+        let auth = operator_signatures_with_capacity(&key_pair, 2);
+        let uri: crate::Uri = "/v1/configuration".parse().expect("valid URI");
+        let body = b"{}";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let protected_headers = ["protected-a", "protected-b"].map(|nonce| {
+            signed_headers_with_nonce(
+                &key_pair,
+                &crate::Method::POST,
+                &uri,
+                body,
+                timestamp_ms,
+                nonce,
+            )
+        });
+
+        for headers in &protected_headers {
+            auth.authorize_bytes(headers, &crate::Method::POST, &uri, body)
+                .expect("initial authenticated nonce use");
+        }
+
+        let overflow = signed_headers_with_nonce(
+            &key_pair,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "overflow",
+        );
+        let error = auth
+            .authorize_bytes(&overflow, &crate::Method::POST, &uri, body)
+            .expect_err("full replay cache must reject a new nonce");
+        assert_eq!(error.code, "operator_signature_replay_cache_unavailable");
+        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+
+        for headers in &protected_headers {
+            let replay = auth
+                .authorize_bytes(headers, &crate::Method::POST, &uri, body)
+                .expect_err("capacity pressure must preserve authenticated nonces");
+            assert_eq!(replay.code, "operator_signature_replay");
+        }
+    }
+
+    #[test]
     fn concurrent_valid_requests_with_same_nonce_have_one_winner() {
         const WORKERS: usize = 16;
 
@@ -1569,7 +1614,8 @@ mod tests {
             checked_ed25519_keypair().public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
 
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
@@ -1596,7 +1642,8 @@ mod tests {
             checked_ed25519_keypair().public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
 
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
@@ -1623,7 +1670,8 @@ mod tests {
             checked_ed25519_keypair().public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
         let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
@@ -1659,7 +1707,8 @@ mod tests {
             checked_ed25519_keypair().public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
 
@@ -1713,7 +1762,8 @@ mod tests {
             checked_ed25519_keypair().public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
 
@@ -1772,7 +1822,8 @@ mod tests {
             key_pair.public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid operator-signature test config");
         let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION.parse().unwrap();
         let headers = signed_request_headers(&key_pair, &crate::Method::GET, &uri, &[])
             .expect("operator signature headers");
@@ -1824,12 +1875,15 @@ mod tests {
         cfg.enabled = false;
         Arc::get_mut(&mut app)
             .expect("unique app state required")
-            .operator_signatures = Arc::new(OperatorSignatures::new(
-            cfg,
-            node_public_key,
-            iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.get(),
-            telemetry,
-        ));
+            .operator_signatures = Arc::new(
+            OperatorSignatures::new(
+                cfg,
+                node_public_key,
+                iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.get(),
+                telemetry,
+            )
+            .expect("valid operator-signature test config"),
+        );
         assert!(!app.operator_signatures.is_enabled());
 
         let operator_layer = axum::middleware::from_fn_with_state::<

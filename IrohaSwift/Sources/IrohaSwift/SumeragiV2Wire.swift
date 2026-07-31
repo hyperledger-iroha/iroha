@@ -177,6 +177,38 @@ public struct SumeragiV2BlockSubject: Equatable, Sendable {
     }
 }
 
+/// Exact merge-ledger entry identity authenticated by global finality.
+public struct SumeragiV2MergeCarrierCommitment: Equatable, Sendable {
+    public static let canonicalVersion: UInt16 = 1
+
+    public let version: UInt16
+    public let entryHash: SumeragiV2Hash
+
+    public init(version: UInt16 = Self.canonicalVersion, entryHash: SumeragiV2Hash) throws {
+        guard version == Self.canonicalVersion else {
+            throw SumeragiV2WireError.invalid(
+                "merge-carrier commitment has an unsupported version"
+            )
+        }
+        self.version = version
+        self.entryHash = entryHash
+    }
+
+    public func encode() -> Data {
+        sumeragiV2Struct(sumeragiV2U16(version), entryHash.bytes)
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            version: sumeragiV2DecodeU16(reader.field("merge carrier version")),
+            entryHash: SumeragiV2Hash(reader.field("merge carrier entry hash"))
+        )
+        try reader.finish("merge carrier commitment")
+        return value
+    }
+}
+
 /// Deterministic state-transition commitment authenticated by consensus votes.
 public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     /// Maximum number of Kagemusha top-up anchors committed by one block.
@@ -194,6 +226,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: SumeragiV2Hash
     public let nativeAmxApplicationManifestCount: UInt32
+    public let mergeCarrier: SumeragiV2MergeCarrierCommitment?
+    public let executedBlockWireLen: UInt64
     public let executedBlockWireHash: SumeragiV2Hash
 
     public init(
@@ -205,6 +239,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         nativeAmxApplicationManifestVersion: UInt16,
         nativeAmxApplicationManifestRoot: SumeragiV2Hash,
         nativeAmxApplicationManifestCount: UInt32,
+        mergeCarrier: SumeragiV2MergeCarrierCommitment? = nil,
+        executedBlockWireLen: UInt64,
         executedBlockWireHash: SumeragiV2Hash
     ) throws {
         guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil) else {
@@ -246,6 +282,11 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
                 "execution commitment Native AMX application-manifest count and root disagree"
             )
         }
+        guard executedBlockWireLen != 0 else {
+            throw SumeragiV2WireError.invalid(
+                "execution commitment executed block wire length must be non-zero"
+            )
+        }
 
         self.parentStateRoot = parentStateRoot
         self.postStateRoot = postStateRoot
@@ -255,6 +296,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         self.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion
         self.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot
         self.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount
+        self.mergeCarrier = mergeCarrier
+        self.executedBlockWireLen = executedBlockWireLen
         self.executedBlockWireHash = executedBlockWireHash
     }
 
@@ -268,6 +311,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             sumeragiV2U16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes,
             sumeragiV2U32(nativeAmxApplicationManifestCount),
+            sumeragiV2Option(mergeCarrier?.encode()),
+            sumeragiV2U64(executedBlockWireLen),
             executedBlockWireHash.bytes
         )
     }
@@ -295,6 +340,13 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ),
             nativeAmxApplicationManifestCount: sumeragiV2DecodeU32(
                 reader.field("execution commitment Native AMX application-manifest count")
+            ),
+            mergeCarrier: sumeragiV2DecodeOption(
+                reader.field("execution commitment merge carrier"),
+                decode: SumeragiV2MergeCarrierCommitment.decode
+            ),
+            executedBlockWireLen: sumeragiV2DecodeU64(
+                reader.field("execution commitment executed block wire length")
             ),
             executedBlockWireHash: SumeragiV2Hash(
                 reader.field("execution commitment executed block wire hash")
@@ -1244,7 +1296,7 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
 
 /// Explicitly versioned live-consensus envelope.
 public struct SumeragiV2ConsensusMessage: Equatable, Sendable {
-    public static let protocolVersion: UInt16 = 3
+    public static let protocolVersion: UInt16 = 4
 
     public let version: UInt16
     public let payload: SumeragiV2ConsensusPayload

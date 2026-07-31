@@ -78,23 +78,38 @@ pub use norito_types::{
 };
 pub use transcript::Transcript;
 
-/// Optional resource limits for standalone `OpenVerifyEnvelope` decoding.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// Resource limits for standalone `OpenVerifyEnvelope` decoding.
+///
+/// Limits are always finite. Runtime callers should construct this value from
+/// their configured ZK policy; convenience APIs use the conservative V1
+/// defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OpenVerifyLimits {
     /// Maximum allowed circuit/domain size exponent (`n <= 2^max_k`).
-    pub max_k: Option<u32>,
+    max_k: u32,
     /// Maximum allowed transcript label length in bytes.
-    pub max_transcript_label_len: Option<usize>,
+    max_transcript_label_len: usize,
 }
 
 impl OpenVerifyLimits {
-    /// Returns an unbounded limit set.
+    /// Conservative V1 circuit/domain size exponent ceiling.
+    pub const DEFAULT_MAX_K: u32 = 16;
+    /// Conservative V1 transcript-label byte ceiling.
+    pub const DEFAULT_MAX_TRANSCRIPT_LABEL_LEN: usize = 64;
+
+    /// Creates an explicit finite limit set.
     #[must_use]
-    pub const fn unbounded() -> Self {
+    pub const fn new(max_k: u32, max_transcript_label_len: usize) -> Self {
         Self {
-            max_k: None,
-            max_transcript_label_len: None,
+            max_k,
+            max_transcript_label_len,
         }
+    }
+}
+
+impl Default for OpenVerifyLimits {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_MAX_K, Self::DEFAULT_MAX_TRANSCRIPT_LABEL_LEN)
     }
 }
 
@@ -135,13 +150,6 @@ pub mod norito_helpers {
         w: &IpaParams,
     ) -> Result<Arc<crate::params::Params<B>>, Error> {
         crate::params::params_from_wire_backend::<B>(w)
-    }
-
-    /// Register a parameter set so that subsequent decodes recognize it.
-    pub fn register_params_from_wire<B: IpaBackend + 'static>(
-        w: &IpaParams,
-    ) -> Result<Arc<crate::params::Params<B>>, Error> {
-        crate::params::register_params_from_wire::<B>(w)
     }
 
     /// Encode an IPA proof for transport.
@@ -215,7 +223,7 @@ pub mod norito_helpers {
 
     /// Decode and dispatch a polynomial opening envelope according to its backend.
     pub fn decode_envelope(env: &OpenVerifyEnvelope) -> Result<DecodedEnvelope, Error> {
-        decode_envelope_with_limits(env, OpenVerifyLimits::unbounded())
+        decode_envelope_with_limits(env, OpenVerifyLimits::default())
     }
 
     /// Decode and dispatch a polynomial opening envelope with explicit resource limits.
@@ -250,58 +258,54 @@ pub mod norito_helpers {
         env: &OpenVerifyEnvelope,
         limits: OpenVerifyLimits,
     ) -> Result<(), Error> {
-        if let Some(max) = limits.max_transcript_label_len {
-            let actual = env.transcript_label.len();
-            if actual > max {
-                return Err(Error::EnvelopeLimitExceeded {
-                    limit: "transcript_label_len",
-                    max,
-                    actual,
-                });
-            }
+        let actual = env.transcript_label.len();
+        if actual > limits.max_transcript_label_len {
+            return Err(Error::EnvelopeLimitExceeded {
+                limit: "transcript_label_len",
+                max: limits.max_transcript_label_len,
+                actual,
+            });
         }
-        if let Some(max_k) = limits.max_k {
-            let max_n = if max_k >= usize::BITS {
-                usize::MAX
-            } else {
-                1usize << max_k
-            };
-            let actual = env.params.n as usize;
+        let max_n = if limits.max_k >= usize::BITS {
+            usize::MAX
+        } else {
+            1usize << limits.max_k
+        };
+        let actual = env.params.n as usize;
+        if actual > max_n {
+            return Err(Error::EnvelopeLimitExceeded {
+                limit: "max_k",
+                max: max_n,
+                actual,
+            });
+        }
+        for (limit, actual) in [
+            ("params_g_len", env.params.g.len()),
+            ("params_h_len", env.params.h.len()),
+        ] {
             if actual > max_n {
                 return Err(Error::EnvelopeLimitExceeded {
-                    limit: "max_k",
+                    limit,
                     max: max_n,
                     actual,
                 });
             }
-            for (limit, actual) in [
-                ("params_g_len", env.params.g.len()),
-                ("params_h_len", env.params.h.len()),
-            ] {
-                if actual > max_n {
-                    return Err(Error::EnvelopeLimitExceeded {
-                        limit,
-                        max: max_n,
-                        actual,
-                    });
-                }
-            }
-            let max_rounds = if max_k >= usize::BITS {
-                usize::MAX
-            } else {
-                max_k as usize
-            };
-            for (limit, actual) in [
-                ("proof_l_rounds", env.proof.l.len()),
-                ("proof_r_rounds", env.proof.r.len()),
-            ] {
-                if actual > max_rounds {
-                    return Err(Error::EnvelopeLimitExceeded {
-                        limit,
-                        max: max_rounds,
-                        actual,
-                    });
-                }
+        }
+        let max_rounds = if limits.max_k >= usize::BITS {
+            usize::MAX
+        } else {
+            limits.max_k as usize
+        };
+        for (limit, actual) in [
+            ("proof_l_rounds", env.proof.l.len()),
+            ("proof_r_rounds", env.proof.r.len()),
+        ] {
+            if actual > max_rounds {
+                return Err(Error::EnvelopeLimitExceeded {
+                    limit,
+                    max: max_rounds,
+                    actual,
+                });
             }
         }
         Ok(())
@@ -442,7 +446,7 @@ pub mod norito_helpers {
     > {
         derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
             env,
-            OpenVerifyLimits::unbounded(),
+            OpenVerifyLimits::default(),
         )
     }
 
@@ -744,7 +748,7 @@ pub mod batch {
         envelopes: &[OpenVerifyEnvelope],
         options: &BatchOptions,
     ) -> Vec<Result<bool, Error>> {
-        verify_open_batch_with_limits(envelopes, options, OpenVerifyLimits::unbounded())
+        verify_open_batch_with_limits(envelopes, options, OpenVerifyLimits::default())
     }
 
     /// Verify multiple `OpenVerifyEnvelope`s with explicit resource limits.

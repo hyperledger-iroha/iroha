@@ -156,6 +156,23 @@ export function buildBrowserInstructionTransactionPayload(
   input: BrowserInstructionTransactionInput,
 ): Uint8Array;
 
+export function buildBrowserVerifyingKeyTransactionPayload(
+  input: BrowserInstructionTransactionInput,
+  operation: "register" | "update",
+): Uint8Array;
+
+export function decodeCanonicalVerifyingKeyTransactionPayload(
+  payloadBytes: BrowserTransactionBytes,
+  constraints: {
+    expectedChainId: string;
+    expectedAuthority: string;
+    operation: "register" | "update";
+  },
+): {
+  id: { backend: string; name: string };
+  record: Record<string, unknown>;
+};
+
 export function buildBrowserExecutableBatchPayload(
   input: BrowserExecutableBatchInput,
 ): Uint8Array;

@@ -10233,7 +10233,7 @@ def test_liveness_ownership_source_seal_requires_runtime_predecessor_theorems(
     assert any(expected_error in error for error in errors), errors
 
 
-def test_liveness_ownership_runner_rejects_nonzero_state_helper_deletion(
+def test_liveness_ownership_runner_rejects_mutation_failure_contract_deletion(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -10242,12 +10242,10 @@ def test_liveness_ownership_runner_rejects_nonzero_state_helper_deletion(
     )
     runner = repo_root / module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
     source = runner.read_text(encoding="utf-8")
-    helper_start = source.index("assert_nonzero_state_space() {")
-    helper_end = source.index("\n\nrun_case() {", helper_start)
-    runner.write_text(
-        source[:helper_start] + source[helper_end + 2 :],
-        encoding="utf-8",
-    )
+    old = "assert_mutation_failure_contract() {"
+    new = "weakened_mutation_failure_contract() {"
+    assert source.count(old) == 1
+    runner.write_text(source.replace(old, new, 1), encoding="utf-8")
     module.LIVENESS_OWNERSHIP_MUTATION_SHA256[
         module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
     ] = hashlib.sha256(runner.read_bytes()).hexdigest()
@@ -10257,8 +10255,7 @@ def test_liveness_ownership_runner_rejects_nonzero_state_helper_deletion(
     )
 
     assert any(
-        "must retain one exact nonzero state-space helper before run_case"
-        in error
+        "mutation-failure contract before run_case and the case matrices" in error
         for error in errors
     ), errors
 
@@ -10267,30 +10264,24 @@ def test_liveness_ownership_runner_rejects_nonzero_state_helper_deletion(
     ("old", "new", "expected_error"),
     (
         (
-            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-            "|| true)\"\n",
-            "  state_line=\"$(grep -E 'states generated, .* distinct states "
-            "found' \"$log\" | tail -n 1 || true)\"\n",
-            "exact TLC state-summary parser",
+            'source "$TLC_RESULT_CONTRACT"',
+            "true # shared contract removed",
+            "shared TLC result-contract source",
         ),
         (
-            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-            "|| true)\"\n",
-            '  state_line=""\n',
-            "exact TLC state-summary parser",
+            '    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"',
+            "    true",
+            "shared fixed-success assertion",
         ),
         (
-            "  if ((generated <= 0 || distinct <= 0)); then",
-            "  if ((generated < 0 || distinct < 0)); then",
-            "reject generated or distinct TLC state counts less than or "
-            "equal to zero",
+            '    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "    true",
+            "shared nonzero state-space assertion",
         ),
         (
-            '  assert_nonzero_state_space "$label" "$log"\n',
-            "",
-            "invoke the nonzero state-space helper exactly once per TLC case",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "    true",
+            "shared terminal-footer assertion",
         ),
         (
             'run_case "$label" "$model" "$config" 12 \\\n',
@@ -10374,9 +10365,11 @@ def test_liveness_ownership_runner_rejects_nonzero_state_helper_deletion(
             "temporal liveness mutation matrix must equal",
         ),
         (
-            "all 63 invariant and 1 temporal liveness-ownership mutations "
-            "produced their exact named counterexamples; repaired models passed",
-            "all liveness-ownership cases passed",
+            'echo "[tlc] all ${#mutation_cases[@]} invariant and '
+            '${#temporal_mutation_cases[@]} temporal liveness-ownership '
+            "mutations produced their exact named counterexamples; all "
+            '${#fixed_cases[@]} repaired models passed"',
+            'echo "[tlc] liveness-ownership cases passed"',
             "exact mutation completion marker",
         ),
     ),
@@ -11125,23 +11118,22 @@ def test_serve_scheduler_ordinal_model_rank_dependency_and_config_mutations_fail
             "exact mutant completion summary",
         ),
         (
-            "readonly TLC_FINISHED_PATTERN='^Finished in "
-            "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-            "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-            "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-            "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-            "readonly TLC_FINISHED_PATTERN='.*'",
-            "exact TLC terminal-marker pattern",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            "true # shared contract removed",
+            "shared TLC result-contract binding",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" -ge 0 ]]',
-            "single TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "    true",
+            "shared mutant terminal-footer assertion",
         ),
         (
-            'for marker in "Temporal properties were violated." "Stuttering"; do',
-            'for marker in "Temporal properties were violated."; do',
-            "exact temporal lasso markers",
+            'sumeragi_v2_tlc_assert_exact_line \\\n'
+            '    "Serve scheduler lasso" "$log" \\\n'
+            '    "Error: Temporal properties were violated."',
+            "true",
+            "shared exact temporal-primary assertion",
         ),
         (
             '[[ "$(grep -Fxc "$SANY_SUCCESS_MARKER" '
@@ -11542,9 +11534,9 @@ def test_commit_import_provenance_model_and_config_mutations_fail_closed(
             "status-12 successor-origin counterexample",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" -ge 0 ]]',
-            "single TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "    true",
+            "shared final TLC terminal check",
         ),
     ),
 )
@@ -11871,9 +11863,16 @@ def test_indexed_service_activation_model_and_config_mutations_fail_closed(
             "invariant/liveness non-interchangeability check",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" -ge 0 ]]',
-            "single TLC terminal-marker check",
+            "assert_unique_primary_diagnostic \\\n"
+            '  "unjoined-clock-owner" "$unjoined_clock_log" \\\n'
+            '  "Error: Temporal properties were violated."',
+            "true",
+            "exact liveness primary diagnostic",
+        ),
+        (
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "    true",
+            "shared final TLC terminal check",
         ),
     ),
 )
@@ -12240,9 +12239,9 @@ def test_historical_discovery_occurrence_rank_seal_rejects_inventory_drift(
             "retained stronger negative control",
         ),
         (
-            'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-            "true",
-            "final TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "    true",
+            "shared final TLC terminal check",
         ),
         (
             'echo "[tlc] exact terminal contract passed; '

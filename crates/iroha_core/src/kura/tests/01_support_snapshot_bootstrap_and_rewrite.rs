@@ -548,10 +548,11 @@
                 hardware_assertion:
                     iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
                         iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
-                            signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
-                                &[1_u8; 64],
-                            )
-                            .expect("fixture hardware signature"),
+                            signature:
+                                iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                                    &[1_u8; 64],
+                                )
+                                .expect("fixture hardware signature"),
                         },
                     ),
             },
@@ -821,6 +822,7 @@
             .expect("store reservation genesis");
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store reservation merge carrier");
+        let _ = persist_v2_finality_chain_through(kura, nonzero!(2_usize));
         let frame = kura.merge_log.lock().frames_by_epoch[&1];
         (transaction_hash, reservation, frame)
     }
@@ -848,6 +850,7 @@
             Hash::new(b"kura finality ordinary writes"),
             None,
             0,
+            1,
             Hash::new(b"Kura fixture executed block wire placeholder"),
         )
         .expect("canonical Kura finality fixture execution commitment")
@@ -857,7 +860,31 @@
         block: &SignedBlock,
         parent: Option<&V2FinalityArtifact>,
         keypairs: &[KeyPair],
+        execution_commitment: ExecutionCommitment,
+    ) -> V2FinalityArtifact {
+        let merge_carrier = block
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref())
+            .map(|reference| {
+                iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                    reference.entry_hash,
+                )
+            });
+        v2_finality_artifact_for_block_with_keys_and_merge_carrier(
+            block,
+            parent,
+            keypairs,
+            execution_commitment,
+            merge_carrier,
+        )
+    }
+
+    fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
+        block: &SignedBlock,
+        parent: Option<&V2FinalityArtifact>,
+        keypairs: &[KeyPair],
         mut execution_commitment: ExecutionCommitment,
+        merge_carrier: Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>,
     ) -> V2FinalityArtifact {
         let roster = keypairs
             .iter()
@@ -885,6 +912,7 @@
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -895,10 +923,11 @@
             },
             leader_seed: [0x42; 32],
         };
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
-            .expect("canonical executed block wire");
-        execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
+        let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
+        execution_commitment.executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        execution_commitment.executed_block_wire_hash = Hash::new(&executed_block_wire);
+        execution_commitment.merge_carrier = merge_carrier;
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
@@ -996,6 +1025,27 @@
                 v2_finality_fixture_execution_commitment(),
             );
             artifacts.push(artifact);
+        }
+        artifacts
+    }
+
+    pub(super) fn persist_v2_finality_chain_through(
+        kura: &Kura,
+        height: NonZeroUsize,
+    ) -> Vec<V2FinalityArtifact> {
+        let blocks = (1..=height.get())
+            .map(|height| {
+                kura.get_block_without_merge_sidecar(
+                    NonZeroUsize::new(height).expect("fixture height is non-zero"),
+                )
+                .expect("fixture canonical block body is available")
+            })
+            .collect::<Vec<_>>();
+        let artifacts = v2_finality_artifacts_for_chain(&blocks);
+        for artifact in &artifacts {
+            let _ = kura
+                .store_v2_finality_artifact(artifact)
+                .expect("persist exact fixture finality chain");
         }
         artifacts
     }
@@ -1158,11 +1208,11 @@
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(Hash::new(
+        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(1, Hash::new(
             b"Kura top-up fixture executed block wire placeholder",
         ));
         let commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness, &manifest)
+            crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
                 .expect("derive top-up execution commitment");
         (witness, commitment)
     }
@@ -1201,11 +1251,11 @@
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(Hash::new(
+        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(1, Hash::new(
             b"Kura receiver-only fixture executed block wire placeholder",
         ));
         let commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness, &manifest)
+            crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
                 .expect("derive receiver-only execution commitment");
         (witness, commitment)
     }
@@ -1477,6 +1527,9 @@
         let anchor_digest = [0x5B; 32];
         let (witness, mut execution_commitment) =
             kagemusha_topup_witness(operation_id, anchor_digest);
+        execution_commitment.executed_block_wire_len =
+            u64::try_from(block.encode_wire().expect("canonical top-up fixture wire").len())
+                .expect("canonical top-up fixture wire length fits u64");
         execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical top-up fixture executed wire");
@@ -1548,6 +1601,9 @@
         let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent Kura");
         let block = DummyBlocks::new().next();
         let (witness, mut execution_commitment) = kagemusha_topup_witness([0xC1; 32], [0xC2; 32]);
+        execution_commitment.executed_block_wire_len =
+            u64::try_from(block.encode_wire().expect("canonical receiver fixture wire").len())
+                .expect("canonical receiver fixture wire length fits u64");
         execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical receiver fixture executed wire");
@@ -1591,6 +1647,9 @@
         let block = DummyBlocks::new().next();
         let operation_id = [0xA5; 32];
         let (witness, mut execution_commitment) = kagemusha_topup_witness(operation_id, [0x5B; 32]);
+        execution_commitment.executed_block_wire_len =
+            u64::try_from(block.encode_wire().expect("canonical top-up fixture wire").len())
+                .expect("canonical top-up fixture wire length fits u64");
         execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical top-up fixture executed wire");
@@ -1661,6 +1720,13 @@
         let block = DummyBlocks::new().next();
         let (receiver_witness, mut execution_commitment) =
             kagemusha_receiver_only_witness(block.header().height().get(), 1);
+        execution_commitment.executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("canonical receiver-only fixture wire")
+                .len(),
+        )
+        .expect("canonical receiver-only fixture wire length fits u64");
         execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical receiver-only fixture executed wire");
@@ -2182,12 +2248,9 @@
                 .expect("build bridge bundle from verified Kura finality");
             assert_eq!(bundle.finality_proof.finality_artifact, artifact);
             assert!(
-                crate::bridge::validated_sccp_finalized_messages_at_height(
-                    &state,
-                    artifact.height,
-                )
-                .expect("build SCCP finality projection from verified Kura finality")
-                .is_none(),
+                crate::bridge::validated_sccp_finalized_messages_at_height(&state, artifact.height,)
+                    .expect("build SCCP finality projection from verified Kura finality")
+                    .is_none(),
                 "a block without an SCCP commitment has no finalized SCCP projection"
             );
         }
@@ -2258,6 +2321,7 @@
                 Hash::new(b"conflicting Kura finality parent state"),
                 Hash::new(b"conflicting Kura finality post state"),
                 Hash::new(b"conflicting Kura finality ordinary writes"),
+                1,
                 Hash::new(b"conflicting Kura finality executed block wire"),
             ),
         );
@@ -2402,6 +2466,39 @@
                 .expect("decode canonical private finality envelope");
             record.format_version = KURA_V2_FINALITY_RECORD_VERSION.saturating_add(1);
             fs::write(&path, record.encode()).expect("write unsupported private-record version");
+
+            assert!(matches!(
+                kura.v2_finality_artifact(1),
+                Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
+            ));
+        }
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
+        ));
+    }
+
+    #[test]
+    fn canonical_finality_path_rejects_legacy_v2_private_record_on_read_and_restart() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let block = store_dummy_block_arcs(&kura, 1)
+                .pop()
+                .expect("canonical block");
+            let artifact = v2_finality_artifact_for_block(block.as_ref());
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("persist canonical private finality envelope");
+            let path = kura.v2_finality_artifact_path(1);
+            let bytes = fs::read(&path).expect("read canonical private finality envelope");
+            let mut input = bytes.as_slice();
+            let mut record = KuraV2FinalityRecord::decode_all(&mut input)
+                .expect("decode canonical private finality envelope");
+            record.format_version = 2;
+            fs::write(&path, record.encode()).expect("write legacy v2 private record");
 
             assert!(matches!(
                 kura.v2_finality_artifact(1),
@@ -2883,4 +2980,3 @@
         );
         assert!(!reopened.retained_block_record_path(1).exists());
     }
-

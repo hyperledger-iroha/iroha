@@ -2660,6 +2660,7 @@
             quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -2691,6 +2692,8 @@
                 Hash::new(b"Torii SCCP exact-v2 parent state"),
                 Hash::new(b"Torii SCCP exact-v2 post state"),
                 Hash::new(b"Torii SCCP exact-v2 ordinary writes"),
+                u64::try_from(block.encode_wire().expect("exact block wire").len())
+                    .expect("exact block wire length fits u64"),
                 block
                     .executed_block_wire_hash()
                     .expect("hash exact SCCP fixture block wire"),
@@ -2818,4 +2821,3 @@
         };
         assert!(message.contains("retained destination binding"));
     }
-

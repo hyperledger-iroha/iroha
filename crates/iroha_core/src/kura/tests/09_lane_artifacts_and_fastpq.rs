@@ -480,6 +480,7 @@
         let (kura, BlockCount(count)) =
             Kura::new(&config, &lane_config).expect("restart repairs committed association");
         assert_eq!(count, 2);
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         let artifact = kura
             .read_lane_block_artifact(lane_id, lane_block_height)
             .expect("the committed carrier retains its lane artifact");

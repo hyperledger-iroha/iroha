@@ -55,6 +55,7 @@ fn context() -> HeightContext {
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
         roster,
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+        execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
             encoding: PayloadEncoding::Plain,
             chunk_size_bytes: 4,
@@ -90,6 +91,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
         Hash::new([seed, 5]),
         None,
         0,
+        1,
         Hash::new([seed, 6]),
     )
     .expect("canonical fixture execution commitment")

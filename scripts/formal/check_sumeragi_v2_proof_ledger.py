@@ -27367,17 +27367,19 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
     if (
         len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 0
         or len(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) != 38
+        or len(_TYPED_ROLLOVER_LIVENESS_HELPER_PROVED_THEOREMS) != 96
         or len(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS) != 0
         or len(
             set(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS)
             | set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+            | set(_TYPED_ROLLOVER_LIVENESS_HELPER_PROVED_THEOREMS)
             | set(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
         )
-        != 38
+        != 134
     ):
         errors.append(
             "internal typed rollover proof inventory must contain exactly "
-            "38 proved and zero proofless theorem declarations"
+            "134 proved and zero proofless theorem declarations"
         )
     for name, expected_sha256 in (
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256.items()
@@ -28057,7 +28059,6 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         model,
         "ResponsiveDurableExactOutputRolloverLiveness",
         (
-            "ResponsiveDurableExactOutputSpec",
             "state.finalityValidated",
             "~> DurableExactOutputSuccessorActiveWithoutRestart",
         ),
@@ -28066,7 +28067,6 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         model,
         "ResponsiveRestartRestoreRolloverLiveness",
         (
-            "ResponsiveRestartRestoreSpec",
             "state.restartRequired",
             "~> RestartRestoreSuccessorActiveWithoutRestart",
         ),
@@ -28146,7 +28146,9 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
     proofless_theorems = set(
         _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS
     ) | set(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
-    proved_theorems = set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+    proved_theorems = set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) | set(
+        _TYPED_ROLLOVER_LIVENESS_HELPER_PROVED_THEOREMS
+    )
     expected_theorems = proofless_theorems | proved_theorems
     if proofs_source is not None:
         path = formal_dir / proofs_name
@@ -39446,7 +39448,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "ProducerEpisodeBudget = 5 RuntimeCycleBudget = 2 "
             "DeferredNormalCapacity = 1 "
             "DeferredProgressCapacity = 1 CompletionReserve = 1 "
-            "IoAuxCapacity = 1 IoWorkCapacity = 1 "
+            "IoAuxCapacity = 1 IoWorkCapacity = 1 CHECK_DEADLOCK FALSE "
             "INVARIANT TypeInvariant INVARIANT "
             "PhysicalWindowBudgetCoversIndependentLanesAndCursorResets"
         ),
@@ -39532,7 +39534,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
 
     exact_action_credit_configs = {
         "fixed_corridor_action_credit_fixed.cfg": (
-            'SPECIFICATION Spec CONSTANT MutationMode = "Cumulative" '
+            'SPECIFICATION Spec CONSTANT MutationMode = "Cumulative" CHECK_DEADLOCK FALSE '
             "INVARIANT TypeInvariant INVARIANT "
             "ExactSuccessorHandoffStrictlyConsumesCumulativeActionDebt"
         ),
@@ -39633,7 +39635,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     exact_pipeline_budget_configs = {
         "proposal_pipeline_budget_fixed.cfg": (
             'SPECIFICATION Spec CONSTANTS MutationMode = "Product" '
-            "ValidatorCount = 1 ChunkCount = 1 PhysicalEpisodeBudget = 1 "
+            "ValidatorCount = 1 ChunkCount = 1 PhysicalEpisodeBudget = 1 CHECK_DEADLOCK FALSE "
             "INVARIANT TypeInvariant INVARIANT "
             "PipelineBudgetCoversEveryCrossSlotEpisode"
         ),
@@ -39676,7 +39678,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 "/\\ receiptDeadline = 13 /\\ now = IF DeadlineMode = "
                 '"AcceptExpiredReceipt" THEN 14 ELSE 0 /\\ stage = 6 '
                 "/\\ stageDue = IF DeadlineMode = "
-                '"AcceptExpiredReceipt" THEN 14 ELSE 2 /\\ ~decided'
+                '"AcceptExpiredReceipt" THEN 14 ELSE 2 /\\ decided = FALSE'
             ),
             "ReceiptActive": (
                 "/\\ stage \\in 1..6 /\\ IF DeadlineMode = "
@@ -39685,9 +39687,9 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             ),
             "ServiceCommitQcStage": (
                 "/\\ ~decided /\\ stage \\in 1..6 /\\ now >= stageDue "
-                "/\\ IF stage = 1 THEN /\\ stage' = 0 /\\ decided' "
+                "/\\ IF stage = 1 THEN /\\ stage' = 0 /\\ decided' = TRUE "
                 "/\\ stageDue' = stageDue ELSE /\\ stage' = stage - 1 "
-                "/\\ ~decided' /\\ stageDue' = now + IF DeadlineMode = "
+                "/\\ decided' = FALSE /\\ stageDue' = now + IF DeadlineMode = "
                 '"RechargeEachKernel" THEN 3 ELSE 2 '
                 "/\\ UNCHANGED <<now, armedAt, receiptDeadline>>"
             ),
@@ -39727,7 +39729,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
 
     exact_authority_deadline_configs = {
         "authority_deadline_carry_fixed.cfg": (
-            'SPECIFICATION Spec CONSTANT DeadlineMode = "FixedCommonDeadline" '
+            'SPECIFICATION Spec CONSTANT DeadlineMode = "FixedCommonDeadline" CHECK_DEADLOCK FALSE '
             "INVARIANT TypeInvariant INVARIANT "
             "ImmutableReceiptNeverRefreshes INVARIANT "
             "ImmutableReceiptCannotExpireBeforeDecision PROPERTY "
@@ -39787,8 +39789,8 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             ),
             "NoPrematureExit": (
                 "\\A deadline \\in ReceiptDeadlines: "
-                "/\\ ReceiptOwnsFrozenRosterWindow(deadline) "
-                "/\\ now < deadline /\\ ~decided => corridor"
+                "(/\\ ReceiptOwnsFrozenRosterWindow(deadline) "
+                "/\\ now < deadline /\\ ~decided) => corridor"
             ),
             "TickWithinWindow": (
                 "/\\ corridor /\\ now < RosterDeadline "
@@ -39892,7 +39894,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 "THEN TRUE ELSE ~LowerOccurrenceCoexists"
             ),
             "SelectedLifecycleEpisodeOrPhysicalDescent": (
-                "\\/ PhysicalStrictRankGoal "
+                '\\/ stage = "Fresh" \\/ PhysicalStrictRankGoal '
                 "\\/ SelectedLifecycleEpisodeActive"
             ),
             "ExactSelectedTokenCutCarry": (
@@ -39984,13 +39986,13 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "Init": (
                 '/\\ ReceiptMode \\in ReceiptModes /\\ phase = "BeforeInstall" '
                 "/\\ now = 3 /\\ leaderView = 1 /\\ otherView = 1 "
-                "/\\ ~leaderArmable /\\ receipts = "
+                "/\\ leaderArmable = FALSE /\\ receipts = "
                 "{LeaderReceipt(1, 0), OtherReceipt(1, 0)}"
             ),
             "InstallSynchronizedLeaderView": (
                 '/\\ phase = "BeforeInstall" /\\ phase\' = "AfterInstall" '
                 "/\\ now' = now /\\ leaderView' = 2 "
-                "/\\ otherView' = otherView /\\ leaderArmable' "
+                "/\\ otherView' = otherView /\\ leaderArmable' = TRUE "
                 "/\\ receipts' = CASE ReceiptMode = "
                 '"PreStateOnly" -> {OtherReceipt(otherView, 0)} '
                 '[] ReceiptMode = "RetireEveryLeader" -> '
@@ -40036,7 +40038,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
 
     exact_receipt_acquisition_configs = {
         "fixed_corridor_receipt_acquisition_fixed.cfg": (
-            'SPECIFICATION Spec CONSTANT ReceiptMode = "LeaderKeyedPostArm" '
+            'SPECIFICATION Spec CONSTANT ReceiptMode = "LeaderKeyedPostArm" CHECK_DEADLOCK FALSE '
             "INVARIANT TypeInvariant INVARIANT "
             "ReceiptAcquisitionAndRetention"
         ),
@@ -40604,18 +40606,6 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "TerminalIdentityCannotResurrect",
         ),
         (
-            "external-continuation-missing-conditional-fairness",
-            "SumeragiV2ExternalProducerContinuationMutation.tla",
-            "external_producer_continuation_missing_conditional_fairness_bug.cfg",
-            "ExternalContinuationsReachTerminal",
-        ),
-        (
-            "external-continuation-missing-volatile-fairness",
-            "SumeragiV2ExternalProducerContinuationMutation.tla",
-            "external_producer_continuation_missing_volatile_fairness_bug.cfg",
-            "ExternalContinuationsReachTerminal",
-        ),
-        (
             "empty-producer-handoff-missing-reservation",
             "SumeragiV2EmptyProducerHandoffMutation.tla",
             "empty_producer_handoff_missing_reservation_bug.cfg",
@@ -40733,6 +40723,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     }
     expected_temporal_mutation_cases = {
         (
+            "external-continuation-missing-conditional-fairness",
+            "SumeragiV2ExternalProducerContinuationMutation.tla",
+            "external_producer_continuation_missing_conditional_fairness_bug.cfg",
+        ),
+        (
+            "external-continuation-missing-volatile-fairness",
+            "SumeragiV2ExternalProducerContinuationMutation.tla",
+            "external_producer_continuation_missing_volatile_fairness_bug.cfg",
+        ),
+        (
             "producer-replay-capacity-replenishment-lasso",
             "SumeragiV2ProducerReplayCapacityMutation.tla",
             "producer_replay_capacity_replenishment_lasso_bug.cfg",
@@ -40749,7 +40749,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     )
     temporal_mutation_pattern = re.compile(
         r'^\s*"([^"|]+)\|([^"|]+\.tla)\|'
-        r'(producer_replay_capacity_replenishment_lasso_bug\.cfg)"\s*$',
+        r'([^"|]+_bug\.cfg)"\s*$',
         re.MULTILINE,
     )
     observed_fixed_cases = set(fixed_pattern.findall(runner_source))
@@ -40766,14 +40766,14 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     if observed_mutation_cases != expected_mutation_cases:
         errors.append(
             f"{runner_path}: failing case matrix must equal the exact reviewed "
-            "seventy-three config/invariant pairs; "
+            "seventy-one config/invariant pairs; "
             f"missing={sorted(expected_mutation_cases - observed_mutation_cases)}, "
             f"extra={sorted(observed_mutation_cases - expected_mutation_cases)}"
         )
     if observed_temporal_mutation_cases != expected_temporal_mutation_cases:
         errors.append(
             f"{runner_path}: temporal liveness mutation matrix must equal "
-            "the exact reviewed producer replay-capacity lasso; "
+            "the exact reviewed three temporal counterexamples; "
             f"missing={sorted(expected_temporal_mutation_cases - observed_temporal_mutation_cases)}, "
             f"extra={sorted(observed_temporal_mutation_cases - expected_temporal_mutation_cases)}"
         )
@@ -56648,7 +56648,7 @@ self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
             && token.slot.phase == token.identity.phase && token.source_class == token.identity.phase.source_class()
             && (token.source_class == FairV2IngressLeaderWireSourceClass::Chunk) == token.slot.chunk_index.is_some()
             && token.admission_ordinal != 0 && token.scheduler_ordinal != 0 && self.first.lifecycle_ordinal == Some(token.scheduler_ordinal)
-    }) && match (self.leader_wire_token.as_ref(), self.leader_wire_runtime_receipt.as_ref()) {
+    }) && match (self.leader_wire_token.as_ref(), self.leader_wire_runtime_receipt.as_ref(),) {
         (None, None) | (Some(_), None) => true,
         (Some(token), Some(receipt)) => {
             receipt.token() == token && receipt.owner().causal_lifecycle_key() == token.identity_hash()
@@ -56807,12 +56807,12 @@ if !ingress_ownership.validate_exact()
 match (&mut existing.ingress_ownership, ingress_ownership) {
     (Some(retained), Some(candidate)) => {
         if !retained.merge_downstream(candidate) {
-            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected,);
         }
     }
     (None, None) if cfg!(test) => {}
     (Some(_), None) | (None, Some(_)) | (None, None) => {
-        return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
+        return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected,);
     }
 }
 """,
@@ -66331,7 +66331,6 @@ match prepared_serve.take() {
     Some(PreparedCertifiedServe::Rejected(reason)) => {
         iroha_logger::debug!(%reason, "rejected certified body request");
         mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-        continue;
     }
     Some(PreparedCertifiedServe::Service(reason)) => {
         return Err(V2RunnerError::Service(reason));
@@ -66353,7 +66352,6 @@ match prepared_serve.take() {
         """
 block_sync_server.serve_historical_body(
     kura,
-    context_store,
     request,
     &sender,
     local_key,
@@ -69416,7 +69414,6 @@ drain_v2_ingress(
     &mut lane_work,
     output_guard.as_ref(),
     kura.as_ref(),
-    &context_store,
     &common_config.key_pair,
     block_sync_server
         .as_mut()
@@ -69591,7 +69588,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum OuterIngressTurn",
             ),
             (
-                "block_sync_server.serve_historical_body( kura, context_store, request, &sender, local_key, )",
+                "block_sync_server.serve_historical_body( kura, request, &sender, local_key )",
                 "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, &ingress_ownership, services, )",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
@@ -70272,10 +70269,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             historical,
             (
                 "kura.v2_finality_artifact(height)?",
-                "context_store\n        .load(height)?",
-                "persisted.context() != &artifact.height_context",
+                "let context = &artifact.height_context",
+                "let proofs_of_possession = &artifact.validator_set_pops",
                 "authenticate_certified_body_request(",
-                "verify_persisted_quorum_certificate(",
+                "verify_historical_quorum_certificate(",
+                "request.certificate.phase != wire::GlobalPhase::Commit",
+                "request.subject != artifact.subject",
                 "let Some(responder_position)",
                 ".position(|entry| entry.validator == responder_peer)",
                 "return Ok(None);",

@@ -114,7 +114,7 @@ injected transport and cannot be changed after `HttpClient` construction.
 - contract code-view access-hint, entrypoint, analysis, permission, and warning
   list DTOs snapshot assigned arrays and return detached arrays on access while
   preserving malformed missing/null list rejection in the raw converters
-- verifying-key registry read/write helpers validate exact backend/name route text, canonical I105 authority, private-key, circuit, gas-schedule, curve, CID, commitment, and status request fields, plus positive version, `vk_len`, and max proof-size fields before HTTP dispatch, and inline verifying-key byte arrays are snapshotted on assignment and access before serialization; accepted 32-byte hex casing/prefixes and status labels are canonicalized only after exact text preflight, verifying-key read responses validate the detail envelope, id/record backend-name material, version/height/status fields, lowercase hashes, inline key base64, and record metadata before returning raw JSON to callers, and verifying-key register/update responses reject malformed or non-accepted envelopes before returning raw JSON to callers
+- verifying-key registry read/write helpers validate exact backend/name route text, canonical I105 authority, circuit, gas-schedule, curve, CID, commitment, and status request fields, plus positive version, `vk_len`, and max proof-size fields before HTTP dispatch, and inline verifying-key byte arrays are snapshotted on assignment and access before serialization; request models contain no private-key field, accepted 32-byte hex casing/prefixes and status labels are canonicalized only after exact text preflight, verifying-key read responses validate the detail envelope, id/record backend-name material, version/height/status fields, lowercase hashes, inline key base64, and record metadata before returning raw JSON to callers, and verifying-key register/update responses return typed unsigned drafts only after exact-field, canonical-base64, payload-prehash, configured-chain, authority, single-operation, identifier, and full-record validation
 - identifier resolve requests validate exact policy ids and encrypted-input text before dispatch; identifier policy listing responses plus raw policy summary/page DTO deserialization validate exact policy ids, resolver public keys, page totals, list items, and duplicate object keys inside decoded policy parameter or ignored extension JSON, and both ToriiClient/raw resolve receipts require the current nested `payload`/`attestation` envelope, reject retired flat receipt fields, and validate exact payload identifiers, attestation signatures, canonical proof base64, execution/opening metadata, duplicate object keys, and positive canonical timestamp strings before callers trust Torii JSON responses; padded, whitespace-containing, control-character, malformed, noncanonical, zero-timestamp, unknown-extension, or mixed signed/proof receipt shapes fail during deserialization
 - identifier policy, contract instance inventory, and contract state response list
   DTOs snapshot assigned arrays and return detached arrays on access while
@@ -415,9 +415,12 @@ characters fail before the gateway request is sent.
 
 `ToriiClient.RegisterVerifyingKeyAsync(...)` and
 `UpdateVerifyingKeyAsync(...)` post Torii's `/v1/zk/vk/register` and
-`/v1/zk/vk/update` payloads. The client validates production verifier backends,
-canonical I105 authority values, required signing fields, height ranges, and
-inline verifier-key commitments before the HTTP request is sent. Production
+`/v1/zk/vk/update` payloads. These requests contain only the public authority
+and verifier metadata; private keys are never modeled or sent. The client
+validates production verifier backends, canonical I105 authority values, height
+ranges, and inline verifier-key commitments before the HTTP request is sent.
+Clients preparing bytes for local signing require one immutable
+`ToriiLocalSigningContext`; read-only clients may omit it. Production
 backend labels reject blank, padded, and whitespace-containing text before
 unsupported-backend classification.
 Production `VerifyingKey`/`Proof` SSE event filters apply the same fail-closed
@@ -426,10 +429,16 @@ padded filter JSON, padded/whitespace/control-character names, and uppercase or
 `0x`-prefixed proof hashes fail before the subscription request is sent.
 
 ```csharp
-await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
+using var torii = new ToriiClient(
+    toriiUri,
+    options: new ToriiClientOptions
+    {
+        LocalSigningContext = new ToriiLocalSigningContext("production-chain"),
+    });
+
+var draft = await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
 {
     Authority = canonicalAuthorityAccountId,
-    PrivateKey = "ed25519:...",
     Backend = "halo2/ipa",
     Name = "vk_main",
     Version = 1,
@@ -440,6 +449,17 @@ await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
     Status = "Active",
 });
 ```
+
+Torii returns HTTP 200 with `Submitted == false`, a canonical Norito
+`TransactionPayload`, and its validated 32-byte Iroha prehash. Pass
+`draft.TransactionPayload` to SDK signers that apply the Iroha prehash
+themselves. Use `draft.SigningMessage` only with raw signature primitives or
+HSM APIs that explicitly accept an already-prehashed message; otherwise the
+message would be hashed twice. Assemble and submit the locally signed
+transaction through the normal pipeline API. Before exposing the draft, the
+client decodes the transaction and requires the configured chain, requested
+authority, and exactly one register/update instruction whose identifier and
+complete verifying-key record equal the normalized request.
 
 
 ## Native Privacy Bridge

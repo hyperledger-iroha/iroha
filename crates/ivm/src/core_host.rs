@@ -24,6 +24,7 @@ use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
     prelude::Name,
+    state_path::StatePath,
 };
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -298,14 +299,19 @@ impl CoreHost {
 
     /// Insert a raw Norito payload into durable state. Intended for unit tests.
     pub fn insert_state_value<P: AsRef<str>, B: AsRef<[u8]>>(&mut self, path: P, value: B) {
+        let path: StatePath = path.as_ref().parse().expect("canonical state path");
         self.state
-            .set(path.as_ref(), value.as_ref().to_vec())
+            .set(&path, value.as_ref().to_vec())
             .expect("insert state value");
     }
 
     /// Return a copy of all durable state paths currently stored in the host.
     pub fn state_paths(&self) -> Vec<String> {
-        let mut keys: Vec<String> = self.state.keys().cloned().collect();
+        let mut keys: Vec<String> = self
+            .state
+            .keys()
+            .map(|path| path.as_ref().to_owned())
+            .collect();
         keys.sort();
         keys
     }
@@ -320,11 +326,11 @@ impl CoreHost {
     fn state_keys_page_with_prefix(
         &self,
         vm: &IVM,
-        prefix: &Name,
+        prefix: &StatePath,
         path_len: usize,
         offset: u64,
         limit: u64,
-    ) -> Result<(Vec<Name>, u64, u64), VMError> {
+    ) -> Result<(Vec<StatePath>, u64, u64), VMError> {
         #[cfg(test)]
         self.state_scan_examined.store(0, Ordering::Relaxed);
         let prefix = prefix.as_ref();
@@ -339,22 +345,22 @@ impl CoreHost {
             crate::host::preflight_reserved_state_scan_work_with_tail(
                 vm,
                 scan_work_gas,
-                key.len(),
+                key.as_ref().len(),
                 response_tail_gas,
             )?;
-            crate::host::validate_state_path_text(key)?;
+            crate::host::validate_state_path(key)?;
             #[cfg(test)]
             self.state_scan_examined.fetch_add(1, Ordering::Relaxed);
             scan_work_gas = scan_work_gas
                 .saturating_add(1)
-                .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX));
-            if Self::state_key_matches_prefix(key, prefix) {
+                .saturating_add(u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX));
+            if Self::state_key_matches_prefix(key.as_ref(), prefix) {
                 if total >= offset && selected.len() < take {
                     let (next_elements, next_response_tail) =
                         crate::host::state_keys_response_tail_after_item(
                             selected.len(),
                             selected_element_bytes,
-                            key,
+                            key.as_ref(),
                         )?;
                     preflight_reserved_syscall_gas(
                         vm,
@@ -364,7 +370,7 @@ impl CoreHost {
                     )?;
                     selected_element_bytes = next_elements;
                     response_tail_gas = u64::try_from(next_response_tail).unwrap_or(u64::MAX);
-                    selected.push(key.parse().map_err(|_| VMError::NoritoInvalid)?);
+                    selected.push(key.clone());
                 }
                 total = total.saturating_add(1);
             }
@@ -374,8 +380,9 @@ impl CoreHost {
 
     /// Borrow the raw Norito payload stored under `path`, if present.
     pub fn state_bytes(&self, path: &str) -> Option<Vec<u8>> {
+        let path: StatePath = path.parse().ok()?;
         self.state
-            .value_payload_ref(path)
+            .value_payload_ref(&path)
             .ok()
             .flatten()
             .map(<[u8]>::to_vec)
@@ -397,32 +404,38 @@ impl CoreHost {
         decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
-    fn decode_state_path_tlv(&self, vm: &IVM, pointer: u64) -> Result<(Name, usize), VMError> {
+    fn decode_state_path_tlv(&self, vm: &IVM, pointer: u64) -> Result<(StatePath, usize), VMError> {
         if pointer == 0 {
             return Err(VMError::NoritoInvalid);
         }
-        let tlv = self.decode_tlv(vm, pointer, PointerType::Name)?;
+        let tlv = self.decode_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let path_len = tlv.payload.len();
-        if path_len > syscalls::STATE_MAX_PATH_BYTES {
+        if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
             return Err(VMError::NoritoInvalid);
         }
-        let path = self.decode_name_payload(tlv.payload)?;
-        crate::host::validate_state_path_name(&path)?;
+        let path: StatePath =
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        crate::host::validate_state_path(&path)?;
         crate::host::validate_declared_state_path(vm, &path)?;
         Ok((path, path_len))
     }
 
-    fn decode_state_scan_path_tlv(&self, vm: &IVM, pointer: u64) -> Result<(Name, usize), VMError> {
+    fn decode_state_scan_path_tlv(
+        &self,
+        vm: &IVM,
+        pointer: u64,
+    ) -> Result<(StatePath, usize), VMError> {
         if pointer == 0 {
             return Err(VMError::NoritoInvalid);
         }
-        let tlv = self.decode_tlv(vm, pointer, PointerType::Name)?;
+        let tlv = self.decode_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let path_len = tlv.payload.len();
-        if path_len > syscalls::STATE_MAX_PATH_BYTES {
+        if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
             return Err(VMError::NoritoInvalid);
         }
-        let path = self.decode_name_payload(tlv.payload)?;
-        crate::host::validate_state_path_name(&path)?;
+        let path: StatePath =
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        crate::host::validate_state_path(&path)?;
         crate::host::validate_declared_state_scan_path(vm, &path)?;
         Ok((path, path_len))
     }
@@ -1209,7 +1222,7 @@ impl CoreHost {
             PointerType::Name,
         )?;
         if page_len > syscalls::STATE_MAP_MAX_PAGE_BYTES
-            || base_len > syscalls::STATE_MAP_MAX_BASE_BYTES
+            || base_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
         {
             return Err(VMError::NoritoInvalid);
         }
@@ -1240,6 +1253,17 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
                 Self::quote_canonical_state_map_path(vm)?
+            }
+            syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
+                let input = quote_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                    PointerType::Name,
+                )?;
+                if input > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
+                    return Err(VMError::NoritoInvalid);
+                }
+                Self::path_gas(input, syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES)
             }
             syscalls::SYSCALL_STATE_MAP_KEY_AT => Self::quote_state_map_key_at(vm)?,
             syscalls::SYSCALL_STATE_GET => {
@@ -1354,11 +1378,12 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_CORE_QUERY_GET | syscalls::SYSCALL_CORE_QUERY_PAGE => Err(
                 VMError::metered_not_implemented(STATE_QUERY_GAS_BASE, number),
             ),
-            // Durable state: pointer-ABI paths (Name) and NoritoBytes values
+            // Durable state: NoritoBytes(StatePath) paths and NoritoBytes values.
             syscalls::SYSCALL_STATE_GET => {
-                // r10 = &Name path; return r10 = &NoritoBytes in host-owned public memory (or 0).
+                // r10 = &NoritoBytes(StatePath); return a host-owned
+                // &NoritoBytes value (or 0).
                 let (path, path_len) = self.decode_state_path_tlv(vm, vm.register(10))?;
-                if let Some(stored) = self.state.value_payload_ref(path.as_ref())? {
+                if let Some(stored) = self.state.value_payload_ref(&path)? {
                     let gas = crate::host::state_value_gas(path_len, stored.len());
                     preflight_reserved_syscall_gas(vm, gas)?;
                     crate::host::validate_declared_state_value_payload(vm, &path, stored)?;
@@ -1396,7 +1421,7 @@ impl IVMHost for CoreHost {
                 }
             }
             syscalls::SYSCALL_STATE_SET => {
-                // r10 = &Name path; r11 = &NoritoBytes value
+                // r10 = &NoritoBytes(StatePath); r11 = &NoritoBytes value
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
                         "[CoreHost] STATE_SET args r8=0x{a:08x} r9=0x{b:08x} r10=0x{path:08x} r11=0x{val:08x} r12=0x{aux:08x} r13=0x{aux2:08x}",
@@ -1417,7 +1442,7 @@ impl IVMHost for CoreHost {
                 let p_val = self.decode_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
                 crate::host::validate_state_value_payload_len(p_val.payload.len())?;
                 crate::host::validate_declared_state_value_payload(vm, &path, p_val.payload)?;
-                self.state.set(path.as_ref(), p_val.payload.to_vec())?;
+                self.state.set(&path, p_val.payload.to_vec())?;
                 self.log_write_key(path.as_ref());
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
@@ -1428,10 +1453,10 @@ impl IVMHost for CoreHost {
                 Ok(crate::host::state_value_gas(path_len, p_val.payload.len()))
             }
             syscalls::SYSCALL_STATE_DEL => {
-                // r10 = &Name path
+                // r10 = &NoritoBytes(StatePath)
                 let (path, path_len) = self.decode_state_path_tlv(vm, vm.register(10))?;
                 let gas = crate::host::state_path_gas(path_len);
-                self.state.del(path.as_ref())?;
+                self.state.del(&path)?;
                 self.log_write_key(path.as_ref());
                 Ok(gas)
             }
@@ -1465,17 +1490,14 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_STATE_HAS => {
                 let (path, path_len) = self.decode_state_path_tlv(vm, vm.register(10))?;
-                let present = self.state.get_ref(path.as_ref()).is_some();
+                let present = self.state.get_ref(&path).is_some();
                 self.log_read_key(path.as_ref());
                 vm.set_register(10, u64::from(present));
                 Ok(crate::host::state_path_gas(path_len))
             }
             syscalls::SYSCALL_STATE_LEN => {
                 let (path, path_len) = self.decode_state_path_tlv(vm, vm.register(10))?;
-                let stored_len = self
-                    .state
-                    .value_payload_ref(path.as_ref())?
-                    .map(<[u8]>::len);
+                let stored_len = self.state.value_payload_ref(&path)?.map(<[u8]>::len);
                 if let Some(stored_len) = stored_len {
                     let gas = crate::host::state_path_gas(path_len);
                     preflight_reserved_syscall_gas(vm, gas)?;
@@ -1555,7 +1577,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
                 // r10 = &Name base; r11 = &NoritoBytes key
-                // -> r10 = &Name("<base>/<lowercase hex(canonical key)>")
+                // -> r10 = &NoritoBytes(StatePath("<base>/<lowercase hex(canonical key)>"))
                 let base_tlv = self.decode_tlv(vm, vm.register(10), PointerType::Name)?;
                 let key_tlv = self.decode_tlv(vm, vm.register(11), PointerType::NoritoBytes)?;
                 let base_name = self.decode_name_payload(base_tlv.payload)?;
@@ -1563,7 +1585,7 @@ impl IVMHost for CoreHost {
                 let path_name = canonical_typed_state_map_path(vm, &base_name, key_tlv.payload)?;
                 let body = encode_canonical_norito(&path_name)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
                 out.extend_from_slice(&(body.len() as u32).to_be_bytes());
                 out.extend_from_slice(&body);
@@ -1571,6 +1593,20 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&hh);
                 let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
+                Ok(Self::path_gas(input_len, body.len()))
+            }
+            syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
+                let name_tlv = self.decode_tlv(vm, vm.register(10), PointerType::Name)?;
+                let input_len = name_tlv.payload.len();
+                if input_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let name = self.decode_name_payload(name_tlv.payload)?;
+                let path = StatePath::from(name);
+                crate::host::validate_state_path(&path)?;
+                let body = encode_canonical_norito(&path)?;
+                let pointer = Self::alloc_norito_bytes_tlv(vm, &body)?;
+                vm.set_register(10, pointer);
                 Ok(Self::path_gas(input_len, body.len()))
             }
             syscalls::SYSCALL_STATE_MAP_KEY_AT => {
@@ -2546,7 +2582,7 @@ mod tests {
         host: &mut CoreHost,
         base: &str,
         key: &[u8],
-    ) -> Result<Name, VMError> {
+    ) -> Result<StatePath, VMError> {
         let base: Name = base.parse().expect("valid test map base");
         let base_pointer = vm.alloc_host_tlv(&make_pointer_tlv(
             PointerType::Name,
@@ -2584,11 +2620,11 @@ mod tests {
     fn set_raw_state_path(
         vm: &mut IVM,
         host: &mut CoreHost,
-        path: &Name,
+        path: &StatePath,
         value: &[u8],
     ) -> Result<u64, VMError> {
         let path_pointer = vm.alloc_host_tlv(&make_pointer_tlv(
-            PointerType::Name,
+            PointerType::NoritoBytes,
             &norito::to_bytes(path).expect("encode raw state path"),
         ))?;
         let value_pointer =
@@ -2631,10 +2667,11 @@ mod tests {
         )
     }
 
-    fn alloc_state_path(vm: &mut IVM, path: &Name) -> u64 {
+    fn alloc_state_path(vm: &mut IVM, path: impl AsRef<str>) -> u64 {
+        let path: StatePath = path.as_ref().parse().expect("canonical state path");
         vm.alloc_host_tlv(&make_pointer_tlv(
-            PointerType::Name,
-            &norito::to_bytes(path).expect("encode state path"),
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&path).expect("encode state path"),
         ))
         .expect("allocate state path")
     }
@@ -2853,9 +2890,9 @@ mod tests {
     fn durable_state_accepts_validated_public_heap_tlvs() {
         let mut vm = IVM::new(u64::MAX);
         let mut host = CoreHost::new();
-        let path = Name::from_str("heap_state").expect("valid state path");
+        let path = StatePath::from_str("heap_state").expect("valid state path");
         let path_payload = norito::to_bytes(&path).expect("encode state path");
-        let path_envelope = make_pointer_tlv(PointerType::Name, &path_payload);
+        let path_envelope = make_pointer_tlv(PointerType::NoritoBytes, &path_payload);
         let path_pointer = vm
             .alloc_heap(path_envelope.len() as u64)
             .expect("allocate path envelope");
@@ -2887,10 +2924,10 @@ mod tests {
         host.insert_state_value("orders/1", b"one");
         host.insert_state_value("accounts/1", b"account");
         let mut vm = IVM::new(u64::MAX);
-        let prefix: Name = "orders".parse().expect("state prefix");
+        let prefix: StatePath = "orders".parse().expect("state prefix");
         let prefix_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
-                PointerType::Name,
+                PointerType::NoritoBytes,
                 &norito::to_bytes(&prefix).expect("encode prefix"),
             ))
             .expect("alloc prefix");
@@ -2910,8 +2947,11 @@ mod tests {
             .validate_tlv(vm.register(10))
             .expect("state keys tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let keys: Vec<Name> = norito::decode_from_bytes(tlv.payload).expect("decode keys");
-        assert_eq!(keys, vec!["orders/2".parse::<Name>().expect("second key")]);
+        let keys: Vec<StatePath> = norito::decode_from_bytes(tlv.payload).expect("decode keys");
+        assert_eq!(
+            keys,
+            vec!["orders/2".parse::<StatePath>().expect("second key")]
+        );
 
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
@@ -2924,7 +2964,7 @@ mod tests {
             .validate_tlv(vm.register(10))
             .expect("empty state keys page");
         assert!(
-            norito::decode_from_bytes::<Vec<Name>>(empty_page.payload)
+            norito::decode_from_bytes::<Vec<StatePath>>(empty_page.payload)
                 .expect("decode empty page")
                 .is_empty()
         );
@@ -2937,10 +2977,10 @@ mod tests {
             Err(VMError::NoritoInvalid)
         ));
 
-        let key: Name = "orders/2".parse().expect("state key");
+        let key: StatePath = "orders/2".parse().expect("state key");
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
-                PointerType::Name,
+                PointerType::NoritoBytes,
                 &norito::to_bytes(&key).expect("encode key"),
             ))
             .expect("alloc key");
@@ -2958,7 +2998,7 @@ mod tests {
 
         vm.set_register(10, prefix_ptr);
         let count_gas = STATE_QUERY_GAS_BASE
-            + u64::try_from(crate::host::state_path_name_payload_len(&prefix).expect("path len"))
+            + u64::try_from(crate::host::state_path_payload_len(&prefix).expect("path len"))
                 .expect("path length fits")
             + u64::try_from(1 + "orders/1".len() + 1 + "orders/2".len()).expect("scan length fits");
         assert_eq!(
@@ -2966,120 +3006,6 @@ mod tests {
             Ok(count_gas)
         );
         assert_eq!(vm.register(10), 2);
-    }
-
-    fn corrupt_state_path_with_oversized_canonical_frame(prefix: &str) -> String {
-        let stem = format!("{prefix}/");
-        let path = format!(
-            "{stem}{}",
-            "x".repeat(syscalls::STATE_MAX_PATH_BYTES - stem.len())
-        );
-        assert_eq!(path.len(), syscalls::STATE_MAX_PATH_BYTES);
-        assert_eq!(
-            crate::host::validate_state_path_text(&path),
-            Err(VMError::NoritoInvalid),
-            "raw-byte maximum must still reject a framed canonical Name over the bound"
-        );
-        path
-    }
-
-    fn assert_failed_state_scan_did_not_publish(
-        vm: &IVM,
-        registers_before: [u64; 3],
-        input_before: &[u8],
-        heap_before: u64,
-    ) {
-        assert_eq!(
-            [vm.register(10), vm.register(11), vm.register(12)],
-            registers_before
-        );
-        assert_eq!(
-            vm.memory
-                .inspect_region(Memory::INPUT_START, Memory::INPUT_SIZE)
-                .expect("inspect INPUT after failed scan"),
-            input_before
-        );
-        assert_eq!(vm.memory.heap_allocated_len(), heap_before);
-    }
-
-    #[test]
-    fn state_keys_rejects_selected_corrupt_framed_key_before_publication() {
-        let mut host = CoreHost::new();
-        host.insert_state_value("scan/a", b"valid");
-        let corrupt = corrupt_state_path_with_oversized_canonical_frame("scan");
-        host.state
-            .insert_unchecked_for_test(corrupt, b"corrupt".to_vec());
-        host.insert_state_value("scan/z", b"valid");
-
-        let mut vm = IVM::new(u64::MAX);
-        let prefix: Name = "scan".parse().expect("scan prefix");
-        let prefix_ptr = vm
-            .alloc_input_tlv(&make_pointer_tlv(
-                PointerType::Name,
-                &encode_canonical_norito(&prefix).expect("encode scan prefix"),
-            ))
-            .expect("allocate scan prefix");
-        vm.set_register(10, prefix_ptr);
-        vm.set_register(11, 1);
-        vm.set_register(12, 1);
-        let registers_before = [prefix_ptr, 1, 1];
-        let input_before = vm
-            .memory
-            .inspect_region(Memory::INPUT_START, Memory::INPUT_SIZE)
-            .expect("inspect INPUT before failed scan")
-            .to_vec();
-        let heap_before = vm.memory.heap_allocated_len();
-
-        assert_eq!(
-            host.syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm),
-            Err(VMError::NoritoInvalid)
-        );
-        assert_failed_state_scan_did_not_publish(&vm, registers_before, &input_before, heap_before);
-        assert!(host.access_log.read_keys.is_empty());
-    }
-
-    #[test]
-    fn corrupt_framed_state_key_cannot_evade_pagination_or_count_validation() {
-        let mut host = CoreHost::new();
-        host.insert_state_value("scan/a", b"valid");
-        let corrupt = corrupt_state_path_with_oversized_canonical_frame("scan");
-        host.state
-            .insert_unchecked_for_test(corrupt, b"corrupt".to_vec());
-        host.insert_state_value("scan/z", b"valid");
-
-        for syscall in [syscalls::SYSCALL_STATE_KEYS, syscalls::SYSCALL_STATE_COUNT] {
-            let mut vm = IVM::new(u64::MAX);
-            let prefix: Name = "scan".parse().expect("scan prefix");
-            let prefix_ptr = vm
-                .alloc_input_tlv(&make_pointer_tlv(
-                    PointerType::Name,
-                    &encode_canonical_norito(&prefix).expect("encode scan prefix"),
-                ))
-                .expect("allocate scan prefix");
-            vm.set_register(10, prefix_ptr);
-            vm.set_register(11, u64::MAX);
-            vm.set_register(12, 0);
-            let registers_before = [prefix_ptr, u64::MAX, 0];
-            let input_before = vm
-                .memory
-                .inspect_region(Memory::INPUT_START, Memory::INPUT_SIZE)
-                .expect("inspect INPUT before failed scan")
-                .to_vec();
-            let heap_before = vm.memory.heap_allocated_len();
-
-            assert_eq!(
-                host.syscall(syscall, &mut vm),
-                Err(VMError::NoritoInvalid),
-                "syscall {syscall:#x} must validate skipped and count-only keys"
-            );
-            assert_failed_state_scan_did_not_publish(
-                &vm,
-                registers_before,
-                &input_before,
-                heap_before,
-            );
-            assert!(host.access_log.read_keys.is_empty());
-        }
     }
 
     #[test]
@@ -3415,10 +3341,10 @@ mod tests {
     fn empty_state_keys_limit_sixty_four_fits_default_gas() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(1_000_000);
-        let prefix: Name = "empty".parse().expect("prefix");
+        let prefix: StatePath = "empty".parse().expect("prefix");
         let prefix_payload = norito::to_bytes(&prefix).expect("encode prefix");
         let prefix_ptr = vm
-            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &prefix_payload))
             .expect("allocate prefix");
         vm.load_program(&assemble_state_map_read_program(
             &[
@@ -3443,7 +3369,7 @@ mod tests {
         assert_eq!(vm.register(12), 0);
         let page = vm.validate_tlv(vm.register(10)).expect("page TLV");
         assert!(
-            norito::decode_from_bytes::<Vec<Name>>(page.payload)
+            norito::decode_from_bytes::<Vec<StatePath>>(page.payload)
                 .expect("decode empty page")
                 .is_empty()
         );
@@ -3455,10 +3381,10 @@ mod tests {
         let mut host = CoreHost::new();
         host.insert_state_value(key_text, b"value");
         let mut vm = IVM::new(u64::MAX);
-        let prefix: Name = "pick".parse().expect("prefix");
+        let prefix: StatePath = "pick".parse().expect("prefix");
         let prefix_payload = norito::to_bytes(&prefix).expect("encode prefix");
         let prefix_ptr = vm
-            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &prefix_payload))
             .expect("allocate prefix");
         vm.load_program(&assemble_state_map_read_program(
             &[
@@ -3496,10 +3422,10 @@ mod tests {
             host.insert_state_value(format!("scan/{index:04}"), b"value");
         }
         let mut vm = IVM::new(u64::MAX);
-        let prefix: Name = "scan".parse().expect("prefix");
+        let prefix: StatePath = "scan".parse().expect("prefix");
         let prefix_payload = norito::to_bytes(&prefix).expect("encode prefix");
         let prefix_ptr = vm
-            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &prefix_payload))
             .expect("allocate prefix");
         vm.load_program(&assemble_state_map_read_program(
             &[
@@ -3546,10 +3472,10 @@ mod tests {
         let mut host = CoreHost::new();
         host.insert_state_value("large", vec![0xabu8; syscalls::STATE_MAX_VALUE_BYTES]);
         let mut vm = IVM::new(u64::MAX);
-        let key: Name = "large".parse().expect("state key");
+        let key: StatePath = "large".parse().expect("state key");
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
-                PointerType::Name,
+                PointerType::NoritoBytes,
                 &norito::to_bytes(&key).expect("encode key"),
             ))
             .expect("alloc key");
@@ -3598,10 +3524,10 @@ mod tests {
         let mut host = CoreHost::new();
         host.insert_state_value("maximum", vec![0x5au8; syscalls::STATE_MAX_VALUE_BYTES]);
         let mut vm = IVM::new(u64::MAX);
-        let key: Name = "maximum".parse().expect("state key");
+        let key: StatePath = "maximum".parse().expect("state key");
         let key_payload = norito::to_bytes(&key).expect("encode key");
         let key_ptr = vm
-            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &key_payload))
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &key_payload))
             .expect("allocate key");
         vm.load_program(&assemble_state_value_read_program(
             &[
@@ -3641,8 +3567,8 @@ mod tests {
         vm.load_program(&program).expect("load program");
         let path_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
-                PointerType::Name,
-                b"hash-valid but not a Norito Name",
+                PointerType::NoritoBytes,
+                b"hash-valid but not a canonical Norito StatePath",
             ))
             .expect("allocate malformed state path");
         let value_ptr = vm
@@ -4265,7 +4191,8 @@ mod tests {
             .memory
             .validate_tlv(vm.register(10))
             .expect("path norito tlv");
-        let path_name: Name =
+        assert_eq!(path_norito_tlv.type_id, PointerType::NoritoBytes);
+        let path_name: StatePath =
             norito::decode_from_bytes(path_norito_tlv.payload).expect("decode canonical path");
         assert_eq!(
             path_name.as_ref(),
@@ -4419,32 +4346,34 @@ mod tests {
         }
     }
 
-    fn maximum_state_map_base() -> Name {
-        let mut low = 1_usize;
-        let mut high = syscalls::STATE_MAP_MAX_BASE_BYTES;
-        while low < high {
-            let middle = low + (high - low).div_ceil(2);
-            let candidate: Name = "m".repeat(middle).parse().expect("ASCII map base");
-            if crate::host::state_path_name_payload_len(&candidate)
-                .is_ok_and(|len| len <= syscalls::STATE_MAP_MAX_BASE_BYTES)
-            {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-        "m".repeat(low).parse().expect("maximum map base")
+    fn maximum_state_map_fixture(fill: u8) -> (Name, Vec<u8>) {
+        let base: Name = "m"
+            .repeat(syscalls::STATE_MAP_MAX_BASE_BYTES)
+            .parse()
+            .expect("maximum map base");
+        let key_payload_len = syscalls::STATE_MAP_MAX_KEY_BYTES;
+        let key_payload = make_pointer_tlv(
+            PointerType::Blob,
+            &vec![fill; key_payload_len - TLV_ENVELOPE_OVERHEAD],
+        );
+        assert_eq!(key_payload.len(), key_payload_len);
+        let path = crate::host::canonical_state_map_path(&base, &key_payload)
+            .expect("maximum bounded map path");
+        assert_eq!(
+            path.as_ref().len(),
+            syscalls::STATE_MAP_MAX_BASE_BYTES + 1 + 2 * syscalls::STATE_MAP_MAX_KEY_BYTES
+        );
+        assert_eq!(
+            crate::host::state_path_payload_len(&path).expect("framed path length"),
+            norito::to_bytes(&path).expect("encode maximum path").len()
+        );
+        (base, key_payload)
     }
 
     #[test]
     fn maximum_state_map_path_roundtrips_into_durable_state() {
-        let base = maximum_state_map_base();
+        let (base, key_payload) = maximum_state_map_fixture(0x5a);
         let base_payload = norito::to_bytes(&base).expect("encode maximum base");
-        let key_payload = make_pointer_tlv(
-            PointerType::Blob,
-            &vec![0x5au8; syscalls::STATE_MAP_MAX_KEY_BYTES - TLV_ENVELOPE_OVERHEAD],
-        );
-        assert_eq!(key_payload.len(), syscalls::STATE_MAP_MAX_KEY_BYTES);
         let mut vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut vm, base.as_ref(), EmbeddedStateType::Bytes);
         let base_ptr = vm
@@ -4465,10 +4394,11 @@ mod tests {
         assert!(actual <= quote);
         let path_ptr = vm.register(10);
         let path_tlv = vm.validate_tlv(path_ptr).expect("path TLV");
-        let path: Name = norito::decode_from_bytes(path_tlv.payload).expect("decode path");
+        assert_eq!(path_tlv.type_id, PointerType::NoritoBytes);
+        let path: StatePath = norito::decode_from_bytes(path_tlv.payload).expect("decode path");
         assert!(
-            crate::host::state_path_name_payload_len(&path).expect("path length")
-                <= syscalls::STATE_MAX_PATH_BYTES
+            crate::host::state_path_payload_len(&path).expect("path length")
+                <= syscalls::STATE_MAX_PATH_FRAME_BYTES
         );
 
         let value = bytes_state_value_record(b"roundtrip");
@@ -4487,13 +4417,8 @@ mod tests {
 
     #[test]
     fn state_map_path_quote_minus_one_allocates_no_output() {
-        let base = maximum_state_map_base();
+        let (base, key_payload) = maximum_state_map_fixture(0x3c);
         let base_payload = norito::to_bytes(&base).expect("encode maximum base");
-        let key_payload = make_pointer_tlv(
-            PointerType::Blob,
-            &vec![0x3cu8; syscalls::STATE_MAP_MAX_KEY_BYTES - TLV_ENVELOPE_OVERHEAD],
-        );
-        assert_eq!(key_payload.len(), syscalls::STATE_MAP_MAX_KEY_BYTES);
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&assemble_state_map_program(
             &[

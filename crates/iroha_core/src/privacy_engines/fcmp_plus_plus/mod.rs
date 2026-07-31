@@ -26,6 +26,13 @@ mod tree;
 mod wallet;
 mod wire;
 
+use iroha_data_model::{
+    ChainId,
+    privacy::{
+        PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+    },
+};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
@@ -103,6 +110,56 @@ pub use self::{
 pub const FCMP_UPSTREAM_REVISION_V1: &str = "15ef71140944b5b5d2feff0e58569b71f34c84a2";
 /// Auditable source profile for the clean-room native port.
 pub const FCMP_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:clean-room:full-chain-membership-proofs+helioselene+monero-fcmp-plus-plus:15ef71140944b5b5d2feff0e58569b71f34c84a2:v1";
+
+/// Complete consensus fields bound into every native FCMP++ transcript.
+#[derive(Clone, Copy, Debug)]
+pub struct FcmpRuntimeContextBindingV1<'a> {
+    /// Exact signed chain identifier.
+    pub chain_id: &'a ChainId,
+    /// Canonical genesis hash selected by the verifier.
+    pub genesis_hash: [u8; 32],
+    /// Zero-based action index in the direct privacy transaction.
+    pub action_index: u32,
+    /// Digest of the complete typed public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Governed parameter identifier.
+    pub parameter_id: PrivacyParameterIdV1,
+    /// Governed parameter archive digest.
+    pub parameter_digest: PrivacyParameterDigestV1,
+    /// Native verifier digest.
+    pub verifier_digest: PrivacyVerifierDigestV1,
+    /// Typed statement-schema digest.
+    pub statement_schema_digest: PrivacyStatementSchemaDigestV1,
+    /// Complete compiled engine-manifest digest.
+    pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
+}
+
+/// Derive the sole canonical native FCMP++ runtime transcript digest.
+///
+/// Both wallet-side proving and validator-side verification call this function,
+/// preventing either boundary from carrying a private copy of the transcript
+/// framing.
+#[must_use]
+pub fn derive_fcmp_runtime_context_hash_v1(binding: &FcmpRuntimeContextBindingV1<'_>) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"iroha.privacy.fcmp-plus-plus.runtime-context.v1";
+
+    let chain_id = binding.chain_id.as_str().as_bytes();
+    let chain_id_len =
+        u64::try_from(chain_id.len()).expect("canonical ChainId length always fits u64");
+    let mut hash = Sha256::new();
+    hash.update(DOMAIN);
+    hash.update(chain_id_len.to_be_bytes());
+    hash.update(chain_id);
+    hash.update(binding.genesis_hash);
+    hash.update(binding.action_index.to_be_bytes());
+    hash.update(binding.statement_digest.as_bytes());
+    hash.update(binding.parameter_id.as_bytes());
+    hash.update(binding.parameter_digest.as_bytes());
+    hash.update(binding.verifier_digest.as_bytes());
+    hash.update(binding.statement_schema_digest.as_bytes());
+    hash.update(binding.engine_manifest_digest.as_bytes());
+    hash.finalize().into()
+}
 /// Canonical description of every fixed first-release FCMP++ parameter family.
 ///
 /// The compiled privacy profile hashes these bytes together with the numeric
@@ -110,7 +167,7 @@ pub const FCMP_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:clean-room:full-ch
 /// derivation, circuit dimension, or proof equation therefore requires an
 /// explicit manifest revision instead of silently retaining an activation
 /// fingerprint for different consensus code.
-pub const FCMP_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"fcmp++:ed25519-sal-blake2b512|field25519:7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed|helioselene-field:7fffffffffffffffffffffffffffffffbf7f782cb7656b586eb6d2727927c79f|helios:a=-3,b=22e8c739b0ea70b8be94a76b3ebb7b3b043f6f384113bf3522b49ee1edd73ad4|selene:a=-3,b=70127713695876c17f51bba595ffe279f3944bdf06ae900e68de0983cb5a4558|curve-tree:selene38-helios18-alternating-zero-pad|hash:keccak256-monero-domains|rng:rand-core06-try-fill-fail-closed+shared-prefix64-health-check-and-exact-replay|sal:nonzero-prover-scalars-retry128+full-proof-retry128-on-point-or-challenge|membership-bp:blake2b512-tagged-transcript-nonzero-challenge-retry128-bounded-canonical-rng128-selene4096-helios2048|dlog:ed253-cycle255-divisor-backed-point-lift-retry128-exceptional-tuple-retry128|membership-restart:full-proof-retry128-on-transcript-or-dlog-exhaustion+hidden-pole+generalized-bulletproof-commitment-identity+inner-product-identity|membership:dual-generalized-bulletproofs+root-blind-pok|range:monero-bulletproofs-plus-64bit-ordered-C-and-C-minus-H-strict-positive-u64-outputs-max4+range-commitments-max8-keccak-transcript-context-output-order-bound+nonzero-prover-scalar-retry128+full-proof-retry128-on-point-or-challenge|witness:caller-explicit-rerandomization+full-input-output-path-scalar-vector-divisor-zeroize-on-drop+redacted-debug|balance:sum-pseudo-out-equals-sum-new-output-C-nonidentity|producer:deterministic-preflight-before-entropy+full-transaction-self-verify|wallet:IFCE-fixed280-x25519-sha256-kdf-xchacha20poly1305-authenticated-amount-u64le-commitment-mask-pool-recipient-ephemeral-output-tuple-aad+secret-key-shared-secret-plaintext-zeroize-on-drop|wire:IFC1-u8-inputs-u8-layers-u8-outputs-reserved0-membership-range-strict-exact|first-release:no-legacy:v1";
+pub const FCMP_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"fcmp++:ed25519-sal-blake2b512|field25519:7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed|helioselene-field:7fffffffffffffffffffffffffffffffbf7f782cb7656b586eb6d2727927c79f|helios:a=-3,b=22e8c739b0ea70b8be94a76b3ebb7b3b043f6f384113bf3522b49ee1edd73ad4|selene:a=-3,b=70127713695876c17f51bba595ffe279f3944bdf06ae900e68de0983cb5a4558|curve-tree:selene38-helios18-alternating-zero-pad|hash:keccak256-monero-domains|rng:rand-core06-try-fill-fail-closed+shared-fixed64-reservoir-health-check-zeroize-poison-on-error-or-unwind|sal:nonzero-prover-scalars-retry128+full-proof-retry128-on-point-or-challenge|membership-bp:blake2b512-tagged-transcript-nonzero-challenge-retry128-bounded-canonical-rng128-selene4096-helios2048|dlog:ed253-cycle255-divisor-backed-point-lift-retry128-exceptional-tuple-retry128|membership-restart:full-proof-retry128-on-transcript-or-dlog-exhaustion+hidden-pole+generalized-bulletproof-commitment-identity+inner-product-identity|membership:dual-generalized-bulletproofs+root-blind-pok|range:monero-bulletproofs-plus-64bit-ordered-C-and-C-minus-H-strict-positive-u64-outputs-max4+range-commitments-max8-keccak-transcript-context-output-order-bound+nonzero-prover-scalar-retry128+full-proof-retry128-on-point-or-challenge|witness:caller-explicit-rerandomization+full-input-output-path-scalar-vector-divisor-zeroize-on-drop+redacted-debug|balance:sum-pseudo-out-equals-sum-new-output-C-nonidentity|producer:deterministic-preflight-before-entropy+full-transaction-self-verify|wallet:IFCE-fixed280-x25519-sha256-kdf-xchacha20poly1305-authenticated-amount-u64le-commitment-mask-pool-recipient-ephemeral-output-tuple-aad+secret-key-shared-secret-plaintext-zeroize-on-drop|wire:IFC1-u8-inputs-u8-layers-u8-outputs-reserved0-membership-range-strict-exact|first-release:no-legacy:v1";
 /// SHA-256 digest of the deterministic complete one-layer native IFC1
 /// transfer vector. Its membership component retains the pinned upstream
 /// encoding; the appended range proof is Iroha statement-bound.
@@ -665,7 +722,7 @@ mod tests {
             std::str::from_utf8(FCMP_COMPILED_PROFILE_DESCRIPTOR_V1).expect("ASCII profile");
         for required in [
             "rand-core06-try-fill-fail-closed",
-            "shared-prefix64-health-check-and-exact-replay",
+            "shared-fixed64-reservoir-health-check-zeroize-poison-on-error-or-unwind",
             "nonzero-challenge-retry128",
             "bounded-canonical-rng128",
             "sal:nonzero-prover-scalars-retry128",

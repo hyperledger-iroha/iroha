@@ -92,7 +92,7 @@ use iroha_data_model::{
             InstructionExecutionError as Error, InvalidParameterError, MathError, Mismatch,
             TypeError,
         },
-        settlement::{SettlementId, SettlementLedger},
+        settlement::{SettlementId, SettlementReceipt},
     },
     merge::{
         LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainCommitmentV1,
@@ -165,6 +165,7 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::VpnLeaseRecordV1,
+    state_path::StatePath,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     validation_fee::{
         ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
@@ -740,7 +741,7 @@ macro_rules! build_world_block {
             repo_agreements_by_initiator: $state.repo_agreements_by_initiator.$method(),
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
-            settlement_ledgers: $state.settlement_ledgers.$method(),
+            settlement_receipts: $state.settlement_receipts.$method(),
             kagemusha_replay_keys: $state.kagemusha_replay_keys.$method(),
             direct_lane_block_application_markers: $state
                 .direct_lane_block_application_markers
@@ -990,7 +991,7 @@ macro_rules! build_world_transaction {
             repo_agreements_by_initiator: $state.repo_agreements_by_initiator.transaction(),
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
-            settlement_ledgers: $state.settlement_ledgers.transaction(),
+            settlement_receipts: $state.settlement_receipts.transaction(),
             kagemusha_replay_keys: $state.kagemusha_replay_keys.transaction(),
             direct_lane_block_application_markers: $state
                 .direct_lane_block_application_markers
@@ -1462,9 +1463,12 @@ impl LaneRelayStore {
             .map(|(_, envelope)| envelope)
     }
 
-    /// Return the highest relay envelope that satisfies merge-admission prerequisites.
+    /// Return the highest relay envelope carrying structural merge material.
+    ///
+    /// The caller must authenticate the QC and the effect-specific proof before
+    /// using the returned settlement as consensus input.
     #[must_use]
-    pub fn latest_merge_admissible_for_lane_dataspace(
+    pub fn latest_with_merge_material_for_lane_dataspace(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -1477,15 +1481,15 @@ impl LaneRelayStore {
             )
             .rev()
             .map(|(_, envelope)| envelope)
-            .find(|envelope| envelope.is_merge_admissible())
+            .find(|envelope| envelope.has_merge_admission_material())
     }
 
-    /// Return the latest merge-admissible relay for each active lane/dataspace pair.
+    /// Return the latest relay carrying merge material for each active lane/dataspace pair.
     #[must_use]
-    pub fn latest_merge_admissible_relays(&self) -> Vec<&LaneRelayEnvelope> {
+    pub fn latest_relays_with_merge_material(&self) -> Vec<&LaneRelayEnvelope> {
         let mut latest = BTreeMap::new();
         for envelope in self.entries.values() {
-            if envelope.is_merge_admissible() {
+            if envelope.has_merge_admission_material() {
                 latest.insert(
                     (
                         envelope.lane_id,
@@ -1499,15 +1503,15 @@ impl LaneRelayStore {
         latest.into_values().collect()
     }
 
-    /// Return the next contiguous merge-admissible relay for each active lane/dataspace pair.
+    /// Return the next contiguous relay carrying merge material for each active route.
     #[must_use]
-    pub fn next_merge_admissible_relays(
+    pub fn next_relays_with_merge_material(
         &self,
         previous_snapshots: &BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
     ) -> Vec<&LaneRelayEnvelope> {
         let mut next = BTreeMap::new();
         for envelope in self.entries.values() {
-            if !envelope.is_merge_admissible() {
+            if !envelope.has_merge_admission_material() {
                 continue;
             }
             let key = (
@@ -1700,8 +1704,8 @@ struct NexusFeeSettlementPlan {
     receipt_authority_heights: BTreeMap<[u8; 32], u64>,
     aggregate_burns: BTreeMap<AssetId, Quantity>,
     settled_lease_usage: BTreeMap<Hash, Quantity>,
-    settlement_markers: Vec<Name>,
-    receipt_markers: Vec<([u8; 32], Name)>,
+    settlement_markers: Vec<StatePath>,
+    receipt_markers: Vec<([u8; 32], StatePath)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -3914,7 +3918,7 @@ pub struct World {
     pub(crate) contract_subject_addresses:
         Storage<AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
-    pub(crate) smart_contract_state: Storage<Name, Vec<u8>>,
+    pub(crate) smart_contract_state: Storage<StatePath, Vec<u8>>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
     pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
     /// Current Soracloud deployment state keyed by service name.
@@ -4074,8 +4078,8 @@ pub struct World {
     /// Repo agreement ids keyed by custodian account.
     #[norito(skip)]
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
-    /// Settlement audit trails keyed by settlement identifier.
-    pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
+    /// Successful settlement receipts keyed by their one-shot identifier.
+    pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) kagemusha_replay_keys: Storage<Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
@@ -4504,7 +4508,7 @@ pub struct WorldBlock<'world> {
     pub(crate) contract_subject_addresses:
         StorageBlock<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
-    pub(crate) smart_contract_state: StorageBlock<'world, Name, Vec<u8>>,
+    pub(crate) smart_contract_state: StorageBlock<'world, StatePath, Vec<u8>>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageBlock<'world, (String, String), SoraDeploymentBundleV1>,
@@ -4683,8 +4687,8 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) repo_agreements_by_custodian:
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Settlement audit trails keyed by settlement identifier.
-    pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
+    /// Successful settlement receipts keyed by their one-shot identifier.
+    pub(crate) settlement_receipts: StorageBlock<'world, SettlementId, SettlementReceipt>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) kagemusha_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
@@ -5152,7 +5156,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_initiator,
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
-            settlement_ledgers,
+            settlement_receipts,
             kagemusha_replay_keys,
             direct_lane_block_application_markers,
             public_lane_validators,
@@ -5584,7 +5588,7 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::ContractAddress,
     >,
     /// Durable smart-contract state keyed by logical path.
-    pub(crate) smart_contract_state: StorageTransaction<'block, 'world, Name, Vec<u8>>,
+    pub(crate) smart_contract_state: StorageTransaction<'block, 'world, StatePath, Vec<u8>>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
@@ -5763,9 +5767,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Repo agreement ids keyed by custodian account.
     pub(crate) repo_agreements_by_custodian:
         StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Settlement audit trails keyed by settlement identifier.
-    pub(crate) settlement_ledgers:
-        StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
+    /// Successful settlement receipts keyed by their one-shot identifier.
+    pub(crate) settlement_receipts:
+        StorageTransaction<'block, 'world, SettlementId, SettlementReceipt>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) kagemusha_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
@@ -5877,7 +5881,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
     pub fn smart_contract_state_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, Name, Vec<u8>> {
+    ) -> &mut StorageTransaction<'block, 'world, StatePath, Vec<u8>> {
         &mut self.smart_contract_state
     }
 
@@ -7142,7 +7146,7 @@ pub struct WorldView<'world> {
     pub(crate) contract_subject_addresses:
         StorageView<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
-    pub(crate) smart_contract_state: StorageView<'world, Name, Vec<u8>>,
+    pub(crate) smart_contract_state: StorageView<'world, StatePath, Vec<u8>>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageView<'world, (String, String), SoraDeploymentBundleV1>,
@@ -7304,8 +7308,8 @@ pub struct WorldView<'world> {
     /// Repo agreement ids keyed by custodian account.
     pub(crate) repo_agreements_by_custodian:
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    /// Settlement audit trails keyed by settlement identifier.
-    pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
+    /// Successful settlement receipts keyed by their one-shot identifier.
+    pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) kagemusha_replay_keys: StorageView<'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
@@ -7399,12 +7403,6 @@ pub struct ZkAssetState {
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
     /// Required verifying key for shield proofs (if configured).
     pub vk_shield: Option<ZkAssetVerifierBinding>,
-    /// Optional pool id when this asset definition stores an asset-hidden shielded pool.
-    #[norito(default)]
-    pub asset_hidden_pool_id: Option<String>,
-    /// Optional asset-set root that the asset-hidden pool verifier is bound to.
-    #[norito(default)]
-    pub asset_hidden_asset_set_root: Option<[u8; 32]>,
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
     #[norito(skip)]
@@ -7423,8 +7421,6 @@ impl Default for ZkAssetState {
             vk_transfer: None,
             vk_unshield: None,
             vk_shield: None,
-            asset_hidden_pool_id: None,
-            asset_hidden_asset_set_root: None,
             frontier_checkpoints: Vec::new(),
             tree: CanonMerkleTree::default(),
         }
@@ -7629,8 +7625,6 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut vk_transfer = None;
         let mut vk_unshield = None;
         let mut vk_shield = None;
-        let mut asset_hidden_pool_id = None;
-        let mut asset_hidden_asset_set_root = None;
         let mut frontier_checkpoints = None;
 
         while let Some(key) = visitor.next_key()? {
@@ -7644,10 +7638,6 @@ impl json::JsonDeserialize for ZkAssetState {
                 "vk_transfer" => vk_transfer = Some(visitor.parse_value()?),
                 "vk_unshield" => vk_unshield = Some(visitor.parse_value()?),
                 "vk_shield" => vk_shield = Some(visitor.parse_value()?),
-                "asset_hidden_pool_id" => asset_hidden_pool_id = Some(visitor.parse_value()?),
-                "asset_hidden_asset_set_root" => {
-                    asset_hidden_asset_set_root = Some(visitor.parse_value()?);
-                }
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
                 other => {
                     visitor.skip_value()?;
@@ -7678,8 +7668,6 @@ impl json::JsonDeserialize for ZkAssetState {
             vk_transfer: vk_transfer.unwrap_or(None),
             vk_unshield: vk_unshield.unwrap_or(None),
             vk_shield: vk_shield.unwrap_or(None),
-            asset_hidden_pool_id: asset_hidden_pool_id.unwrap_or(None),
-            asset_hidden_asset_set_root: asset_hidden_asset_set_root.unwrap_or(None),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
             tree,
         })
@@ -8993,7 +8981,6 @@ pub struct GovernanceLockRecord {
     pub amount: Quantity,
     /// Exact amount slashed from this lock (accumulated).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub slashed: Quantity,
     /// Height at which the lock expires and can be released.
     pub expiry_height: u64,
@@ -9007,7 +8994,6 @@ pub struct GovernanceLockRecord {
     /// Legacy records decode as `None` and continue to use the active governance
     /// configuration. New records always retain `Some`.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub custody: Option<GovernanceLockCustody>,
 }
 
@@ -9044,15 +9030,12 @@ pub struct AssetDefinitionAliasBindingRecord {
     pub alias: AssetDefinitionAlias,
     /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub lease_expiry_ms: Option<u64>,
     /// End of the grace period (unix ms). Alias is removed once `now_ms > grace_until_ms`.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub grace_until_ms: Option<u64>,
     /// Timestamp when the binding was recorded.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub bound_at_ms: u64,
 }
 
@@ -9112,15 +9095,12 @@ pub struct ContractAliasBindingRecord {
     pub alias: ContractAlias,
     /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub lease_expiry_ms: Option<u64>,
     /// End of the grace period (unix ms). Alias is removed once `now_ms > grace_until_ms`.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub grace_until_ms: Option<u64>,
     /// Timestamp when the binding was recorded.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub bound_at_ms: u64,
 }
 
@@ -9169,31 +9149,24 @@ pub struct CitizenshipRecord {
     pub amount: Quantity,
     /// Block height at which the bond was recorded.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub bonded_height: u64,
     /// Seats filled in the most recent epoch (resets when `last_epoch_seen` changes).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub seats_in_epoch: u32,
     /// Epoch index when `seats_in_epoch` was last updated.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub last_epoch_seen: u64,
     /// Height until which the citizen is on cooldown (ineligible for new seats).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub cooldown_until: u64,
     /// Declines consumed in the current epoch (penalties start after the free budget).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub declines_used: u32,
     /// Accumulated no-show events for audit/telemetry.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub no_show_strikes: u32,
     /// Accumulated misconduct events for audit/telemetry.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(default))]
     pub misconduct_strikes: u32,
 }
 
@@ -10940,8 +10913,6 @@ pub struct StateBlock<'state> {
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: crate::zk::DedupCache,
-    /// Optional preverified batch results for this block.
-    pub(crate) preverified_batch: Option<std::sync::Arc<crate::zk::PreverifiedProofMap>>,
     /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.
     committed_fragments: usize,
     /// True while rebuilding state from already committed Kura blocks.
@@ -11726,11 +11697,11 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Deterministic per-execution ordinal for contract lifecycle transitions.
     pub(crate) contract_lifecycle_transition_ordinal: u64,
-    /// Remaining executor fuel budget for runtime executor validation in this transaction.
-    pub(crate) executor_fuel_remaining: Option<u64>,
-    /// Optional view of block-level preverified proofs.
-    #[cfg_attr(not(feature = "zk-preverify"), allow(dead_code))]
-    pub(crate) preverified_batch: Option<std::sync::Arc<crate::zk::PreverifiedProofMap>>,
+    /// Remaining governed fuel for runtime executor validation in this transaction.
+    ///
+    /// Every state transaction snapshots `executor.fuel` at creation, including
+    /// transactions that begin with the initial executor and upgrade it later.
+    pub(crate) executor_fuel_remaining: u64,
     /// Block-level transfer transcript accumulator shared across transactions.
     fastpq_transcripts:
         &'block mut BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
@@ -17757,7 +17728,7 @@ impl World {
     }
 
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
-    pub fn smart_contract_state_mut_for_testing(&mut self) -> &mut Storage<Name, Vec<u8>> {
+    pub fn smart_contract_state_mut_for_testing(&mut self) -> &mut Storage<StatePath, Vec<u8>> {
         &mut self.smart_contract_state
     }
 
@@ -18106,7 +18077,7 @@ impl World {
             repo_agreements_by_initiator: Storage::default(),
             repo_agreements_by_counterparty: Storage::default(),
             repo_agreements_by_custodian: Storage::default(),
-            settlement_ledgers: Storage::default(),
+            settlement_receipts: Storage::default(),
             ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
@@ -19006,7 +18977,7 @@ impl World {
             repo_agreements_by_initiator: self.repo_agreements_by_initiator.view(),
             repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
             repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
-            settlement_ledgers: self.settlement_ledgers.view(),
+            settlement_receipts: self.settlement_receipts.view(),
             kagemusha_replay_keys: self.kagemusha_replay_keys.view(),
             direct_lane_block_application_markers: self
                 .direct_lane_block_application_markers
@@ -19654,7 +19625,7 @@ pub trait WorldReadOnly {
         &self,
     ) -> &impl StorageReadOnly<AccountId, iroha_data_model::smart_contract::ContractAddress>;
     /// Durable smart-contract state keyed by logical path (read-only).
-    fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>>;
+    fn smart_contract_state(&self) -> &impl StorageReadOnly<StatePath, Vec<u8>>;
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
     fn soracloud_service_revisions(
         &self,
@@ -19782,8 +19753,8 @@ pub trait WorldReadOnly {
     fn repo_agreements_by_custodian(
         &self,
     ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
-    /// Settlement audit trails (read-only).
-    fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
+    /// Successful settlement receipts (read-only).
+    fn settlement_receipts(&self) -> &impl StorageReadOnly<SettlementId, SettlementReceipt>;
     /// Offline replay keys (read-only).
     fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Direct standalone lane-block application markers (read-only).
@@ -21109,7 +21080,7 @@ macro_rules! impl_world_ro {
             > {
                 &self.contract_subject_addresses
             }
-            fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>> {
+            fn smart_contract_state(&self) -> &impl StorageReadOnly<StatePath, Vec<u8>> {
                 &self.smart_contract_state
             }
             fn soracloud_service_revisions(
@@ -21282,8 +21253,8 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
                 &self.repo_agreements_by_custodian
             }
-            fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
-                &self.settlement_ledgers
+            fn settlement_receipts(&self) -> &impl StorageReadOnly<SettlementId, SettlementReceipt> {
+                &self.settlement_receipts
             }
             fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
                 &self.kagemusha_replay_keys
@@ -21827,7 +21798,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_initiator,
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
-            settlement_ledgers,
+            settlement_receipts,
             kagemusha_replay_keys,
             direct_lane_block_application_markers,
             public_lane_validators,
@@ -21947,7 +21918,7 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_initiator.commit();
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
-        settlement_ledgers.commit();
+        settlement_receipts.commit();
         kagemusha_replay_keys.commit();
         direct_lane_block_application_markers.commit();
         domain_committees.commit();
@@ -23245,7 +23216,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             pin_manifests,
             manifest_aliases,
             replication_orders,
-            settlement_ledgers,
+            settlement_receipts,
             kagemusha_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
@@ -23365,7 +23336,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_rotation_policy.apply();
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
-        settlement_ledgers.apply();
+        settlement_receipts.apply();
         kagemusha_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
@@ -24312,6 +24283,16 @@ impl State {
                     "bootstrap Nexus/AMX context does not match the complete restored validator and lane state"
                         .to_owned(),
                 );
+            }
+            let live_execution_policy = Hash::prehashed(
+                self.execution_policy_digest_v1()
+                    .map_err(|error| format!("failed to derive execution policy: {error}"))?,
+            );
+            if record.context.execution_policy_hash != live_execution_policy {
+                return Err(format!(
+                    "bootstrap execution-policy hash {:?} does not match restored local policy {live_execution_policy:?}",
+                    record.context.execution_policy_hash
+                ));
             }
         }
 
@@ -26845,8 +26826,6 @@ impl State {
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
             quarantine_tx_max_cycles:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-            quarantine_tx_max_millis:
-                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
             query_max_fetch_size:
                 iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
@@ -27906,8 +27885,6 @@ impl State {
             _curr_block: curr_block,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: Default::default(),
-            // No preverified batch at block start; may be set later by pipeline
-            preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
@@ -28745,7 +28722,6 @@ impl State {
             _curr_block: curr_block,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: Default::default(),
-            preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
@@ -28855,8 +28831,6 @@ impl State {
             _curr_block: curr_block,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: Default::default(),
-            // No preverified batch at block start; may be set later by pipeline
-            preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
@@ -29867,12 +29841,22 @@ impl State {
                                 "durable carrier height is zero".to_owned(),
                             )
                         })?;
-                    let carrier_block = self.kura.get_block(carrier_height).ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "durable carrier body is unavailable during merge recovery".to_owned(),
-                        )
-                    })?;
-                    if crate::merge::merge_application_header_from_carrier(&carrier_block.header())
+                    let carrier_header = if let Some(carrier_block) =
+                        self.kura.get_block_without_merge_sidecar(carrier_height)
+                    {
+                        carrier_block.header()
+                    } else {
+                        self.kura
+                            .v2_finality_artifact_with_header(carrier.block_height)?
+                            .map(|(header, _)| header)
+                            .ok_or_else(|| {
+                                MergeLedgerCommitError::ExecutionBatchInvalid(
+                                    "durable carrier has neither a local body nor retained finality header"
+                                        .to_owned(),
+                                )
+                            })?
+                    };
+                    if crate::merge::merge_application_header_from_carrier(&carrier_header)
                         != batch.application_block_header
                     {
                         return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -30161,13 +30145,13 @@ impl State {
             .prune_lane_progress(lanes_to_prune);
     }
 
-    fn is_verified_lane_relay_contract_state_key(key: &Name) -> bool {
+    fn is_verified_lane_relay_contract_state_key(key: &StatePath) -> bool {
         let key = key.to_string();
         key.starts_with(VERIFIED_LANE_RELAY_STATE_KEY_PREFIX)
             || key.starts_with(VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX)
     }
 
-    fn verified_lane_relay_canonical_state_key_lane(key: &Name) -> Option<LaneId> {
+    fn verified_lane_relay_canonical_state_key_lane(key: &StatePath) -> Option<LaneId> {
         let key = key.to_string();
         let suffix = key
             .strip_prefix(VERIFIED_LANE_RELAY_STATE_KEY_PREFIX)?
@@ -30197,8 +30181,11 @@ impl State {
         Some(encoded)
     }
 
-    fn verified_lane_relay_contract_map_state_key(relay_state_key: &Name) -> Option<Name> {
-        let key_payload = norito::to_bytes(relay_state_key).ok()?;
+    fn verified_lane_relay_contract_map_state_key(
+        relay_state_key: &StatePath,
+    ) -> Option<StatePath> {
+        let abi_name = Name::from_str(relay_state_key.as_ref()).ok()?;
+        let key_payload = norito::to_bytes(&abi_name).ok()?;
         let pointer_body = Self::encode_pointer_abi_tlv(ivm::PointerType::Name, &key_payload)?;
         let digest: [u8; 32] = Hash::new(&pointer_body).into();
         format!(
@@ -30210,10 +30197,10 @@ impl State {
     }
 
     fn verified_lane_relay_contract_state_key_matches_record(
-        key: &Name,
+        key: &StatePath,
         record: &VerifiedLaneRelayRecord,
     ) -> bool {
-        let Ok(relay_state_key) = Name::from_str(&record.relay_ref.relay_state_key()) else {
+        let Ok(relay_state_key) = StatePath::from_str(&record.relay_ref.relay_state_key()) else {
             return false;
         };
         if key == &relay_state_key {
@@ -30585,9 +30572,9 @@ impl State {
     }
 
     fn verified_lane_relay_contract_state_keys_for_lanes(
-        smart_contract_state: &impl StorageReadOnly<Name, Vec<u8>>,
+        smart_contract_state: &impl StorageReadOnly<StatePath, Vec<u8>>,
         lanes_to_reset: &BTreeSet<LaneId>,
-    ) -> Vec<Name> {
+    ) -> Vec<StatePath> {
         if lanes_to_reset.is_empty() {
             return Vec::new();
         }
@@ -31561,8 +31548,10 @@ impl State {
         Ok((public_keys, pops))
     }
 
-    fn verify_lane_relay_qc(
-        &self,
+    fn verify_lane_relay_qc_from_sources(
+        world: &impl WorldReadOnly,
+        chain_id: &iroha_data_model::ChainId,
+        nexus: &iroha_config::parameters::actual::Nexus,
         envelope: &LaneRelayEnvelope,
         committee: &[PeerId],
     ) -> Result<(), LaneRelayError> {
@@ -31574,7 +31563,6 @@ impl State {
         {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
-        let nexus = self.nexus_snapshot();
         let pinned_committee = match nexus
             .lane_catalog
             .lanes()
@@ -31587,14 +31575,13 @@ impl State {
             ),
             _ => None,
         };
-        let world = self.world.view();
         let proposal_height = envelope.block_header.height().get();
-        let expected_epoch = crate::sumeragi::epoch_for_height_from_world(&world, proposal_height);
+        let expected_epoch = crate::sumeragi::epoch_for_height_from_world(world, proposal_height);
         if qc.epoch != expected_epoch {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
         let (public_keys, pops) = Self::lane_relay_qc_signers(
-            &world,
+            world,
             committee,
             pinned_committee.as_deref(),
             &qc.aggregate.signers_bitmap,
@@ -31609,7 +31596,7 @@ impl State {
             ConsensusMode::Permissioned
         };
         let derived_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-            &world,
+            world,
             qc.height,
             fallback_mode,
         );
@@ -31640,7 +31627,7 @@ impl State {
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = crate::sumeragi::consensus::vote_preimage(&self.chain_id, mode_tag, &vote);
+        let preimage = crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
         let key_refs: Vec<&PublicKey> = public_keys.iter().collect();
         let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
@@ -31653,9 +31640,132 @@ impl State {
         Ok(())
     }
 
+    /// Authenticate a finalized relay against the canonical lane committee derived from the
+    /// supplied consensus snapshot.
+    ///
+    /// The returned label describes an emergency-roster outcome, when committee recovery was
+    /// consulted. Callers may use it for telemetry but must not alter admission from the label.
+    #[allow(clippy::too_many_lines)]
+    fn verify_lane_relay_finality_from_sources(
+        world: &impl WorldReadOnly,
+        chain_id: &iroha_data_model::ChainId,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        commit_topology: &[PeerId],
+        envelope: &LaneRelayEnvelope,
+    ) -> Result<Option<&'static str>, LaneRelayError> {
+        // Pending envelopes are useful for local progress/status, but they are never authority
+        // for persistent settlement state.
+        if envelope.qc.is_none() {
+            return Err(LaneRelayError::MissingQc);
+        }
+
+        let fault_tolerance = nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.id == envelope.dataspace_id)
+            .map(|entry| entry.fault_tolerance)
+            .ok_or(LaneRelayError::UnknownDataspace(envelope.dataspace_id))?;
+        let committee_size = fault_tolerance
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(LaneRelayError::InvalidValidatorSet {
+                validator_count: u32::MAX,
+                min_quorum: 0,
+            })?;
+        let committee_size =
+            usize::try_from(committee_size).map_err(|_| LaneRelayError::InvalidValidatorSet {
+                validator_count: u32::MAX,
+                min_quorum: 0,
+            })?;
+        let proposal_height = envelope.block_header.height().get();
+        let validator_mode = nexus
+            .staking
+            .validator_mode(envelope.lane_id, &nexus.lane_catalog);
+        let base_pool = Self::authoritative_lane_peer_ids_from_sources(
+            world,
+            chain_id,
+            envelope.lane_id,
+            validator_mode,
+            manifest_registry,
+            nexus,
+            commit_topology,
+            proposal_height,
+        );
+        let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
+        let seed = Self::lane_relay_committee_seed_from_sources(
+            world,
+            chain_id,
+            envelope.dataspace_id,
+            envelope.lane_id,
+            proposal_height,
+        );
+        let (committee, override_outcome) = if base_pool.len() >= committee_size {
+            (
+                Self::lane_relay_committee_from_pool(&base_pool, committee_size, seed)?,
+                None,
+            )
+        } else {
+            let mut outcome = Some("missing");
+            let mut committee = base_pool.clone();
+            if !nexus.lane_relay_emergency.enabled {
+                outcome = Some("disabled");
+            } else if let Some(record) = world
+                .lane_relay_emergency_validators()
+                .get(&envelope.lane_id)
+            {
+                if proposal_height > record.expires_at_height {
+                    outcome = Some("expired");
+                } else {
+                    let base_members: BTreeSet<_> = committee.iter().cloned().collect();
+                    let mut emergency_pool = eligible_lane_relay_emergency_peers(
+                        world,
+                        &record.peers,
+                        commit_topology,
+                        proposal_height,
+                    );
+                    emergency_pool.retain(|peer| !base_members.contains(peer));
+                    let deficit = committee_size.saturating_sub(committee.len());
+                    let fillers =
+                        Self::lane_relay_committee_from_pool(&emergency_pool, deficit, seed)?;
+                    if fillers.len() < deficit {
+                        outcome = Some("insufficient");
+                    } else {
+                        committee.extend(fillers);
+                        outcome = Some("applied");
+                    }
+                }
+            }
+
+            if committee.len() < committee_size {
+                return Err(LaneRelayError::InvalidValidatorSet {
+                    validator_count: u32::try_from(committee.len()).unwrap_or(u32::MAX),
+                    min_quorum: u32::try_from(min_quorum).unwrap_or(u32::MAX),
+                });
+            }
+            (committee, outcome)
+        };
+
+        let validator_count =
+            u32::try_from(committee.len()).map_err(|_| LaneRelayError::InvalidValidatorSet {
+                validator_count: u32::MAX,
+                min_quorum: 0,
+            })?;
+        let committee_quorum =
+            crate::sumeragi::network_topology::commit_quorum_from_len(committee.len());
+        let quorum = LaneRelayQuorumContext::new(
+            validator_count,
+            u32::try_from(committee_quorum).unwrap_or(validator_count),
+        )?;
+        envelope.verify_with_quorum(quorum)?;
+        Self::verify_lane_relay_qc_from_sources(world, chain_id, nexus, envelope, &committee)?;
+        Ok(override_outcome)
+    }
+
     fn verified_lane_relay_state_key(
         envelope: &LaneRelayEnvelope,
-    ) -> core::result::Result<Name, LaneRelayError> {
+    ) -> core::result::Result<StatePath, LaneRelayError> {
         core::str::FromStr::from_str(&envelope.relay_ref().relay_state_key())
             .map_err(|_| LaneRelayError::InvalidFastpqProof)
     }
@@ -31715,7 +31825,7 @@ impl State {
         observed_at_height: u64,
     ) -> core::result::Result<(), LaneRelayError> {
         let envelope = &record.relay_envelope;
-        envelope.verify_fastpq_proof_material()?;
+        envelope.validate_fastpq_proof_metadata()?;
         let Some(material) = envelope.fastpq_proof.as_ref() else {
             return Err(LaneRelayError::MissingFastpqProof);
         };
@@ -31866,14 +31976,19 @@ impl State {
             .expect("persisting relay validation always returns an insertion outcome"))
     }
 
-    /// Fully authenticate an embedded relay without consulting or mutating the opportunistic
-    /// relay inventory. This is the follower path for leader-proposed merge candidates.
+    /// Fully authenticate a merge-authoritative embedded relay.
+    ///
+    /// The lane QC authenticates finality for the block header, while the
+    /// committed `FastPQ` record authenticates the exact effect claim,
+    /// including the descriptor and settlement commitment. Neither proof is
+    /// sufficient on its own.
     fn validate_embedded_lane_relay(
         &self,
         envelope: &LaneRelayEnvelope,
     ) -> core::result::Result<(), LaneRelayError> {
         self.validate_or_record_lane_relay(envelope, false)
-            .map(|_| ())
+            .map(|_| ())?;
+        self.verify_lane_relay_fastpq_record(envelope)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -31950,134 +32065,39 @@ impl State {
                 new_height: envelope.block_height,
             });
         }
-        let fault_tolerance = nexus
-            .dataspace_catalog
-            .entries()
-            .iter()
-            .find(|entry| entry.id == envelope.dataspace_id)
-            .map(|entry| entry.fault_tolerance)
-            .ok_or(LaneRelayError::UnknownDataspace(envelope.dataspace_id))?;
-        let committee_size = fault_tolerance
-            .checked_mul(3)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(LaneRelayError::InvalidValidatorSet {
-                validator_count: u32::MAX,
-                min_quorum: 0,
-            })?;
-        let committee_size =
-            usize::try_from(committee_size).map_err(|_| LaneRelayError::InvalidValidatorSet {
-                validator_count: u32::MAX,
-                min_quorum: 0,
-            })?;
-
         let manifest_registry = self.lane_manifests.read().clone();
-        let validator_mode = nexus
-            .staking
-            .validator_mode(envelope.lane_id, &nexus.lane_catalog);
         let commit_topology = self.commit_topology_snapshot();
         let world = self.world.view();
-        let base_pool = Self::authoritative_lane_peer_ids_from_sources(
+        let emergency_override_outcome = Self::verify_lane_relay_finality_from_sources(
             &world,
             &self.chain_id,
-            envelope.lane_id,
-            validator_mode,
             manifest_registry.as_ref(),
             &nexus,
             &commit_topology,
-            proposal_height,
-        );
-        let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
-        let seed = self.lane_relay_committee_seed(
-            envelope.dataspace_id,
-            envelope.lane_id,
-            proposal_height,
-        );
-        let committee = if base_pool.len() >= committee_size {
-            Self::lane_relay_committee_from_pool(&base_pool, committee_size, seed)?
-        } else {
-            #[cfg(feature = "telemetry")]
-            let mut override_outcome = None;
-            #[cfg(feature = "telemetry")]
-            let mut set_override_outcome = |value: &'static str| {
-                override_outcome = Some(value);
-            };
-            #[cfg(not(feature = "telemetry"))]
-            let set_override_outcome = |_: &'static str| {};
-
-            let mut committee = base_pool.clone();
-            if !nexus.lane_relay_emergency.enabled {
-                set_override_outcome("disabled");
-            } else if let Some(record) = self
-                .world
-                .lane_relay_emergency_validators
-                .view()
-                .get(&envelope.lane_id)
-                .cloned()
-            {
-                if proposal_height > record.expires_at_height {
-                    set_override_outcome("expired");
-                } else {
-                    let base_members: BTreeSet<_> = committee.iter().cloned().collect();
-                    let mut emergency_pool = eligible_lane_relay_emergency_peers(
-                        &world,
-                        &record.peers,
-                        &commit_topology,
-                        proposal_height,
-                    );
-                    emergency_pool.retain(|peer| !base_members.contains(peer));
-                    let deficit = committee_size.saturating_sub(committee.len());
-                    let fillers =
-                        Self::lane_relay_committee_from_pool(&emergency_pool, deficit, seed)?;
-                    if fillers.len() < deficit {
-                        set_override_outcome("insufficient");
-                    } else {
-                        committee.extend(fillers);
-                        set_override_outcome("applied");
-                    }
-                }
-            } else {
-                set_override_outcome("missing");
-            }
-
-            #[cfg(feature = "telemetry")]
-            if persist && let Some(outcome) = override_outcome {
-                self.telemetry.record_lane_relay_emergency_override(
-                    envelope.lane_id,
-                    envelope.dataspace_id,
-                    outcome,
-                );
-            }
-
-            if committee.len() < committee_size {
-                return Err(LaneRelayError::InvalidValidatorSet {
-                    validator_count: u32::try_from(committee.len()).unwrap_or(u32::MAX),
-                    min_quorum: u32::try_from(min_quorum).unwrap_or(u32::MAX),
-                });
-            }
-            committee
-        };
-        let validator_count =
-            u32::try_from(committee.len()).map_err(|_| LaneRelayError::InvalidValidatorSet {
-                validator_count: u32::MAX,
-                min_quorum: 0,
-            })?;
-        let committee_quorum =
-            crate::sumeragi::network_topology::commit_quorum_from_len(committee.len());
-        let quorum = LaneRelayQuorumContext::new(
-            validator_count,
-            u32::try_from(committee_quorum).unwrap_or(validator_count),
+            envelope,
         )?;
-        envelope.verify_with_quorum(quorum)?;
-        self.verify_lane_relay_qc(envelope, &committee)?;
+        #[cfg(feature = "telemetry")]
+        if persist && let Some(outcome) = emergency_override_outcome {
+            self.telemetry.record_lane_relay_emergency_override(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                outcome,
+            );
+        }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = emergency_override_outcome;
+
         if persist && let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
             return Err(error);
         }
-        let fastpq_verified = match envelope.verify_fastpq_proof_material() {
+        let fastpq_metadata_present = match envelope.validate_fastpq_proof_metadata() {
             Ok(()) => true,
             Err(LaneRelayError::MissingFastpqProof) => false,
             Err(err) => return Err(err),
         };
-        if fastpq_verified && nexus.fees.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn {
+        if fastpq_metadata_present
+            && nexus.fees.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
+        {
             self.verify_lane_relay_fastpq_record(envelope)?;
         }
 
@@ -34328,7 +34348,13 @@ impl State {
 
         {
             let relays = self.lane_relays.read();
-            for latest_admissible in relays.next_merge_admissible_relays(previous_snapshots) {
+            for latest_admissible in relays.next_relays_with_merge_material(previous_snapshots) {
+                if self
+                    .verify_lane_relay_fastpq_record(latest_admissible)
+                    .is_err()
+                {
+                    continue;
+                }
                 let relay_proposal_height = latest_admissible.block_header.height().get();
                 if !lifecycle.lane_route_and_incarnation_matches(
                     latest_admissible.lane_id,
@@ -36390,7 +36416,8 @@ impl State {
                 let proposal_height = relay.block_header.height().get();
                 relay.lane_id == lane_id
                     && relay.dataspace_id == dataspace_id
-                    && relay.is_merge_admissible()
+                    && relay.has_merge_admission_material()
+                    && self.verify_lane_relay_fastpq_record(relay).is_ok()
                     && relay.lane_incarnation == lane_incarnation
                     && lifecycle.lane_route_and_incarnation_matches(
                         lane_id,
@@ -36624,7 +36651,7 @@ impl State {
 
     fn queue_plan_admission_registry_marker_key(
         registry_key: &crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2,
-    ) -> Result<Name, MergeLedgerCommitError> {
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         if registry_key.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2
             || registry_key
                 .chain_id_digest
@@ -36676,7 +36703,7 @@ impl State {
     }
 
     fn decode_exact_queue_plan_admission_registry_marker(
-        key: &Name,
+        key: &StatePath,
         payload: &[u8],
     ) -> Result<crate::torii_proxy::QueuePlanAdmissionRegistryValueV2, MergeLedgerCommitError> {
         let value = norito::decode_from_bytes::<
@@ -36696,7 +36723,9 @@ impl State {
         Ok(value)
     }
 
-    fn nexus_fee_receipt_marker_key(source_id: &[u8; 32]) -> Result<Name, MergeLedgerCommitError> {
+    fn nexus_fee_receipt_marker_key(
+        source_id: &[u8; 32],
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         let raw = format!("nexus_fee_receipt_settled_{}", hex::encode(source_id));
         core::str::FromStr::from_str(&raw).map_err(|_| {
             MergeLedgerCommitError::InvalidNexusFeeReceipt(
@@ -36708,7 +36737,7 @@ impl State {
     fn merge_execution_batch_marker_key(
         epoch_id: u64,
         batch_identity_hash: Hash,
-    ) -> Result<Name, MergeLedgerCommitError> {
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         format!(
             "{MERGE_EXECUTION_BATCH_MARKER_PREFIX}{epoch_id}_{}",
             hex::encode(batch_identity_hash.as_ref())
@@ -36723,7 +36752,7 @@ impl State {
 
     fn merge_execution_lane_marker_key(
         execution: &MergeLaneExecution,
-    ) -> Result<Name, MergeLedgerCommitError> {
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         let descriptor = &execution.proposal.descriptor;
         format!(
             "{MERGE_EXECUTION_LANE_MARKER_PREFIX}{}_{}_{}_{}",
@@ -36744,7 +36773,7 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> Result<Name, MergeLedgerCommitError> {
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         format!(
             "{MERGE_EXECUTION_LANE_FRONTIER_MARKER_PREFIX}{}_{}_{}",
             lane_id.as_u32(),
@@ -36763,7 +36792,7 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> Result<Name, MergeLedgerCommitError> {
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         format!(
             "{NATIVE_AMX_PARTICIPANT_FRONTIER_MARKER_PREFIX}{}_{}_{}",
             lane_id.as_u32(),
@@ -36780,7 +36809,7 @@ impl State {
 
     fn encode_native_amx_participant_frontier_marker(
         marker: AppliedNativeAmxParticipantFrontierMarker,
-    ) -> Result<(Name, Vec<u8>), MergeLedgerCommitError> {
+    ) -> Result<(StatePath, Vec<u8>), MergeLedgerCommitError> {
         let key = Self::native_amx_participant_frontier_marker_key(
             marker.lane_id,
             marker.dataspace_id,
@@ -36795,7 +36824,7 @@ impl State {
     }
 
     fn decode_exact_native_amx_participant_frontier_marker(
-        key: &Name,
+        key: &StatePath,
         payload: &[u8],
     ) -> Result<AppliedNativeAmxParticipantFrontierMarker, MergeLedgerCommitError> {
         let marker = norito::decode_from_bytes::<AppliedNativeAmxParticipantFrontierMarker>(
@@ -36967,7 +36996,7 @@ impl State {
     fn merge_execution_marker_payloads(
         epoch_id: u64,
         batch: &MergeExecutionBatch,
-    ) -> Result<Vec<(Name, Vec<u8>)>, MergeLedgerCommitError> {
+    ) -> Result<Vec<(StatePath, Vec<u8>)>, MergeLedgerCommitError> {
         let batch_identity_hash = crate::merge::merge_execution_batch_identity_hash(batch);
         let batch_marker = AppliedMergeExecutionBatchMarker {
             version: 1,
@@ -37008,7 +37037,7 @@ impl State {
 
     fn merge_lane_execution_frontier_marker_payloads(
         batch: &MergeExecutionBatch,
-    ) -> Result<Vec<(Name, Vec<u8>)>, MergeLedgerCommitError> {
+    ) -> Result<Vec<(StatePath, Vec<u8>)>, MergeLedgerCommitError> {
         batch
             .lanes
             .iter()
@@ -37029,7 +37058,7 @@ impl State {
 
     fn encode_merge_lane_frontier_marker(
         marker: AppliedMergeLaneFrontierMarker,
-    ) -> Result<(Name, Vec<u8>), MergeLedgerCommitError> {
+    ) -> Result<(StatePath, Vec<u8>), MergeLedgerCommitError> {
         let key = Self::merge_lane_frontier_marker_key(
             marker.lane_id,
             marker.dataspace_id,
@@ -37044,7 +37073,7 @@ impl State {
     }
 
     fn decode_exact_merge_lane_frontier_marker(
-        key: &Name,
+        key: &StatePath,
         payload: &[u8],
     ) -> Result<AppliedMergeLaneFrontierMarker, MergeLedgerCommitError> {
         let marker =
@@ -37243,7 +37272,7 @@ impl State {
 
     fn merge_lane_snapshot_frontier_marker_payloads(
         snapshots: &[MergeLaneSnapshot],
-    ) -> Result<Vec<(Name, Vec<u8>)>, MergeLedgerCommitError> {
+    ) -> Result<Vec<(StatePath, Vec<u8>)>, MergeLedgerCommitError> {
         snapshots
             .iter()
             .map(|snapshot| {
@@ -37275,7 +37304,7 @@ impl State {
     pub(crate) fn expected_merge_execution_marker_payloads(
         entry: &MergeLedgerEntry,
         batch: &MergeExecutionBatch,
-    ) -> Result<Vec<(Name, Vec<u8>)>, MergeLedgerCommitError> {
+    ) -> Result<Vec<(StatePath, Vec<u8>)>, MergeLedgerCommitError> {
         if entry.execution_batch.as_ref() != Some(batch) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "marker request batch does not belong to the supplied merge entry".to_owned(),
@@ -37384,7 +37413,7 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
         settlement_hash: &Hash,
-    ) -> Result<Name, MergeLedgerCommitError> {
+    ) -> Result<StatePath, MergeLedgerCommitError> {
         let raw = format!(
             "nexus_fee_settlement_settled_{}_{}_{}_{}",
             dataspace_id.as_u64(),
@@ -37455,7 +37484,7 @@ impl State {
                 "sponsored lane receipt is missing its proof-bound spend lease".to_owned(),
             )
         })?;
-        let key = Name::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key = StatePath::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
             program_id,
             &receipt.fee_asset_id,
             &lease_id,
@@ -37500,13 +37529,15 @@ impl State {
 
     fn fee_sponsor_allocation_settled_usage_key(
         lease_id: &Hash,
-    ) -> Result<Name, MergeLedgerCommitError> {
-        Name::from_str(&VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id))
-            .map_err(|_| {
-                MergeLedgerCommitError::InvalidNexusFeeReceipt(
-                    "invalid settled sponsor allocation usage state key".to_owned(),
-                )
-            })
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        StatePath::from_str(
+            &VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id),
+        )
+        .map_err(|_| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                "invalid settled sponsor allocation usage state key".to_owned(),
+            )
+        })
     }
 
     fn fee_sponsor_allocation_settled_usage(
@@ -38013,7 +38044,7 @@ impl State {
                     "embedded lane relay authentication failed: {err}"
                 ))
             })?;
-            if !envelope.is_merge_admissible()
+            if !envelope.has_merge_admission_material()
                 || envelope.lane_id != snapshot.lane_id
                 || envelope.dataspace_id != snapshot.dataspace_id
                 || envelope.block_height != snapshot.lane_block_height
@@ -38263,9 +38294,8 @@ impl State {
                     })?;
                 for leg in &receipt.legs {
                     for qc in [&leg.prepare_qc, &leg.commit_qc] {
-                        if qc.validator_set.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-                            || qc.validator_set_pops.len() != qc.validator_set.len()
-                            || qc.validator_set_pops.iter().any(|pop| {
+                        if qc.validator_set().len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+                            || qc.validator_set_pops().iter().any(|pop| {
                                 pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
                             })
                             || qc.signers_bitmap.len()
@@ -41647,15 +41677,12 @@ impl State {
         records: &[DaCommitmentRecord],
     ) -> Vec<DaCommitmentRecord> {
         let nexus = self.nexus_snapshot();
+        let policy_context = crate::da::ActiveLaneProofPolicyContext::new(&nexus);
         records
             .iter()
             .filter_map(|record| {
-                let validation =
-                    crate::da::enforce_active_lane_proof_policy_at_height(
-                        record,
-                        &nexus,
-                        block_height,
-                    )
+                let validation = policy_context
+                    .enforce_commitment_at_height(record, block_height)
                     .map_err(crate::da::DaCommitmentValidationError::from)
                     .and_then(|()| {
                         crate::da::validate_confidential_compute_record(&nexus.lane_config, record)
@@ -46944,6 +46971,113 @@ pub fn compute_zk_consensus_policy_hash(
     Sha2Digest::finalize(h).into()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn compute_execution_policy_digest_v1(
+    pipeline: &iroha_config::parameters::actual::Pipeline,
+    oracle: &iroha_config::parameters::actual::Oracle,
+    crypto: &iroha_config::parameters::actual::Crypto,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    lane_manifests: &LaneManifestRegistry,
+    lane_compliance: Option<&LaneComplianceEngine>,
+    fraud_monitoring: &iroha_config::parameters::actual::FraudMonitoring,
+    zk: &iroha_config::parameters::actual::Zk,
+    governance: &iroha_config::parameters::actual::Governance,
+    content: &iroha_config::parameters::actual::Content,
+    settlement: &iroha_config::parameters::actual::Settlement,
+    kagemusha_release_catalog: &crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+) -> core::result::Result<[u8; 32], iroha_config::parameters::actual::NexusConsensusPolicyDigestError>
+{
+    let compliance_policy_digest =
+        lane_compliance.map(LaneComplianceEngine::consensus_policy_digest);
+    let nexus_policy_digest =
+        iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+            nexus,
+            compliance_policy_digest,
+            Some(lane_manifests.consensus_policy_digest()),
+        )?;
+    Ok(
+        iroha_config::parameters::actual::execution_policy_digest_v1(
+            pipeline,
+            oracle,
+            crypto,
+            fraud_monitoring,
+            governance,
+            content,
+            settlement,
+            nexus_policy_digest,
+            compute_zk_consensus_policy_hash(zk),
+            kagemusha_release_catalog.configured_policy_sha256(),
+        ),
+    )
+}
+
+impl State {
+    /// Compute the canonical V1 identity of all process-local policy that can affect execution.
+    ///
+    /// The identity is suitable for peer admission and comparison with an authenticated recovery
+    /// context. Operational cache, worker, transport, telemetry, and filesystem settings are
+    /// intentionally absent because they must not affect ledger results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an enabled Nexus policy cannot be represented canonically, including
+    /// when configured lane compliance has no loaded authenticated policy set.
+    pub fn execution_policy_digest_v1(
+        &self,
+    ) -> core::result::Result<
+        [u8; 32],
+        iroha_config::parameters::actual::NexusConsensusPolicyDigestError,
+    > {
+        let crypto = self.crypto.read().clone();
+        let nexus = self.nexus_snapshot();
+        let lane_manifests = self.lane_manifests.read().clone();
+        let lane_compliance = self.lane_compliance_engine();
+        compute_execution_policy_digest_v1(
+            &self.pipeline,
+            &self.oracle,
+            crypto.as_ref(),
+            &nexus,
+            lane_manifests.as_ref(),
+            lane_compliance.as_deref(),
+            &self.fraud_monitoring,
+            &self.zk,
+            &self.gov,
+            &self.content,
+            &self.settlement,
+            self.kagemusha_release_catalog.as_ref(),
+        )
+    }
+}
+
+impl StateBlock<'_> {
+    /// Compute the canonical V1 execution-policy identity frozen for this block scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the frozen Nexus policy cannot be represented canonically.
+    pub fn execution_policy_digest_v1(
+        &self,
+    ) -> core::result::Result<
+        [u8; 32],
+        iroha_config::parameters::actual::NexusConsensusPolicyDigestError,
+    > {
+        compute_execution_policy_digest_v1(
+            &self.pipeline,
+            &self.oracle,
+            self.crypto.as_ref(),
+            &self.nexus,
+            self.lane_manifests.as_ref(),
+            self.lane_compliance.as_deref(),
+            &self.fraud_monitoring,
+            &self.zk,
+            &self.gov,
+            &self.content,
+            &self.settlement,
+            self.kagemusha_release_catalog.as_ref(),
+        )
+    }
+}
+
 /// Build the confidential feature digest advertised by blocks and handshake metadata for `height`.
 #[must_use]
 pub fn compute_confidential_feature_digest(
@@ -47822,6 +47956,7 @@ impl<'state> StateBlock<'state> {
             axt_lane_map,
         );
         world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
+        let executor_fuel_remaining = world.parameters.get().executor().fuel.get();
         let zk = self.zk.clone();
         let sccp_registry = Arc::clone(&self.sccp_registry);
         let sccp_verifier_work_after_block = self.sccp_verifier_work_in_block;
@@ -47920,10 +48055,9 @@ impl<'state> StateBlock<'state> {
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             contract_lifecycle_transition_ordinal: 0,
-            executor_fuel_remaining: None,
+            executor_fuel_remaining,
             replay_compatibility: self.replay_compatibility,
             trust_committed_execution_results: self.trust_committed_execution_results,
-            preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,
@@ -48231,7 +48365,7 @@ impl<'state> StateBlock<'state> {
 
     fn stage_merge_lane_frontier_markers(
         &mut self,
-        markers: Vec<(Name, Vec<u8>)>,
+        markers: Vec<(StatePath, Vec<u8>)>,
     ) -> Result<(), MergeLedgerCommitError> {
         let mut seen = BTreeSet::new();
         for (key, payload) in &markers {
@@ -51110,16 +51244,6 @@ impl<'state> StateBlock<'state> {
         transaction.current_entrypoint_index =
             Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));
     }
-
-    /// Install a block-level preverified batch map.
-    ///
-    /// This acts as a block-scope aggregator for ZK verification results
-    /// computed earlier in the pipeline (e.g., background batch checks).
-    /// Execution of `RegisterProof` will prefer this cache over invoking
-    /// backend verifiers, keeping the hot path deterministic and cheap.
-    pub fn set_preverified_batch(&mut self, map: std::sync::Arc<crate::zk::PreverifiedProofMap>) {
-        self.preverified_batch = Some(map);
-    }
 }
 
 #[cfg(feature = "zk-preverify")]
@@ -51189,23 +51313,6 @@ impl StateTransaction<'_, '_> {
             expected_vk_commitment,
             vk_active,
         )
-    }
-
-    /// Lookup a preverified batch result for a proof and verifying-key binding if present.
-    ///
-    /// Returns `Some(true|false)` when a result is available in the current
-    /// block's aggregator cache, or `None` if the proof/key binding was not
-    /// part of the preverification batch.
-    pub fn lookup_preverified_proof(
-        &self,
-        proof: &iroha_data_model::proof::ProofBox,
-        vk_ref: &iroha_data_model::proof::VerifyingKeyId,
-        vk_commitment: [u8; 32],
-    ) -> Option<bool> {
-        let key = crate::zk::PreverifiedProofKey::new(proof, vk_ref, vk_commitment);
-        self.preverified_batch
-            .as_ref()
-            .and_then(|m| m.get(&key).copied())
     }
 }
 
@@ -56273,14 +56380,22 @@ fn load_verified_v2_replay_artifact(
             "replayed block #{height} v2 finality payload hash does not bind the canonical resultless proposal wire"
         ));
     }
-    let executed_block_wire_hash = block
-        .executed_block_wire_hash()
+    let executed_block_wire = block
+        .encode_wire()
         .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
+    let executed_block_wire_len = u64::try_from(executed_block_wire.len())
+        .wrap_err_with(|| format!("replayed executed block #{height} length does not fit u64"))?;
+    let executed_block_wire_hash = Hash::new(&executed_block_wire);
     if artifact
         .commit_qc
         .execution_commitment
-        .executed_block_wire_hash
-        != executed_block_wire_hash
+        .executed_block_wire_len
+        != executed_block_wire_len
+        || artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash
+            != executed_block_wire_hash
     {
         return Err(eyre!(
             "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
@@ -57401,9 +57516,10 @@ fn replay_blocks_from_kura_range_inner(
                 eyre!("failed to derive replayed block #{height} Native AMX manifest: {error}")
             })?;
         let replayed_execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(
+            crate::sumeragi::exec::execution_commitment_from_validated_block(
                 &witness,
                 &native_amx_manifest,
+                valid_block.as_ref(),
             )
             .map_err(|error| {
                 eyre!("failed to derive replayed block #{height} execution commitment: {error}")
@@ -60541,22 +60657,6 @@ mod permission_cache_tests {
     }
 }
 
-#[cfg(not(feature = "zk-preverify"))]
-impl StateTransaction<'_, '_> {
-    /// Lookup a preverified batch result for a proof and verifying-key binding if present.
-    ///
-    /// When `zk-preverify` feature is disabled, batch preverification is unavailable,
-    /// so this always returns `None` and the caller should perform normal verification.
-    pub fn lookup_preverified_proof(
-        &self,
-        _proof: &iroha_data_model::proof::ProofBox,
-        _vk_ref: &iroha_data_model::proof::VerifyingKeyId,
-        _vk_commitment: [u8; 32],
-    ) -> Option<bool> {
-        None
-    }
-}
-
 impl StateTransaction<'_, '_> {
     /// Expected confidential feature digest for the current transaction context.
     #[must_use]
@@ -61407,6 +61507,30 @@ impl StateTransaction<'_, '_> {
     /// the runtime relay cache after its contract-visible state is durable.
     pub(crate) fn stage_verified_lane_relay_record(&mut self, record: VerifiedLaneRelayRecord) {
         self.pending_verified_lane_relay_records.push(record);
+    }
+
+    /// Authenticate a finalized lane relay against this transaction's exact consensus snapshot.
+    ///
+    /// This is the consensus boundary for contract-visible relay registration. The transaction
+    /// authority transports the proof but does not replace the lane committee's QC authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneRelayError`] when the envelope has no final QC, lacks quorum, names a
+    /// non-authoritative committee, or carries an invalid aggregate signature.
+    pub(crate) fn authenticate_finalized_lane_relay(
+        &self,
+        envelope: &LaneRelayEnvelope,
+    ) -> Result<(), LaneRelayError> {
+        State::verify_lane_relay_finality_from_sources(
+            &self.world,
+            &self.chain_id,
+            self.lane_manifests.as_ref(),
+            &self.nexus,
+            self.commit_topology().get(),
+            envelope,
+        )
+        .map(|_| ())
     }
 
     fn update_axt_policies_from_envelope(&mut self, record: &AxtEnvelopeRecord) {
@@ -65086,7 +65210,7 @@ pub(crate) mod deserialize {
         let parliament_bodies = take_optional_default(&mut map, "parliament_bodies")?;
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
-        let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
+        let settlement_receipts = take_optional_default(&mut map, "settlement_receipts")?;
         let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
         let direct_lane_block_application_markers =
             take_optional_default(&mut map, "direct_lane_block_application_markers")?;
@@ -65279,7 +65403,7 @@ pub(crate) mod deserialize {
             repo_agreements_by_initiator: Storage::default(),
             repo_agreements_by_counterparty: Storage::default(),
             repo_agreements_by_custodian: Storage::default(),
-            settlement_ledgers,
+            settlement_receipts,
             kagemusha_replay_keys,
             direct_lane_block_application_markers,
             domain_committees,
@@ -65644,8 +65768,6 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
             quarantine_tx_max_cycles:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-            quarantine_tx_max_millis:
-                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
             query_max_fetch_size:
                 iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
@@ -68162,6 +68284,27 @@ seiyaku SequentialNfts {
         assert!(
             Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err(),
             "the nominal stake type must reject negatives before state construction"
+        );
+    }
+
+    #[test]
+    fn world_snapshot_names_successful_settlement_receipts_explicitly() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let value = norito::json::to_value(&state).expect("serialize state");
+        let norito::json::Value::Object(root) = value else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(world) = root.get("world").expect("world snapshot field")
+        else {
+            panic!("world snapshot must be an object");
+        };
+        assert!(
+            world.contains_key("settlement_receipts"),
+            "first-release snapshots must expose the receipt-only settlement map"
         );
     }
 
@@ -72487,7 +72630,6 @@ seiyaku SequentialNfts {
         let mut base_lane = LaneConfig {
             lane_type: Some("regulated-public".to_owned()),
             settlement: Some("settlement-v3".to_owned()),
-            proof_scheme: DaProofScheme::KzgBls12_381,
             ..LaneConfig::default()
         };
         base_lane
@@ -72808,7 +72950,7 @@ seiyaku SequentialNfts {
         let mut world = World::default();
         world.smart_contract_state.insert(key, payload);
         for index in 0..1_000_u64 {
-            let unrelated: Name = format!("unrelated_contract_state_{index}")
+            let unrelated: StatePath = format!("unrelated_contract_state_{index}")
                 .parse()
                 .expect("unrelated state key");
             world.smart_contract_state.insert(
@@ -72816,7 +72958,7 @@ seiyaku SequentialNfts {
                 vec![u8::try_from(index % 251).expect("bounded byte")],
             );
         }
-        let old_height_key: Name = format!(
+        let old_height_key: StatePath = format!(
             "{MERGE_EXECUTION_LANE_FRONTIER_MARKER_PREFIX}{}_{}_{}_{}",
             lane_id.as_u32(),
             dataspace_id.as_u64(),
@@ -74671,7 +74813,7 @@ seiyaku SequentialNfts {
             governance: Some("governance-v2".to_owned()),
             settlement: Some("settlement-v3".to_owned()),
             storage: LaneStorageProfile::SplitReplica,
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
             metadata: BTreeMap::new(),
         };
         base_lane
@@ -80107,7 +80249,6 @@ seiyaku SequentialNfts {
             alias: "core".to_owned(),
             lane_type: Some("regulated-public".to_owned()),
             settlement: Some("settlement-v3".to_owned()),
-            proof_scheme: DaProofScheme::KzgBls12_381,
             ..LaneConfig::default()
         };
         base_lane
@@ -80167,7 +80308,7 @@ seiyaku SequentialNfts {
         assert_eq!(lane.governance, None);
         assert_eq!(lane.settlement.as_deref(), Some("settlement-v3"));
         assert_eq!(lane.storage, LaneStorageProfile::FullReplica);
-        assert_eq!(lane.proof_scheme, DaProofScheme::KzgBls12_381);
+        assert_eq!(lane.proof_scheme, DaProofScheme::MerkleSha256);
         assert_eq!(
             lane.metadata.get("security.profile").map(String::as_str),
             Some("strict")
@@ -82498,7 +82639,7 @@ seiyaku SequentialNfts {
         let future_relay =
             sample_lane_relay_envelope(2, retired_lane_id, &signers, full_signer_bitmap(4));
         assert!(
-            future_relay.is_merge_admissible(),
+            future_relay.has_merge_admission_material(),
             "test noise is structurally merge-admissible before lifecycle authentication"
         );
         assert_ne!(
@@ -82666,7 +82807,7 @@ seiyaku SequentialNfts {
         let blocking_relay =
             sample_lane_relay_envelope(1, managed_lanes[2], &signers, full_signer_bitmap(4));
         assert!(
-            blocking_relay.is_merge_admissible(),
+            blocking_relay.has_merge_admission_material(),
             "highest-lane blocker must carry merge-admissible evidence"
         );
         state
@@ -83166,7 +83307,7 @@ seiyaku SequentialNfts {
             sample_lane_relay_envelope(1, retired_lane_id, &signers, vec![0b0000_0001])
                 .with_fastpq_proof_material(None);
         assert!(
-            !retired_relay.is_merge_admissible(),
+            !retired_relay.has_merge_admission_material(),
             "cleanup sentinel must not suppress autoscale scale-in staging"
         );
         state
@@ -83322,7 +83463,7 @@ seiyaku SequentialNfts {
         let late_relay =
             sample_lane_relay_envelope(1, retired_lane_id, &signers, full_signer_bitmap(4));
         assert!(
-            late_relay.is_merge_admissible(),
+            late_relay.has_merge_admission_material(),
             "test noise is structurally merge-admissible before lifecycle authentication"
         );
         assert_ne!(
@@ -84017,11 +84158,11 @@ seiyaku SequentialNfts {
             State::verified_lane_relay_contract_map_state_key(&retired_key).expect("map state key");
         let retired_map_payload =
             encode_verified_lane_relay_record_contract_map_state_for_test(&retired_record);
-        let spoofed_key: Name =
+        let spoofed_key: StatePath =
             format!("{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_autoscale_spoofed_cleanup")
                 .parse()
                 .expect("spoofed canonical-prefix key");
-        let spoofed_map_key: Name = format!(
+        let spoofed_map_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX}{}",
             "cc".repeat(32)
         )
@@ -85279,7 +85420,7 @@ seiyaku SequentialNfts {
                 .with_manifest_root(Some([0x72; 32]));
         let mut reset_ref_only = sample_verified_lane_relay_record(&survivor_payload_envelope);
         reset_ref_only.relay_ref = reset_ref_envelope.relay_ref();
-        let reset_ref_key: Name = reset_ref_only
+        let reset_ref_key: StatePath = reset_ref_only
             .relay_ref
             .relay_state_key()
             .parse()
@@ -85295,7 +85436,7 @@ seiyaku SequentialNfts {
                 .with_manifest_root(Some([0x74; 32]));
         let mut reset_envelope_only = sample_verified_lane_relay_record(&reset_envelope);
         reset_envelope_only.relay_ref = survivor_ref_envelope.relay_ref();
-        let reset_envelope_key: Name = reset_envelope_only
+        let reset_envelope_key: StatePath = reset_envelope_only
             .relay_ref
             .relay_state_key()
             .parse()
@@ -85318,33 +85459,33 @@ seiyaku SequentialNfts {
                 .with_manifest_root(Some([0x76; 32]));
         let spoofed_key =
             State::verified_lane_relay_state_key(&spoofed_key_envelope).expect("spoofed key");
-        let spoofed_map_key: Name = format!(
+        let spoofed_map_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX}{}",
             "dd".repeat(32)
         )
         .parse()
         .expect("spoofed map key");
-        let malformed_reset_key: Name = format!(
+        let malformed_reset_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_11_{}",
             reset_lane.as_u32(),
             "11".repeat(32)
         )
         .parse()
         .expect("malformed reset canonical key");
-        let malformed_survivor_key: Name = format!(
+        let malformed_survivor_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_12_{}",
             survivor_lane.as_u32(),
             "22".repeat(32)
         )
         .parse()
         .expect("malformed survivor canonical key");
-        let malformed_spoofed_reset_key: Name = format!(
+        let malformed_spoofed_reset_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_13_short",
             reset_lane.as_u32()
         )
         .parse()
         .expect("malformed noncanonical reset-prefixed key");
-        let malformed_uppercase_reset_key: Name = format!(
+        let malformed_uppercase_reset_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_14_{}",
             reset_lane.as_u32(),
             "AA".repeat(32)
@@ -87940,41 +88081,6 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn lanes_requiring_state_reset_tracks_proof_policy_changes() {
-        let policy_lane_id = LaneId::new(1);
-        let policy_lane = LaneConfig {
-            id: policy_lane_id,
-            alias: "policy".to_string(),
-            ..LaneConfig::default()
-        };
-        let previous_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![LaneConfig::default(), policy_lane.clone()],
-        )
-        .expect("previous catalog");
-        let current_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    proof_scheme: DaProofScheme::KzgBls12_381,
-                    ..policy_lane
-                },
-            ],
-        )
-        .expect("current catalog");
-
-        let previous = RuntimeLaneConfig::from_catalog(&previous_catalog);
-        let current = RuntimeLaneConfig::from_catalog(&current_catalog);
-
-        assert_eq!(
-            super::lanes_requiring_state_reset(&previous, &current),
-            BTreeSet::from([policy_lane_id]),
-            "proof-policy-only changes must reset lane-scoped DA state"
-        );
-    }
-
-    #[test]
     fn lanes_requiring_state_reset_tracks_manifest_policy_changes() {
         let lane_id = LaneId::new(1);
         let policy_lane = |manifest_policy: &str| {
@@ -88516,8 +88622,8 @@ seiyaku SequentialNfts {
         peer: PeerId,
         economic_keys: PublicLaneEconomicKeys,
         replay_key: AxtHandleReplayKey,
-        verified_relay_key: Name,
-        verified_relay_map_key: Name,
+        verified_relay_key: StatePath,
+        verified_relay_map_key: StatePath,
     }
 
     fn seed_lane_scoped_cleanup_fixture_for_lifecycle_test(
@@ -90123,7 +90229,6 @@ seiyaku SequentialNfts {
         let mut base_lane = LaneConfig {
             lane_type: Some("regulated-public".to_owned()),
             settlement: Some("settlement-v3".to_owned()),
-            proof_scheme: DaProofScheme::KzgBls12_381,
             ..LaneConfig::default()
         };
         base_lane
@@ -90154,11 +90259,6 @@ seiyaku SequentialNfts {
             ("storage", {
                 let mut drift = valid_lane.clone();
                 drift.storage = LaneStorageProfile::SplitReplica;
-                drift
-            }),
-            ("proof scheme", {
-                let mut drift = valid_lane.clone();
-                drift.proof_scheme = DaProofScheme::MerkleSha256;
                 drift
             }),
             ("metadata value", {
@@ -93552,13 +93652,16 @@ seiyaku SequentialNfts {
             &commit_keypairs,
         );
         ensure_merge_carrier_parent_for_test(&restarted);
-        let lane1_h1 = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        let lane1_h1 = seed_effect_authenticated_relay_for_merge_test(
             &restarted,
-            1,
-            1,
-            LaneId::new(1),
-            0,
-            &commit_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &restarted,
+                1,
+                1,
+                LaneId::new(1),
+                0,
+                &commit_keypairs,
+            ),
         );
         restarted
             .lane_relays
@@ -94475,7 +94578,6 @@ seiyaku SequentialNfts {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
                 checked_da_ack_signature(0x11),
@@ -94685,7 +94787,6 @@ seiyaku SequentialNfts {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -96254,8 +96355,10 @@ seiyaku SequentialNfts {
             &commit_keypairs,
         );
 
-        let lane1_h1 =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs);
+        let lane1_h1 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs),
+        );
         let historical_lane_incarnation = lane1_h1.lane_incarnation;
         let lane0_h1 =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &commit_keypairs);
@@ -96282,7 +96385,6 @@ seiyaku SequentialNfts {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -96406,13 +96508,16 @@ seiyaku SequentialNfts {
             &[LaneId::SINGLE, LaneId::new(1)],
             &commit_keypairs,
         );
-        let lane1_recreated_h1 = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        let lane1_recreated_h1 = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            2,
-            1,
-            LaneId::new(1),
-            0,
-            &commit_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &state,
+                2,
+                1,
+                LaneId::new(1),
+                0,
+                &commit_keypairs,
+            ),
         );
         state
             .lane_relays
@@ -96692,8 +96797,10 @@ seiyaku SequentialNfts {
             &[LaneId::SINGLE, LaneId::new(1)],
             &commit_keypairs,
         );
-        let lane1_h1 =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs);
+        let lane1_h1 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs),
+        );
         state
             .lane_relays
             .write()
@@ -96800,13 +96907,17 @@ seiyaku SequentialNfts {
             &[LaneId::SINGLE, LaneId::new(1)],
             &commit_keypairs,
         );
-        let lane1_h1 = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        seed_committed_height_for_state_test(&restarted, 3);
+        let lane1_h1 = seed_effect_authenticated_relay_for_merge_test(
             &restarted,
-            3,
-            1,
-            LaneId::new(1),
-            0,
-            &commit_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &restarted,
+                3,
+                1,
+                LaneId::new(1),
+                0,
+                &commit_keypairs,
+            ),
         );
         restarted
             .lane_relays
@@ -97912,11 +98023,11 @@ seiyaku SequentialNfts {
             old_map_key.clone(),
             encode_verified_lane_relay_record_contract_map_state_for_test(&old_record),
         );
-        let spoofed_key: Name =
+        let spoofed_key: StatePath =
             format!("{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_spoofed_cleanup_sibling")
                 .parse()
                 .expect("spoofed canonical-prefix key");
-        let spoofed_map_key: Name = format!(
+        let spoofed_map_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX}{}",
             "aa".repeat(32)
         )
@@ -98058,13 +98169,16 @@ seiyaku SequentialNfts {
                 (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        let fresh_envelope = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        let fresh_envelope = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            2,
-            1,
-            recreated_lane_id,
-            0,
-            &validator_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &state,
+                2,
+                1,
+                recreated_lane_id,
+                0,
+                &validator_keypairs,
+            ),
         );
         state
             .lane_relays
@@ -98151,11 +98265,11 @@ seiyaku SequentialNfts {
             old_map_key.clone(),
             encode_verified_lane_relay_record_contract_map_state_for_test(&old_record),
         );
-        let spoofed_key: Name =
+        let spoofed_key: StatePath =
             format!("{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_set_nexus_spoofed_cleanup")
                 .parse()
                 .expect("spoofed canonical-prefix key");
-        let spoofed_map_key: Name = format!(
+        let spoofed_map_key: StatePath = format!(
             "{VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX}{}",
             "bb".repeat(32)
         )
@@ -98260,13 +98374,16 @@ seiyaku SequentialNfts {
         );
 
         ensure_merge_carrier_parent_for_test(&state);
-        let fresh_envelope = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        let fresh_envelope = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            2,
-            1,
-            recreated_lane_id,
-            0,
-            &validator_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &state,
+                1,
+                1,
+                recreated_lane_id,
+                0,
+                &validator_keypairs,
+            ),
         );
         state
             .lane_relays
@@ -98801,152 +98918,6 @@ seiyaku SequentialNfts {
                 .get_by_alias("same-shard-old-dataspace-pin")
                 .is_none(),
             "persisted reset watermark must suppress old-dataspace pin after restart"
-        );
-    }
-
-    #[test]
-    fn lane_lifecycle_same_lane_proof_policy_change_hides_previous_da_indexes_after_kura_replay() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let policy_lane_id = LaneId::new(1);
-        let lane1_config = LaneConfig {
-            id: policy_lane_id,
-            alias: "policy".to_string(),
-            ..LaneConfig::default()
-        };
-        let initial_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![LaneConfig::default(), lane1_config.clone()],
-        )
-        .expect("initial lane catalog");
-        let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        let kura = strict_kura_for_testing(
-            temp_dir.path().join("same-lane-policy-reset-da-kura"),
-            &RuntimeLaneConfig::default(),
-        );
-        let state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        install_existing_nexus_geometry_for_test(
-            &state,
-            iroha_config::parameters::actual::Nexus {
-                enabled: true,
-                lane_catalog: initial_catalog,
-                ..Default::default()
-            },
-        );
-        let stale_record = sample_da_commitment_record(policy_lane_id, 2, 1, 0xCF);
-        let keypair = crate::state::checked_keypair();
-        let old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, None)
-            .with_da_commitments(Some(DaCommitmentBundle::new(vec![stale_record.clone()])))
-            .sign(keypair.private_key())
-            .unpack(|_| {})
-            .into();
-        kura.store_block(Arc::new(old_block.clone()))
-            .expect("store old-policy DA block");
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push(old_block.hash());
-            block_hashes.commit_for_tests();
-        }
-        assert_eq!(
-            state.find_da_commitment_by_manifest(&stale_record.manifest_hash),
-            Some(stale_record.clone()),
-            "test setup should hydrate old-policy DA commitment before policy change"
-        );
-
-        let policy_lane_config = LaneConfig {
-            proof_scheme: DaProofScheme::KzgBls12_381,
-            ..lane1_config
-        };
-        let policy_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![LaneConfig::default(), policy_lane_config.clone()],
-        )
-        .expect("policy catalog");
-        let policy_config = RuntimeLaneConfig::from_catalog(&policy_catalog);
-        assert_eq!(
-            initial_config.shard_id(policy_lane_id),
-            policy_config.shard_id(policy_lane_id),
-            "test setup must keep the lane on the same DA shard"
-        );
-
-        state
-            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![policy_lane_config],
-                retire: vec![policy_lane_id],
-            })
-            .expect("same-lane proof policy change should apply through lifecycle consensus");
-
-        let reset_journal = DaShardCursorJournal::load(
-            &state.nexus_snapshot().lane_config,
-            &state.da_shard_cursor_journal_path(),
-        )
-        .expect("load reset journal");
-        assert_eq!(
-            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
-            Some(old_block.header().height().get()),
-            "proof-policy change should persist a reset watermark at the old block height"
-        );
-        assert!(
-            state
-                .find_da_commitment_by_manifest(&stale_record.manifest_hash)
-                .is_none(),
-            "old-policy commitment must not stay query-visible after live lifecycle reset"
-        );
-
-        state
-            .rewind_da_indexes_to_height(old_block.header().height().get())
-            .expect("rewind DA indexes after proof policy change");
-        {
-            let commitments = state.da_commitments();
-            assert!(
-                commitments
-                    .get_by_manifest(&stale_record.manifest_hash)
-                    .is_none(),
-                "old-policy commitment must not be query-visible after replay"
-            );
-            assert!(
-                commitments
-                    .get_committed_by_key(&DaCommitmentKey::from_record(&stale_record))
-                    .is_none(),
-                "old-policy commitment must not reserve fresh-lane identities after replay"
-            );
-            assert!(
-                commitments
-                    .bundle_at(old_block.header().height().get())
-                    .is_some(),
-                "committed block bundle remains available as historical proof material"
-            );
-        }
-
-        let restarted = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        {
-            let mut nexus = restarted.nexus.write();
-            nexus.enabled = true;
-            nexus.lane_catalog = policy_catalog;
-            nexus.lane_config = policy_config;
-        }
-        {
-            let mut block_hashes = restarted.block_hashes.block();
-            block_hashes.push(old_block.hash());
-            block_hashes.commit_for_tests();
-        }
-        restarted
-            .ensure_da_indexes_hydrated()
-            .expect("restart should hydrate with proof-policy reset watermark");
-        assert!(
-            restarted
-                .da_commitments()
-                .get_by_manifest(&stale_record.manifest_hash)
-                .is_none(),
-            "persisted reset watermark must suppress old-policy commitment after restart"
         );
     }
 
@@ -100123,7 +100094,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([tag.wrapping_add(2); 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([tag.wrapping_add(3); 32]),
             checked_da_ack_signature(tag),
@@ -101049,6 +101019,21 @@ seiyaku SequentialNfts {
         record
     }
 
+    fn seed_effect_authenticated_relay_for_merge_test(
+        state: &State,
+        mut envelope: LaneRelayEnvelope,
+    ) -> LaneRelayEnvelope {
+        envelope.manifest_root.get_or_insert([0x44; 32]);
+        let proposal_height = envelope.block_header.height().get();
+        envelope
+            .fastpq_proof
+            .as_mut()
+            .expect("merge-ready relay fixture carries FastPQ material")
+            .verified_at_height = proposal_height;
+        seed_verified_lane_relay_record(state, &envelope);
+        envelope
+    }
+
     fn setup_lane_relay_burn_state() -> (State, Vec<KeyPair>) {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -101114,7 +101099,7 @@ seiyaku SequentialNfts {
         state_block.commit().expect("block commit");
     }
 
-    fn insert_smart_contract_state_payload(state: &State, key: Name, payload: Vec<u8>) {
+    fn insert_smart_contract_state_payload(state: &State, key: StatePath, payload: Vec<u8>) {
         let mut world_block = state.world.block();
         world_block.smart_contract_state.insert(key, payload);
         world_block.commit();
@@ -101122,13 +101107,13 @@ seiyaku SequentialNfts {
 
     fn insert_verified_lane_relay_record_state(
         state: &State,
-        key: Name,
+        key: StatePath,
         record: &VerifiedLaneRelayRecord,
     ) {
         insert_smart_contract_state_payload(state, key, encode_verified_lane_relay_record(record));
     }
 
-    fn noncanonical_verified_lane_relay_state_key(suffix: &str) -> Name {
+    fn noncanonical_verified_lane_relay_state_key(suffix: &str) -> StatePath {
         format!("{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_{suffix}")
             .parse()
             .expect("noncanonical verified relay state key")
@@ -101205,6 +101190,31 @@ seiyaku SequentialNfts {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].block_height, 1);
         assert_eq!(snapshot[0].lane_id, LaneId::new(0));
+    }
+
+    #[test]
+    fn transaction_relay_registration_authenticates_valid_committee_qc() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)],
+        );
+        configure_commit_topology_preserving_world_peers(&state, 1);
+
+        let envelope =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
+        let mut state_block = state.block(valid_block.as_ref().header().clone());
+        let state_transaction = state_block.transaction();
+
+        state_transaction
+            .authenticate_finalized_lane_relay(&envelope)
+            .expect("contract registration must accept the same authenticated QC as relay ingress");
     }
 
     #[test]
@@ -101703,6 +101713,74 @@ seiyaku SequentialNfts {
             snapshot.merge_hint_root,
             envelope.merge_hint_root().expect("merge hint root")
         );
+    }
+
+    #[test]
+    fn merge_candidates_require_effect_authenticated_relay_records_in_direct_mode() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        state.nexus.write().fees.settlement_mode =
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+        ensure_merge_carrier_parent_for_test(&state);
+        let envelope =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
+
+        assert!(envelope.has_merge_admission_material());
+        assert_eq!(
+            state
+                .record_lane_relay(&envelope)
+                .expect("authenticated QC relay should remain available as progress data"),
+            LaneRelayInsert::Inserted
+        );
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "structural FastPQ metadata and a valid header QC must not authorize settlement merge"
+        );
+
+        seed_verified_lane_relay_record(&state, &envelope);
+        let candidates = state.merge_entry_candidates_from_lane_relays();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "the exact cryptographically verified effect record should authorize the relay"
+        );
+        assert_eq!(candidates[0].lane_snapshots.len(), 1);
+        assert_eq!(
+            candidates[0].lane_snapshots[0].settlement_hash,
+            envelope.settlement_hash
+        );
+    }
+
+    #[test]
+    fn embedded_relay_rejects_settlement_substitution_under_a_valid_header_qc() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        state.nexus.write().fees.settlement_mode =
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+        ensure_merge_carrier_parent_for_test(&state);
+        let envelope =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
+        seed_verified_lane_relay_record(&state, &envelope);
+
+        state
+            .validate_embedded_lane_relay(&envelope)
+            .expect("the exact effect-authenticated relay should validate");
+
+        let mut substituted = envelope.clone();
+        substituted.settlement_commitment.tx_count =
+            substituted.settlement_commitment.tx_count.saturating_add(1);
+        substituted.settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&substituted.settlement_commitment)
+                .expect("substituted settlement remains canonically hashable");
+        substituted
+            .verify()
+            .expect("the substituted envelope remains structurally self-consistent");
+        assert!(substituted.has_merge_admission_material());
+
+        let err = state
+            .validate_embedded_lane_relay(&substituted)
+            .expect_err("the QC must not authorize a substituted settlement effect");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
     }
 
     #[test]
@@ -102456,7 +102534,7 @@ seiyaku SequentialNfts {
         let (key_prefix, digest) = canonical_key
             .rsplit_once('_')
             .expect("verified relay key includes digest suffix");
-        let uppercase_key: Name = format!("{key_prefix}_{}", digest.to_ascii_uppercase())
+        let uppercase_key: StatePath = format!("{key_prefix}_{}", digest.to_ascii_uppercase())
             .parse()
             .expect("uppercase relay state key");
 
@@ -102517,7 +102595,7 @@ seiyaku SequentialNfts {
     #[test]
     fn merge_candidates_ignore_nonprefix_malformed_verified_lane_relay_payload() {
         let (state, _, _) = sample_verified_lane_relay_record_for_merge_candidate_test();
-        let key: Name = "unrelated_verified_lane_relay_junk"
+        let key: StatePath = "unrelated_verified_lane_relay_junk"
             .parse()
             .expect("unrelated state key");
 
@@ -102686,8 +102764,10 @@ seiyaku SequentialNfts {
         let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         ensure_merge_carrier_parent_for_test(&state);
 
-        let first_relay =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
+        let first_relay = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs),
+        );
         state
             .record_lane_relay(&first_relay)
             .expect("new relay accepted");
@@ -102732,22 +102812,29 @@ seiyaku SequentialNfts {
         );
         let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         ensure_merge_carrier_parent_for_test(&state);
+        seed_committed_height_for_state_test(&state, 2);
 
-        let height2 = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        let height2 = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            2,
-            2,
-            LaneId::new(0),
-            0,
-            &validator_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &state,
+                2,
+                2,
+                LaneId::new(0),
+                0,
+                &validator_keypairs,
+            ),
         );
-        let height1 = sample_lane_relay_envelope_for_state_at_heights_with_view(
+        let height1 = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            2,
-            1,
-            LaneId::new(0),
-            0,
-            &validator_keypairs,
+            sample_lane_relay_envelope_for_state_at_heights_with_view(
+                &state,
+                2,
+                1,
+                LaneId::new(0),
+                0,
+                &validator_keypairs,
+            ),
         );
 
         assert_eq!(
@@ -106478,8 +106565,10 @@ seiyaku SequentialNfts {
         let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         ensure_merge_carrier_parent_for_test(&state);
 
-        let envelope =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
+        let envelope = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs),
+        );
         state.record_lane_relay(&envelope).expect("relay accepted");
 
         let candidates = state.merge_entry_candidates_from_lane_relays();
@@ -106555,10 +106644,14 @@ seiyaku SequentialNfts {
         let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         ensure_merge_carrier_parent_for_test(&state);
 
-        let lane0 =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
-        let lane1 =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &validator_keypairs);
+        let lane0 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs),
+        );
+        let lane1 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &validator_keypairs),
+        );
 
         state.record_lane_relay(&lane0).expect("lane0 accepted");
         let single_lane_candidates = state.merge_entry_candidates_from_lane_relays();
@@ -106628,7 +106721,7 @@ seiyaku SequentialNfts {
         stale_relay.settlement_hash =
             iroha_data_model::nexus::compute_settlement_hash(&stale_relay.settlement_commitment)
                 .expect("future-created fixture settlement hash");
-        assert!(stale_relay.is_merge_admissible());
+        assert!(stale_relay.has_merge_admission_material());
         state
             .lane_relays
             .write()
@@ -106684,19 +106777,25 @@ seiyaku SequentialNfts {
         configure_commit_topology_preserving_world_peers(&state, 1);
         ensure_merge_carrier_parent_for_test(&state);
 
-        let lane0 = sample_lane_relay_envelope_for_state_with_view(
+        let lane0 = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            1,
-            LaneId::new(0),
-            1,
-            &validator_keypairs,
+            sample_lane_relay_envelope_for_state_with_view(
+                &state,
+                1,
+                LaneId::new(0),
+                1,
+                &validator_keypairs,
+            ),
         );
-        let lane1 = sample_lane_relay_envelope_for_state_with_view(
+        let lane1 = seed_effect_authenticated_relay_for_merge_test(
             &state,
-            1,
-            LaneId::new(1),
-            3,
-            &validator_keypairs,
+            sample_lane_relay_envelope_for_state_with_view(
+                &state,
+                1,
+                LaneId::new(1),
+                3,
+                &validator_keypairs,
+            ),
         );
 
         state.record_lane_relay(&lane0).expect("lane0 accepted");
@@ -106755,10 +106854,14 @@ seiyaku SequentialNfts {
         let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         ensure_merge_carrier_parent_for_test(&state);
 
-        let lane0_h1 =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
-        let lane1_h1 =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &validator_keypairs);
+        let lane0_h1 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs),
+        );
+        let lane1_h1 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &validator_keypairs),
+        );
         state
             .record_lane_relay(&lane0_h1)
             .expect("lane0 height1 accepted");
@@ -106776,8 +106879,10 @@ seiyaku SequentialNfts {
             .commit_merge_entry(merge_entry_from_candidate(first_candidate, first_qc))
             .expect("commit initial merge entry");
 
-        let lane0_h2 =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
+        let lane0_h2 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs),
+        );
         state
             .record_lane_relay(&lane0_h2)
             .expect("lane0 height2 accepted");
@@ -107197,7 +107302,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -107210,7 +107314,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xDD; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xFF; 32]),
@@ -107258,7 +107361,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -107271,7 +107373,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xDD; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xFF; 32]),
@@ -107415,7 +107516,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -107472,7 +107572,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xC1; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xD1; 32]),
             checked_da_ack_signature(0xE1),
@@ -107499,7 +107598,6 @@ seiyaku SequentialNfts {
             first.manifest_hash,
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xC2; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xD2; 32]),
@@ -107557,7 +107655,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x31; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0x41; 32]),
             checked_da_ack_signature(0x51),
@@ -107584,7 +107681,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x22; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x32; 32]),
-            None,
             None,
             RetentionClass::default(),
             first.storage_ticket,
@@ -107642,7 +107738,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x83; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0x84; 32]),
             checked_da_ack_signature(0x85),
@@ -107669,7 +107764,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x92; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x93; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x94; 32]),
@@ -107731,7 +107825,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x63; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0x64; 32]),
             checked_da_ack_signature(0x65),
@@ -107775,7 +107868,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x72; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x73; 32]),
-            None,
             None,
             RetentionClass::default(),
             first.storage_ticket,
@@ -107823,7 +107915,6 @@ seiyaku SequentialNfts {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -107905,7 +107996,6 @@ seiyaku SequentialNfts {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([seed.wrapping_add(2); 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([seed.wrapping_add(3); 32]),
                 checked_da_ack_signature(seed.wrapping_add(4)),
@@ -107969,7 +108059,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x03; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
@@ -108103,7 +108192,6 @@ seiyaku SequentialNfts {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
                 checked_da_ack_signature(0x11),
@@ -108116,7 +108204,6 @@ seiyaku SequentialNfts {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBC; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCD; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEF; 32]),
@@ -108145,7 +108232,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBD; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCE; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xF0; 32]),
@@ -108217,7 +108303,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -108269,7 +108354,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCD; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEF; 32]),
             checked_da_ack_signature(0x12),
@@ -108316,7 +108400,6 @@ seiyaku SequentialNfts {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -108448,7 +108531,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -108461,7 +108543,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x32; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x54; 32]),
@@ -108545,7 +108626,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x03; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
             checked_da_ack_signature(0x06),
@@ -108574,7 +108654,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x30; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x50; 32]),
@@ -108651,7 +108730,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xC3; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xE5; 32]),
@@ -108762,7 +108840,6 @@ seiyaku SequentialNfts {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB0 ^ tag; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xC0 ^ tag; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xD0 ^ tag; 32]),
@@ -108881,7 +108958,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -108953,7 +109029,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -109945,7 +110020,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -110036,7 +110110,6 @@ seiyaku SequentialNfts {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -111750,7 +111823,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x30; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0x50; 32]),
             checked_da_ack_signature(0x60),
@@ -111832,7 +111904,6 @@ seiyaku SequentialNfts {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -111946,7 +112017,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xC3; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xE5; 32]),
@@ -112070,7 +112140,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x03; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
             checked_da_ack_signature(0x06),
@@ -112134,7 +112203,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -112223,7 +112291,6 @@ seiyaku SequentialNfts {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
             checked_da_ack_signature(0x11),
@@ -112284,7 +112351,6 @@ seiyaku SequentialNfts {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -120854,11 +120920,14 @@ seiyaku IdentitylessRawCallback {
         let commit_keypairs = configure_commit_topology_preserving_world_peers(state, 1);
 
         for idx in 0..lane_count {
-            let envelope = sample_lane_relay_envelope_for_state(
+            let envelope = seed_effect_authenticated_relay_for_merge_test(
                 state,
-                first_height,
-                LaneId::new(idx),
-                &validator_keypairs,
+                sample_lane_relay_envelope_for_state(
+                    state,
+                    first_height,
+                    LaneId::new(idx),
+                    &validator_keypairs,
+                ),
             );
             state
                 .record_lane_relay(&envelope)
@@ -122093,8 +122162,10 @@ seiyaku IdentitylessRawCallback {
         validator_keypairs: &[KeyPair],
         commit_keypairs: &[KeyPair],
     ) -> MergeLedgerEntry {
-        let envelope =
-            sample_lane_relay_envelope_for_state(state, lane_height, lane_id, validator_keypairs);
+        let envelope = seed_effect_authenticated_relay_for_merge_test(
+            state,
+            sample_lane_relay_envelope_for_state(state, lane_height, lane_id, validator_keypairs),
+        );
         state
             .record_lane_relay(&envelope)
             .expect("record next contiguous merge relay");
@@ -123380,7 +123451,7 @@ seiyaku IdentitylessRawCallback {
                 effect_binding: None,
             },
         );
-        let allocation_key: Name =
+        let allocation_key: StatePath =
             VerifiedFeeSponsorVaultAllocation::state_key_for(&program_id, &asset_def_id, &lease_id)
                 .parse()
                 .expect("verified fee allocation state key");
@@ -123540,7 +123611,7 @@ seiyaku IdentitylessRawCallback {
             *Hash::new(b"fee-sponsor-authority-height-manifest").as_ref(),
             binding,
         );
-        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key: StatePath = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &program_id,
             &asset_definition_id,
             &lease_id,
@@ -124411,12 +124482,15 @@ seiyaku IdentitylessRawCallback {
             .find(|snapshot| snapshot.lane_id == LaneId::new(1))
             .expect("first merge includes lane1");
         let first_qc = merge_qc_for_candidate(&state, &first_candidate, &commit_keypairs, &[0]);
-        state
+        let first_stored = state
             .commit_merge_entry(merge_entry_from_candidate(first_candidate, first_qc))
             .expect("initial two-lane merge commits");
+        publish_committed_merge_carrier_for_test(&state, first_stored.as_ref());
 
-        let lane0_h2 =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
+        let lane0_h2 = seed_effect_authenticated_relay_for_merge_test(
+            &state,
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs),
+        );
         state
             .lane_relays
             .write()

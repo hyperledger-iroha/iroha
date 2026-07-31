@@ -82,7 +82,7 @@ The expected-roster document is strict JSON:
   {
     \"schema_version\": 3,
     \"chain_id\": \"cbdc16\",
-    \"protocol_version\": 3,
+    \"protocol_version\": 4,
     \"consensus_mode\": \"npos\",
     \"expected_node_key\": \"<this port's BLS public key>\",
     \"validator_keys\": [\"<BLS public key>\", \"...\"],
@@ -235,6 +235,7 @@ struct AttestedVerificationReceipt {
 struct ValidatedSignedGenesis {
     block_hash: HashOf<BlockHeader>,
     proposal_wire_hash: Hash,
+    executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
 }
 
@@ -868,12 +869,13 @@ fn decode_validate_signed_genesis(
     let proposal_wire_hash = block
         .canonical_proposal_wire_hash()
         .map_err(|error| format!("failed to hash signed genesis proposal wire: {error}"))?;
-    let executed_block_wire_hash = block
-        .executed_block_wire_hash()
-        .map_err(|error| format!("failed to hash signed genesis executed wire: {error}"))?;
+    let executed_block_wire_len = u64::try_from(canonical.len())
+        .map_err(|_| "signed genesis executed wire length does not fit u64".to_owned())?;
+    let executed_block_wire_hash = Hash::new(&canonical);
     Ok(ValidatedSignedGenesis {
         block_hash: block.hash(),
         proposal_wire_hash,
+        executed_block_wire_len,
         executed_block_wire_hash,
     })
 }
@@ -902,8 +904,13 @@ fn verify_genesis_finality_proof(
     if artifact
         .commit_qc
         .execution_commitment
-        .executed_block_wire_hash
-        != genesis.executed_block_wire_hash
+        .executed_block_wire_len
+        != genesis.executed_block_wire_len
+        || artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash
+            != genesis.executed_block_wire_hash
     {
         return Err(
             "genesis finality proof execution commitment does not match signed genesis executed wire"
@@ -1298,7 +1305,7 @@ mod tests {
             },
         },
         bridge::{
-            BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V1,
+            BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2,
             BridgeFinalityAttestationBodyV1,
         },
         transaction::signed::TransactionBuilder,
@@ -1360,10 +1367,10 @@ mod tests {
         let genesis_payload_hash = genesis_block
             .canonical_proposal_wire_hash()
             .expect("genesis proposal wire hash");
-        let genesis_executed_wire_hash = genesis_block
-            .executed_block_wire_hash()
-            .expect("genesis executed wire hash");
         let signed_genesis = genesis_block.encode_wire().expect("signed genesis wire");
+        let genesis_executed_wire_len =
+            u64::try_from(signed_genesis.len()).expect("genesis wire length fits u64");
+        let genesis_executed_wire_hash = Hash::new(&signed_genesis);
         let context = HeightContext {
             chain_id: PK2_CHAIN_ID.into(),
             protocol_version: PROTOCOL_VERSION,
@@ -1377,6 +1384,7 @@ mod tests {
             roster,
             quorum,
             nexus_amx_context_hash: Hash::new(b"pk2 finality verifier test nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -1396,6 +1404,7 @@ mod tests {
             Hash::new(b"parent state"),
             Hash::new(b"post state"),
             Hash::new(b"ordinary writes"),
+            genesis_executed_wire_len,
             genesis_executed_wire_hash,
         );
         let round = ConsensusRound {
@@ -1496,7 +1505,7 @@ mod tests {
             min_signers: context.quorum.min_signers,
         };
         let proof = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header: header,
             finality_artifact: artifact,
         };

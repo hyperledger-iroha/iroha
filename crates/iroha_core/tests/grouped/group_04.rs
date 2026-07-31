@@ -46,10 +46,6 @@ mod sumeragi_doc_sync;
 mod validation_fee_admission;
 #[path = "../validation_fee_plain_ballot_gates.rs"]
 mod validation_fee_plain_ballot_gates;
-#[path = "../zk_asset_stark_envelope.rs"]
-mod zk_asset_stark_envelope;
-#[path = "../zk_asset_vk_enforcement.rs"]
-mod zk_asset_vk_enforcement;
 #[path = "../zk_backend_tags.rs"]
 mod zk_backend_tags;
 #[path = "../zk_confidential_events.rs"]
@@ -66,10 +62,6 @@ mod zk_ledger_scaffold;
 mod zk_preverify_budget;
 #[path = "../zk_proof_event_callhash.rs"]
 mod zk_proof_event_callhash;
-#[path = "../zk_proof_hash_events.rs"]
-mod zk_proof_hash_events;
-#[path = "../zk_proof_hash_metadata.rs"]
-mod zk_proof_hash_metadata;
 #[path = "../zk_proof_retention.rs"]
 mod zk_proof_retention;
 #[path = "../zk_root_hint_enforced.rs"]

@@ -31,11 +31,8 @@ pub struct ChallengeBinding<'a> {
     pub descriptor_commit: &'a [u8],
     /// Relay identity bytes (32 bytes).
     pub relay_id: &'a [u8],
-    /// Optional transcript hash carried across resumed circuits.
-    ///
-    /// Present when the client resumes a circuit and both parties agree on the
-    /// previously negotiated transcript hash.
-    pub transcript_hash: Option<&'a [u8]>,
+    /// Transcript hash binding the puzzle to this admission attempt.
+    pub transcript_hash: &'a [u8; 32],
 }
 
 impl<'a> ChallengeBinding<'a> {
@@ -44,7 +41,7 @@ impl<'a> ChallengeBinding<'a> {
     pub fn new(
         descriptor_commit: &'a [u8],
         relay_id: &'a [u8],
-        transcript_hash: Option<&'a [u8]>,
+        transcript_hash: &'a [u8; 32],
     ) -> Self {
         Self {
             descriptor_commit,
@@ -82,6 +79,11 @@ pub const MAX_LANES: u32 = 16;
 /// connectivity and therefore are rejected instead of silently partitioning a
 /// node.
 pub const MAX_DIFFICULTY: u8 = 32;
+/// Default first-release proof-of-work difficulty.
+///
+/// Difficulty zero makes every Argon2 output pass, forcing the verifier to pay
+/// the memory-hard cost without requiring equivalent client work.
+pub const DEFAULT_DIFFICULTY: u8 = 6;
 
 /// Errors surfaced while constructing Argon2 puzzle policy parameters.
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
@@ -112,6 +114,9 @@ pub enum ParameterError {
         /// Configured difficulty.
         configured: u8,
     },
+    /// A zero difficulty would impose verifier cost without client work.
+    #[error("puzzle difficulty must be greater than zero")]
+    DifficultyZero,
     /// The minimum ticket TTL must be non-zero.
     #[error("puzzle min_ticket_ttl must be greater than zero")]
     MinTicketTtlZero,
@@ -200,6 +205,9 @@ impl Parameters {
             return Err(ParameterError::LanesTooHigh {
                 configured: lanes.get(),
             });
+        }
+        if difficulty == 0 {
+            return Err(ParameterError::DifficultyZero);
         }
         if difficulty > MAX_DIFFICULTY {
             return Err(ParameterError::DifficultyTooHigh {
@@ -509,14 +517,6 @@ fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
             binding.relay_id.len()
         ));
     }
-    if let Some(transcript_hash) = binding.transcript_hash
-        && transcript_hash.len() != BINDING_FIELD_LEN
-    {
-        return Err(format!(
-            "transcript_hash must be {BINDING_FIELD_LEN} bytes, got {}",
-            transcript_hash.len()
-        ));
-    }
     Ok(())
 }
 
@@ -529,9 +529,7 @@ fn derive_challenge(
     hasher.update(CHALLENGE_DOMAIN);
     hasher.update(binding.descriptor_commit);
     hasher.update(binding.relay_id);
-    if let Some(transcript) = binding.transcript_hash {
-        hasher.update(transcript);
-    }
+    hasher.update(binding.transcript_hash);
     hasher.update(&client_nonce);
     hasher.update(&expires_at.to_be_bytes());
     hasher.finalize()
@@ -619,6 +617,7 @@ mod tests {
 
     const DESCRIPTOR: [u8; 32] = [0x11; 32];
     const RELAY: [u8; 32] = [0x22; 32];
+    const TRANSCRIPT: [u8; 32] = [0x33; 32];
 
     fn test_parameters() -> Parameters {
         Parameters::new(
@@ -712,6 +711,18 @@ mod tests {
             .expect_err("out-of-range memory must fail");
             assert_eq!(error, ParameterError::MemoryOutOfRange { configured });
         }
+        assert_eq!(
+            Parameters::try_new(
+                memory,
+                time,
+                lanes,
+                0,
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+            )
+            .expect_err("zero difficulty must fail"),
+            ParameterError::DifficultyZero
+        );
         assert_eq!(
             Parameters::try_new(
                 memory,
@@ -860,7 +871,7 @@ mod tests {
     }
 
     fn binding() -> ChallengeBinding<'static> {
-        ChallengeBinding::new(&DESCRIPTOR, &RELAY, None)
+        ChallengeBinding::new(&DESCRIPTOR, &RELAY, &TRANSCRIPT)
     }
 
     #[test]
@@ -905,46 +916,42 @@ mod tests {
     }
 
     #[test]
-    fn transcript_hashes_match_legacy_contiguous_layout() {
+    fn challenge_hashes_match_canonical_contiguous_layout() {
         let transcript = [0x33; 32];
         let client_nonce = [0x44; 32];
         let expires_at = 1_700_000_123_u64;
 
-        for transcript_hash in [None, Some(transcript.as_slice())] {
-            let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, transcript_hash);
-            let mut legacy = Vec::with_capacity(
-                CHALLENGE_DOMAIN.len()
-                    + DESCRIPTOR.len()
-                    + RELAY.len()
-                    + transcript_hash.map_or(0, <[u8]>::len)
-                    + client_nonce.len()
-                    + 8,
-            );
-            legacy.extend_from_slice(CHALLENGE_DOMAIN);
-            legacy.extend_from_slice(&DESCRIPTOR);
-            legacy.extend_from_slice(&RELAY);
-            if let Some(transcript_hash) = transcript_hash {
-                legacy.extend_from_slice(transcript_hash);
-            }
-            legacy.extend_from_slice(&client_nonce);
-            legacy.extend_from_slice(&expires_at.to_be_bytes());
+        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &transcript);
+        let mut expected_challenge = Vec::with_capacity(
+            CHALLENGE_DOMAIN.len()
+                + DESCRIPTOR.len()
+                + RELAY.len()
+                + transcript.len()
+                + client_nonce.len()
+                + 8,
+        );
+        expected_challenge.extend_from_slice(CHALLENGE_DOMAIN);
+        expected_challenge.extend_from_slice(&DESCRIPTOR);
+        expected_challenge.extend_from_slice(&RELAY);
+        expected_challenge.extend_from_slice(&transcript);
+        expected_challenge.extend_from_slice(&client_nonce);
+        expected_challenge.extend_from_slice(&expires_at.to_be_bytes());
 
-            assert_eq!(
-                derive_challenge(&binding, client_nonce, expires_at),
-                blake3::hash(&legacy)
-            );
-        }
+        assert_eq!(
+            derive_challenge(&binding, client_nonce, expires_at),
+            blake3::hash(&expected_challenge)
+        );
 
         let params = test_parameters();
-        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript));
+        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &transcript);
         let challenge = derive_challenge(&binding, client_nonce, expires_at);
-        let mut legacy_salt =
+        let mut expected_salt =
             Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len());
-        legacy_salt.extend_from_slice(SOLUTION_DOMAIN);
-        legacy_salt.extend_from_slice(challenge.as_bytes());
+        expected_salt.extend_from_slice(SOLUTION_DOMAIN);
+        expected_salt.extend_from_slice(challenge.as_bytes());
         assert_eq!(
             derive_solution_salt(&challenge).as_slice(),
-            legacy_salt.as_slice()
+            expected_salt.as_slice()
         );
 
         let solution = [0x55; 32];
@@ -958,8 +965,8 @@ mod tests {
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
         let mut expected = [0u8; OUTPUT_LEN];
         argon2
-            .hash_password_into(&solution, &legacy_salt, &mut expected)
-            .expect("legacy argon2 digest");
+            .hash_password_into(&solution, &expected_salt, &mut expected)
+            .expect("canonical argon2 digest");
 
         assert_eq!(
             derive_solution_digest(&challenge, &solution, &params)
@@ -1025,11 +1032,11 @@ mod tests {
                 let idx = u8::try_from(idx).expect("transcript index fits in u8");
                 *byte = seed.wrapping_add(idx);
             }
-            if base.transcript_hash == Some(transcript.as_slice()) {
+            if base.transcript_hash == &transcript {
                 continue;
             }
             let candidate =
-                ChallengeBinding::new(base.descriptor_commit, base.relay_id, Some(&transcript));
+                ChallengeBinding::new(base.descriptor_commit, base.relay_id, &transcript);
             let challenge = derive_challenge(&candidate, ticket.client_nonce, ticket.expires_at);
             let digest = derive_solution_digest(&challenge, &ticket.solution, params)
                 .expect("digest derivation should succeed");
@@ -1107,14 +1114,14 @@ mod tests {
 
     #[test]
     fn mint_rejects_ttl_that_overflows_system_time() {
-        let memory = NonZeroU32::new(8).expect("non-zero memory");
+        let memory = NonZeroU32::new(MIN_MEMORY_KIB).expect("non-zero memory");
         let time = NonZeroU32::new(1).expect("non-zero time");
         let lanes = NonZeroU32::new(1).expect("non-zero lanes");
         let params = Parameters::try_new(
             memory,
             time,
             lanes,
-            0,
+            1,
             Duration::from_secs(u64::MAX),
             Duration::from_secs(1),
         )
@@ -1153,35 +1160,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_malformed_binding_before_argon2_work() {
-        let params = test_parameters().with_difficulty(0);
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: 1_700_000_120,
-            client_nonce: [0x66; 32],
-            solution: [0x77; 32],
-        };
-        let short_transcript = [0x33; 31];
-        let malformed = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&short_transcript));
-        let err = verify_at(&ticket, &malformed, &params, now)
-            .expect_err("malformed binding must fail before Argon2 derivation");
-        match err {
-            Error::MalformedBinding(message) => assert!(
-                message.contains("transcript_hash"),
-                "unexpected error: {message}"
-            ),
-            other => panic!("expected malformed binding error, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn mint_rejects_malformed_binding_before_solution_search() {
         let params = test_parameters().with_difficulty(0);
         let mut rng = ChaCha20Rng::from_seed([0x66; 32]);
         let short_descriptor = [0x11; 31];
-        let malformed = ChallengeBinding::new(&short_descriptor, &RELAY, None);
+        let malformed = ChallengeBinding::new(&short_descriptor, &RELAY, &TRANSCRIPT);
         let err = mint_ticket(&params, &malformed, Duration::from_secs(12), &mut rng)
             .expect_err("malformed binding must fail before minting");
         match err {
@@ -1198,14 +1181,14 @@ mod tests {
         let params = test_parameters();
         let mut rng = ChaCha20Rng::from_seed([0xAA; 32]);
         let transcript_a = [0x11; 32];
-        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript_a));
+        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &transcript_a);
         let ticket =
             mint_ticket(&params, &binding, Duration::from_secs(12), &mut rng).expect("mint");
 
         let now = stable_verify_time(&ticket, &params);
         verify_at(&ticket, &binding, &params, now).expect("expected transcript to verify");
         let transcript_b = first_invalid_transcript_hash(&ticket, &params, &binding);
-        let mismatched = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript_b));
+        let mismatched = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &transcript_b);
         let err = verify_at(&ticket, &mismatched, &params, now)
             .expect_err("transcript mismatch should reject ticket");
         assert!(matches!(err, Error::InvalidSolution));

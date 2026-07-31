@@ -892,6 +892,7 @@ mod prepare_qc_split_tests {
                     hash(0x30),
                     hash(0x31),
                     hash(0x32),
+                    1,
                     hash(execution_seed),
                 ),
             },

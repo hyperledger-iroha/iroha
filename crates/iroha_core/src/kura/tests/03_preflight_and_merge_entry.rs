@@ -1015,14 +1015,17 @@
             coordinator_lane_block_view: origin.descriptor.lane_block_view,
             coordinator_proposal_hash: origin.proposal_hash,
         };
-        let native_qc = |body| iroha_data_model::block::consensus::NativeAmxAttestationQcV2 {
-            body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: participant_validator_set_hash,
-            validator_set: participant_validator_set.clone(),
-            validator_set_pops: Vec::new(),
-            signers_bitmap: Vec::new(),
-            bls_aggregate_signature: Vec::new(),
+        let native_qc = |body| {
+            iroha_data_model::block::consensus::NativeAmxAttestationQcV2::try_new(
+                body,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                participant_validator_set_hash,
+                participant_validator_set.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("preflight fixture validator set and proofs must align")
         };
         let prepare_qc = native_qc(prepare_body);
         prepare_body.phase = iroha_data_model::block::consensus::NativeAmxPhase::Commit;
@@ -2023,6 +2026,7 @@
             .expect("store block+entry1");
         kura.store_block_with_merge_entry(Arc::clone(&block2), &entry2)
             .expect("store block+entry2");
+        let _ = persist_v2_finality_chain_through(&kura, block2_height);
         assert_eq!(
             kura.merge_ledger_snapshot(),
             vec![entry1.clone(), entry2.clone()]
@@ -2522,6 +2526,7 @@
         let entry_hash = entry.canonical_hash();
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store merge carrier");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         let scans = kura.merge_carrier_index.lock().directory_scans;
 
         for _ in 0..32 {
@@ -2546,6 +2551,245 @@
     }
 
     #[test]
+    fn carrier_lookup_requires_finality_even_while_body_is_present() {
+        let kura = Kura::blank_kura_for_testing();
+        let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
+        let carrier_height = carrier.header().height().get();
+        let carrier_hash = carrier.hash();
+        let entry_hash = entry.canonical_hash();
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("store merge carrier without finality");
+
+        assert!(
+            kura.get_block_without_merge_sidecar(nonzero!(2_usize))
+                .is_some()
+        );
+        assert!(matches!(
+            kura.merge_carrier_for_entry(entry_hash),
+            Err(Error::MergeCarrierConflict(_))
+        ));
+        assert!(matches!(
+            kura.merge_entry_for_carrier(carrier_height, carrier_hash),
+            Err(Error::MergeCarrierConflict(_))
+        ));
+        assert!(matches!(
+            kura.merge_carrier_records(),
+            Err(Error::MergeCarrierConflict(_))
+        ));
+    }
+
+    #[test]
+    fn finality_store_rejects_missing_or_wrong_merge_carrier_projection() {
+        let wrong_entry_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong finality merge-carrier entry"));
+        let projections = [
+            None,
+            Some(
+                iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                    wrong_entry_hash,
+                ),
+            ),
+        ];
+
+        for projection in projections {
+            let kura = Kura::blank_kura_for_testing();
+            let mut blocks = DummyBlocks::new();
+            let genesis = blocks.next();
+            let mut entry = sample_merge_entry(1);
+            let carrier = next_merge_carrier(&mut blocks, &mut entry);
+            kura.store_block(Arc::clone(&genesis))
+                .expect("store carrier parent");
+            kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+                .expect("store merge carrier");
+
+            let keypairs = v2_finality_fixture_keys();
+            let parent = v2_finality_artifact_for_block_with_keys(
+                genesis.as_ref(),
+                None,
+                &keypairs,
+                v2_finality_fixture_execution_commitment(),
+            );
+            let _ = kura
+                .store_v2_finality_artifact(&parent)
+                .expect("persist parent finality");
+            let malformed = v2_finality_artifact_for_block_with_keys_and_merge_carrier(
+                carrier.as_ref(),
+                Some(&parent),
+                &keypairs,
+                v2_finality_fixture_execution_commitment(),
+                projection,
+            );
+            malformed
+                .verify()
+                .expect("malformed projection remains self-consistently signed");
+
+            assert!(matches!(
+                kura.store_v2_finality_artifact(&malformed),
+                Err(Error::MergeCarrierConflict(_))
+            ));
+            assert!(!kura.v2_finality_artifact_path(2).exists());
+        }
+    }
+
+    #[test]
+    fn finality_authenticated_carrier_survives_body_removal_and_restart() {
+        let dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+        let mut blocks = DummyBlocks::new();
+        let genesis = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let carrier = next_merge_carrier(&mut blocks, &mut entry);
+        let tail = blocks.next();
+        let entry_hash = entry.canonical_hash();
+        let carrier_hash = carrier.hash();
+
+        kura.store_block(genesis).expect("store carrier parent");
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("store merge carrier");
+        kura.store_block(tail).expect("store eviction tail");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
+        assert_eq!(
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("validate body-present carrier")
+                .map(|record| record.block_hash),
+            Some(carrier_hash)
+        );
+
+        let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        assert!(
+            kura.evict_block_bodies(payload_len)
+                .expect("evict finalized carrier body")
+                >= payload_len
+        );
+        kura.remove_evicted_block_sidecar_for_testing(nonzero!(2_usize))
+            .expect("remove local remote-only cache");
+        assert!(
+            kura.get_block_without_merge_sidecar(nonzero!(2_usize))
+                .is_none()
+        );
+        assert_eq!(
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("validate bodyless carrier")
+                .map(|record| record.block_hash),
+            Some(carrier_hash)
+        );
+        drop(kura);
+
+        let (reopened, _) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen bodyless carrier");
+        assert!(
+            reopened
+                .get_block_without_merge_sidecar(nonzero!(2_usize))
+                .is_none()
+        );
+        assert_eq!(
+            reopened
+                .merge_carrier_for_entry(entry_hash)
+                .expect("validate bodyless carrier after restart")
+                .map(|record| record.block_hash),
+            Some(carrier_hash)
+        );
+    }
+
+    #[test]
+    fn bodyless_finalized_execution_carrier_rebuilds_merge_transaction_index() {
+        let dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+
+        let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+        let entrypoint_hash = entrypoint.hash();
+        let transaction_hash =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone())).hash();
+        let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
+
+        let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, None)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        let genesis = Arc::new(genesis);
+        let mut raw_carrier: SignedBlock =
+            BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+                .chain(0, Some(genesis.as_ref()))
+                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                .unpack(|_| {})
+                .into();
+        raw_carrier
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach empty ordinary carrier results");
+        assert!(raw_carrier.header().merkle_root().is_none());
+        assert!(raw_carrier.header().result_merkle_root().is_none());
+        let batch = entry
+            .execution_batch
+            .as_mut()
+            .expect("index fixture has an execution batch");
+        batch.application_block_header =
+            crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        let descriptor = batch
+            .lanes
+            .first()
+            .expect("index fixture has one lane")
+            .proposal
+            .descriptor
+            .clone();
+        let lane_entry = kura
+            .lane_storage_entry(descriptor.lane_id)
+            .expect("index fixture targets an active lane");
+        kura.install_lane_incarnation_marker_for_test(&lane_entry, descriptor.lane_incarnation, 0)
+            .expect("install index fixture lane incarnation");
+        let carrier = bind_merge_entry_to_carrier(Arc::new(raw_carrier), &mut entry);
+        let carrier_hash = carrier.hash();
+
+        kura.store_block(genesis).expect("store carrier parent");
+        kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+            .expect("store execution carrier");
+        let tail: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, Some(carrier.as_ref()))
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(tail))
+            .expect("store eviction tail");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
+
+        let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        assert!(
+            kura.evict_block_bodies(payload_len)
+                .expect("evict finalized execution carrier")
+                >= payload_len
+        );
+        kura.remove_evicted_block_sidecar_for_testing(nonzero!(2_usize))
+            .expect("remove local remote-only carrier cache");
+        drop(kura);
+
+        let (reopened, _) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen bodyless carrier");
+        assert!(
+            reopened
+                .get_block_without_merge_sidecar(nonzero!(2_usize))
+                .is_none()
+        );
+        assert_eq!(
+            reopened.get_block_heights_by_entrypoint_hash(entrypoint_hash),
+            Some(BTreeSet::from([nonzero!(2_usize)]))
+        );
+        assert_eq!(
+            reopened.get_block_heights_by_transaction_hash(transaction_hash),
+            Some(BTreeSet::from([nonzero!(2_usize)]))
+        );
+        assert_eq!(
+            reopened
+                .merge_carrier_for_entry(entry.canonical_hash())
+                .expect("validate rebuilt bodyless execution carrier")
+                .map(|record| record.block_hash),
+            Some(carrier_hash)
+        );
+    }
+
+    #[test]
     fn carrier_point_and_write_paths_do_not_clone_the_full_inventory() {
         let kura = Kura::blank_kura_for_testing();
         let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
@@ -2555,6 +2799,7 @@
 
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store merge carrier through indexed write path");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         for _ in 0..16 {
             assert!(
                 kura.merge_carrier_for_entry(entry_hash)
@@ -2583,6 +2828,7 @@
         let entry_hash = entry.canonical_hash();
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store merge carrier");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         let scans = kura.merge_carrier_index.lock().directory_scans;
         let existing = kura
             .merge_carrier_for_entry(entry_hash)
@@ -2630,6 +2876,7 @@
         let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store merge carrier");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         let existing = kura
             .merge_carrier_for_entry(entry.canonical_hash())
             .expect("lookup carrier")
@@ -2659,6 +2906,7 @@
         let entry_hash = entry.canonical_hash();
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store merge carrier");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         let path = kura.merge_carrier_path(2);
         let mut bytes = fs::read(&path).expect("read carrier record");
         let last = bytes.last_mut().expect("non-empty carrier record");
@@ -2681,6 +2929,7 @@
         let entry_hash = entry.canonical_hash();
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("store merge carrier");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         let path = kura.merge_carrier_path(2);
         let temp_path = path.with_extension("norito.tmp");
         fs::rename(&path, &temp_path).expect("simulate crash before carrier rename");
@@ -2880,4 +3129,3 @@
             "preflight failure must not stage a new recovery sidecar"
         );
     }
-

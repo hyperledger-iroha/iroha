@@ -1074,6 +1074,7 @@ fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
         roster,
         mode,
         Digest::repeat(0x44),
+        Digest::repeat(0x46),
         Digest::repeat(0x45),
         Digest::repeat(0),
     )

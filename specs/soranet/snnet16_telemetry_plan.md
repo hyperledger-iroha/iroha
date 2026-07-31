@@ -95,7 +95,11 @@ downgrade reason, and ticket cost without bespoke parsing.
 
 - `ProxyPolicyEventBuffer` (see `tools/soranet-relay/src/privacy.rs`) already
   stores downgrade events; the runtime exposes `/policy/proxy-toggle` for
-  orchestrators (`tools/soranet-relay/src/runtime.rs:2779`). The stream now
+  orchestrators (`tools/soranet-relay/src/runtime.rs`). The listener must bind
+  to loopback, and `/policy/proxy-toggle`, `/privacy/events`, and `/metrics`
+  require the bearer token loaded from `admin_auth_token_path`; `/healthz` is
+  the only unauthenticated liveness route. Remote collectors must connect
+  through a separately authenticated and encrypted local proxy. The stream now
   includes a deterministic `detail` slug derived from
   `normalize_downgrade_reason` so automations see the same vocabulary as the
   Prometheus counters, and the `soranet_proxy_policy_queue_depth` gauge is

@@ -147,13 +147,13 @@ if hashlib.sha256(recipient_request_vector).hexdigest() != (
     "899c9b4d44630e6c0c010d04ab4b0c570c2062fba5a54e678d6a0baf0e8b02b0"
 ):
     errors.append(f"{paths['recipient_request_vector']}: canonical SHA-256 mismatch")
-if len(peer_payment_vector) != 11_854:
+if len(peer_payment_vector) != 11_887:
     errors.append(
-        f"{paths['peer_payment_vector']}: expected 11854 bytes, "
+        f"{paths['peer_payment_vector']}: expected 11887 bytes, "
         f"found {len(peer_payment_vector)}"
     )
 if hashlib.sha256(peer_payment_vector).hexdigest() != (
-    "22e6ecf3fb9260004d6e6776e7ecdda5b5188bc87ac4b1a55836d48a26476aba"
+    "ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"
 ):
     errors.append(f"{paths['peer_payment_vector']}: canonical SHA-256 mismatch")
 for needle in (
@@ -174,7 +174,7 @@ for needle in (
 ):
     require("swift_peer_fixtures", needle)
 for needle in (
-    '"22e6ecf3fb9260004d6e6776e7ecdda5b5188bc87ac4b1a55836d48a26476aba"',
+    '"ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"',
     '"e9aa5e352f5e14687adac62b40dbcfba2050463624ce3d21377e83fc3f34de08"',
     ".archiveTooLarge(",
     "maximumTextArchiveBytes",

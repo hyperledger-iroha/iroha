@@ -14,7 +14,16 @@ keywords = ["blockchain", "crypto", "iroha", "ledger"]
 categories = ["cryptography::cryptocurrencies"]
 
 [workspace.metadata]
-docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kagami"]
+docker_bins = [
+    "iroha",
+    "irohad",
+    "iroha3",
+    "iroha3d",
+    "iroha2",
+    "iroha2d",
+    "kagami",
+    "attachment_sanitizer",
+]
 
 [workspace.dependencies]
 # Internal dependency features are selected by the consuming crate. Keeping the

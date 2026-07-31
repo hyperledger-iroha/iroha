@@ -132,6 +132,12 @@ enrolled programs receive leases even when they are not a route default.
 Withdrawals must leave every unexpired lease remainder intact, and final close
 waits until executed receipt usage has been merge-settled.
 
+Verified allocation, executed-usage, and merge-settled-usage records are
+native-authored consensus state. Contracts may read and enumerate their
+canonical keys, but generic IVM state syscalls cannot create, overwrite, or
+delete them; updates must pass through the validating native allocation and fee
+settlement paths.
+
 ## Reservations and settlement
 
 Queue admission reserves the deterministic quoted maxima authorized by the

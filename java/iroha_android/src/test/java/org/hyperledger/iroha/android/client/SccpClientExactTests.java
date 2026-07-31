@@ -1063,7 +1063,7 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.chainIdHash.equals(tairaChainIdHash());
     assert request.soraFinalityAnchor.checkpointHeight.equals(BigInteger.valueOf(7));
     assert request.soraFinalityAnchor.checkpointBlockHash.equals(upper(0xa1, 32));
-    assert request.soraFinalityAnchor.protocolVersion == 3;
+    assert request.soraFinalityAnchor.protocolVersion == 4;
     assert request.soraFinalityAnchor.checkpointContextId.equals(upper(0xa2, 32));
     assert request.soraFinalityAnchor.checkpointFinalityArtifactHash.equals(upper(0xa3, 32));
     assert request.soraFinalityAnchor.anchorHash.equals(
@@ -1075,10 +1075,10 @@ public final class SccpClientExactTests {
     object(wrongProtocol.get("sora_finality_anchor")).put("protocol_version", 1);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocol)));
     final Map<String, Object> wrongProtocolType = proofRequest();
-    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "3");
+    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "4");
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocolType)));
     final Map<String, Object> floatingProtocol = proofRequest();
-    object(floatingProtocol.get("sora_finality_anchor")).put("protocol_version", 3.0d);
+    object(floatingProtocol.get("sora_finality_anchor")).put("protocol_version", 4.0d);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(floatingProtocol)));
     final Map<String, Object> booleanProtocol = proofRequest();
     object(booleanProtocol.get("sora_finality_anchor")).put("protocol_version", true);
@@ -1508,7 +1508,7 @@ public final class SccpClientExactTests {
     final Map<String, Object> anchor = map();
     anchor.put("version", 1);
     anchor.put("source_network", network("sora-taira"));
-    anchor.put("protocol_version", 3);
+    anchor.put("protocol_version", 4);
     anchor.put("chain_id_hash", tairaChainIdHash());
     anchor.put("checkpoint_height", 7);
     anchor.put("checkpoint_block_hash", upper(0xa1, 32));

@@ -88,7 +88,7 @@ PhysicalOwners ==
 Init ==
   /\ RetirementMode \in RetirementModes
   /\ stage = "PersistInstallTC"
-  /\ ~installed
+  /\ installed = FALSE
   /\ timeoutRetiredThroughView = 0
   /\ runtimeOwners = InitialOwners
   /\ deferredOwners = InitialOwners
@@ -103,7 +103,7 @@ Init ==
 PersistInstallTC ==
   /\ stage = "PersistInstallTC"
   /\ stage' = "Installed"
-  /\ installed'
+  /\ installed' = TRUE
   /\ timeoutRetiredThroughView' = InstalledView
   /\ runtimeOwners' = OwnersAfterInstall(runtimeOwners)
   /\ deferredOwners' =

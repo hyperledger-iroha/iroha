@@ -508,6 +508,7 @@
             Hash::new(b"coalesced parent state"),
             Hash::new(b"coalesced post state"),
             Hash::new(b"coalesced ordinary writes"),
+            1,
             Hash::new(b"coalesced executed block wire"),
         );
         let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {

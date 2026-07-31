@@ -14,6 +14,7 @@ from iroha_python.client import (
     SumeragiV2BodyState,
     SumeragiV2ExecutionCommitment,
     SumeragiV2GlobalPhase,
+    SumeragiV2MergeCarrierCommitment,
     SumeragiV2StatusPhase,
     ToriiClient,
 )
@@ -60,6 +61,8 @@ def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 512,
         "executed_block_wire_hash": _canonical_hash(seed + 3),
     }
 
@@ -86,7 +89,7 @@ def _healthy_status() -> dict[str, object]:
     prepare_qc = _prepare_qc()
     committed_subject = _subject(0x41)
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -247,7 +250,7 @@ def _healthy_diagnostics() -> dict[str, object]:
 def test_status_parses_authoritative_reducer_state() -> None:
     status = SumeragiStatusSnapshot.from_payload(_healthy_status())
 
-    assert status.protocol_version == 3
+    assert status.protocol_version == 4
     assert status.restart_required is False
     assert status.height_context_id.hash == _canonical_hash(0x14)
     assert status.height == 15
@@ -374,6 +377,8 @@ def test_qc_reference_preserves_execution_commitment() -> None:
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         native_amx_application_manifest_count=0,
+        merge_carrier=None,
+        executed_block_wire_len=512,
         executed_block_wire_hash=_canonical_hash(0x54),
     )
 
@@ -389,6 +394,69 @@ def test_execution_commitment_accepts_nonempty_native_manifest() -> None:
 
     assert commitment.native_amx_application_manifest_root == _canonical_hash(0x55)
     assert commitment.native_amx_application_manifest_count == 1
+
+
+def test_execution_commitment_requires_exact_merge_carrier_projection() -> None:
+    payload = _execution_commitment()
+    assert (
+        SumeragiV2ExecutionCommitment.from_payload(payload, "test_commitment").merge_carrier
+        is None
+    )
+
+    payload["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x56),
+    }
+    commitment = SumeragiV2ExecutionCommitment.from_payload(
+        payload, "test_commitment"
+    )
+    assert commitment.merge_carrier == SumeragiV2MergeCarrierCommitment(
+        version=1,
+        entry_hash=_canonical_hash(0x56),
+    )
+
+    invalid_payloads = []
+    missing = _execution_commitment()
+    del missing["merge_carrier"]
+    invalid_payloads.append(missing)
+    malformed = _execution_commitment()
+    malformed["merge_carrier"] = "carrier"
+    invalid_payloads.append(malformed)
+    wrong_version = _execution_commitment()
+    wrong_version["merge_carrier"] = {
+        "version": 2,
+        "entry_hash": _canonical_hash(0x56),
+    }
+    invalid_payloads.append(wrong_version)
+    bad_hash = _execution_commitment()
+    bad_hash["merge_carrier"] = {"version": 1, "entry_hash": "not-a-hash"}
+    invalid_payloads.append(bad_hash)
+    unknown = _execution_commitment()
+    unknown["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x56),
+        "future": True,
+    }
+    invalid_payloads.append(unknown)
+
+    for invalid in invalid_payloads:
+        with pytest.raises((TypeError, ValueError)):
+            SumeragiV2ExecutionCommitment.from_payload(invalid, "test_commitment")
+
+
+@pytest.mark.parametrize("invalid", [None, True, 0, -1, 1 << 64, "512"])
+def test_execution_commitment_requires_exact_executed_wire_len(invalid: object) -> None:
+    payload = _execution_commitment()
+    commitment = SumeragiV2ExecutionCommitment.from_payload(payload, "test_commitment")
+    assert commitment.executed_block_wire_len == 512
+
+    payload["executed_block_wire_len"] = invalid
+    with pytest.raises((TypeError, ValueError), match="executed_block_wire_len"):
+        SumeragiV2ExecutionCommitment.from_payload(payload, "test_commitment")
+
+    del payload["executed_block_wire_len"]
+    with pytest.raises((TypeError, ValueError), match="executed_block_wire_len"):
+        SumeragiV2ExecutionCommitment.from_payload(payload, "test_commitment")
 
 
 @pytest.mark.parametrize(
@@ -568,7 +636,7 @@ def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
 @pytest.mark.parametrize(
     ("mutate", "error"),
     [
-        (lambda payload: payload.update(protocol_version=1), "must equal 3"),
+        (lambda payload: payload.update(protocol_version=3), "must equal 4"),
         (
             lambda payload: payload.pop("restart_required"),
             "restart_required must be a boolean",

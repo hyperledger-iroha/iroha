@@ -1188,7 +1188,7 @@ class SccpClientExactTest {
         assertEquals(tairaChainIdHash(), request.soraFinalityAnchor.chainIdHash)
         assertEquals(BigInteger.valueOf(7), request.soraFinalityAnchor.checkpointHeight)
         assertEquals(upper(0xa1, 32), request.soraFinalityAnchor.checkpointBlockHash)
-        assertEquals(3, request.soraFinalityAnchor.protocolVersion)
+        assertEquals(4, request.soraFinalityAnchor.protocolVersion)
         assertEquals(upper(0xa2, 32), request.soraFinalityAnchor.checkpointContextId)
         assertEquals(upper(0xa3, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
         assertEquals(
@@ -1199,8 +1199,8 @@ class SccpClientExactTest {
 
         val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
             { it["protocol_version"] = 1 },
-            { it["protocol_version"] = "3" },
-            { it["protocol_version"] = 3.0 },
+            { it["protocol_version"] = "4" },
+            { it["protocol_version"] = 4.0 },
             { it["protocol_version"] = true },
             { it["validator_set_epoch"] = 3 },
             { it["checkpoint_context_id"] = upper(0, 32) },
@@ -1603,7 +1603,7 @@ class SccpClientExactTest {
     private fun finalityAnchor(): MutableMap<String, Any?> = linkedMapOf(
         "version" to 1,
         "source_network" to network("sora-taira"),
-        "protocol_version" to 3,
+        "protocol_version" to 4,
         "chain_id_hash" to tairaChainIdHash(),
         "checkpoint_height" to 7,
         "checkpoint_block_hash" to upper(0xa1, 32),

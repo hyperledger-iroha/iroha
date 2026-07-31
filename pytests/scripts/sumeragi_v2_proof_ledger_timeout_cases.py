@@ -1148,7 +1148,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (
             "production_gate_disconnected",
             Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
-            "accepts",
+            "check",
             "accepts_facts(transition_facts(projection))",
             "true",
             "production commit gate must consume facts derived from the exact projection",
@@ -1201,16 +1201,14 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "timeout_ack_generation_preflight_removed",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "on_persisted",
-            """let next_generation =
-            if matches!(&pending.continuation, Continuation::InstallTimeout { .. }) {
-                self.generation
-                    .next()
-                    .ok_or(ReducerError::GenerationOverflow)?
-            } else {
-                self.generation
-            };""",
+            """let next_generation = match pending.entry.record() {
+            WalRecord::InstallTimeout(certificate) => self
+                .generation_after_timeout_install(certificate)
+                .ok_or(ReducerError::GenerationOverflow)?,
+            _ => self.generation,
+        };""",
             "let next_generation = self.generation;",
-            "InstallTimeout acknowledgement must reject generation exhaustion before applying WAL state or releasing its pending owner",
+            "InstallTimeout acknowledgement must preflight same-round generation exhaustion while allowing an advancing-view reset",
         ),
         (
             "timeout_ack_ignores_preflighted_generation",
@@ -1264,15 +1262,15 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (
             "timeout_generation_overflow_regression_deleted",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
-            "timeout_install_generation_overflow_preserves_the_complete_state",
-            "fn timeout_install_generation_overflow_preserves_the_complete_state() {",
-            "fn removed_timeout_install_generation_overflow_preserves_the_complete_state() {",
+            "same_round_timeout_generation_overflow_preserves_the_complete_state",
+            "fn same_round_timeout_generation_overflow_preserves_the_complete_state() {",
+            "fn removed_same_round_timeout_generation_overflow_preserves_the_complete_state() {",
             "generation overflow must retain a regression for complete reducer-state non-mutation",
         ),
         (
             "timeout_generation_overflow_public_state_weakened",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
-            "timeout_install_generation_overflow_preserves_the_complete_state",
+            "same_round_timeout_generation_overflow_preserves_the_complete_state",
             "assert_eq!(pending, before);",
             "assert_eq!(pending.generation, before.generation);",
             "the public reducer step must preserve every durable, pending, and volatile owner on generation overflow",
@@ -1280,7 +1278,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (
             "timeout_generation_overflow_in_place_state_weakened",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
-            "timeout_install_generation_overflow_preserves_the_complete_state",
+            "same_round_timeout_generation_overflow_preserves_the_complete_state",
             "assert_eq!(in_place, before);",
             "assert_eq!(in_place.generation, before.generation);",
             "the in-place acknowledgement callback must preserve the complete reducer state on generation overflow",

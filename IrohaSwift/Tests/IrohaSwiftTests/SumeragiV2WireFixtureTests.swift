@@ -6,6 +6,52 @@ import XCTest
 @testable import IrohaSwift
 
 final class SumeragiV2WireFixtureTests: XCTestCase {
+    func testExecutionCommitmentCarriesExactMandatoryMergeCarrierOption() throws {
+        func hash(_ seed: UInt8) throws -> SumeragiV2Hash {
+            var bytes = Data(repeating: seed, count: 32)
+            bytes[31] |= 1
+            return try SumeragiV2Hash(bytes)
+        }
+        let emptyManifestRoot = try SumeragiV2Hash(
+            SumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRootBytes()
+        )
+        let base = try SumeragiV2ExecutionCommitment(
+            parentStateRoot: hash(0x21),
+            postStateRoot: hash(0x23),
+            ordinaryWritesRoot: hash(0x25),
+            topUpAnchorRoot: nil,
+            topUpAnchorCount: 0,
+            nativeAmxApplicationManifestVersion: 1,
+            nativeAmxApplicationManifestRoot: emptyManifestRoot,
+            nativeAmxApplicationManifestCount: 0,
+            executedBlockWireLen: 123,
+            executedBlockWireHash: hash(0x27)
+        )
+        let carrier = try SumeragiV2MergeCarrierCommitment(entryHash: hash(0x29))
+        let carried = try SumeragiV2ExecutionCommitment(
+            parentStateRoot: base.parentStateRoot,
+            postStateRoot: base.postStateRoot,
+            ordinaryWritesRoot: base.ordinaryWritesRoot,
+            topUpAnchorRoot: nil,
+            topUpAnchorCount: 0,
+            nativeAmxApplicationManifestVersion:
+                base.nativeAmxApplicationManifestVersion,
+            nativeAmxApplicationManifestRoot: base.nativeAmxApplicationManifestRoot,
+            nativeAmxApplicationManifestCount: 0,
+            mergeCarrier: carrier,
+            executedBlockWireLen: base.executedBlockWireLen,
+            executedBlockWireHash: base.executedBlockWireHash
+        )
+
+        XCTAssertNil(base.mergeCarrier)
+        XCTAssertEqual(base.executedBlockWireLen, 123)
+        XCTAssertEqual(carried.mergeCarrier, carrier)
+        XCTAssertGreaterThan(carried.encode().count, base.encode().count)
+        XCTAssertThrowsError(
+            try SumeragiV2MergeCarrierCommitment(version: 2, entryHash: hash(0x29))
+        )
+    }
+
     func testUnsafeProposalIgnoreReasonUsesWireDiscriminantEleven() {
         XCTAssertEqual(SumeragiV2IgnoreReason(rawValue: 11), .unsafeProposal)
     }
@@ -431,6 +477,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                     commitment.nativeAmxApplicationManifestRoot,
                 nativeAmxApplicationManifestCount:
                     commitment.nativeAmxApplicationManifestCount,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -447,6 +494,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                     commitment.nativeAmxApplicationManifestRoot,
                 nativeAmxApplicationManifestCount:
                     commitment.nativeAmxApplicationManifestCount,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -463,6 +511,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                     commitment.nativeAmxApplicationManifestRoot,
                 nativeAmxApplicationManifestCount:
                     commitment.nativeAmxApplicationManifestCount,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -479,6 +528,25 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                     commitment.nativeAmxApplicationManifestRoot,
                 nativeAmxApplicationManifestCount:
                     commitment.nativeAmxApplicationManifestCount,
+                executedBlockWireLen: commitment.executedBlockWireLen,
+                executedBlockWireHash: commitment.executedBlockWireHash
+            )
+        )
+        XCTAssertThrowsError(
+            try SumeragiV2ExecutionCommitment(
+                parentStateRoot: commitment.parentStateRoot,
+                postStateRoot: commitment.postStateRoot,
+                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+                topUpAnchorRoot: commitment.topUpAnchorRoot,
+                topUpAnchorCount: commitment.topUpAnchorCount,
+                nativeAmxApplicationManifestVersion:
+                    commitment.nativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount:
+                    commitment.nativeAmxApplicationManifestCount,
+                mergeCarrier: commitment.mergeCarrier,
+                executedBlockWireLen: 0,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -516,6 +584,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 nativeAmxApplicationManifestRoot:
                     commitment.nativeAmxApplicationManifestRoot,
                 nativeAmxApplicationManifestCount: 0,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -531,6 +600,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                         .canonicalNativeAmxApplicationManifestVersion,
                 nativeAmxApplicationManifestRoot: commitment.parentStateRoot,
                 nativeAmxApplicationManifestCount: 0,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -547,6 +617,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 nativeAmxApplicationManifestRoot:
                     commitment.nativeAmxApplicationManifestRoot,
                 nativeAmxApplicationManifestCount: 1,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -564,6 +635,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 nativeAmxApplicationManifestCount:
                     SumeragiV2ExecutionCommitment
                         .maximumNativeAmxApplicationManifestLeafCount + 1,
+                executedBlockWireLen: commitment.executedBlockWireLen,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )

@@ -150,7 +150,7 @@ PROFILE_ORDER = (
 )
 
 HUB_CHAIN_IDS = {"sora-taira": "fc56984b-2be7-431d-840e-21514d1883f0"}
-SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION = 3
+SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION = 4
 
 # Fixture keys are disposable and non-production. Production policy loading
 # denies every published generation even if an attacker relabels the fixture

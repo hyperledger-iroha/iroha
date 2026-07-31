@@ -145,6 +145,7 @@
             kura.store_block(parent).expect("store carrier parent");
             kura.store_block_with_merge_entry(block, &entry)
                 .expect("store block with merge entry");
+            let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
 
             let mut record = kura
                 .merge_carrier_for_entry(entry.canonical_hash())
@@ -273,6 +274,7 @@
 
         kura.store_block_with_merge_entry(block, &entry)
             .expect("a complete idempotent replay must not recreate its pending sidecar");
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         assert_eq!(
             kura.merge_entry_for_carrier(2, block_hash)
                 .expect("read complete merge association"),
@@ -2062,6 +2064,7 @@
             .expect("restart repairs the committed association");
         assert_eq!(count, 2);
         assert_eq!(kura.merge_ledger_snapshot(), vec![entry.clone()]);
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         assert_eq!(
             kura.merge_carrier_for_entry(entry_hash)
                 .expect("read repaired carrier")
@@ -2151,6 +2154,7 @@
                     vec![entry.clone()],
                     "{failure_point:?} retry_before_reopen={retry_before_reopen} must leave exactly one frame"
                 );
+                let _ = persist_v2_finality_chain_through(&reopened, nonzero!(2_usize));
                 assert_eq!(
                     reopened
                         .merge_carrier_for_entry(entry_hash)
@@ -2212,6 +2216,7 @@
                 vec![entry.clone()],
                 "restart must leave exactly one merge frame at crash window {published_merge_parts}"
             );
+            let _ = persist_v2_finality_chain_through(&reopened, nonzero!(2_usize));
             assert_eq!(
                 reopened
                     .merge_carrier_records()

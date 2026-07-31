@@ -1,6 +1,6 @@
 //! Canonical bounded segmented transparent proof container for zk-X509 AIRs.
 //!
-//! This module is deliberately below the fail-closed engine boundary.  It
+//! This module is deliberately below the governed engine boundary. It
 //! implements the complete commitment, quotient, Merkle-opening, binary-FRI,
 //! grinding, and exact-codec machinery for the verifier-fixed cross-segment
 //! byte-memory table and the numeric output-projection AIR.
@@ -21,6 +21,25 @@
 //! Proof dimensions are reconstructed from the verifier statement.  The wire
 //! contains no caller-selected parameter and the strict reader rejects every
 //! truncation and trailing suffix.
+
+mod main_aggregate;
+
+#[cfg(test)]
+use main_aggregate::{
+    MainOpenedProviderSetV1, MainOpenedRowEvaluatorV1, MainTraceColumnKindV1,
+    MainTracePolynomialSetV1, MainTraceProviderSetV1, P256OpenedRowEvaluatorV1,
+    add_main_composition_coefficient_chunks_v1, main_opened_composition_value_v1,
+    record_main_group_commitment_v1, validate_main_fri_mixes_v1,
+};
+use main_aggregate::{
+    ProjectionOpenedRowEvaluatorV1, p256_opened_residues_v1, p256_scalar_opened_residues_v1,
+};
+#[allow(unused_imports)]
+pub(crate) use main_aggregate::{
+    ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1,
+    commit_zk_x509_main_base_phase_v1_with_rng, verify_zk_x509_main_aggregate_stark_v1,
+    zk_x509_main_pre_aux_from_proof_v1,
+};
 
 use std::collections::BTreeMap;
 
@@ -50,6 +69,7 @@ use super::{
     },
     credential_stark::{
         ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, ZkX509CredentialPublicBindingV1,
+        ZkX509MainCaBindingV1,
     },
     der_air::ZkX509Rfc5280StatementV1,
     der_stark::{
@@ -238,7 +258,7 @@ use crate::privacy_engines::{
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log25:compact-ca-local-lde-log14:ordered-native-stride-trace-groups:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log7-13-chunks:sha256-vector-row-merkle:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-openings-canonical-sorted-unique-current-next-union-max116-after-grinding:x5b1-shared-challenge-pre-aux=all-six-main-base-roots-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-four-composition-chunks:ca-three-composition-chunks:fri-rate1over32:binary-fri:affine-batching-m3-arities2,2,2:58-uniform-distinct-queries-without-replacement:main-terminal1024-degree31:ca-terminal512-degree15:main-mask802-coefficients:ca-mask306-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier-pending:activation=false";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log25:compact-ca-local-lde-log14:ordered-native-stride-trace-groups:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log7-13-chunks:sha256-vector-row-merkle:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-openings-canonical-sorted-unique-current-next-union-max116-after-grinding:x5b1-shared-challenge-pre-aux=all-six-main-base-roots-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-four-composition-chunks:ca-three-composition-chunks:fri-rate1over32:binary-fri:affine-batching-m3-arities2,2,2:58-uniform-distinct-queries-without-replacement:main-terminal1024-degree31:ca-terminal512-degree15:main-mask802-coefficients:ca-mask306-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=governance-gated";
 
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
@@ -2507,8 +2527,8 @@ impl ZkX509MainBaseCommitmentSessionV1 {
 
     /// Initialize chronology only after the caller has validated the release
     /// profile. This remains private: production reaches it exclusively
-    /// through `new_v1`, while unit tests can exercise the state machine while
-    /// the independent release pins intentionally keep `new_v1` fail-closed.
+    /// through `new_v1`, while unit tests exercise the isolated chronology
+    /// state machine with explicit test profiles.
     fn new_after_profile_validation_v1(
         layout: &AggregateProofLayoutV1,
         consensus_context_digest: [u8; 32],
@@ -4433,6 +4453,48 @@ fn der_fixed_openings_v1(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RegisteredRetainedProverPlanV1 {
+    quotient_coset_log2: u8,
+    quotient_coset_rows: usize,
+    quotient_next_stride: usize,
+    maximum_quotient_degree: usize,
+}
+
+fn registered_retained_prover_plan_v1(
+    segment: SegmentLayoutV1,
+    common_lde_log2: u8,
+) -> Result<RegisteredRetainedProverPlanV1, ZkX509StarkErrorV1> {
+    segment.validate()?;
+    if common_lde_log2 < segment.lde_log2 {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let (maximum_quotient_degree, _) = checked_segment_degree_capacity_v1(
+        segment.trace_log2,
+        common_lde_log2,
+        segment.constraint_degree,
+    )?;
+    let quotient_coset_rows = maximum_quotient_degree
+        .checked_add(1)
+        .and_then(|rows| rows.checked_next_power_of_two())
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let quotient_coset_log2 = u8::try_from(quotient_coset_rows.ilog2())
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let quotient_next_stride = quotient_coset_rows
+        .checked_div(segment.trace_size())
+        .filter(|stride| *stride != 0 && quotient_coset_rows % segment.trace_size() == 0)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    if quotient_coset_log2 > common_lde_log2 {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(RegisteredRetainedProverPlanV1 {
+        quotient_coset_log2,
+        quotient_coset_rows,
+        quotient_next_stride,
+        maximum_quotient_degree,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DerRetainedProverAllocationPlanV1 {
     quotient_coset_log2: u8,
     quotient_coset_rows: usize,
@@ -4451,21 +4513,7 @@ fn der_retained_prover_allocation_plan_v1(
     if layout.adapter != SegmentAdapterIdV1::StrictDer {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    let (maximum_quotient_degree, _) = checked_segment_degree_capacity_v1(
-        layout.trace_log2,
-        layout.lde_log2,
-        layout.constraint_degree,
-    )?;
-    let quotient_coset_rows = maximum_quotient_degree
-        .checked_add(1)
-        .and_then(|rows| rows.checked_next_power_of_two())
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    let quotient_coset_log2 = u8::try_from(quotient_coset_rows.ilog2())
-        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let quotient_next_stride = quotient_coset_rows
-        .checked_div(layout.trace_size())
-        .filter(|stride| *stride != 0 && quotient_coset_rows % layout.trace_size() == 0)
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let retained = registered_retained_prover_plan_v1(layout, layout.lde_log2)?;
     let masked_coefficient_count = layout
         .trace_size()
         .checked_add(MASK_DEGREE)
@@ -4481,14 +4529,14 @@ fn der_retained_prover_allocation_plan_v1(
         .base_width
         .checked_add(layout.aux_width)
         .and_then(|width| width.checked_add(layout.fixed_width))
-        .and_then(|width| width.checked_mul(quotient_coset_rows))
+        .and_then(|width| width.checked_mul(retained.quotient_coset_rows))
         .and_then(|fields| fields.checked_mul(core::mem::size_of::<F>()))
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
     let plan = DerRetainedProverAllocationPlanV1 {
-        quotient_coset_log2,
-        quotient_coset_rows,
-        quotient_next_stride,
-        maximum_quotient_degree,
+        quotient_coset_log2: retained.quotient_coset_log2,
+        quotient_coset_rows: retained.quotient_coset_rows,
+        quotient_next_stride: retained.quotient_next_stride,
+        maximum_quotient_degree: retained.maximum_quotient_degree,
         retained_masked_coefficient_bytes,
         quotient_trace_matrix_bytes,
         encrypted_trace_scratch_bytes: 0,
@@ -4504,9 +4552,9 @@ fn der_retained_prover_allocation_plan_v1(
     Ok(plan)
 }
 
-struct ZeroizingDerBaseColumnsV1(Vec<Vec<F>>);
+struct ZeroizingBaseColumnsV1(Vec<Vec<F>>);
 
-impl core::ops::Deref for ZeroizingDerBaseColumnsV1 {
+impl core::ops::Deref for ZeroizingBaseColumnsV1 {
     type Target = [Vec<F>];
 
     fn deref(&self) -> &Self::Target {
@@ -4514,7 +4562,7 @@ impl core::ops::Deref for ZeroizingDerBaseColumnsV1 {
     }
 }
 
-impl Drop for ZeroizingDerBaseColumnsV1 {
+impl Drop for ZeroizingBaseColumnsV1 {
     fn drop(&mut self) {
         for column in &mut self.0 {
             column.fill(F::ZERO);
@@ -4522,9 +4570,9 @@ impl Drop for ZeroizingDerBaseColumnsV1 {
     }
 }
 
-struct ZeroizingDerExtensionColumnV1(Vec<E>);
+struct ZeroizingExtensionColumnV1(Vec<E>);
 
-impl core::ops::Deref for ZeroizingDerExtensionColumnV1 {
+impl core::ops::Deref for ZeroizingExtensionColumnV1 {
     type Target = [E];
 
     fn deref(&self) -> &Self::Target {
@@ -4532,18 +4580,18 @@ impl core::ops::Deref for ZeroizingDerExtensionColumnV1 {
     }
 }
 
-impl Drop for ZeroizingDerExtensionColumnV1 {
+impl Drop for ZeroizingExtensionColumnV1 {
     fn drop(&mut self) {
         self.0.fill(E::ZERO);
     }
 }
 
-struct DerCompositionMaterialV1 {
+struct RetainedCompositionMaterialV1 {
     evaluations: Vec<Vec<Vec<E>>>,
     coefficient_chunks: Vec<Vec<Vec<E>>>,
 }
 
-impl Drop for DerCompositionMaterialV1 {
+impl Drop for RetainedCompositionMaterialV1 {
     fn drop(&mut self) {
         for lane in &mut self.evaluations {
             for chunk in lane {
@@ -4558,10 +4606,10 @@ impl Drop for DerCompositionMaterialV1 {
     }
 }
 
-fn fp4_coset_coefficients_for_der_v1(
+fn fp4_coset_coefficients_v1(
     evaluations: &[E],
     coset_log2: u8,
-) -> Result<ZeroizingDerExtensionColumnV1, ZkX509StarkErrorV1> {
+) -> Result<ZeroizingExtensionColumnV1, ZkX509StarkErrorV1> {
     let expected = 1_usize
         .checked_shl(u32::from(coset_log2))
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -4572,7 +4620,7 @@ fn fp4_coset_coefficients_for_der_v1(
     let inverse_shift = F(GOLDILOCKS_GENERATOR_V1)
         .inv()
         .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-    let mut coefficients = ZeroizingDerExtensionColumnV1(Vec::new());
+    let mut coefficients = ZeroizingExtensionColumnV1(Vec::new());
     coefficients
         .0
         .try_reserve_exact(expected)
@@ -4591,7 +4639,7 @@ fn der_fixed_columns_on_coset_v1(
     schedule: &ZkX509DerStarkFixedScheduleV1,
     layout: SegmentLayoutV1,
     evaluation_log2: u8,
-) -> Result<ZeroizingDerBaseColumnsV1, ZkX509StarkErrorV1> {
+) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
     if layout.adapter != SegmentAdapterIdV1::StrictDer
         || layout.fixed_width != ZK_X509_DER_STARK_FIXED_WIDTH_V1
         || evaluation_log2 <= layout.trace_log2
@@ -4605,7 +4653,7 @@ fn der_fixed_columns_on_coset_v1(
         goldilocks_primitive_root_v1(layout.trace_log2).map_err(map_transparent_error_v1)?;
     let evaluation_root =
         goldilocks_primitive_root_v1(evaluation_log2).map_err(map_transparent_error_v1)?;
-    let mut columns = ZeroizingDerBaseColumnsV1(Vec::new());
+    let mut columns = ZeroizingBaseColumnsV1(Vec::new());
     columns
         .0
         .try_reserve_exact(ZK_X509_DER_STARK_FIXED_WIDTH_V1)
@@ -4631,7 +4679,7 @@ fn der_fixed_columns_on_coset_v1(
     Ok(columns)
 }
 
-fn composition_coefficient_chunks_for_der_v1(
+fn composition_coefficient_chunks_v1(
     quotient_coefficients: &[E],
     maximum_quotient_degree: usize,
     shared_layout: &aggregate::AggregateProofLayoutV1,
@@ -4695,7 +4743,7 @@ fn der_composition_material_from_polynomials_v1(
     public: ZkX509DerStarkPublicTerminalsV1,
     claims: ZkX509DerStarkTerminalClaimsV1,
     alphas: &[Vec<E>],
-) -> Result<DerCompositionMaterialV1, ZkX509StarkErrorV1> {
+) -> Result<RetainedCompositionMaterialV1, ZkX509StarkErrorV1> {
     let plan = der_retained_prover_allocation_plan_v1(layout)?;
     if base_polynomials.width() != ZK_X509_DER_STARK_BASE_WIDTH_V1
         || aux_polynomials.width() != ZK_X509_DER_STARK_AUX_WIDTH_V1
@@ -4729,7 +4777,7 @@ fn der_composition_material_from_polynomials_v1(
     }
     let mut numerators = (0..SECURITY_LANES)
         .map(|_| {
-            let mut numerator = ZeroizingDerExtensionColumnV1(Vec::new());
+            let mut numerator = ZeroizingExtensionColumnV1(Vec::new());
             numerator
                 .0
                 .try_reserve_exact(plan.quotient_coset_rows)
@@ -4796,7 +4844,7 @@ fn der_composition_material_from_polynomials_v1(
         .try_reserve_exact(SECURITY_LANES)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     for numerator in &numerators {
-        let quotient = ZeroizingDerExtensionColumnV1(
+        let quotient = ZeroizingExtensionColumnV1(
             aggregate::quotient_evaluations_from_constraint_coset_v1(
                 numerator,
                 layout.trace_log2,
@@ -4804,8 +4852,8 @@ fn der_composition_material_from_polynomials_v1(
             )
             .map_err(map_aggregate_error_v1)?,
         );
-        let coefficients = fp4_coset_coefficients_for_der_v1(&quotient, plan.quotient_coset_log2)?;
-        coefficient_chunks.push(composition_coefficient_chunks_for_der_v1(
+        let coefficients = fp4_coset_coefficients_v1(&quotient, plan.quotient_coset_log2)?;
+        coefficient_chunks.push(composition_coefficient_chunks_v1(
             &coefficients,
             plan.maximum_quotient_degree,
             &shared_layout,
@@ -4821,7 +4869,7 @@ fn der_composition_material_from_polynomials_v1(
             .map_err(map_aggregate_error_v1)?,
         );
     }
-    Ok(DerCompositionMaterialV1 {
+    Ok(RetainedCompositionMaterialV1 {
         evaluations,
         coefficient_chunks,
     })
@@ -4892,7 +4940,7 @@ fn accumulate_extension_deep_quotient_v1(
     Ok(())
 }
 
-fn evaluate_der_composition_coefficients_at_deep_v1(
+fn evaluate_retained_composition_coefficients_at_deep_v1(
     coefficient_chunks: &[Vec<Vec<E>>],
     point: E,
 ) -> Result<Vec<Vec<E>>, ZkX509StarkErrorV1> {
@@ -4988,7 +5036,7 @@ fn der_fri_bases_from_polynomials_v1(
     let deep_next_point = deep_point.mul_base(native_root);
     let mut accumulators = (0..SECURITY_LANES)
         .map(|_| {
-            let mut accumulator = ZeroizingDerExtensionColumnV1(Vec::new());
+            let mut accumulator = ZeroizingExtensionColumnV1(Vec::new());
             accumulator
                 .0
                 .try_reserve_exact(coefficient_cap)
@@ -6886,7 +6934,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
         deep_point,
     )
     .map_err(map_aggregate_error_v1)?;
-    let deep_composition_values = evaluate_der_composition_coefficients_at_deep_v1(
+    let deep_composition_values = evaluate_retained_composition_coefficients_at_deep_v1(
         &composition_material.coefficient_chunks,
         deep_point,
     )?;
@@ -12495,1991 +12543,6 @@ impl MainOpenedGroupProviderV1<'_> {
                 source.constraint_residues_v1(registration, query_index, x, opening, &fixed)
             }
         }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum MainTraceColumnKindV1 {
-    Base,
-    Aux,
-}
-
-/// Exact ordered ownership of the six authenticated masked-LDE matrices.
-///
-/// Every scratch file is anonymous and owner-private; its ephemeral key and
-/// nonce prefix are zeroized by the aggregate scratch owner. Keeping this
-/// typed set alive across the phase boundary prevents a prover from discarding
-/// the committed codeword and later reconstructing a substitute from native
-/// columns and masks.
-struct MainTraceScratchSetV1 {
-    scratches: [aggregate::EncryptedFieldMatrixScratchV1; FULL_PROFILE_TRACE_GROUPS_V1],
-}
-
-impl MainTraceScratchSetV1 {
-    fn from_ordered_v1(
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-        scratches: Vec<aggregate::EncryptedFieldMatrixScratchV1>,
-    ) -> Result<Self, ZkX509StarkErrorV1> {
-        layout.validate_exact_full_profile_registration_v1()?;
-        let scratches = scratches
-            .try_into()
-            .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-        let set = Self { scratches };
-        set.validate_v1(layout, kind)?;
-        Ok(set)
-    }
-
-    fn validate_v1(
-        &self,
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-    ) -> Result<(), ZkX509StarkErrorV1> {
-        layout.validate_exact_full_profile_registration_v1()?;
-        let rows = layout.common_lde_size();
-        for (scratch, group) in self.scratches.iter().zip(&layout.trace_groups) {
-            let width = match kind {
-                MainTraceColumnKindV1::Base => group.base_width,
-                MainTraceColumnKindV1::Aux => group.aux_width,
-            };
-            if scratch.rows() != rows
-                || scratch.width() != width
-                || scratch.chunk_rows() == 0
-                || scratch.chunk_count() == 0
-                || scratch.chunk_rows().checked_mul(scratch.chunk_count()) != Some(rows)
-                || scratch.ciphertext_bytes() == 0
-            {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-        }
-        Ok(())
-    }
-}
-
-fn registered_main_group_column_v1(
-    layout: &AggregateProofLayoutV1,
-    group_index: usize,
-    kind: MainTraceColumnKindV1,
-    column_index: usize,
-) -> Result<(RegisteredSegmentLayoutV1, usize), ZkX509StarkErrorV1> {
-    layout.validate_exact_full_profile_registration_v1()?;
-    let group = layout
-        .trace_groups
-        .get(group_index)
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    let width = match kind {
-        MainTraceColumnKindV1::Base => group.base_width,
-        MainTraceColumnKindV1::Aux => group.aux_width,
-    };
-    if column_index >= width {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    let mut matched = None;
-    for registration in layout
-        .registered_segments
-        .iter()
-        .copied()
-        .filter(|registration| registration.trace_group == group_index)
-    {
-        let (start, end) = match kind {
-            MainTraceColumnKindV1::Base => (registration.base_start, registration.base_end()?),
-            MainTraceColumnKindV1::Aux => (registration.aux_start, registration.aux_end()?),
-        };
-        if (start..end).contains(&column_index)
-            && matched
-                .replace((registration, column_index - start))
-                .is_some()
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-    }
-    matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
-}
-
-fn commit_main_trace_group_v1<R: TryRngCore>(
-    layout: &AggregateProofLayoutV1,
-    group_index: usize,
-    kind: MainTraceColumnKindV1,
-    source: &mut dyn MainTraceGroupSourceV1,
-    rng: &mut R,
-) -> Result<
-    (
-        aggregate::StreamingRowCommitmentResultV1,
-        aggregate::StreamingTraceMaskSetV1,
-        aggregate::EncryptedFieldMatrixScratchV1,
-    ),
-    ZkX509StarkErrorV1,
-> {
-    layout.validate_exact_full_profile_registration_v1()?;
-    let group = *layout
-        .trace_groups
-        .get(group_index)
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    if MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
-        .get(group_index)
-        .copied()
-        != Some(group.native_trace_log2)
-    {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    let (leaf_domain, node_domain, width) = match kind {
-        MainTraceColumnKindV1::Base => (BASE_LEAF_DOMAIN, BASE_NODE_DOMAIN, group.base_width),
-        MainTraceColumnKindV1::Aux => (AUX_LEAF_DOMAIN, AUX_NODE_DOMAIN, group.aux_width),
-    };
-    let mut source_error = None;
-    let result = aggregate::commit_masked_trace_columns_retaining_encrypted_scratch_v1(
-        leaf_domain,
-        node_domain,
-        group_index,
-        group.native_trace_log2,
-        layout.common_lde_log2,
-        width,
-        MASK_DEGREE,
-        &[],
-        rng,
-        |column_index| {
-            let (registration, local_column) =
-                registered_main_group_column_v1(layout, group_index, kind, column_index)
-                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
-            let column = match kind {
-                MainTraceColumnKindV1::Base => {
-                    source.native_base_column_v1(registration, local_column)
-                }
-                MainTraceColumnKindV1::Aux => {
-                    source.native_aux_column_v1(registration, local_column)
-                }
-            };
-            let column = match column {
-                Ok(column) => column,
-                Err(error) => {
-                    let aggregate_error = if matches!(&error, ZkX509StarkErrorV1::AllocationFailure)
-                    {
-                        AggregateStarkErrorV1::AllocationFailure
-                    } else {
-                        AggregateStarkErrorV1::InvalidLayout
-                    };
-                    source_error = Some(error);
-                    return Err(aggregate_error);
-                }
-            };
-            if column.len() != registration.segment.trace_size()
-                || column.iter().any(|value| F::canonical(value.0).is_none())
-            {
-                return Err(AggregateStarkErrorV1::InvalidLayout);
-            }
-            Ok(column.into_vec_v1())
-        },
-    );
-    match (result, source_error) {
-        (Ok(committed), None) => Ok(committed),
-        (Err(_), Some(error)) => Err(error),
-        (Err(error), None) => Err(map_aggregate_error_v1(error)),
-        (Ok(_), Some(_)) => Err(ZkX509StarkErrorV1::InternalInvariant),
-    }
-}
-
-fn main_trace_group_root_v1(
-    kind: MainTraceColumnKindV1,
-    commitment: &aggregate::StreamingRowCommitmentResultV1,
-) -> TraceGroupProofV1 {
-    match kind {
-        MainTraceColumnKindV1::Base => TraceGroupProofV1 {
-            base_root: commitment.commitment.root,
-            aux_root: [0_u8; 32],
-            base_frontier: Vec::new(),
-            aux_frontier: Vec::new(),
-        },
-        MainTraceColumnKindV1::Aux => TraceGroupProofV1 {
-            base_root: [0_u8; 32],
-            aux_root: commitment.commitment.root,
-            base_frontier: Vec::new(),
-            aux_frontier: Vec::new(),
-        },
-    }
-}
-
-fn map_credential_pre_aux_error_v1(
-    error: super::credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
-) -> ZkX509StarkErrorV1 {
-    use super::credential_pre_aux::ZkX509CredentialPreAuxErrorV1 as Error;
-    match error {
-        Error::Resource => ZkX509StarkErrorV1::AllocationFailure,
-        Error::Transcript | Error::Challenge => ZkX509StarkErrorV1::TranscriptMismatch,
-    }
-}
-
-/// MAIN state after exactly six ordered base commitments and before X5B1.
-///
-/// The type owns every challenge-independent child which must cross the joint
-/// credential phase. It exposes only a consuming transition accepting the
-/// opaque outer credential binding; raw challenge families and auxiliary
-/// commitment APIs are intentionally absent.
-pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
-    layout: AggregateProofLayoutV1,
-    assembly: &'a ZkX509MainTraceAssemblyV1,
-    public: ZkX509CredentialPublicBindingV1,
-    p256: P256MainBaseSourceV1,
-    sha: [ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
-    projection: MainProjectionTraceGroupSourceV1<'a>,
-    io: MainIoTraceGroupSourceV1<'a>,
-    trace_groups: Vec<TraceGroupProofV1>,
-    base_masks: Vec<aggregate::StreamingTraceMaskSetV1>,
-    base_scratch: MainTraceScratchSetV1,
-    transcript: TransparentTranscriptV1,
-    base_transcript_state: [u8; 32],
-    pre_aux: ZkX509CredentialMainPreAuxV1,
-}
-
-impl ZkX509MainAwaitingCredentialBindingV1<'_> {
-    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
-        self.layout.validate_exact_full_profile_registration_v1()?;
-        validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
-        self.base_scratch
-            .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
-        if self.public.consensus_context_digest == [0_u8; 32]
-            || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.base_masks.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.transcript.state() != self.base_transcript_state
-            || self
-                .trace_groups
-                .iter()
-                .any(|group| group.base_root == [0_u8; 32] || group.aux_root != [0_u8; 32])
-            || self
-                .base_masks
-                .iter()
-                .zip(&self.layout.trace_groups)
-                .any(|(masks, group)| masks.width() != group.base_width)
-            || self.projection.aux.is_some()
-            || self.io.bind_attempted
-            || self.io.aux_columns.is_some()
-            || self.io.post_base.is_some()
-        {
-            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-        }
-        validate_p256_main_registration_order_v1(&self.p256.canonical_registrations_v1()?)
-            .map_err(|_| ZkX509StarkErrorV1::P256Witness)
-    }
-}
-
-/// Composition-ready MAIN state after the sole X5B1 transition.
-///
-/// Both trace-mask sets, all six base/aux roots, the exact terminal claims,
-/// and per-registration composition coefficients are retained together. A
-/// future composition/DEEP/FRI continuation cannot resample challenges or
-/// return to either earlier phase.
-pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
-    layout: AggregateProofLayoutV1,
-    assembly: &'a ZkX509MainTraceAssemblyV1,
-    public: ZkX509CredentialPublicBindingV1,
-    log19: MainLog19BoundTraceGroupSourceV1<'a>,
-    projection: MainProjectionTraceGroupSourceV1<'a>,
-    io: MainIoTraceGroupSourceV1<'a>,
-    trace_groups: Vec<TraceGroupProofV1>,
-    base_masks: Vec<aggregate::StreamingTraceMaskSetV1>,
-    aux_masks: Vec<aggregate::StreamingTraceMaskSetV1>,
-    base_scratch: MainTraceScratchSetV1,
-    aux_scratch: MainTraceScratchSetV1,
-    terminal_claims: ZkX509MainTerminalClaimsV1,
-    alphas: Vec<Vec<Vec<E>>>,
-    transcript: TransparentTranscriptV1,
-    composition_transcript_state: [u8; 32],
-    binding: ZkX509CredentialPreAuxBindingV1,
-}
-
-impl ZkX509MainCompositionPhaseV1<'_> {
-    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
-        self.layout.validate_exact_full_profile_registration_v1()?;
-        validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
-        self.base_scratch
-            .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
-        self.aux_scratch
-            .validate_v1(&self.layout, MainTraceColumnKindV1::Aux)?;
-        if self.public.consensus_context_digest == [0_u8; 32]
-            || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.base_masks.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.aux_masks.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.terminal_claims != self.log19.terminal_claims_v1()
-            || self.log19.post_base != self.binding.main_post_base()
-            || self.transcript.state() != self.composition_transcript_state
-            || self
-                .trace_groups
-                .iter()
-                .any(|group| group.base_root == [0_u8; 32] || group.aux_root == [0_u8; 32])
-            || self
-                .base_masks
-                .iter()
-                .zip(&self.layout.trace_groups)
-                .any(|(masks, group)| masks.width() != group.base_width)
-            || self
-                .aux_masks
-                .iter()
-                .zip(&self.layout.trace_groups)
-                .any(|(masks, group)| masks.width() != group.aux_width)
-            || self.alphas.len() != self.layout.registered_segments.len()
-            || self
-                .alphas
-                .iter()
-                .zip(&self.layout.registered_segments)
-                .any(|(lanes, registration)| {
-                    lanes.len() != SECURITY_LANES
-                        || lanes
-                            .iter()
-                            .any(|lane| lane.len() != registration.segment.constraint_count)
-                })
-        {
-            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-        }
-        self.io.validate_bound_phase_v1()?;
-        if self.projection.aux.is_none() {
-            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-        }
-        Ok(())
-    }
-}
-
-fn record_main_group_commitment_v1(
-    group_index: usize,
-    kind: MainTraceColumnKindV1,
-    commitment: &aggregate::StreamingRowCommitmentResultV1,
-    trace_groups: &mut Vec<TraceGroupProofV1>,
-) -> Result<(), ZkX509StarkErrorV1> {
-    if commitment.commitment.root == [0_u8; 32] {
-        return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-    }
-    match kind {
-        MainTraceColumnKindV1::Base => {
-            if group_index != trace_groups.len() {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-            trace_groups.push(main_trace_group_root_v1(kind, commitment));
-        }
-        MainTraceColumnKindV1::Aux => {
-            let expected_group = trace_groups
-                .iter()
-                .position(|group| group.aux_root == [0_u8; 32])
-                .unwrap_or(trace_groups.len());
-            if trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1 || group_index != expected_group {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-            let group = trace_groups
-                .get_mut(group_index)
-                .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
-            if group.base_root == [0_u8; 32] || group.aux_root != [0_u8; 32] {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-            group.aux_root = commitment.commitment.root;
-        }
-    }
-    Ok(())
-}
-
-/// Commit exactly the six canonical MAIN base groups and yield the sole outer
-/// credential assembly hook.
-///
-/// This is phase one only. The returned state cannot commit auxiliary columns
-/// until the credential layer combines its fixed six roots with the compact-CA
-/// root and supplies the resulting opaque 272-challenge X5B1 binding.
-pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
-    statement: &IrohaZkX509StarkP256StatementV1,
-    assembly: &'a ZkX509MainTraceAssemblyV1,
-    public: ZkX509CredentialPublicBindingV1,
-    rng: &mut R,
-) -> Result<
-    (
-        ZkX509MainAwaitingCredentialBindingV1<'a>,
-        ZkX509CredentialMainPreAuxV1,
-    ),
-    ZkX509StarkErrorV1,
-> {
-    validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
-    if public.consensus_context_digest == [0_u8; 32] {
-        return Err(ZkX509StarkErrorV1::InvalidStatement);
-    }
-    if ca_accumulator_stark_public_v1(&assembly.ca_accumulator_trace, &assembly.sha_schedule)?
-        != public.ca_public_v1()
-    {
-        return Err(ZkX509StarkErrorV1::WitnessStatementMismatch);
-    }
-    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
-    let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
-    let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
-    let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
-        &layout,
-        statement,
-        &assembly.projection_trace,
-    )?;
-    let mut io = MainIoTraceGroupSourceV1::for_main_v1(&layout, statement, &assembly.io)?;
-    let mut session = ZkX509MainBaseCommitmentSessionV1::new_v1(
-        &layout,
-        public.consensus_context_digest,
-        assembly.verifier_profile,
-    )?;
-    let mut transcript =
-        new_main_transcript_v1(&public.consensus_context_digest, assembly.verifier_profile)?;
-    absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
-
-    let mut trace_groups = Vec::new();
-    let mut base_masks = Vec::new();
-    let mut base_scratch = Vec::new();
-    trace_groups
-        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    base_masks
-        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    base_scratch
-        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-
-    {
-        let mut source = MainP256Log5TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
-        let (commitment, masks, scratch) =
-            commit_main_trace_group_v1(&layout, 0, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(0, &commitment)?;
-        record_main_group_commitment_v1(
-            0,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
-        base_masks.push(masks);
-        base_scratch.push(scratch);
-    }
-    {
-        let mut source = MainP256ScalarTraceGroupSourceV1::for_base_v1(&layout, &p256)?;
-        let (commitment, masks, scratch) =
-            commit_main_trace_group_v1(&layout, 1, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(1, &commitment)?;
-        record_main_group_commitment_v1(
-            1,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
-        base_masks.push(masks);
-        base_scratch.push(scratch);
-    }
-    {
-        let (commitment, masks, scratch) = commit_main_trace_group_v1(
-            &layout,
-            2,
-            MainTraceColumnKindV1::Base,
-            &mut projection,
-            rng,
-        )?;
-        session.accept_streaming_base_commitment_v1(2, &commitment)?;
-        record_main_group_commitment_v1(
-            2,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
-        base_masks.push(masks);
-        base_scratch.push(scratch);
-    }
-    {
-        let mut source = MainP256Log16TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
-        let (commitment, masks, scratch) =
-            commit_main_trace_group_v1(&layout, 3, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(3, &commitment)?;
-        record_main_group_commitment_v1(
-            3,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
-        base_masks.push(masks);
-        base_scratch.push(scratch);
-    }
-    {
-        let (commitment, masks, scratch) =
-            commit_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Base, &mut io, rng)?;
-        session.accept_streaming_base_commitment_v1(4, &commitment)?;
-        record_main_group_commitment_v1(
-            4,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
-        base_masks.push(masks);
-        base_scratch.push(scratch);
-    }
-    {
-        let mut source =
-            MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
-        let (commitment, masks, scratch) =
-            commit_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(5, &commitment)?;
-        record_main_group_commitment_v1(
-            5,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
-        base_masks.push(masks);
-        base_scratch.push(scratch);
-    }
-    let base_scratch =
-        MainTraceScratchSetV1::from_ordered_v1(&layout, MainTraceColumnKindV1::Base, base_scratch)?;
-    aggregate::absorb_base_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
-        .map_err(map_aggregate_error_v1)?;
-    let pre_aux = session.finish_pre_aux_v1()?;
-    let base_transcript_state = transcript.state();
-    let phase = ZkX509MainAwaitingCredentialBindingV1 {
-        layout,
-        assembly,
-        public,
-        p256,
-        sha,
-        projection,
-        io,
-        trace_groups,
-        base_masks,
-        base_scratch,
-        transcript,
-        base_transcript_state,
-        pre_aux,
-    };
-    phase.validate_v1()?;
-    Ok((phase, pre_aux))
-}
-
-impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
-    /// Consume phase one, bind all challenge-dependent children with one X5B1
-    /// capability, commit exactly six auxiliary groups, absorb terminal
-    /// claims, and sample the complete per-registration alpha schedule.
-    pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRngCore>(
-        self,
-        binding: ZkX509CredentialPreAuxBindingV1,
-        rng: &mut R,
-    ) -> Result<ZkX509MainCompositionPhaseV1<'a>, ZkX509StarkErrorV1> {
-        self.validate_v1()?;
-        if !binding.matches_main_pre_aux_v1(self.pre_aux) {
-            // Reject substitution before transcript absorption or any
-            // challenge-dependent child transition.
-            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-        }
-        let ZkX509MainAwaitingCredentialBindingV1 {
-            layout,
-            assembly,
-            public,
-            p256,
-            sha,
-            mut projection,
-            mut io,
-            mut trace_groups,
-            base_masks,
-            base_scratch,
-            mut transcript,
-            base_transcript_state: _,
-            pre_aux: _,
-        } = self;
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
-            .map_err(map_credential_pre_aux_error_v1)?;
-        let post_base = binding.main_post_base();
-        projection.bind_challenges_v1(post_base)?;
-        io.bind_challenges_v1(post_base)?;
-        let mut log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-            &layout, assembly, sha, p256, binding,
-        )?;
-
-        let mut aux_masks = Vec::new();
-        let mut aux_scratch = Vec::new();
-        aux_masks
-            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        aux_scratch
-            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        {
-            let mut source = MainP256Log5TraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
-            let (commitment, masks, scratch) = commit_main_trace_group_v1(
-                &layout,
-                0,
-                MainTraceColumnKindV1::Aux,
-                &mut source,
-                rng,
-            )?;
-            record_main_group_commitment_v1(
-                0,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
-            aux_masks.push(masks);
-            aux_scratch.push(scratch);
-        }
-        {
-            let mut source = MainP256ScalarTraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
-            let (commitment, masks, scratch) = commit_main_trace_group_v1(
-                &layout,
-                1,
-                MainTraceColumnKindV1::Aux,
-                &mut source,
-                rng,
-            )?;
-            record_main_group_commitment_v1(
-                1,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
-            aux_masks.push(masks);
-            aux_scratch.push(scratch);
-        }
-        {
-            let (commitment, masks, scratch) = commit_main_trace_group_v1(
-                &layout,
-                2,
-                MainTraceColumnKindV1::Aux,
-                &mut projection,
-                rng,
-            )?;
-            record_main_group_commitment_v1(
-                2,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
-            aux_masks.push(masks);
-            aux_scratch.push(scratch);
-        }
-        {
-            let mut source = MainP256Log16TraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
-            let (commitment, masks, scratch) = commit_main_trace_group_v1(
-                &layout,
-                3,
-                MainTraceColumnKindV1::Aux,
-                &mut source,
-                rng,
-            )?;
-            record_main_group_commitment_v1(
-                3,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
-            aux_masks.push(masks);
-            aux_scratch.push(scratch);
-        }
-        {
-            let (commitment, masks, scratch) =
-                commit_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Aux, &mut io, rng)?;
-            record_main_group_commitment_v1(
-                4,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
-            aux_masks.push(masks);
-            aux_scratch.push(scratch);
-        }
-        {
-            let (commitment, masks, scratch) = commit_main_trace_group_v1(
-                &layout,
-                5,
-                MainTraceColumnKindV1::Aux,
-                &mut log19,
-                rng,
-            )?;
-            record_main_group_commitment_v1(
-                5,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
-            aux_masks.push(masks);
-            aux_scratch.push(scratch);
-        }
-        let aux_scratch = MainTraceScratchSetV1::from_ordered_v1(
-            &layout,
-            MainTraceColumnKindV1::Aux,
-            aux_scratch,
-        )?;
-        aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
-            .map_err(map_aggregate_error_v1)?;
-        let terminal_claims = log19.terminal_claims_v1();
-        absorb_zk_x509_main_terminal_claims_v1(&mut transcript, terminal_claims)?;
-        let alphas = derive_constraint_alphas_v1(&mut transcript, &layout)?;
-        let composition_transcript_state = transcript.state();
-        let phase = ZkX509MainCompositionPhaseV1 {
-            layout,
-            assembly,
-            public,
-            log19,
-            projection,
-            io,
-            trace_groups,
-            base_masks,
-            aux_masks,
-            base_scratch,
-            aux_scratch,
-            terminal_claims,
-            alphas,
-            transcript,
-            composition_transcript_state,
-            binding,
-        };
-        phase.validate_v1()?;
-        Ok(phase)
-    }
-}
-
-/// Exact six-provider registry for the verifier-owned full MAIN layout.
-///
-/// The layout is cloned only after every dimension and closed provider
-/// discriminator is validated, preventing later caller mutation.
-struct MainTraceProviderSetV1<'a> {
-    layout: AggregateProofLayoutV1,
-    groups: Vec<MainTraceGroupProviderV1<'a>>,
-}
-
-impl<'a> MainTraceProviderSetV1<'a> {
-    fn new_v1(
-        layout: &AggregateProofLayoutV1,
-        groups: Vec<MainTraceGroupProviderV1<'a>>,
-    ) -> Result<Self, ZkX509StarkErrorV1> {
-        layout.validate_exact_full_profile_registration_v1()?;
-        if groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || groups.len() != layout.trace_groups.len()
-            || groups
-                .iter()
-                .zip(&layout.trace_groups)
-                .any(|(provider, group)| provider.native_trace_log2_v1() != group.native_trace_log2)
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        Ok(MainTraceProviderSetV1 {
-            layout: layout.clone(),
-            groups,
-        })
-    }
-
-    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
-        self.layout.validate_exact_full_profile_registration_v1()?;
-        if self.groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.groups.len() != self.layout.trace_groups.len()
-            || self
-                .groups
-                .iter()
-                .zip(&self.layout.trace_groups)
-                .any(|(provider, group)| provider.native_trace_log2_v1() != group.native_trace_log2)
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        Ok(())
-    }
-
-    fn registered_column_v1(
-        &self,
-        group_index: usize,
-        kind: MainTraceColumnKindV1,
-        column_index: usize,
-    ) -> Result<(RegisteredSegmentLayoutV1, usize), ZkX509StarkErrorV1> {
-        self.validate_v1()?;
-        registered_main_group_column_v1(&self.layout, group_index, kind, column_index)
-    }
-
-    fn native_group_column_v1(
-        &mut self,
-        group_index: usize,
-        kind: MainTraceColumnKindV1,
-        column_index: usize,
-    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
-        let (registration, local_column) =
-            self.registered_column_v1(group_index, kind, column_index)?;
-        let expected_rows = registration.segment.trace_size();
-        let source = self
-            .groups
-            .get_mut(group_index)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-            .source_mut_v1();
-        let column = match kind {
-            MainTraceColumnKindV1::Base => {
-                source.native_base_column_v1(registration, local_column)?
-            }
-            MainTraceColumnKindV1::Aux => {
-                source.native_aux_column_v1(registration, local_column)?
-            }
-        };
-        if column.len() != expected_rows
-            || column.iter().any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        Ok(column)
-    }
-}
-
-/// Exact six-provider registry used only for verifier-safe opened-row
-/// evaluation.
-struct MainOpenedProviderSetV1<'a> {
-    layout: AggregateProofLayoutV1,
-    groups: Vec<MainOpenedGroupProviderV1<'a>>,
-}
-
-impl<'a> MainOpenedProviderSetV1<'a> {
-    fn new_v1(
-        layout: &AggregateProofLayoutV1,
-        groups: Vec<MainOpenedGroupProviderV1<'a>>,
-    ) -> Result<Self, ZkX509StarkErrorV1> {
-        layout.validate_exact_full_profile_registration_v1()?;
-        if groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || groups.len() != layout.trace_groups.len()
-            || groups
-                .iter()
-                .zip(&layout.trace_groups)
-                .any(|(provider, group)| provider.native_trace_log2_v1() != group.native_trace_log2)
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        Ok(MainOpenedProviderSetV1 {
-            layout: layout.clone(),
-            groups,
-        })
-    }
-
-    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
-        self.layout.validate_exact_full_profile_registration_v1()?;
-        if self.groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
-            || self.groups.len() != self.layout.trace_groups.len()
-            || self
-                .groups
-                .iter()
-                .zip(&self.layout.trace_groups)
-                .any(|(provider, group)| provider.native_trace_log2_v1() != group.native_trace_log2)
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        Ok(())
-    }
-
-    fn registered_constraint_residues_v1(
-        &mut self,
-        registration: RegisteredSegmentLayoutV1,
-        query_index: usize,
-        next_query_index: usize,
-        x: F,
-        opening: RegisteredOpenedRowsV1<'_>,
-    ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        self.validate_v1()?;
-        if self
-            .layout
-            .registered_segments
-            .get(
-                self.layout
-                    .registered_segments
-                    .binary_search_by_key(
-                        &(
-                            registration.segment.trace_log2,
-                            registration.segment.adapter,
-                            registration.segment.instance,
-                        ),
-                        |candidate| {
-                            (
-                                candidate.segment.trace_log2,
-                                candidate.segment.adapter,
-                                candidate.segment.instance,
-                            )
-                        },
-                    )
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            )
-            .copied()
-            != Some(registration)
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        let provider = self
-            .groups
-            .get_mut(registration.trace_group)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        if provider.native_trace_log2_v1() != registration.segment.trace_log2 {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        provider.constraint_residues_v1(registration, query_index, next_query_index, x, opening)
-    }
-}
-
-fn validate_main_opened_evaluation_shape_v1(
-    providers: &MainOpenedProviderSetV1<'_>,
-    query_index: usize,
-    lane: usize,
-    trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-    alphas: &[Vec<Vec<E>>],
-) -> Result<(), ZkX509StarkErrorV1> {
-    providers.validate_v1()?;
-    let layout = &providers.layout;
-    if query_index >= layout.common_lde_size()
-        || lane >= SECURITY_LANES
-        || trace_groups.len() != layout.trace_groups.len()
-        || alphas.len() != layout.registered_segments.len()
-        || trace_groups
-            .iter()
-            .zip(&layout.trace_groups)
-            .any(|(opening, group)| {
-                opening.base_current.len() != group.base_width
-                    || opening.base_next.len() != group.base_width
-                    || opening.aux_current.len() != group.aux_width
-                    || opening.aux_next.len() != group.aux_width
-                    || opening
-                        .base_current
-                        .iter()
-                        .chain(&opening.base_next)
-                        .chain(&opening.aux_current)
-                        .chain(&opening.aux_next)
-                        .any(|value| F::canonical(value.0).is_none())
-            })
-        || alphas
-            .iter()
-            .zip(&layout.registered_segments)
-            .any(|(lanes, registration)| {
-                lanes.len() != SECURITY_LANES
-                    || lanes
-                        .iter()
-                        .any(|values| values.len() != registration.segment.constraint_count)
-            })
-    {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    Ok(())
-}
-
-fn main_opened_composition_value_v1(
-    providers: &mut MainOpenedProviderSetV1<'_>,
-    query_index: usize,
-    lane: usize,
-    trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-    alphas: &[Vec<Vec<E>>],
-) -> Result<E, ZkX509StarkErrorV1> {
-    validate_main_opened_evaluation_shape_v1(providers, query_index, lane, trace_groups, alphas)?;
-    let lde_root = goldilocks_primitive_root_v1(providers.layout.common_lde_log2)
-        .map_err(map_transparent_error_v1)?;
-    let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(query_index as u128));
-    let mut composition = E::ZERO;
-    for registration_index in 0..providers.layout.registered_segments.len() {
-        let registration = providers.layout.registered_segments[registration_index];
-        let opening = registered_opened_rows_v1(&providers.layout, registration, trace_groups)
-            .map_err(map_aggregate_error_v1)?;
-        let next_stride = providers
-            .layout
-            .trace_groups
-            .get(registration.trace_group)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-            .next_stride(providers.layout.common_lde_log2)?;
-        let next_query_index = query_index
-            .checked_add(next_stride)
-            .map(|index| index % providers.layout.common_lde_size())
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        let residues = providers.registered_constraint_residues_v1(
-            registration,
-            query_index,
-            next_query_index,
-            x,
-            opening,
-        )?;
-        if residues.len() != registration.segment.constraint_count
-            || residues.iter().any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        composition = composition.add(accumulator_quotient_value_v1(
-            registration.segment,
-            x,
-            &residues,
-            &alphas[registration_index][lane],
-        )?);
-    }
-    Ok(composition)
-}
-
-fn validate_main_fri_mixes_v1(
-    layout: &AggregateProofLayoutV1,
-    mixes: &[Vec<FriMixV1>],
-) -> Result<(), ZkX509StarkErrorV1> {
-    layout.validate_exact_full_profile_registration_v1()?;
-    if mixes.len() != layout.trace_groups.len()
-        || mixes.iter().any(|lanes| lanes.len() != SECURITY_LANES)
-        || mixes
-            .iter()
-            .zip(&layout.trace_groups)
-            .any(|(lanes, group)| {
-                lanes.iter().any(|mix| {
-                    mix.base.len() != group.base_width
-                        || mix.base_next.len() != group.base_width
-                        || mix.aux.len() != group.aux_width
-                        || mix.aux_next.len() != group.aux_width
-                        || mix.composition.len() != COMPOSITION_DEGREE_CHUNKS
-                })
-            })
-    {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    for lane in 0..SECURITY_LANES {
-        let composition = &mixes[0][lane].composition;
-        if mixes
-            .iter()
-            .any(|lanes| &lanes[lane].composition != composition)
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-    }
-    Ok(())
-}
-
-/// Full MAIN verifier opened-row evaluator.
-///
-/// This path is intentionally separate from prover fixed-polynomial streaming:
-/// verification samples only the canonical query openings, while proving must
-/// traverse the full common domain without inheriting a query-cache bound.
-struct MainOpenedRowEvaluatorV1<'a, 'providers> {
-    providers: &'a mut MainOpenedProviderSetV1<'providers>,
-    alphas: &'a [Vec<Vec<E>>],
-    mixes: &'a [Vec<FriMixV1>],
-}
-
-impl aggregate::AggregateOpenedRowEvaluatorV1 for MainOpenedRowEvaluatorV1<'_, '_> {
-    fn evaluate_opened_row_v1(
-        &mut self,
-        query_index: usize,
-        lane: usize,
-        trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-        composition_chunks: &[E],
-    ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
-        validate_main_fri_mixes_v1(&self.providers.layout, self.mixes)
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if composition_chunks.len() != COMPOSITION_DEGREE_CHUNKS {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let composition = main_opened_composition_value_v1(
-            self.providers,
-            query_index,
-            lane,
-            trace_groups,
-            self.alphas,
-        )
-        .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        let mut fri_base = E::ZERO;
-        for (group_index, opening) in trace_groups.iter().enumerate() {
-            let mix = &self.mixes[group_index][lane];
-            fri_base = fri_base.add(
-                opening
-                    .base_current
-                    .iter()
-                    .zip(&mix.base)
-                    .fold(E::ZERO, |sum, (value, coefficient)| {
-                        sum.add(coefficient.mul_base(*value))
-                    }),
-            );
-            fri_base = fri_base.add(
-                opening
-                    .aux_current
-                    .iter()
-                    .zip(&mix.aux)
-                    .fold(E::ZERO, |sum, (value, coefficient)| {
-                        sum.add(coefficient.mul_base(*value))
-                    }),
-            );
-        }
-        fri_base = fri_base.add(mix_opened_composition_chunks_v1(
-            composition_chunks,
-            &self.mixes[0][lane],
-        )?);
-        Ok(aggregate::AggregateExpectedOpeningV1 {
-            composition,
-            fri_base,
-        })
-    }
-}
-
-impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
-    fn evaluate_opened_row_v1(
-        &mut self,
-        query_index: usize,
-        lane: usize,
-        trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-        composition_chunks: &[E],
-    ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
-        let registration = self
-            .aggregate_layout
-            .registered_segment(SegmentAdapterIdV1::StrictDer, 0)
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if registration.segment != self.layout {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let opening = registered_opened_rows_v1(self.aggregate_layout, registration, trace_groups)?;
-        let alphas = self
-            .alphas
-            .get(lane)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let mix = self
-            .mixes
-            .get(lane)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let next_index = query_index
-            .checked_add(
-                self.aggregate_layout
-                    .trace_groups
-                    .get(registration.trace_group)
-                    .ok_or(AggregateStarkErrorV1::ConstraintOpening)?
-                    .next_stride(self.aggregate_layout.common_lde_log2)
-                    .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?,
-            )
-            .map(|index| index % self.aggregate_layout.common_lde_size())
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let fixed = self
-            .fixed_openings
-            .get(&query_index)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let next_fixed = self
-            .fixed_openings
-            .get(&next_index)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
-        let composition = der_quotient_value_v1(
-            self.layout,
-            x,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
-            fixed,
-            next_fixed,
-            self.challenges,
-            self.public,
-            self.claims,
-            alphas,
-        )
-        .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if opening.base_current.len() != mix.base.len()
-            || opening.aux_current.len() != mix.aux.len()
-        {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let mixed_base = opening
-            .base_current
-            .iter()
-            .zip(&mix.base)
-            .fold(E::ZERO, |sum, (value, coefficient)| {
-                sum.add(coefficient.mul_base(*value))
-            });
-        let mixed_aux = opening
-            .aux_current
-            .iter()
-            .zip(&mix.aux)
-            .fold(E::ZERO, |sum, (value, coefficient)| {
-                sum.add(coefficient.mul_base(*value))
-            });
-        Ok(aggregate::AggregateExpectedOpeningV1 {
-            composition,
-            fri_base: mixed_base
-                .add(mixed_aux)
-                .add(mix_opened_composition_chunks_v1(composition_chunks, mix)?),
-        })
-    }
-}
-
-impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
-    fn evaluate_opened_row_v1(
-        &mut self,
-        query_index: usize,
-        lane: usize,
-        trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-        composition_chunks: &[E],
-    ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
-        let registration = self
-            .aggregate_layout
-            .registered_segment(SegmentAdapterIdV1::ByteMemory, 0)
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if registration.segment != self.layout {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let opening = registered_opened_rows_v1(self.aggregate_layout, registration, trace_groups)?;
-        let alphas = self
-            .alphas
-            .get(lane)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let mix = self
-            .mixes
-            .get(lane)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let fixed = row_at_v1(self.fixed_lde, query_index)
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
-        let composition = quotient_value_v1(
-            self.layout,
-            self.logical_active_rows,
-            x,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
-            &fixed,
-            self.io_challenges,
-            alphas,
-        )
-        .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if opening.base_current.len() != mix.base.len()
-            || opening.aux_current.len() != mix.aux.len()
-        {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let mixed_base = opening
-            .base_current
-            .iter()
-            .zip(&mix.base)
-            .fold(E::ZERO, |sum, (value, coefficient)| {
-                sum.add(coefficient.mul_base(*value))
-            });
-        let mixed_aux = opening
-            .aux_current
-            .iter()
-            .zip(&mix.aux)
-            .fold(E::ZERO, |sum, (value, coefficient)| {
-                sum.add(coefficient.mul_base(*value))
-            });
-        Ok(aggregate::AggregateExpectedOpeningV1 {
-            composition,
-            fri_base: mixed_base
-                .add(mixed_aux)
-                .add(mix_opened_composition_chunks_v1(composition_chunks, mix)?),
-        })
-    }
-}
-
-struct ProjectionOpenedRowEvaluatorV1<'a> {
-    aggregate_layout: &'a AggregateProofLayoutV1,
-    layout: SegmentLayoutV1,
-    fixed_lde: &'a [Vec<F>],
-    challenges: ZkX509ProjectionChallengesV1,
-    alphas: &'a [Vec<E>],
-    mixes: &'a [FriMixV1],
-    lde_root: F,
-}
-
-struct AccumulatorOpenedRowEvaluatorV1<'a> {
-    aggregate_layout: &'a AggregateProofLayoutV1,
-    public: AccumulatorRegistrationPublicV1,
-    fixed_openings: &'a [BTreeMap<usize, Vec<F>>; ACCUMULATOR_REGISTRATION_COUNT_V1],
-    sha_challenges: ZkX509ShaCallBusChallengesV1,
-    io_challenges: ZkX509Rfc5280StarkChallengesV1,
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-    alphas: &'a [Vec<Vec<E>>],
-    mixes: &'a [Vec<FriMixV1>],
-    lde_root: F,
-}
-
-struct P256OpenedRowEvaluatorV1<'a> {
-    material: &'a P256OpenedMaterialV1,
-    challenges: P256AggregateChallengesV1,
-    alphas: &'a [Vec<Vec<E>>],
-    mixes: &'a [Vec<FriMixV1>],
-    lde_root: F,
-}
-
-fn p256_scalar_opened_residues_v1(
-    registration: RegisteredSegmentLayoutV1,
-    opening: RegisteredOpenedRowsV1<'_>,
-    fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
-    challenges: P256ScalarBitBusChallengesV1,
-    terminals: &P256TerminalRegistrationV1,
-) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-    let Some((_, 0)) = p256_instance_parts_v1(registration.segment.instance) else {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    };
-    if registration.segment.adapter != SegmentAdapterIdV1::P256ScalarBitBus
-        || registration.segment.trace_log2 != P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_LOG2_V1
-        || registration.segment.base_width != P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1
-        || registration.segment.aux_width != P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1
-        || registration.segment.fixed_width != P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1
-        || registration.segment.constraint_count
-            != P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1
-        || opening
-            .base_current
-            .iter()
-            .chain(opening.base_next)
-            .chain(opening.aux_current)
-            .chain(opening.aux_next)
-            .chain(fixed)
-            .any(|value| F::canonical(value.0).is_none())
-    {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    challenges
-        .validate_v1()
-        .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-    let current: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1] = opening
-        .base_current
-        .try_into()
-        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let next: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1] = opening
-        .base_next
-        .try_into()
-        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let current_aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] = opening
-        .aux_current
-        .try_into()
-        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let next_aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] = opening
-        .aux_next
-        .try_into()
-        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let mut residues = evaluate_p256_scalar_bit_bus_aggregate_residues_v1(
-        current,
-        next,
-        current_aux,
-        next_aux,
-        fixed,
-        challenges,
-    )?;
-    if residues.len() != P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1 {
-        return Err(ZkX509StarkErrorV1::InternalInvariant);
-    }
-    let terminal_bindings = evaluate_p256_scalar_source_terminal_openings_v1(
-        p256_scalar_bit_bus_stark_last_active_selector_v1(fixed),
-        terminals.buses.arithmetic_scalar,
-        terminals.buses.window_scalar,
-        p256_scalar_bit_bus_opened_terminals_v1(current_aux),
-    );
-    if terminal_bindings.len() != 2 * P256_SCALAR_BIT_BUS_LANES_V1 {
-        return Err(ZkX509StarkErrorV1::InternalInvariant);
-    }
-    residues.extend(terminal_bindings);
-    if residues.len() != P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1 {
-        return Err(ZkX509StarkErrorV1::InternalInvariant);
-    }
-    Ok(residues)
-}
-
-fn p256_opened_residues_v1(
-    registration: RegisteredSegmentLayoutV1,
-    opening: RegisteredOpenedRowsV1<'_>,
-    fixed: &[F],
-    challenges: P256AggregateChallengesV1,
-    terminals: &P256TerminalRegistrationV1,
-) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-    let (_, local_instance) = p256_instance_parts_v1(registration.segment.instance)
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    let mut residues = match (registration.segment.adapter, local_instance) {
-        (SegmentAdapterIdV1::P256Reduction, instance @ 0..=1) => {
-            let claim_role = if instance == 0 {
-                P256CrossTraceTerminalRoleV1::DigestReduction
-            } else {
-                P256CrossTraceTerminalRoleV1::ResultXReduction
-            };
-            let claim = terminals.cross_claim(claim_role)?;
-            let current: &[F; P256_REDUCTION_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_REDUCTION_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_reduction_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                claim.start,
-                challenges.cross,
-            )?;
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                p256_reduction_last_selector_v1(fixed),
-                p256_reduction_cross_terminal_v1(current_aux)?,
-                claim.terminal,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256LowS, 0) => {
-            let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::WalletLowS)?;
-            let current: &[F; P256_LOW_S_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_LOW_S_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_low_s_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                claim.start,
-                challenges.cross,
-            )?;
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                p256_low_s_last_selector_v1(fixed),
-                p256_low_s_cross_terminal_v1(current_aux)?,
-                claim.terminal,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256ScalarBitBus, 0) => {
-            let fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            p256_scalar_opened_residues_v1(
-                registration,
-                opening,
-                fixed,
-                challenges.scalar,
-                terminals,
-            )?
-        }
-        (SegmentAdapterIdV1::P256Window, 0) => {
-            let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::WindowBatch)?;
-            let current: &[F; P256_WINDOW_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_WINDOW_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_window_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                P256WindowAggregateChallengesV1 {
-                    cross_start: claim.start,
-                    cross: challenges.cross,
-                    scalar: challenges.scalar,
-                },
-            )?;
-            let selector = p256_window_last_selector_v1(fixed);
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_window_cross_terminal_v1(current_aux)?,
-                claim.terminal,
-            ));
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_window_scalar_terminal_v1(current_aux)?,
-                terminals.buses.window_scalar,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256ValueBus, 2) => {
-            let current: &[F; P256_BINDING_SINK_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_BINDING_SINK_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; super::p256_cross_trace_bus::P256_CROSS_TRACE_SINK_AUX_WIDTH_V1] =
-                opening
-                    .aux_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; super::p256_cross_trace_bus::P256_CROSS_TRACE_SINK_AUX_WIDTH_V1] =
-                opening
-                    .aux_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_BINDING_SINK_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_binding_sink_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                challenges.cross,
-            )?;
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                p256_binding_sink_last_selector_v1(fixed),
-                p256_binding_sink_terminal_v1(current_aux)?,
-                terminals.sink,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256Arithmetic, 0) => {
-            let current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_ARITHMETIC_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_arithmetic_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                challenges.scalar,
-                challenges.arithmetic_copy,
-            )?;
-            let selector = p256_arithmetic_last_selector_v1(fixed);
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_arithmetic_scalar_terminal_v1(current_aux)?,
-                terminals.buses.arithmetic_scalar,
-            ));
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_arithmetic_value_copy_terminal_v1(current_aux)?,
-                terminals.buses.arithmetic_value_copy,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256ValueBus, 0) => {
-            let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::ValueWriter)?;
-            let current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_value_execution_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                P256ValueExecutionAggregateChallengesV1 {
-                    value: challenges.value,
-                    cross: challenges.cross,
-                    arithmetic_copy: challenges.arithmetic_copy,
-                },
-            )?;
-            let selector = p256_value_execution_last_selector_v1(fixed);
-            let value_aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = current_aux
-                [..P256_VALUE_BUS_STARK_AUX_WIDTH_V1]
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_value_bus_stark_opened_terminal_v1(value_aux),
-                terminals.buses.value_execution,
-            ));
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_value_execution_arithmetic_copy_terminal_v1(current_aux)?,
-                terminals.buses.value_arithmetic_copy,
-            ));
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_value_execution_cross_terminal_v1(current_aux)?,
-                claim.terminal,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256ValueBus, 1) => {
-            let current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_value_bus_stark_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                challenges.value,
-            )
-            .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                p256_value_bus_stark_last_domain_selector_v1(fixed),
-                p256_value_bus_stark_opened_terminal_v1(current_aux),
-                terminals.buses.value_sorted,
-            ));
-            residues
-        }
-        _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
-    };
-    if residues.len() != registration.segment.constraint_count {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    Ok(core::mem::take(&mut residues))
-}
-
-impl aggregate::AggregateOpenedRowEvaluatorV1 for AccumulatorOpenedRowEvaluatorV1<'_> {
-    fn evaluate_opened_row_v1(
-        &mut self,
-        query_index: usize,
-        lane: usize,
-        trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-        composition_chunks: &[E],
-    ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
-        self.aggregate_layout
-            .validate_accumulator_registration_v1()
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        self.public
-            .validate()
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        self.sha_challenges
-            .validate()
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        self.io_challenges
-            .validate()
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if lane >= SECURITY_LANES
-            || self.alphas.len() != ACCUMULATOR_REGISTRATION_COUNT_V1
-            || self.mixes.len() != self.aggregate_layout.trace_groups.len()
-        {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
-        let mut composition = E::ZERO;
-        let mut fri_base = E::ZERO;
-        for (registration_index, registration) in self
-            .aggregate_layout
-            .registered_segments
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            let opening =
-                registered_opened_rows_v1(self.aggregate_layout, registration, trace_groups)?;
-            let fixed = self.fixed_openings[registration_index]
-                .get(&query_index)
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let alphas = self.alphas[registration_index]
-                .get(lane)
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let residues = match (registration.segment.adapter, registration.segment.instance) {
-                (SegmentAdapterIdV1::CaAccumulator, 0) => {
-                    evaluate_ca_accumulator_stark_residues_v1(
-                        self.public.ca_membership,
-                        opening.base_current,
-                        opening.base_next,
-                        opening.aux_current,
-                        opening.aux_next,
-                        fixed,
-                        self.sha_challenges,
-                        self.io_challenges,
-                        self.claims,
-                    )
-                }
-                _ => return Err(AggregateStarkErrorV1::ConstraintOpening),
-            }
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let local_composition =
-                accumulator_quotient_value_v1(registration.segment, x, &residues, alphas)
-                    .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let mix = self
-                .mixes
-                .get(registration.trace_group)
-                .and_then(|lanes| lanes.get(lane))
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let base_mix = mix
-                .base
-                .get(
-                    registration.base_start
-                        ..registration
-                            .base_end()
-                            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?,
-                )
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let aux_mix = mix
-                .aux
-                .get(
-                    registration.aux_start
-                        ..registration
-                            .aux_end()
-                            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?,
-                )
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            if opening.base_current.len() != base_mix.len()
-                || opening.aux_current.len() != aux_mix.len()
-            {
-                return Err(AggregateStarkErrorV1::ConstraintOpening);
-            }
-            let mixed_base = opening
-                .base_current
-                .iter()
-                .zip(base_mix)
-                .fold(E::ZERO, |sum, (value, coefficient)| {
-                    sum.add(coefficient.mul_base(*value))
-                });
-            let mixed_aux = opening
-                .aux_current
-                .iter()
-                .zip(aux_mix)
-                .fold(E::ZERO, |sum, (value, coefficient)| {
-                    sum.add(coefficient.mul_base(*value))
-                });
-            composition = composition.add(local_composition);
-            fri_base = fri_base.add(mixed_base).add(mixed_aux);
-        }
-        let composition_mix = self
-            .mixes
-            .first()
-            .and_then(|lanes| lanes.get(lane))
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        if self.mixes.iter().any(|lanes| {
-            lanes.get(lane).map(|mix| &mix.composition) != Some(&composition_mix.composition)
-        }) {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        fri_base = fri_base.add(mix_opened_composition_chunks_v1(
-            composition_chunks,
-            composition_mix,
-        )?);
-        Ok(aggregate::AggregateExpectedOpeningV1 {
-            composition,
-            fri_base,
-        })
-    }
-}
-
-impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
-    fn evaluate_opened_row_v1(
-        &mut self,
-        query_index: usize,
-        lane: usize,
-        trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-        composition_chunks: &[E],
-    ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
-        self.material
-            .validate()
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        self.challenges
-            .validate()
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        let aggregate_layout = &self.material.registration.layout;
-        if lane >= SECURITY_LANES
-            || self.alphas.len() != aggregate_layout.registered_segments.len()
-            || self.mixes.len() != aggregate_layout.trace_groups.len()
-        {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
-        let mut composition = E::ZERO;
-        let mut fri_base = E::ZERO;
-        for (registration_index, registration) in aggregate_layout
-            .registered_segments
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            let opening = registered_opened_rows_v1(aggregate_layout, registration, trace_groups)?;
-            let fixed = self.material.fixed_openings[registration_index]
-                .get(&query_index)
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let alphas = self.alphas[registration_index]
-                .get(lane)
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let residues = p256_opened_residues_v1(
-                registration,
-                opening,
-                fixed,
-                self.challenges,
-                &self.material.terminals,
-            )
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let local_composition =
-                accumulator_quotient_value_v1(registration.segment, x, &residues, alphas)
-                    .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let mix = self
-                .mixes
-                .get(registration.trace_group)
-                .and_then(|lanes| lanes.get(lane))
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let base_end = registration
-                .base_end()
-                .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let aux_end = registration
-                .aux_end()
-                .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let base_mix = mix
-                .base
-                .get(registration.base_start..base_end)
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let aux_mix = mix
-                .aux
-                .get(registration.aux_start..aux_end)
-                .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            if opening.base_current.len() != base_mix.len()
-                || opening.aux_current.len() != aux_mix.len()
-            {
-                return Err(AggregateStarkErrorV1::ConstraintOpening);
-            }
-            let mixed_base = opening
-                .base_current
-                .iter()
-                .zip(base_mix)
-                .fold(E::ZERO, |sum, (value, coefficient)| {
-                    sum.add(coefficient.mul_base(*value))
-                });
-            let mixed_aux = opening
-                .aux_current
-                .iter()
-                .zip(aux_mix)
-                .fold(E::ZERO, |sum, (value, coefficient)| {
-                    sum.add(coefficient.mul_base(*value))
-                });
-            composition = composition.add(local_composition);
-            fri_base = fri_base.add(mixed_base).add(mixed_aux);
-        }
-        let composition_mix = self
-            .mixes
-            .first()
-            .and_then(|lanes| lanes.get(lane))
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        if self.mixes.iter().any(|lanes| {
-            lanes.get(lane).map(|mix| &mix.composition) != Some(&composition_mix.composition)
-        }) {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        fri_base = fri_base.add(mix_opened_composition_chunks_v1(
-            composition_chunks,
-            composition_mix,
-        )?);
-        Ok(aggregate::AggregateExpectedOpeningV1 {
-            composition,
-            fri_base,
-        })
-    }
-}
-
-impl aggregate::AggregateOpenedRowEvaluatorV1 for ProjectionOpenedRowEvaluatorV1<'_> {
-    fn evaluate_opened_row_v1(
-        &mut self,
-        query_index: usize,
-        lane: usize,
-        trace_groups: &[aggregate::AggregateOpenedTraceGroupV1],
-        composition_chunks: &[E],
-    ) -> Result<aggregate::AggregateExpectedOpeningV1, AggregateStarkErrorV1> {
-        let registration = self
-            .aggregate_layout
-            .registered_segment(SegmentAdapterIdV1::Projection, 0)
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if registration.segment != self.layout {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let opening = registered_opened_rows_v1(self.aggregate_layout, registration, trace_groups)?;
-        let alphas = self
-            .alphas
-            .get(lane)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let mix = self
-            .mixes
-            .get(lane)
-            .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-        let fixed = row_at_v1(self.fixed_lde, query_index)
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
-        let composition = projection_quotient_value_v1(
-            self.layout,
-            x,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
-            &fixed,
-            self.challenges,
-            alphas,
-        )
-        .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        if opening.base_current.len() != mix.base.len()
-            || opening.aux_current.len() != mix.aux.len()
-        {
-            return Err(AggregateStarkErrorV1::ConstraintOpening);
-        }
-        let mixed_base = opening
-            .base_current
-            .iter()
-            .zip(&mix.base)
-            .fold(E::ZERO, |sum, (value, coefficient)| {
-                sum.add(coefficient.mul_base(*value))
-            });
-        let mixed_aux = opening
-            .aux_current
-            .iter()
-            .zip(&mix.aux)
-            .fold(E::ZERO, |sum, (value, coefficient)| {
-                sum.add(coefficient.mul_base(*value))
-            });
-        Ok(aggregate::AggregateExpectedOpeningV1 {
-            composition,
-            fri_base: mixed_base
-                .add(mixed_aux)
-                .add(mix_opened_composition_chunks_v1(composition_chunks, mix)?),
-        })
     }
 }
 

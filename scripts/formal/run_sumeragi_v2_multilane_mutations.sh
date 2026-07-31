@@ -213,6 +213,24 @@ run_mutant autonomous-skip-canonical-reexecution "$AUTONOMOUS_MODULE" \
 run_mutant autonomous-restart-drops-ownership "$AUTONOMOUS_MODULE" \
   multilane_autonomous_restart_drops_ownership_bug.cfg \
   MLReservationSingleOwner
+run_mutant autonomous-unauthenticated-recovery-body "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_unauthenticated_recovery_body_bug.cfg \
+  MLRecoveredCarrierBodyAuthenticated
+run_mutant autonomous-mixed-signer-recovery-body "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_mixed_signer_recovery_body_bug.cfg \
+  MLRecoveredCarrierBodyAuthenticated
+run_mutant autonomous-inflated-recovery-wire-length "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_inflated_recovery_wire_length_bug.cfg \
+  MLRecoveredCarrierLengthAuthenticated
+run_mutant autonomous-historical-context-drift "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_historical_context_drift_bug.cfg \
+  MLHistoricalRecoveryContextExact
+run_mutant autonomous-open-queue-before-recovery-install "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_open_queue_before_recovery_install_bug.cfg \
+  MLHistoricalQueueGateOrder
+run_mutant autonomous-partial-recovery-group-preflight "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_partial_recovery_group_preflight_bug.cfg \
+  MLHistoricalAllGroupsPreflight
 run_mutant autonomous-volatile-stage-diagnostics "$AUTONOMOUS_MODULE" \
   multilane_autonomous_volatile_stage_diagnostics_bug.cfg \
   MLStageEvidenceMonotonic
@@ -254,4 +272,4 @@ run_mutant queue-plan-duplicate-execution "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_duplicate_execution_bug.cfg \
   MLAdmissionAtMostOnceExecution
 
-echo "[tlc] all 46 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+echo "[tlc] all 52 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

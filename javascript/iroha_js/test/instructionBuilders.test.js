@@ -54,13 +54,11 @@ import {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
-  buildRegisterAssetHiddenZkPoolInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
   buildShieldInstruction,
   buildZkTransferInstruction,
-  buildAssetHiddenZkTransferInstruction,
   buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
@@ -3080,47 +3078,6 @@ test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
 });
 
-test("buildRegisterAssetHiddenZkPoolInstruction encodes pool verifier state", () => {
-  const assetSetRoot = Buffer.alloc(32, 0xa0);
-  const instruction = buildRegisterAssetHiddenZkPoolInstruction({
-    poolId: "boi-private-is-pool",
-    storageAssetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    assetSetRoot,
-    transferVerifyingKey: "halo2/ipa/poly-open:native_ipa_vk",
-  });
-  const payload = encodeAndDecode(instruction).zk.RegisterAssetHiddenZkPool;
-  assert.equal(payload.pool_id, "boi-private-is-pool");
-  assert.equal(payload.storage_asset, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-  assert.deepEqual(payload.asset_set_root, Array.from(assetSetRoot));
-  assert.deepEqual(payload.vk_transfer, {
-    backend: "halo2/ipa/poly-open",
-    name: "native_ipa_vk",
-  });
-});
-
-test("buildRegisterAssetHiddenZkPoolInstruction rejects adversarial pool registration", () => {
-  const validBase = {
-    poolId: "boi-private-is-pool",
-    storageAssetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    assetSetRoot: Buffer.alloc(32, 0xa0),
-    transferVerifyingKey: "halo2/ipa/poly-open:native_ipa_vk",
-  };
-  for (const payload of [
-    { ...validBase, poolId: "   " },
-    { ...validBase, assetSetRoot: Buffer.alloc(31, 0xa0) },
-    { ...validBase, assetSetRoot: Buffer.alloc(32, 0x00) },
-    { ...validBase, transferVerifyingKey: null },
-    { ...validBase, transferVerifyingKey: "missing-separator" },
-    { ...validBase, poolId: "pool-a", pool_id: "pool-b" },
-    { ...validBase, assetSetRoot: Buffer.alloc(32, 0xa0), asset_set_root: Buffer.alloc(32, 0xa1) },
-  ]) {
-    assert.throws(
-      () => buildRegisterAssetHiddenZkPoolInstruction(payload),
-      /registerAssetHiddenZkPool/,
-    );
-  }
-});
-
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {
   const transitionId = Buffer.alloc(32, 0xaa);
   const instruction = buildScheduleConfidentialPolicyTransitionInstruction({
@@ -3222,54 +3179,6 @@ test("buildZkTransferInstruction normalizes proof attachments", () => {
   assert.equal(payload.proof.backend, "halo2/ipa");
   assert.equal(payload.proof.vk_ref.name, "vk_transfer");
   assert.equal(payload.inputs.length, 1);
-});
-
-test("buildAssetHiddenZkTransferInstruction encodes pool transfer surface", () => {
-  const instruction = buildAssetHiddenZkTransferInstruction({
-    poolId: "boi-private-is-pool",
-    inputs: [Buffer.alloc(32, 0x11)],
-    outputs: [Buffer.alloc(32, 0x22)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: "halo2/ipa:vk_asset_hidden_transfer",
-    },
-    rootHint: Buffer.alloc(32, 0x33),
-  });
-  const payload = encodeAndDecode(instruction).zk.AssetHiddenZkTransfer;
-  assert.equal(payload.pool_id, "boi-private-is-pool");
-  assert.deepEqual(payload.inputs[0], Array.from(Buffer.alloc(32, 0x11)));
-  assert.deepEqual(payload.outputs[0], Array.from(Buffer.alloc(32, 0x22)));
-  assert.deepEqual(payload.root_hint, Array.from(Buffer.alloc(32, 0x33)));
-  assert.equal(payload.proof.vk_ref.name, "vk_asset_hidden_transfer");
-});
-
-test("buildAssetHiddenZkTransferInstruction rejects adversarial pool payloads", () => {
-  const validBase = {
-    poolId: "boi-private-is-pool",
-    inputs: [Buffer.alloc(32, 0x11)],
-    outputs: [Buffer.alloc(32, 0x22)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: "halo2/ipa:vk_asset_hidden_transfer",
-    },
-  };
-  for (const payload of [
-    { ...validBase, inputs: [] },
-    { ...validBase, outputs: [] },
-    { ...validBase, poolId: "   " },
-    { ...validBase, inputs: [Buffer.alloc(31)] },
-    { ...validBase, outputs: [Buffer.alloc(33)] },
-    { ...validBase, poolId: "pool-a", pool_id: "pool-b" },
-    { ...validBase, assetPoolId: "pool-a", asset_pool_id: "pool-b" },
-    { ...validBase, rootHint: Buffer.alloc(32), root_hint: Buffer.alloc(32) },
-  ]) {
-    assert.throws(
-      () => buildAssetHiddenZkTransferInstruction(payload),
-      /assetHiddenZkTransfer/,
-    );
-  }
 });
 
 test("buildZkTransferInstruction rejects legacy inline verifying key fields", () => {
@@ -3827,7 +3736,7 @@ test("proof attachments support lane privacy merkle witnesses", () => {
         merkle: {
           leaf,
           leafIndex: 0,
-          auditPath: [sibling, null],
+          auditPath: [sibling],
         },
       },
     },
@@ -3838,5 +3747,27 @@ test("proof attachments support lane privacy merkle witnesses", () => {
   assert.equal(proof.lane_privacy.witness.kind, "merkle");
   assert.deepEqual(proof.lane_privacy.witness.payload.leaf, Array.from(leaf));
   assert.deepEqual(proof.lane_privacy.witness.payload.proof.audit_path[0], Array.from(sibling));
-  assert.equal(proof.lane_privacy.witness.payload.proof.audit_path[1], null);
+});
+
+test("proof attachments reject empty lane privacy merkle paths", () => {
+  assert.throws(
+    () =>
+      buildFinalizeElectionInstruction({
+        electionId: "elec-1",
+        tally: [1],
+        proof: {
+          backend: "lane/privacy",
+          proof: new Uint8Array([1, 2, 3]),
+          verifyingKeyRef: "lane/privacy:vk_lane_privacy",
+          lanePrivacy: {
+            commitmentId: 9,
+            merkle: {
+              leaf: Buffer.alloc(32, 1),
+              auditPath: [],
+            },
+          },
+        },
+      }),
+    /must contain at least one sibling/,
+  );
 });

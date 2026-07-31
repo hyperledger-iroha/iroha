@@ -4364,7 +4364,7 @@ exit 0
             let script_path = root.join("kagami_stub.sh");
             let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
             let manifest = format!(
-                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"wire_protocol_version\":3,\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\"}},\"transactions\":[{{\"instructions\":[]}}]}}"
+                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"wire_protocol_version\":4,\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\",\"execution_policy_hash\":\"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3\"}},\"transactions\":[{{\"instructions\":[]}}]}}"
             );
             let script = format!(
                 r#"#!/bin/sh
@@ -4497,7 +4497,7 @@ case "$1" in
     case "$2" in
       generate)
         cat <<'JSON'
-{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","wire_protocol_version":3,"sumeragi_v2":{{"da_layout":{{"encoding":{{"encoding":"reed_solomon16","details":null}},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024}},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3"}},"transactions":[{{"instructions":[]}}]}}
+{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","wire_protocol_version":4,"sumeragi_v2":{{"da_layout":{{"encoding":{{"encoding":"reed_solomon16","details":null}},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024}},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"}},"transactions":[{{"instructions":[]}}]}}
 JSON
         exit 0
         ;;

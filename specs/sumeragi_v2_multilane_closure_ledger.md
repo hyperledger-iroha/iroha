@@ -686,15 +686,19 @@ expose loss, duplication, or stale retention.
 **Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** Startup calls
-`reconcile_lane_reservation_ownership` from
+**Production map.** Startup repeatedly calls
+`plan_lane_reservation_ownership` and then
+`apply_lane_reservation_reconciliation_plan` from
 `crates/iroha_core/src/sumeragi/v2_apply.rs` through
-`crates/iroha_core/src/sumeragi/v2_runner.rs`.
-`Kura::autonomous_lane_payload_matches_reservation` performs the production
-current-incarnation, exact-reservation, payload/certification/application
-evidence check. Reconciliation retains one authenticated owner, releases
-orphans in original enqueue order, resumes terminal Commit/ForgetCommit, and
-prunes only forgotten reservations.
+`crates/iroha_core/src/sumeragi/v2_runner.rs`. The immutable plan classifies
+every reservation group together against State, Kura's bounded autonomous
+evidence classifier, pending merge entries, and exact committed carrier
+indices. Missing canonical bodies enter authenticated, fixed-chunk
+Commit-QC-signer recovery; pruned historical autonomous carriers require an
+exact durable recovery installation before any Queue mutation. Application
+then retains one authenticated owner, releases orphans in original enqueue
+order, resumes terminal Commit/ForgetCommit, and opens the Queue startup gate
+only after all groups and crash barriers have completed.
 
 **Closure condition.** Replace the production false stub with exact,
 bounded, authenticated ownership reconciliation. Retain only reservations
@@ -712,7 +716,23 @@ evidence, corrupt/oversized artifacts, and repeated startup.
 states that startup reconstruction preserves the single-owner partition.
 Mutation `ML-MUT-AUT-06` treats all or no payloads as owners, ignores
 incarnation, or performs non-idempotent release; the model must expose loss,
-duplication, or ABA retention.
+duplication, or ABA retention. Invariant
+`MLRecoveredCarrierBodyAuthenticated` requires one retained Commit-QC signer
+to own the whole bounded canonical-body assembly; `ML-MUT-AUT-07` accepts an
+unauthenticated body or mixes chunks across signers. Invariant
+`MLHistoricalRecoveryContextExact` binds the installed task to the exact
+historical route, incarnation, predecessor, proposal, committee, quorum, and
+validator PoPs; `ML-MUT-AUT-08` drifts that context. Invariant
+`MLHistoricalQueueGateOrder` keeps ordinary Queue selection closed until body
+recovery, durable task installation, and reconciliation preflight complete,
+then permits it to open before quorum certification; `ML-MUT-AUT-09` opens the
+gate early. Invariant `MLHistoricalAllGroupsPreflight` preserves the exact
+owner until every reservation group has passed preflight;
+`ML-MUT-AUT-10` publishes a partial group prefix. Invariant
+`MLRecoveredCarrierLengthAuthenticated` requires the exact complete-wire
+length to be Commit-QC-signed and cross-checked against retained Kura/index
+evidence before allocation; `ML-MUT-AUT-11` lets a recovery peer inflate that
+length.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, and `G-12P`.
 
@@ -1284,6 +1304,16 @@ diagnostics must be added here or mapped to a ledger row before release.
 
 ### Explicitly out of scope
 
+- **Generic finalized-view archive retention:** the TODO beside
+  `provider_ingest_finalized_archive` in
+  `crates/iroha_core/src/sumeragi/v2_apply.rs` concerns a governed
+  indefinite-retention/deployment policy for optional provider-ingest and
+  reputation finalized-view archives. Those archives consume the same
+  authenticated commit receipt but do not own lane reservations, merge
+  carriers, Native participant receipts, autoscale frontiers, drain
+  certificates, or lane-retirement artifacts. Their bounded fail-stop ceiling
+  is a separate operator archive-policy obligation and is outside this
+  multilane ledger.
 - **Generic block scheduling:** the TODO on
   `PreparedBlockExecution::LiveBatch` in `crates/iroha_core/src/block.rs`
   concerns routing classified mixed batches through the ordinary quarantine

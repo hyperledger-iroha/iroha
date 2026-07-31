@@ -58,7 +58,7 @@ impl ServerCertVerifier for CertificateKeyProofVerifier {
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
+    ) -> std::result::Result<ServerCertVerified, RustlsError> {
         if let Some(expected) = self.expected_fingerprint {
             let actual = certificate_fingerprint(end_entity.as_ref());
             if actual != expected {
@@ -75,7 +75,7 @@ impl ServerCertVerifier for CertificateKeyProofVerifier {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
+    ) -> std::result::Result<HandshakeSignatureValid, RustlsError> {
         rustls::crypto::verify_tls12_signature(
             message,
             cert,
@@ -89,7 +89,7 @@ impl ServerCertVerifier for CertificateKeyProofVerifier {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
+    ) -> std::result::Result<HandshakeSignatureValid, RustlsError> {
         rustls::crypto::verify_tls13_signature(
             message,
             cert,

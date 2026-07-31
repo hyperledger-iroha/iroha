@@ -12093,6 +12093,7 @@ fn durable_history_source_covers(
         ) => {
             if response.request_hash != *request_hash
                 || HashOf::new(response.as_ref()) != *response_hash
+                || response.version != super::message::LANE_HISTORICAL_RECOVERY_VERSION_V4
             {
                 return Err(
                     "historical lane recovery response changed its exact request binding"
@@ -12194,6 +12195,92 @@ fn durable_history_source_covers(
                     {
                         return Err(
                             "historical autonomous response differs from its READY sidecar"
+                                .to_owned(),
+                        );
+                    }
+                    Ok(())
+                }
+                LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk {
+                    finality_artifact,
+                    wire_len,
+                    chunk_index,
+                    chunk_count,
+                    bytes,
+                } => {
+                    let height = finality_artifact.height;
+                    if height == 0 || height > maximum_source_height {
+                        return Err(
+                            "historical canonical executed-block chunk belongs to an invalid or future height"
+                                .to_owned(),
+                        );
+                    }
+                    let source = kura
+                        .v2_finality_artifact(height)
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| {
+                            "historical canonical executed-block chunk lost its finality source"
+                                .to_owned()
+                        })?;
+                    let height_index = usize::try_from(height)
+                        .ok()
+                        .and_then(NonZeroUsize::new)
+                        .ok_or_else(|| {
+                            "historical canonical executed-block height is not representable"
+                                .to_owned()
+                        })?;
+                    let block = kura
+                        .get_block_without_merge_sidecar(height_index)
+                        .ok_or_else(|| {
+                            "historical canonical executed-block chunk lost its Kura body"
+                                .to_owned()
+                        })?;
+                    if &source.height_context.chain_id != source_chain_id
+                        || source != *finality_artifact
+                        || source.verify().is_err()
+                        || source.validate_for_header(&block.header()).is_err()
+                        || block.header().height().get() != height
+                        || block.hash() != source.block_hash
+                        || source.commit_qc.execution_commitment.validate().is_err()
+                        || !block.executed_block_wire_hash().is_ok_and(|hash| {
+                            hash == source
+                                .commit_qc
+                                .execution_commitment
+                                .executed_block_wire_hash
+                        })
+                    {
+                        return Err(
+                            "historical canonical executed-block chunk differs from Kura finality"
+                                .to_owned(),
+                        );
+                    }
+                    let canonical_wire = block.encode_wire().map_err(|error| error.to_string())?;
+                    let expected_wire_len =
+                        u64::try_from(canonical_wire.len()).map_err(|error| error.to_string())?;
+                    let expected_chunk_count = canonical_wire
+                        .len()
+                        .div_ceil(crate::merge_sidecar::MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+                    let expected_chunk_count_u32 =
+                        u32::try_from(expected_chunk_count).map_err(|error| error.to_string())?;
+                    let chunk_index_usize =
+                        usize::try_from(*chunk_index).map_err(|error| error.to_string())?;
+                    let start = chunk_index_usize
+                        .checked_mul(crate::merge_sidecar::MAX_CERTIFIED_MERGE_CHUNK_BYTES)
+                        .ok_or_else(|| {
+                            "historical canonical executed-block chunk offset overflow".to_owned()
+                        })?;
+                    let end = start
+                        .saturating_add(crate::merge_sidecar::MAX_CERTIFIED_MERGE_CHUNK_BYTES)
+                        .min(canonical_wire.len());
+                    if canonical_wire.is_empty()
+                        || expected_wire_len > crate::kura::STRICT_INIT_MAX_BLOCK_BYTES
+                        || *wire_len != expected_wire_len
+                        || expected_chunk_count == 0
+                        || *chunk_count != expected_chunk_count_u32
+                        || chunk_index_usize >= expected_chunk_count
+                        || bytes.as_slice() != &canonical_wire[start..end]
+                    {
+                        return Err(
+                            "historical canonical executed-block chunk differs from its exact Kura wire"
                                 .to_owned(),
                         );
                     }
@@ -17049,6 +17136,7 @@ pub(super) mod tests {
                     Hash::new(b"Serve fixture parent state"),
                     Hash::new(b"Serve fixture post state"),
                     Hash::new(b"Serve fixture ordinary writes"),
+                    1,
                     Hash::new(b"Serve fixture executed block"),
                 ),
                 signers: (0..context.roster.len())
@@ -17840,6 +17928,7 @@ pub(super) mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 8,
@@ -20756,6 +20845,7 @@ pub(super) mod tests {
                 Hash::new(b"fetch fixture parent state"),
                 Hash::new(b"fetch fixture post state"),
                 Hash::new(b"fetch fixture writes"),
+                1,
                 Hash::new(b"fetch fixture block"),
             ),
             signers: vec![0],
@@ -21014,6 +21104,7 @@ pub(super) mod tests {
             Hash::new(b"restart parent state"),
             Hash::new(b"restart post state"),
             Hash::new(b"restart ordinary writes"),
+            1,
             Hash::new(b"restart executed block wire"),
         );
         let validated = body_store
@@ -29155,6 +29246,7 @@ pub(super) mod tests {
             Hash::new(b"worker parent state"),
             Hash::new(b"worker post state"),
             Hash::new(b"worker ordinary writes"),
+            1,
             Hash::new(b"worker executed block wire"),
         );
         let preimage = wire::Vote {
@@ -31318,6 +31410,7 @@ pub(super) mod tests {
             Hash::new(b"worker prepared parent state"),
             Hash::new(b"worker prepared post state"),
             Hash::new(b"worker prepared ordinary writes"),
+            1,
             Hash::new(b"worker prepared executed block wire"),
         );
         let vote = |phase| wire::Vote {

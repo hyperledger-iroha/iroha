@@ -52,7 +52,7 @@ work assumptions are the trusted contracts stated in the protocol document.
 The local-work contract is quantified only over validator hosts admitted by
 the first-release storage-platform gate. An unsupported-platform failure is
 not successful termination and cannot discharge application or
-successor-activation fairness. Revision 3 has no legacy decoder premise: a
+successor-activation fairness. Revision 4 has no legacy decoder premise: a
 Vote, QC, status record, or finality artifact without its canonical signed
 proposal origin is rejected.
 

@@ -153,6 +153,52 @@
       "source_checks": []
     },
     {
+      "id": "ML-MUT-AUT-07",
+      "classification": "tla_counterexample",
+      "obligation": "MLRecoveredCarrierBodyAuthenticated",
+      "mutation_configs": [
+        "multilane_autonomous_unauthenticated_recovery_body_bug.cfg",
+        "multilane_autonomous_mixed_signer_recovery_body_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-08",
+      "classification": "tla_counterexample",
+      "obligation": "MLHistoricalRecoveryContextExact",
+      "mutation_configs": [
+        "multilane_autonomous_historical_context_drift_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-09",
+      "classification": "tla_counterexample",
+      "obligation": "MLHistoricalQueueGateOrder",
+      "mutation_configs": [
+        "multilane_autonomous_open_queue_before_recovery_install_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-10",
+      "classification": "tla_counterexample",
+      "obligation": "MLHistoricalAllGroupsPreflight",
+      "mutation_configs": [
+        "multilane_autonomous_partial_recovery_group_preflight_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-11",
+      "classification": "tla_counterexample",
+      "obligation": "MLRecoveredCarrierLengthAuthenticated",
+      "mutation_configs": [
+        "multilane_autonomous_inflated_recovery_wire_length_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
       "id": "ML-MUT-LIFE-01",
       "classification": "tla_counterexample",
       "obligation": "MLActivationAfterAtomicCreate",
@@ -297,17 +343,18 @@
       "source_checks": [
         {
           "path": "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
-          "required_tokens": [
-            "Pass `--check` to verify",
-            "native_amx_grouped::write_fixture(check_only)"
-          ]
+            "required_tokens": [
+              "Pass `--check` to verify",
+              "native_amx_grouped::write_fixture(",
+              "options.check_only"
+            ]
         },
         {
           "path": "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
-          "required_tokens": [
-            "\"rust_owner\": \"iroha_data_model::block::consensus\"",
-            "pub fn write_fixture(check_only: bool)"
-          ]
+            "required_tokens": [
+              "\"rust_owner\": \"iroha_data_model::block::consensus\"",
+              "pub fn write_fixture(path: &Path, check_only: bool)"
+            ]
         },
         {
           "path": "ci/check_sumeragi_v2_multilane_release_inventory.sh",
@@ -1728,6 +1775,7 @@
           "kind": "fn",
           "symbol": "from_result_bearing_block",
           "required_tokens": [
+            "executed_block_wire_len",
             "executed_block_wire_hash",
             "native_amx_participant_application_role",
             "MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES",
@@ -1744,12 +1792,30 @@
         {
           "path": "crates/iroha_core/src/sumeragi/exec.rs",
           "kind": "fn",
-          "symbol": "execution_commitment_from_witness",
+          "symbol": "execution_commitment_from_validated_block",
           "required_tokens": [
-            "new_with_native_amx_application_manifest",
+            "executed_block_wire_len()",
+            "executed_block_wire_hash()",
+            "native_amx_manifest.executed_block_wire_len()",
+            "native_amx_manifest.executed_block_wire_hash()",
+            "validated_block",
+            ".execution_context()",
+            "bundle.merge_entry.as_ref()",
+            "MergeCarrierCommitmentV1::new(reference.entry_hash)",
+            "execution_commitment_from_projection("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/exec.rs",
+          "kind": "fn",
+          "symbol": "execution_commitment_from_projection",
+          "required_tokens": [
+            "new_with_native_amx_application_manifest_and_merge_carrier",
             "native_amx_manifest.root()",
             "native_amx_manifest.count()",
-            "native_amx_manifest.executed_block_wire_hash()"
+            "merge_carrier",
+            "executed_block_wire_len",
+            "executed_block_wire_hash"
           ]
         },
         {
@@ -1895,6 +1961,7 @@
             "finality.verify",
             "finality.validate_for_header",
             "finality.commit_qc.execution_commitment",
+            "executed_block_wire_len",
             "executed_block_wire_hash",
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
             "native_amx_application_manifest_root",
@@ -1919,7 +1986,7 @@
           "required_tokens": [
             "height_context",
             ".roster",
-            "commit_qc.signers.binary_search"
+            "commit_qc.signers.iter().any"
           ]
         },
         {
@@ -1986,7 +2053,7 @@
           "kind": "fn",
           "symbol": "validate_native_participant_recovery_request",
           "required_tokens": [
-            "LANE_HISTORICAL_RECOVERY_VERSION_V2",
+            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
             "request.certificate.is_some",
             "request.signer_pops.is_empty",
             "historical_recovery_request_fits_frame",
@@ -2005,7 +2072,7 @@
           "symbol": "serve_historical_recovery_request",
           "required_tokens": [
             "validate_native_participant_recovery_request",
-            "peer_is_global_finality_signer",
+            "peer_is_historical_global_finality_signer",
             "kura.get_block",
             "native_participant_recovery_block_matches_finality",
             "historical_recovery_response_fits_frame",
@@ -2019,7 +2086,7 @@
           "required_tokens": [
             "native_participant_recovery_requests",
             "pending_native_participant_recovery_markers",
-            "peer_is_global_finality_signer",
+            "peer_is_historical_global_finality_signer",
             "native_participant_recovery_block_matches_finality",
             "cache_block_body",
             "repair_native_amx_participant_application_evidence",
@@ -2660,7 +2727,7 @@
           "symbol": "V2ApplyService::validate_and_apply",
           "required_tokens": [
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
-            "execution_commitment_from_witness",
+            "execution_commitment_from_validated_block",
             "store_block",
             "store_v2_finality_artifact",
             "prepublish_native_amx_participant_application_evidence",
@@ -2774,6 +2841,30 @@
         {
           "config": "multilane_autonomous_restart_drops_ownership_bug.cfg",
           "invariant": "MLReservationSingleOwner"
+        },
+        {
+          "config": "multilane_autonomous_unauthenticated_recovery_body_bug.cfg",
+          "invariant": "MLRecoveredCarrierBodyAuthenticated"
+        },
+        {
+          "config": "multilane_autonomous_mixed_signer_recovery_body_bug.cfg",
+          "invariant": "MLRecoveredCarrierBodyAuthenticated"
+        },
+        {
+          "config": "multilane_autonomous_inflated_recovery_wire_length_bug.cfg",
+          "invariant": "MLRecoveredCarrierLengthAuthenticated"
+        },
+        {
+          "config": "multilane_autonomous_historical_context_drift_bug.cfg",
+          "invariant": "MLHistoricalRecoveryContextExact"
+        },
+        {
+          "config": "multilane_autonomous_open_queue_before_recovery_install_bug.cfg",
+          "invariant": "MLHistoricalQueueGateOrder"
+        },
+        {
+          "config": "multilane_autonomous_partial_recovery_group_preflight_bug.cfg",
+          "invariant": "MLHistoricalAllGroupsPreflight"
         },
         {
           "config": "multilane_autonomous_volatile_stage_diagnostics_bug.cfg",
@@ -3358,21 +3449,96 @@
           ]
         },
         {
+          "path": "crates/iroha_data_model/src/block/consensus_v2.rs",
+          "kind": "method",
+          "symbol": "ExecutionCommitment::validate",
+          "required_tokens": [
+            "self.executed_block_wire_len == 0",
+            "InvalidExecutedBlockWireLength",
+            "merge_carrier.validate()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/exec.rs",
+          "kind": "fn",
+          "symbol": "execution_commitment_from_validated_block",
+          "required_tokens": [
+            "let executed_block_wire = validated_block",
+            ".encode_wire()",
+            "u64::try_from(executed_block_wire.len())",
+            "Hash::new(&executed_block_wire)",
+            "native_amx_manifest.executed_block_wire_len()",
+            "native_amx_manifest.executed_block_wire_hash()",
+            "MergeCarrierCommitmentV1::new(reference.entry_hash)",
+            "execution_commitment_from_projection("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_v2_finality_wire_bindings",
+          "required_tokens": [
+            ".execution_commitment",
+            ".executed_block_wire_len",
+            "executed_block_wire_len",
+            "V2FinalityExecutedBlockWireLengthMismatch",
+            ".executed_block_wire_hash",
+            "executed_block_wire_hash",
+            "V2FinalityExecutedBlockWireHashMismatch"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "durable_block_payload_len_by_hash",
+          "required_tokens": [
+            "prune_lock.lock()",
+            "ensure_prune_recovery_not_required",
+            "canonical_chain_lock.lock()",
+            "ensure_canonical_storage_not_poisoned",
+            "read_exact_durable_index_count",
+            "read_durable_hash_at_height",
+            "read_block_index",
+            "index.length == 0",
+            "index.length > STRICT_INIT_MAX_BLOCK_BYTES",
+            "v2_finality_artifact_with_archive_under_prune_and_canonical_guards",
+            "executed_block_wire_len",
+            "index.length"
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
           "kind": "fn",
-          "symbol": "reconcile_lane_reservation_ownership",
+          "symbol": "plan_lane_reservation_ownership",
           "required_tokens": [
             "live_lane_reservations",
             "has_committed_transaction",
-            "committed_recovered",
-            "committed_merge_queue_reservations",
-            "exact_committed",
-            "commit_lane_reservation",
+            "unique_recovered",
+            "get_merge_entry_by_carrier_height",
+            "certified_merge_queue_reservations",
+            "exact_committed_carrier_height_for_group",
             "lane_reservation_release_barriers",
-            "retire_autonomous_lane_slot_and_release_reservations",
-            "reconcile_orphaned_lane_reservations",
             "lane_incarnation_at_height",
-            "autonomous_lane_payload_matches_reservation"
+            "classify_autonomous_lane_reservation_groups",
+            "canonical_autonomous_carrier_disposition",
+            "RecoverCanonicalBodies",
+            "InstallHistoricalAutonomousRecoveries",
+            "lane_reservation_reconciliation_snapshot"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "fn",
+          "symbol": "apply_lane_reservation_reconciliation_plan",
+          "required_tokens": [
+            "historical_autonomous_lane_recovery_matches",
+            "lane_reservation_reconciliation_snapshot",
+            "lane_reservation_commit_barriers",
+            "lane_reservation_release_barriers",
+            "commit_lane_reservation",
+            "retire_autonomous_lane_slot_and_release_reservations",
+            "release_lane_reservations_in_order",
+            "complete_lane_reservation_startup_reconciliation"
           ]
         },
         {
@@ -4014,13 +4180,17 @@
             "self.ensure_plan_journal_replay_startup_shape_locked()?",
             "self.plan_journal_replay_reservation_shape_locked()?",
             "journal_hashes.len() != records.len()",
-            ".is_subset(&journal_hashes)",
+            ".missing_payload_hashes",
+            ".difference(&journal_hashes)",
+            "commit_barrier_hashes.contains(hash)",
+            "state_view.transactions.get(hash).is_none()",
             "let replay_observed_at = self.time_source.get_unix_time();",
             "AcceptedTransaction::accept_entrypoint_at_time",
             "accepted.hash_as_entrypoint() != entrypoint_hash",
-            "restored_reservation_fifo_order_for_identity",
+            "queue_plan_replay_reservation_owner",
             "reservation_shape.durable_owned_hashes.contains(&hash)",
-            "restored_fifo_order.is_some()",
+            "reservation_owner.is_present()",
+            "reservation_owner.fifo_order()",
             "state_view.transactions.get(&hash).is_some()",
             "recorded_global_admission_identity",
             "queue_plan_admission_registry_match",
@@ -4101,10 +4271,32 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "method",
-          "symbol": "Queue::finalize_plan_journal_startup_recovery",
+          "symbol": "Queue::complete_lane_reservation_startup_reconciliation",
           "required_tokens": [
-            "self.finalize_completed_releases(None)",
-            ".map_err(std::io::Error::other)"
+            "self.lane_reservation_transition_lock.lock()",
+            "self.push_remove_lock.lock()",
+            "self.transaction_selection_durability_faulted()",
+            "!store.commit_barriers.is_empty()",
+            "!store.release_barriers.is_empty()",
+            "!store.completed_releases.is_empty()",
+            "!store.missing_payload_hashes.is_empty()",
+            "lane_reservation_reconciliation_pending",
+            ".store(false, Ordering::Release)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "fn",
+          "symbol": "apply_lane_reservation_reconciliation_plan",
+          "required_tokens": [
+            "historical_autonomous_lane_recovery_matches",
+            "lane_reservation_reconciliation_snapshot",
+            "lane_reservation_commit_barriers",
+            "lane_reservation_release_barriers",
+            "commit_lane_reservation",
+            "retire_autonomous_lane_slot_and_release_reservations",
+            "release_lane_reservations_in_order",
+            "complete_lane_reservation_startup_reconciliation"
           ]
         },
         {
@@ -4115,7 +4307,6 @@
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "finalize_plan_journal_startup_recovery()",
             "IrohaNetwork::start_with_crypto("
           ]
         },

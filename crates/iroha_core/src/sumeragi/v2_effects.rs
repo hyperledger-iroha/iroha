@@ -10778,6 +10778,7 @@ mod tests {
                 roster: roster.clone(),
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1_048_576,
@@ -10924,6 +10925,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"production transport nexus/amx context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1_048_576,
@@ -10972,6 +10974,7 @@ mod tests {
                 Hash::new(b"conflicting parent state"),
                 Hash::new(b"conflicting post state"),
                 Hash::new(b"conflicting ordinary writes"),
+                1,
                 Hash::new(b"conflicting executed block wire"),
             );
             assert_ne!(canonical_commitment, conflicting_commitment);
@@ -11328,6 +11331,7 @@ mod tests {
             Hash::new(b"effects fixture parent state"),
             Hash::new(b"effects fixture post state"),
             Hash::new(b"effects fixture ordinary writes"),
+            1,
             Hash::new(b"effects fixture executed block wire"),
         )
     }
@@ -17397,6 +17401,7 @@ mod tests {
             Hash::new(b"drifted effects fixture parent state"),
             Hash::new(b"drifted effects fixture post state"),
             Hash::new(b"drifted effects fixture ordinary writes"),
+            1,
             Hash::new(b"drifted effects fixture executed block wire"),
         );
         assert!(matches!(
@@ -18971,6 +18976,7 @@ mod tests {
             Hash::new(b"Decision conflict parent state"),
             Hash::new(b"Decision conflict post state"),
             Hash::new(b"Decision conflict ordinary writes"),
+            1,
             Hash::new(b"Decision conflict executed block"),
         );
         assert_ne!(conflicting_commitment, fixture_execution_commitment());
@@ -19019,6 +19025,7 @@ mod tests {
             Hash::new(b"drifted Decision parent state"),
             Hash::new(b"drifted Decision post state"),
             Hash::new(b"drifted Decision ordinary writes"),
+            1,
             Hash::new(b"drifted Decision executed block"),
         );
         assert_ne!(drifted_commitment, first.3);
@@ -21600,6 +21607,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"serialized rebind nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1_048_576,

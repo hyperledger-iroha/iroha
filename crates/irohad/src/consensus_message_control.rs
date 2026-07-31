@@ -1731,6 +1731,7 @@ mod tests {
             Hash::new([marker, 1]),
             Hash::new([marker, 2]),
             Hash::new([marker, 3]),
+            1,
             Hash::new([marker, 4]),
         )
     }

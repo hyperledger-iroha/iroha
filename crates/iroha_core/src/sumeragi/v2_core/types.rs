@@ -3,7 +3,7 @@ use std::{error::Error, fmt};
 use super::{Quorum, QuorumError};
 
 /// Wire protocol version implemented by this crate.
-pub const PROTOCOL_VERSION_V3: u16 = 3;
+pub const PROTOCOL_VERSION_V4: u16 = 4;
 /// Maximum voting validators accepted by a frozen v2 height context.
 pub const MAX_VOTING_ROSTER_LEN: usize = 128;
 
@@ -347,6 +347,7 @@ pub struct HeightContext {
     total_voting_power: VotingPower,
     mode: VotingMode,
     nexus_amx_context_hash: Digest,
+    execution_policy_hash: Digest,
     da_layout_hash: Digest,
     leader_seed: Digest,
 }
@@ -369,6 +370,7 @@ impl HeightContext {
         roster: Vec<Validator>,
         mode: VotingMode,
         nexus_amx_context_hash: Digest,
+        execution_policy_hash: Digest,
         da_layout_hash: Digest,
         leader_seed: Digest,
     ) -> Result<Self, HeightContextError> {
@@ -382,6 +384,7 @@ impl HeightContext {
             roster,
             mode,
             nexus_amx_context_hash,
+            execution_policy_hash,
             da_layout_hash,
             leader_seed,
         )
@@ -405,6 +408,7 @@ impl HeightContext {
         roster: Vec<Validator>,
         mode: VotingMode,
         nexus_amx_context_hash: Digest,
+        execution_policy_hash: Digest,
         da_layout_hash: Digest,
         leader_seed: Digest,
     ) -> Result<Self, HeightContextError> {
@@ -418,6 +422,7 @@ impl HeightContext {
             roster,
             mode,
             nexus_amx_context_hash,
+            execution_policy_hash,
             da_layout_hash,
             leader_seed,
         )
@@ -434,6 +439,7 @@ impl HeightContext {
         roster: Vec<Validator>,
         mode: VotingMode,
         nexus_amx_context_hash: Digest,
+        execution_policy_hash: Digest,
         da_layout_hash: Digest,
         leader_seed: Digest,
     ) -> Result<Self, HeightContextError> {
@@ -477,7 +483,7 @@ impl HeightContext {
             (_, Some(_), false) => {}
         }
         Ok(Self {
-            protocol_version: PROTOCOL_VERSION_V3,
+            protocol_version: PROTOCOL_VERSION_V4,
             id,
             chain_id,
             height,
@@ -488,6 +494,7 @@ impl HeightContext {
             total_voting_power: VotingPower::new(total),
             mode,
             nexus_amx_context_hash,
+            execution_policy_hash,
             da_layout_hash,
             leader_seed,
         })
@@ -563,6 +570,12 @@ impl HeightContext {
     #[must_use]
     pub const fn nexus_amx_context_hash(&self) -> Digest {
         self.nexus_amx_context_hash
+    }
+
+    /// Returns the frozen V1 boot execution-policy identity.
+    #[must_use]
+    pub const fn execution_policy_hash(&self) -> Digest {
+        self.execution_policy_hash
     }
 
     /// Returns the deterministic data-availability layout commitment.

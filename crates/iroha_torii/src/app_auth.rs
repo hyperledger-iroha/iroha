@@ -24,6 +24,8 @@
 //!   rules.
 //! - The body hash is computed over the raw request body bytes.
 //! - Freshness validation rejects stale timestamps and replayed nonces.
+//! - Nonce retention must exceed the full timestamp-skew window. A saturated
+//!   cache rejects new requests and never evicts live replay evidence.
 //! - `X-Iroha-Account` only identifies a caller when paired with a valid
 //!   signature or witness; bare account headers are rejected on caller-scoped
 //!   read paths.
@@ -34,15 +36,15 @@
 //! the endpoint-defined unsigned body bytes.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
+    fmt,
     num::NonZeroUsize,
     sync::{Arc, Mutex, OnceLock, RwLock},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::{actual::AppApi as AppApiConfig, defaults};
 use iroha_core::{
     sns::resolve_active_account_alias,
@@ -68,6 +70,8 @@ use iroha_torii_shared::FeeQuoteRequest;
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
+use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache};
+
 /// Header carrying the authorising account id.
 pub const HEADER_ACCOUNT: &str = "X-Iroha-Account";
 /// Header carrying the base64-encoded signature over the canonical request bytes.
@@ -87,10 +91,39 @@ pub use axum::http::{Method, Uri};
 pub struct CanonicalRequestAuthConfig {
     /// Maximum allowed clock skew for signed requests.
     pub max_clock_skew: Duration,
-    /// TTL for nonces retained for replay detection.
+    /// TTL for nonces retained for replay detection; must exceed twice
+    /// `max_clock_skew`.
     pub nonce_ttl: Duration,
     /// Maximum number of nonce entries held in memory for replay detection.
     pub replay_cache_capacity: NonZeroUsize,
+}
+
+/// Invalid relationship between canonical-request freshness and replay retention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalRequestAuthConfigError;
+
+impl fmt::Display for CanonicalRequestAuthConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "canonical request nonce TTL must be greater than twice the maximum clock skew",
+        )
+    }
+}
+
+impl std::error::Error for CanonicalRequestAuthConfigError {}
+
+impl CanonicalRequestAuthConfig {
+    /// Validate that a nonce cannot expire while its signed timestamp remains admissible.
+    pub fn validate(self) -> Result<(), CanonicalRequestAuthConfigError> {
+        let replay_window = self
+            .max_clock_skew
+            .checked_mul(2)
+            .ok_or(CanonicalRequestAuthConfigError)?;
+        if self.nonce_ttl <= replay_window {
+            return Err(CanonicalRequestAuthConfigError);
+        }
+        Ok(())
+    }
 }
 
 impl Default for CanonicalRequestAuthConfig {
@@ -99,7 +132,7 @@ impl Default for CanonicalRequestAuthConfig {
             max_clock_skew: Duration::from_secs(defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS),
             nonce_ttl: Duration::from_secs(defaults::torii::app_auth::NONCE_TTL_SECS),
             replay_cache_capacity: NonZeroUsize::new(
-                defaults::torii::app_auth::REPLAY_CACHE_CAPACITY.max(1),
+                defaults::torii::app_auth::REPLAY_CACHE_CAPACITY,
             )
             .expect("default app-auth replay cache capacity must be non-zero"),
         }
@@ -116,99 +149,6 @@ impl From<&AppApiConfig> for CanonicalRequestAuthConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReplayCacheConfig {
-    ttl: Duration,
-    capacity: NonZeroUsize,
-}
-
-impl From<CanonicalRequestAuthConfig> for ReplayCacheConfig {
-    fn from(config: CanonicalRequestAuthConfig) -> Self {
-        Self {
-            ttl: config.nonce_ttl.max(Duration::from_secs(1)),
-            capacity: config.replay_cache_capacity,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ReplayCache {
-    config: RwLock<ReplayCacheConfig>,
-    entries: DashMap<String, Instant>,
-    order: Mutex<VecDeque<(String, Instant)>>,
-}
-
-impl ReplayCache {
-    fn new(config: CanonicalRequestAuthConfig) -> Self {
-        Self {
-            config: RwLock::new(config.into()),
-            entries: DashMap::new(),
-            order: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    fn configure(&self, config: CanonicalRequestAuthConfig) {
-        let config = ReplayCacheConfig::from(config);
-        *self
-            .config
-            .write()
-            .expect("canonical request replay cache config lock") = config;
-        if let Ok(mut guard) = self.order.lock() {
-            self.prune_locked(&mut guard, Instant::now(), config.capacity);
-        }
-    }
-
-    fn check_and_insert(&self, key: String) -> bool {
-        let now = Instant::now();
-        let (expires_at, capacity) = {
-            let replay_config = self
-                .config
-                .read()
-                .expect("canonical request replay cache config lock");
-            (now + replay_config.ttl, replay_config.capacity)
-        };
-
-        match self.entries.entry(key.clone()) {
-            Entry::Occupied(mut occ) => {
-                if *occ.get() > now {
-                    return false;
-                }
-                occ.insert(expires_at);
-            }
-            Entry::Vacant(vac) => {
-                vac.insert(expires_at);
-            }
-        }
-
-        if let Ok(mut guard) = self.order.lock() {
-            guard.push_back((key, expires_at));
-            self.prune_locked(&mut guard, now, capacity);
-        }
-
-        true
-    }
-
-    fn prune_locked(
-        &self,
-        order: &mut VecDeque<(String, Instant)>,
-        now: Instant,
-        capacity: NonZeroUsize,
-    ) {
-        let cap = capacity.get();
-        while let Some((_key, expiry)) = order.front() {
-            if *expiry > now && order.len() <= cap {
-                break;
-            }
-            let (key, expiry) = order
-                .pop_front()
-                .expect("front is Some so pop_front must succeed");
-            let _ = self
-                .entries
-                .remove_if(&key, |_k, existing| *existing == expiry);
-        }
-    }
-}
-
 #[derive(Debug)]
 struct CanonicalRequestAuthRuntime {
     config: CanonicalRequestAuthConfig,
@@ -217,9 +157,13 @@ struct CanonicalRequestAuthRuntime {
 
 impl CanonicalRequestAuthRuntime {
     fn new(config: CanonicalRequestAuthConfig) -> Self {
+        debug_assert!(config.validate().is_ok());
         Self {
             config,
-            replay_cache: Arc::new(ReplayCache::new(config)),
+            replay_cache: Arc::new(ReplayCache::new(
+                config.nonce_ttl,
+                config.replay_cache_capacity,
+            )),
         }
     }
 }
@@ -237,12 +181,23 @@ fn auth_runtime_snapshot() -> (CanonicalRequestAuthConfig, Arc<ReplayCache>) {
 }
 
 /// Configure app-facing canonical request freshness enforcement.
-pub fn configure(config: CanonicalRequestAuthConfig) {
+///
+/// # Errors
+///
+/// Returns an error when nonce retention is too short to cover the complete
+/// accepted timestamp-skew window.
+pub fn configure(
+    config: CanonicalRequestAuthConfig,
+) -> Result<(), CanonicalRequestAuthConfigError> {
+    config.validate()?;
     let mut guard = auth_runtime()
         .write()
         .expect("canonical request auth config lock");
     guard.config = config;
-    guard.replay_cache.configure(config);
+    guard
+        .replay_cache
+        .configure(config.nonce_ttl, config.replay_cache_capacity);
+    Ok(())
 }
 
 /// Authenticated canonical request identity.
@@ -757,12 +712,17 @@ fn check_replay(
     replay_cache: &ReplayCache,
 ) -> Result<(), crate::Error> {
     let replay_key = format!("{account}:{nonce}");
-    if !replay_cache.check_and_insert(replay_key) {
-        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+    match replay_cache.check_and_insert(replay_key) {
+        Ok(()) => Ok(()),
+        Err(ReplayInsertError::Replay) => Err(crate::Error::Query(ValidationFail::NotPermitted(
             "request nonce already used".to_owned(),
-        )));
+        ))),
+        Err(ReplayInsertError::Capacity | ReplayInsertError::LifetimeOverflow) => {
+            Err(crate::Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )))
+        }
     }
-    Ok(())
 }
 
 /// Validate an iterable query against the executor on behalf of `authority`.
@@ -1030,12 +990,7 @@ pub fn verify_canonical_request(
             }
         };
 
-        let replay_key = format!("{account}:{}", witness.nonce);
-        if !replay_cache.check_and_insert(replay_key) {
-            return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                "request nonce already used".to_owned(),
-            )));
-        }
+        check_replay(&account, &witness.nonce, &replay_cache)?;
         let signer = verified_signers
             .first()
             .cloned()
@@ -1106,12 +1061,7 @@ pub fn verify_canonical_request(
             )));
         }
     };
-    let replay_key = format!("{account}:{nonce}");
-    if !replay_cache.check_and_insert(replay_key) {
-        return Err(crate::Error::Query(ValidationFail::NotPermitted(
-            "request nonce already used".to_owned(),
-        )));
-    }
+    check_replay(&account, &nonce, &replay_cache)?;
 
     Ok(Some(VerifiedCanonicalRequest {
         account,
@@ -1384,14 +1334,14 @@ mod tests {
         struct Guard(std::sync::MutexGuard<'static, ()>);
         impl Drop for Guard {
             fn drop(&mut self) {
-                configure(CanonicalRequestAuthConfig::default());
+                configure(CanonicalRequestAuthConfig::default()).expect("default app-auth config");
             }
         }
         let guard = TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        configure(config);
+        configure(config).expect("valid app-auth test config");
         Guard(guard)
     }
 
@@ -2293,6 +2243,43 @@ mod tests {
     }
 
     #[test]
+    fn replay_cache_capacity_fails_closed_without_evicting_live_nonces() {
+        let cache = ReplayCache::new(Duration::from_secs(300), nonzero!(2_usize));
+        let account = ALICE_ID.clone();
+
+        check_replay(&account, "protected-a", &cache).expect("first nonce");
+        check_replay(&account, "protected-b", &cache).expect("second nonce");
+        let saturated =
+            check_replay(&account, "overflow", &cache).expect_err("full cache must reject");
+        assert!(matches!(
+            saturated,
+            crate::Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+
+        let replay = check_replay(&account, "protected-a", &cache)
+            .expect_err("capacity pressure must preserve the first nonce");
+        match replay {
+            crate::Error::Query(ValidationFail::NotPermitted(message)) => {
+                assert!(message.contains("nonce already used"));
+            }
+            other => panic!("unexpected replay error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_auth_config_rejects_short_nonce_retention() {
+        let config = CanonicalRequestAuthConfig {
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(120),
+            replay_cache_capacity: nonzero!(8_usize),
+        };
+
+        assert_eq!(config.validate(), Err(CanonicalRequestAuthConfigError));
+    }
+
+    #[test]
     fn configure_preserves_replay_cache_entries() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let account = ALICE_ID.clone();
@@ -2330,7 +2317,8 @@ mod tests {
         configure(CanonicalRequestAuthConfig {
             max_clock_skew: Duration::from_secs(120),
             ..CanonicalRequestAuthConfig::default()
-        });
+        })
+        .expect("valid reconfigured app-auth window");
         let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
             .expect_err("replay must still fail after reconfigure");
         match err {

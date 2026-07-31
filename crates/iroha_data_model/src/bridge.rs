@@ -569,7 +569,7 @@ pub struct BridgeProofRecord {
 }
 
 /// Current schema version of [`BridgeFinalityProof`].
-pub const BRIDGE_FINALITY_PROOF_VERSION_V1: u8 = 1;
+pub const BRIDGE_FINALITY_PROOF_VERSION_V2: u8 = 2;
 
 /// Current schema version of [`BridgeFinalityAttestationBodyV1`].
 pub const BRIDGE_FINALITY_ATTESTATION_VERSION_V1: u8 = 1;
@@ -593,7 +593,7 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityProof {
     /// Proof schema version. The first release requires
-    /// [`BRIDGE_FINALITY_PROOF_VERSION_V1`].
+    /// [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
     pub version: u8,
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
@@ -1145,9 +1145,9 @@ fn validate_bridge_finality_proof_structure(
     proof: &BridgeFinalityProof,
     expected_chain_id: &ChainId,
 ) -> Result<(), BridgeFinalityVerifyError> {
-    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1 {
+    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2 {
         return Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
-            expected: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            expected: BRIDGE_FINALITY_PROOF_VERSION_V2,
             actual: proof.version,
         });
     }
@@ -1466,6 +1466,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid powered roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"bridge v2 test nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -1490,6 +1491,7 @@ mod tests {
             Hash::new(b"bridge v2 parent state"),
             Hash::new(b"bridge v2 post state"),
             Hash::new(b"bridge v2 ordinary writes"),
+            1,
             Hash::new(b"bridge v2 executed block wire"),
         );
         let mut commit_qc = QuorumCertificate {
@@ -1538,7 +1540,7 @@ mod tests {
         );
         V2Fixture {
             proof: BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
                 block_header: header,
                 finality_artifact: artifact,
             },
@@ -1604,6 +1606,7 @@ mod tests {
             quorum,
             roster,
             nexus_amx_context_hash: Hash::new(b"bridge v2 successor nexus context"),
+            execution_policy_hash: parent_artifact.height_context.execution_policy_hash,
             da_layout: parent_artifact.height_context.da_layout,
             leader_seed,
         };
@@ -1621,6 +1624,7 @@ mod tests {
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),
+            1,
             Hash::new(b"bridge v2 successor executed block wire"),
         );
         let commit_qc = wire::QuorumCertificate {
@@ -1639,7 +1643,7 @@ mod tests {
             validator_set_pops,
         );
         let mut proof = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header: header,
             finality_artifact: artifact,
         };
@@ -2786,11 +2790,22 @@ mod tests {
         let context_id = fixture.proof.finality_artifact.context_id();
 
         let mut wrong_version = fixture.proof.clone();
-        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V1 + 1;
+        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V2 + 1;
         let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
         assert!(matches!(
             verifier.verify(&wrong_version),
             Err(BridgeFinalityVerifyError::UnsupportedProofVersion { .. })
+        ));
+
+        let mut legacy_v1 = fixture.proof.clone();
+        legacy_v1.version = 1;
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        assert!(matches!(
+            verifier.verify(&legacy_v1),
+            Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
+                expected: BRIDGE_FINALITY_PROOF_VERSION_V2,
+                actual: 1,
+            })
         ));
 
         let mut verifier = BridgeFinalityVerifier::with_context(

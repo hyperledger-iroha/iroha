@@ -33,6 +33,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.ClientConfigManifestLoaderTests",
         "org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests",
         "org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests",
+        "org.hyperledger.iroha.android.client.DaToriiClientTests",
         "org.hyperledger.iroha.android.client.ConfigWatcherTests",
         "org.hyperledger.iroha.android.client.ContractManifestTests",
         "org.hyperledger.iroha.android.client.Ed25519RouteAdmissionTests",

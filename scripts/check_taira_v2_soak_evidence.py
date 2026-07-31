@@ -306,7 +306,7 @@ def _validate_status_snapshots(
             STATUS_REQUIRED_FIELDS <= set(status),
             f"{name} status payload omits required Sumeragi fields",
         )
-        _require(status.get("protocol_version") == 3, f"{name} uses the wrong protocol version")
+        _require(status.get("protocol_version") == 4, f"{name} uses the wrong protocol version")
         _require(status.get("restart_required") is False, f"{name} records a fail-stopped validator")
         for field, minimum in (("height", 1), ("view", 0), ("leader", 0)):
             value = status.get(field)

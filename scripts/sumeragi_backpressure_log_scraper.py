@@ -251,7 +251,7 @@ def load_status_metrics(path: Optional[Path]) -> Dict[str, Optional[int]]:
         raise ValueError(f"status snapshot does not exist: {path}") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"status snapshot is not valid JSON: {path}") from exc
-    if not isinstance(data, dict) or data.get("protocol_version") != 3:
+    if not isinstance(data, dict) or data.get("protocol_version") != 4:
         raise ValueError("status snapshot is not the flattened protocol-v2 schema")
     restart_required = data.get("restart_required")
     if not isinstance(restart_required, bool):
@@ -530,7 +530,7 @@ def run_self_tests() -> bool:
             import tempfile
 
             status = {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "restart_required": False,
                 "height": 8,
                 "view": 3,
@@ -565,7 +565,7 @@ def run_self_tests() -> bool:
                     load_status_metrics(Path(handle.name))
 
             status["restart_required"] = False
-            status["protocol_version"] = 1
+            status["protocol_version"] = 3
             with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
                 json.dump(status, handle)
                 handle.flush()

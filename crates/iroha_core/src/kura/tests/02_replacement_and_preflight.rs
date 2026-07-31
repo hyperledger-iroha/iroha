@@ -590,6 +590,9 @@
         let canonical = KuraRetainedBlockRecord::new(
             blocks[1].header(),
             Kura::canonical_proposal_wire_hash(&blocks[1]).expect("canonical proposal wire hash"),
+            Kura::canonical_block_wire_identity(&blocks[1])
+                .expect("canonical block wire identity")
+                .0,
             Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
             archive.clone(),
         );
@@ -673,6 +676,9 @@
         let rootless_extra = KuraRetainedBlockRecord::new(
             rootless_header,
             Kura::canonical_proposal_wire_hash(&blocks[0]).expect("rootless proposal wire hash"),
+            Kura::canonical_block_wire_identity(&blocks[0])
+                .expect("rootless block wire identity")
+                .0,
             Kura::canonical_block_wire_hash(&blocks[0]).expect("rootless block wire hash"),
             archive,
         );
@@ -811,6 +817,9 @@
         let forged = KuraRetainedBlockRecord::new(
             substitute.header(),
             Kura::canonical_proposal_wire_hash(&substitute).expect("substitute proposal wire hash"),
+            Kura::canonical_block_wire_identity(&substitute)
+                .expect("substitute block wire identity")
+                .0,
             Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
             Vec::new(),
         );
@@ -862,6 +871,9 @@
                 substitute.header(),
                 Kura::canonical_proposal_wire_hash(&substitute)
                     .expect("substitute proposal wire hash"),
+                Kura::canonical_block_wire_identity(&substitute)
+                    .expect("substitute block wire identity")
+                    .0,
                 Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
                 Vec::new(),
             )
@@ -956,6 +968,9 @@
                     block.header(),
                     Kura::canonical_proposal_wire_hash(&block)
                         .expect("canonical proposal wire hash"),
+                    Kura::canonical_block_wire_identity(&block)
+                        .expect("canonical block wire identity")
+                        .0,
                     Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
                     Vec::new(),
                 )
@@ -1069,6 +1084,9 @@
                 blocks[1].header(),
                 Kura::canonical_proposal_wire_hash(&blocks[1])
                     .expect("canonical proposal wire hash"),
+                Kura::canonical_block_wire_identity(&blocks[1])
+                    .expect("canonical block wire identity")
+                    .0,
                 Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
                 Vec::new(),
             )
@@ -1140,6 +1158,9 @@
         let canonical = KuraRetainedBlockRecord::new(
             block.header(),
             Kura::canonical_proposal_wire_hash(&block).expect("canonical proposal wire hash"),
+            Kura::canonical_block_wire_identity(&block)
+                .expect("canonical block wire identity")
+                .0,
             Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
             Vec::new(),
         );
@@ -1157,6 +1178,12 @@
         );
         absurd_archive_len.extend([0xff; 9]);
         absurd_archive_len.push(1);
+        let mut legacy_v2 = canonical.clone();
+        legacy_v2.format_version = 2;
+        let mut zero_wire_len = canonical.clone();
+        zero_wire_len.executed_block_wire_len = 0;
+        let mut oversized_wire_len = canonical.clone();
+        oversized_wire_len.executed_block_wire_len = STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1);
         let mut bad_version = canonical;
         bad_version.format_version = RETAINED_BLOCK_RECORD_VERSION.saturating_add(1);
 
@@ -1164,6 +1191,9 @@
             trailing,
             truncated,
             absurd_archive_len,
+            legacy_v2.encode(),
+            zero_wire_len.encode(),
+            oversized_wire_len.encode(),
             bad_version.encode(),
         ] {
             assert!(hostile.len() <= MAX_RETAINED_BLOCK_RECORD_BYTES);
@@ -2884,4 +2914,3 @@
             "rejected root identity must remain unchanged"
         );
     }
-

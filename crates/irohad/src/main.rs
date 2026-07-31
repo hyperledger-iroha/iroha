@@ -95,6 +95,7 @@ use iroha_config::{
         },
         user::Root as UserConfig,
     },
+    snapshot::Mode as SnapshotMode,
 };
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::{StateTelemetry, StreamingTelemetry};
@@ -176,21 +177,36 @@ fn log_startup_trace(stage: &'static str, started_at: Instant) {
     }
 }
 
-fn torii_receipt_signer_or_ephemeral(
+fn torii_receipt_signer_or_derived(
     receipt_signer: Option<KeyPair>,
+    node_key_pair: &KeyPair,
 ) -> Result<KeyPair, iroha_crypto::Error> {
     if let Some(receipt_signer) = receipt_signer {
         return Ok(receipt_signer);
     }
 
-    let key = iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)?;
+    // A receipt key must survive process restarts because the durable DA log verifies historical
+    // receipts during startup. Derive a separate key from the node identity instead of generating
+    // an ephemeral key; the BLAKE3 KDF context prevents the derived key from being reused as the
+    // node key or by another protocol.
+    let (node_algorithm, mut node_secret) = node_key_pair.private_key().try_to_bytes()?;
+    let mut key_deriver = blake3::Hasher::new_derive_key("iroha:torii:receipt-signer:secp256k1:v1");
+    key_deriver.update(node_algorithm.as_static_str().as_bytes());
+    key_deriver.update(&[0]);
+    key_deriver.update(&node_secret);
+    let mut seed = [0_u8; 32];
+    key_deriver.finalize_xof().fill(&mut seed);
+    node_secret.fill(0);
+    let key = iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), Algorithm::Secp256k1);
+    seed.fill(0);
+    let key = key?;
     let algorithm = key
         .public_key()
         .try_algorithm()
         .map_or("malformed", |algorithm| algorithm.as_static_str());
     iroha_logger::info!(
         algorithm,
-        "torii receipt signer not configured; generated ephemeral secp256k1 key"
+        "torii receipt signer not configured; derived a stable domain-separated key from the node identity"
     );
     Ok(key)
 }
@@ -6915,6 +6931,7 @@ mod network_relay_tests {
                     Hash::prehashed([0x64; 32]),
                     Hash::prehashed([0x65; 32]),
                     Hash::prehashed([0x66; 32]),
+                    1,
                     Hash::prehashed([0x67; 32]),
                 ),
                 signer: 0,
@@ -7920,6 +7937,10 @@ fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
     snapshot_read_error_is_recoverable_for_bootstrap(error, false)
 }
 
+fn snapshot_mode_allows_restore(mode: SnapshotMode) -> bool {
+    !matches!(mode, SnapshotMode::Disabled)
+}
+
 fn snapshot_failure_allows_empty_state_fallback(
     error: &TryReadSnapshotError,
     provisional_imported_prefix: bool,
@@ -7999,6 +8020,10 @@ fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &C
     // offline transitions under the wrong policy.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
+    state.set_oracle(config.oracle.clone());
+    state.set_fraud_monitoring(config.fraud_monitoring.clone());
+    state.set_gov(config.gov.clone());
+    state.content = config.content.clone();
     state.set_settlement(config.settlement.clone());
 }
 
@@ -8296,6 +8321,13 @@ mod snapshot_read_error_tests {
             &TryReadSnapshotError::SignatureInvalid("ordinary corrupt snapshot".to_owned()),
             false,
         ));
+    }
+
+    #[test]
+    fn disabled_snapshot_mode_skips_restore() {
+        assert!(snapshot_mode_allows_restore(SnapshotMode::ReadWrite));
+        assert!(snapshot_mode_allows_restore(SnapshotMode::Readonly));
+        assert!(!snapshot_mode_allows_restore(SnapshotMode::Disabled));
     }
 
     #[test]
@@ -9146,20 +9178,26 @@ impl Iroha {
         };
 
         let mut loaded_state_from_snapshot = false;
-        let mut state = match try_read_snapshot_with_bootstrap_policy(
-            config.snapshot.store_dir.resolve_relative_path(),
-            &kura,
-            || live_query_store.clone(),
-            block_count,
-            config.snapshot.merkle_chunk_size_bytes,
-            config.snapshot.max_payload_bytes,
-            verification_key,
-            &config.common.chain,
-            &config.zk,
-            &config.snapshot.bootstrap,
-            #[cfg(feature = "telemetry")]
-            state_telemetry.clone(),
-        ) {
+        let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
+            try_read_snapshot_with_bootstrap_policy(
+                config.snapshot.store_dir.resolve_relative_path(),
+                &kura,
+                || live_query_store.clone(),
+                block_count,
+                config.snapshot.merkle_chunk_size_bytes,
+                config.snapshot.max_payload_bytes,
+                verification_key,
+                &config.common.chain,
+                &config.zk,
+                &config.snapshot.bootstrap,
+                #[cfg(feature = "telemetry")]
+                state_telemetry.clone(),
+            )
+        } else {
+            iroha_logger::info!("Snapshot restore is disabled by configuration");
+            Err(TryReadSnapshotError::NotFound)
+        };
+        let mut state = match snapshot_result {
             Ok(state) => {
                 iroha_logger::info!(
                     at_height = state.committed_height(),
@@ -9303,6 +9341,7 @@ impl Iroha {
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters {
                     da_layout: bootstrap.context.da_layout,
                     nexus_amx_context_hash: *bootstrap.context.nexus_amx_context_hash.as_ref(),
+                    execution_policy_hash: *bootstrap.context.execution_policy_hash.as_ref(),
                 },
             ),
             (Some(_), Some(_)) => {
@@ -9359,6 +9398,10 @@ impl Iroha {
                         || context.nexus_amx_context_hash
                             != iroha_crypto::Hash::prehashed(
                                 signed_v2_genesis_context.nexus_amx_context_hash,
+                            )
+                        || context.execution_policy_hash
+                            != iroha_crypto::Hash::prehashed(
+                                signed_v2_genesis_context.execution_policy_hash,
                             )
                     {
                         return Err(Report::new(StartError::InitKura).attach(
@@ -9841,8 +9884,7 @@ impl Iroha {
         let (network, child) = IrohaNetwork::start_with_crypto(
             config.common.key_pair.clone(),
             config.network.clone(),
-            // Bind handshake to chain id when supported by the p2p layer
-            Some(config.common.chain.clone()),
+            config.common.chain.clone(),
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
@@ -9873,7 +9915,11 @@ impl Iroha {
             .map(|peer| (peer.id().clone(), peer.address.clone()))
             .collect();
         bootstrapper.seed_topology(&peer_seed);
-        bootstrapper.spawn_listener().await;
+        let genesis_listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("a fresh genesis bootstrapper has no active listener");
+        supervisor.monitor(genesis_listener);
 
         // Audited snapshot bootstrap is a complete alternative trust root and must not advertise
         // an unrelated local legacy genesis file as if it authenticated the imported history.
@@ -11361,12 +11407,14 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
-        let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone())
-            .map_err(|err| {
-                Report::new(StartError::StartTorii).attach(format!(
-                    "failed to generate ephemeral Torii receipt signer: {err}"
-                ))
-            })?;
+        let receipt_signer = torii_receipt_signer_or_derived(
+            config.torii.receipt_signer.clone(),
+            &config.common.key_pair,
+        )
+        .map_err(|err| {
+            Report::new(StartError::StartTorii)
+                .attach(format!("failed to derive Torii receipt signer: {err}"))
+        })?;
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
@@ -15645,60 +15693,20 @@ fn validate_config_for_check(
 fn load_configured_kagemusha_release_catalog(
     config: &Config,
 ) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
-    if !config.settlement.offline.enabled {
-        return Ok(iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty());
-    }
-    match (
-        config
-            .settlement
-            .offline
-            .kagemusha_release_policy_path
-            .as_deref(),
-        config
-            .settlement
-            .offline
-            .kagemusha_artifact_dir
-            .as_deref(),
-    ) {
-        (None, None) => Err(
+    let offline = &config.settlement.offline;
+    if offline.enabled
+        && offline.kagemusha_release_policy_path.is_none()
+        && offline.kagemusha_artifact_dir.is_none()
+    {
+        return Err(
             "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory"
                 .to_owned(),
-        ),
-        (Some(policy_path), Some(artifact_dir)) => {
-            let budget = config.settlement.offline.kagemusha_max_decoded_bytes;
-            if let Some(seal_path) = config
-                .settlement
-                .offline
-                .kagemusha_catalog_qualification_seal_path
-                .as_deref()
-            {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget_and_qualification_seal(
-                    policy_path,
-                    artifact_dir,
-                    budget,
-                    seal_path,
-                )
-                .map_err(|error| {
-                    format!(
-                        "failed to load sealed Kagemusha V4 release catalog without fallback: {error}"
-                    )
-                })
-            } else {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                    policy_path,
-                    artifact_dir,
-                    budget,
-                )
-                .map_err(|error| {
-                    format!("failed to authenticate Kagemusha V4 release catalog: {error}")
-                })
-            }
-        }
-        _ => Err(
-            "Kagemusha V4 release policy and artifact directory must be configured together"
-                .to_owned(),
-        ),
+        );
     }
+    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+        offline,
+    )
+    .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
 }
 
 fn load_and_build_configured_kagemusha_catalog_qualification_seal(
@@ -16060,6 +16068,7 @@ fn build_consensus_config_caps(
         // The signed genesis/world projection replaces this bootstrap value
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
+        execution_policy_hash: [0; 32],
         nexus_policy_digest,
         ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
     })
@@ -16117,6 +16126,7 @@ fn consensus_caps_from_genesis(
         return None;
     }
     let mut config_caps = *config_caps;
+    config_caps.execution_policy_hash = entry.sumeragi_v2.execution_policy_hash;
     config_caps.v2_config_fingerprint = sumeragi
         .v2_config(
             Duration::from_millis(consensus_params.block_cadence_ms.get()),
@@ -17897,17 +17907,34 @@ mod tests {
         use super::*;
 
         #[test]
-        fn defaults_to_ephemeral_secp256k1() {
-            let signer = torii_receipt_signer_or_ephemeral(None)
-                .expect("checked ephemeral receipt signer generation should succeed");
-            assert_eq!(signer.algorithm(), Algorithm::Secp256k1);
+        fn default_is_stable_and_domain_separated_from_node_identity() {
+            let node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let first = torii_receipt_signer_or_derived(None, &node)
+                .expect("checked receipt signer derivation should succeed");
+            let second = torii_receipt_signer_or_derived(None, &node)
+                .expect("checked receipt signer derivation should be repeatable");
+            assert_eq!(first.algorithm(), Algorithm::Secp256k1);
+            assert_eq!(first.public_key(), second.public_key());
+            assert_ne!(first.public_key(), node.public_key());
+        }
+
+        #[test]
+        fn different_node_identities_derive_different_receipt_signers() {
+            let first_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let second_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let first = torii_receipt_signer_or_derived(None, &first_node)
+                .expect("first checked receipt signer derivation should succeed");
+            let second = torii_receipt_signer_or_derived(None, &second_node)
+                .expect("second checked receipt signer derivation should succeed");
+            assert_ne!(first.public_key(), second.public_key());
         }
 
         #[test]
         fn preserves_configured_receipt_signer() {
             let configured = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let signer = torii_receipt_signer_or_ephemeral(Some(configured.clone()))
-                .expect("configured receipt signer should not require randomness");
+            let unrelated_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let signer = torii_receipt_signer_or_derived(Some(configured.clone()), &unrelated_node)
+                .expect("configured receipt signer should not require derivation");
             assert_eq!(signer.public_key(), configured.public_key());
             assert_eq!(signer.algorithm(), Algorithm::Ed25519);
         }
@@ -18183,6 +18210,7 @@ mod tests {
                         Hash::prehashed([marker; 32]),
                         Hash::prehashed([marker.wrapping_add(1); 32]),
                         Hash::prehashed([marker.wrapping_add(2); 32]),
+                        1,
                         Hash::prehashed([marker.wrapping_add(3); 32]),
                     ),
                     signer: 0,
@@ -19949,6 +19977,20 @@ mod tests {
                 config.common.chain.clone(),
             );
             state.set_pipeline(config.pipeline.clone());
+            state.set_oracle(config.oracle.clone());
+            state.set_fraud_monitoring(config.fraud_monitoring.clone());
+            state.set_gov(config.gov.clone());
+            state.content = config.content.clone();
+            state.set_settlement(config.settlement.clone());
+            state.set_kagemusha_release_catalog(
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+                    &config.settlement.offline,
+                )
+                .expect("test Kagemusha release policy must be valid"),
+            );
+            state
+                .set_zk(config.zk.clone())
+                .expect("test ZK config must be valid");
             state
                 .set_nexus(config.nexus.clone())
                 .expect("test Nexus config must be valid");
@@ -19961,11 +20003,11 @@ mod tests {
             (state, kura)
         }
 
-        fn staged_context_hash_for_test(
+        fn staged_context_hashes_for_test(
             genesis: &RawGenesisTransaction,
             genesis_authority: &KeyPair,
             config: &Config,
-        ) -> Hash {
+        ) -> (Hash, Hash) {
             let provisional = genesis
                 .clone()
                 .with_consensus_meta()
@@ -20003,7 +20045,11 @@ mod tests {
                     transaction_errors.join("; ")
                 );
             });
-            iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged)
+            (
+                iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
+                iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
+                    .expect("derive staged execution-policy identity"),
+            )
         }
 
         fn bind_staged_context_for_test(
@@ -20011,9 +20057,11 @@ mod tests {
             genesis_authority: &KeyPair,
             config: &Config,
         ) -> GenesisBlock {
-            let hash = staged_context_hash_for_test(&genesis, genesis_authority, config);
+            let (nexus_amx_hash, execution_policy_hash) =
+                staged_context_hashes_for_test(&genesis, genesis_authority, config);
             let mut parameters = genesis.sumeragi_v2_context_parameters();
-            parameters.nexus_amx_context_hash = hash.into();
+            parameters.nexus_amx_context_hash = nexus_amx_hash.into();
+            parameters.execution_policy_hash = execution_policy_hash.into();
             genesis
                 .with_sumeragi_v2_context_parameters(parameters)
                 .with_consensus_meta()
@@ -20379,9 +20427,11 @@ mod tests {
             let base_genesis =
                 GenesisBuilder::new_without_executor(chain_id, ".").set_topology(topology);
             let base_raw = base_genesis.build_raw();
-            let context_hash = staged_context_hash_for_test(&base_raw, &genesis_authority, &config);
+            let (context_hash, execution_policy_hash) =
+                staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_v2_context_parameters();
             parameters.nexus_amx_context_hash = context_hash.into();
+            parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
                 .with_sumeragi_v2_context_parameters(parameters);

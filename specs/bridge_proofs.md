@@ -558,7 +558,7 @@ profile:
 - the exact reproducible witness-generator SHA-256;
 - the fixed ordered eleven-public-signal schema hash;
 - the domain-separated semantic-profile hash derived from those three roles;
-- a typed wire-revision-3 Taira checkpoint containing the chain id, height, block
+- a typed wire-revision-4 Taira checkpoint containing the chain id, height, block
   hash, context id, and finality-artifact hash, plus the independently derived
   finality-anchor hash;
 - the exact verifier-key hash;

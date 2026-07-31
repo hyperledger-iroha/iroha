@@ -1492,7 +1492,7 @@ def _health_getter(
         if "/v1/sumeragi/status" in url:
             subject = {"block_hash": f"hash:{block_hash.upper()}"}
             return {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "restart_required": False,
                 "height": 8,
                 "last_committed_height": 7,
@@ -1613,6 +1613,7 @@ def test_four_peer_health_requires_full_pinned_offline_release_identity(
 @pytest.mark.parametrize(
     ("path", "value"),
     [
+        (("protocol_version",), 3),
         (("height_context", "validator_count"), 1),
         (("last_commit_qc", "signer_count"), 2),
         (("last_commit_qc", "signed_power"), 2),

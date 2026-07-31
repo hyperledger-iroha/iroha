@@ -174,7 +174,7 @@ const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
 /// framing/context headroom while preventing hostile on-disk data from turning
 /// startup or proof serving into an unbounded allocation.
 const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = 4 * 1024 * 1024;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 2;
+const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
 /// The maximum 4,096-validator roster, its current PoPs, and a boundary
@@ -182,7 +182,7 @@ const RETAINED_BLOCK_RECORD_VERSION: u16 = 2;
 const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 /// Hard limit for the complete private record, including its retained block header.
 const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
-const KURA_V2_FINALITY_RECORD_VERSION: u16 = 2;
+const KURA_V2_FINALITY_RECORD_VERSION: u16 = 3;
 /// Hard limit for one startup replay WSV checkpoint.
 const MAX_WSV_CHECKPOINT_BYTES: usize = 64 * 1024;
 /// Hard limit for one startup replay commit manifest.
@@ -1865,6 +1865,46 @@ impl Kura {
             index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
     }
 
+    fn set_transaction_entrypoint_index_entry_from_finalized_bodyless_merge(
+        &self,
+        height: usize,
+        canonical_header: &BlockHeader,
+        merge_entry: &MergeLedgerEntry,
+        chain_len: usize,
+    ) -> Result<()> {
+        let Some(height) = NonZeroUsize::new(height) else {
+            return Err(Error::MergeCarrierConflict(
+                "bodyless merge-index height is zero".to_owned(),
+            ));
+        };
+        if usize::try_from(canonical_header.height().get())? != height.get() {
+            return Err(Error::MergeCarrierConflict(format!(
+                "bodyless merge-index header height {} differs from carrier height {}",
+                canonical_header.height().get(),
+                height.get()
+            )));
+        }
+
+        let ordinary_projection_is_empty = canonical_header.merkle_root().is_none()
+            && canonical_header.result_merkle_root().is_none();
+        let mut index = self.transaction_entrypoint_index.lock();
+        if ordinary_projection_is_empty {
+            // The QC-authenticated retained header proves that this carrier has
+            // no ordinary entrypoints or results. The exact finalized merge
+            // entry therefore supplies the complete transaction projection for
+            // this height even though the canonical body has been pruned.
+            Self::remove_transaction_entrypoint_height(&mut index, height);
+            index.indexed_heights.insert(height);
+        }
+        if let Some(batch) = merge_entry.execution_batch.as_ref() {
+            Self::insert_merge_execution_index_heights(&mut index, height, batch);
+        }
+        index.incomplete_merge_heights.remove(&height);
+        index.complete =
+            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
+        Ok(())
+    }
+
     fn truncate_transaction_heights<K: Ord>(
         index: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
         keep: usize,
@@ -2053,8 +2093,9 @@ impl Kura {
                 && metadata.len() == index.length
         });
         if has_local_candidate
-            && let Ok(Some(finality_wire_hash)) =
+            && let Ok(Some((finality_wire_len, finality_wire_hash))) =
                 self.verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, expected_hash)
+            && finality_wire_len == index.length
             && let Ok(Some(bytes)) = self.read_regular_sidecar_bytes(
                 &da_path,
                 &da_blocks_dir,
@@ -4323,7 +4364,7 @@ impl Kura {
                 }
                 if self
                     .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, hash)?
-                    .is_none()
+                    .is_none_or(|(wire_len, _)| wire_len != entry.length)
                 {
                     debug!(
                         height,
@@ -4395,7 +4436,7 @@ impl Kura {
             }
             let height = idx.saturating_add(1) as u64;
             let canonical_hash = hashes[idx];
-            let finality_wire_hash = self
+            let (finality_wire_len, finality_wire_hash) = self
                 .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, canonical_hash)?
                 .ok_or_else(|| {
                     Error::IO(
@@ -4428,8 +4469,11 @@ impl Kura {
                     actual: actual_hash,
                 });
             }
+            if finality_wire_len != entry.length {
+                return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+            }
             if Hash::new(&buffer) != finality_wire_hash {
-                return Err(Error::V2FinalityPayloadHashMismatch { height });
+                return Err(Error::V2FinalityExecutedBlockWireHashMismatch { height });
             }
             self.persist_retained_block_record(&blocks_dir, canonical_hash, &block)?;
 
@@ -8223,10 +8267,10 @@ impl Kura {
         Ok(())
     }
 
-    fn validate_merge_carrier_record_against_block(
+    fn validate_merge_carrier_record_against_header(
         &self,
         record: MergeLedgerCarrierRecord,
-        block: &SignedBlock,
+        header: &BlockHeader,
     ) -> Result<MergeLedgerEntry> {
         let persisted = self
             .read_merge_carrier_path(&self.merge_carrier_path(record.block_height))?
@@ -8250,12 +8294,6 @@ impl Kura {
                 record.entry_hash, record.block_height
             )));
         }
-        let reference = Self::block_merge_reference(block).ok_or_else(|| {
-            Error::MergeCarrierConflict(format!(
-                "carrier block {} no longer contains a compact merge reference",
-                record.block_height
-            ))
-        })?;
         let entry = self
             .merge_log
             .lock()
@@ -8266,22 +8304,43 @@ impl Kura {
                     record.entry_hash
                 ))
             })?;
-        if entry.merge_qc.carrier_height != block.header().height().get()
-            || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
-            || entry.merge_qc.view != block.header().view_change_index()
+        if entry.merge_qc.carrier_height != header.height().get()
+            || Some(entry.merge_qc.carrier_parent_hash) != header.prev_block_hash()
+            || entry.merge_qc.view != header.view_change_index()
         {
             return Err(Error::MergeCarrierConflict(format!(
                 "carrier block {} merge QC height, parent, or view differs from its canonical block header",
                 record.block_height
             )));
         }
-        if block.hash() != record.block_hash
-            || reference.entry_hash != record.entry_hash
-            || reference.epoch_id != record.epoch_id
+        if header.hash() != record.block_hash
             || entry.epoch_id != record.epoch_id
             || entry.merge_qc.carrier_height != record.block_height
-            || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
-            || entry.merge_qc.view != block.header().view_change_index()
+            || Some(entry.merge_qc.carrier_parent_hash) != header.prev_block_hash()
+            || entry.merge_qc.view != header.view_change_index()
+        {
+            return Err(Error::MergeCarrierConflict(format!(
+                "carrier block {} header differs from its record or full entry",
+                record.block_height
+            )));
+        }
+        Ok(entry)
+    }
+
+    fn validate_merge_carrier_record_against_block_projection(
+        &self,
+        record: MergeLedgerCarrierRecord,
+        block: &SignedBlock,
+    ) -> Result<MergeLedgerEntry> {
+        let entry = self.validate_merge_carrier_record_against_header(record, &block.header())?;
+        let reference = Self::block_merge_reference(block).ok_or_else(|| {
+            Error::MergeCarrierConflict(format!(
+                "carrier block {} no longer contains a compact merge reference",
+                record.block_height
+            ))
+        })?;
+        if reference.entry_hash != record.entry_hash
+            || reference.epoch_id != record.epoch_id
             || !reference.matches_entry(&entry)
         {
             return Err(Error::MergeCarrierConflict(format!(
@@ -8292,19 +8351,127 @@ impl Kura {
         Ok(entry)
     }
 
-    fn validate_merge_carrier_record(
+    /// Derive the exact merge-carrier projection at the finality publication seam.
+    ///
+    /// This is deliberately the only pre-finality path which may authorize a
+    /// body-carried compact reference. It runs while the caller holds both the
+    /// prune and canonical-chain guards, after the canonical block and its
+    /// merge-log/carrier sidecars are durable, either at finality publication
+    /// or while recovering the sole interrupted prepublication tip.
+    fn merge_carrier_commitment_for_finality_prepublication_under_prune_and_canonical_guards(
+        &self,
+        block_height: NonZeroUsize,
+        canonical_header: &BlockHeader,
+    ) -> Result<Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>> {
+        let height = u64::try_from(block_height.get())?;
+        let block_hash = canonical_header.hash();
+        let record = self.merge_carrier_record_for_block(height, block_hash)?;
+        let block = self.get_block_without_merge_sidecar(block_height);
+
+        let entry_hash = match (block, record) {
+            (Some(block), Some(record)) => {
+                if block.header() != *canonical_header {
+                    return Err(Error::MergeCarrierConflict(format!(
+                        "carrier block {height} body differs from its canonical finality header"
+                    )));
+                }
+                self.validate_merge_carrier_record_against_block_projection(
+                    record,
+                    block.as_ref(),
+                )?;
+                Some(record.entry_hash)
+            }
+            (Some(block), None) if Self::block_merge_reference(block.as_ref()).is_some() => {
+                return Err(Error::MergeCarrierConflict(format!(
+                    "carrier block {height} has no durable merge-carrier record"
+                )));
+            }
+            (Some(_), None) => None,
+            (None, Some(record)) => {
+                self.validate_merge_carrier_record_against_header(record, canonical_header)?;
+                Some(record.entry_hash)
+            }
+            (None, None) => None,
+        };
+
+        Ok(entry_hash.map(iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new))
+    }
+
+    fn validate_merge_carrier_finality_projection(
+        record: MergeLedgerCarrierRecord,
+        entry: &MergeLedgerEntry,
+        header: &BlockHeader,
+        finality: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let expected =
+            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(record.entry_hash);
+        if finality.height != record.block_height
+            || finality.block_hash != record.block_hash
+            || header.hash() != record.block_hash
+            || finality.commit_qc.execution_commitment.validate().is_err()
+            || finality.commit_qc.execution_commitment.merge_carrier != Some(expected)
+            || entry.canonical_hash() != record.entry_hash
+            || entry.epoch_id != record.epoch_id
+            || entry.merge_qc.carrier_height != header.height().get()
+            || Some(entry.merge_qc.carrier_parent_hash) != header.prev_block_hash()
+            || entry.merge_qc.view != header.view_change_index()
+        {
+            return Err(Error::MergeCarrierConflict(format!(
+                "carrier block {} finality does not authenticate its exact merge entry",
+                record.block_height
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_merge_carrier_record_under_prune_and_canonical_guards(
         &self,
         record: MergeLedgerCarrierRecord,
     ) -> Result<MergeLedgerEntry> {
         let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
             .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
-        let block = self.get_block(height).ok_or_else(|| {
-            Error::MergeCarrierConflict(format!(
-                "carrier block {} body is unavailable; compact merge reference cannot be revalidated",
+        let block = self.get_block_without_merge_sidecar(height);
+        let finality = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                record.block_height,
+            )?
+            .map(|(header, finality, _)| (header, finality));
+        match (block, finality) {
+            (Some(block), Some((retained_header, finality))) => {
+                let entry = self.validate_merge_carrier_record_against_block_projection(
+                    record,
+                    block.as_ref(),
+                )?;
+                if retained_header != block.header() {
+                    return Err(Error::MergeCarrierConflict(format!(
+                        "carrier block {} body differs from its retained finality header",
+                        record.block_height
+                    )));
+                }
+                Self::validate_merge_carrier_finality_projection(
+                    record,
+                    &entry,
+                    &retained_header,
+                    &finality,
+                )?;
+                Ok(entry)
+            }
+            (None, Some((retained_header, finality))) => {
+                let entry =
+                    self.validate_merge_carrier_record_against_header(record, &retained_header)?;
+                Self::validate_merge_carrier_finality_projection(
+                    record,
+                    &entry,
+                    &retained_header,
+                    &finality,
+                )?;
+                Ok(entry)
+            }
+            (Some(_), None) | (None, None) => Err(Error::MergeCarrierConflict(format!(
+                "carrier block {} has no durable finality-authenticated merge identity",
                 record.block_height
-            ))
-        })?;
-        self.validate_merge_carrier_record_against_block(record, block.as_ref())
+            ))),
+        }
     }
 
     fn merge_carrier_record_for_block(
@@ -8331,25 +8498,28 @@ impl Kura {
         }
     }
 
-    fn merge_entry_for_loaded_carrier(
-        &self,
-        block: &SignedBlock,
-    ) -> Result<Option<MergeLedgerEntry>> {
-        let Some(record) =
-            self.merge_carrier_record_for_block(block.header().height().get(), block.hash())?
-        else {
-            return Ok(None);
-        };
-        self.validate_merge_carrier_record_against_block(record, block)
-            .map(Some)
-    }
-
     /// Resolve the exact canonical carrier for a committed merge entry hash.
     ///
     /// # Errors
     /// Returns an error if the sparse carrier index is malformed or the carrier
     /// no longer matches Kura's canonical block hash.
     pub(crate) fn merge_carrier_for_entry(
+        &self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerCarrierRecord>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.merge_carrier_for_entry_under_prune_guard(entry_hash)
+    }
+
+    fn merge_carrier_for_entry_under_prune_guard(
+        &self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerCarrierRecord>> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.merge_carrier_for_entry_under_prune_and_canonical_guards(entry_hash)
+    }
+
+    fn merge_carrier_for_entry_under_prune_and_canonical_guards(
         &self,
         entry_hash: HashOf<MergeLedgerEntry>,
     ) -> Result<Option<MergeLedgerCarrierRecord>> {
@@ -8364,7 +8534,7 @@ impl Kura {
                 .copied()
         };
         if let Some(record) = record {
-            let _ = self.validate_merge_carrier_record(record)?;
+            let _ = self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
         }
         self.ensure_prune_recovery_not_required()?;
         Ok(record)
@@ -8379,12 +8549,30 @@ impl Kura {
         block_height: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Result<Option<MergeLedgerEntry>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.merge_entry_for_carrier_under_prune_guard(block_height, block_hash)
+    }
+
+    fn merge_entry_for_carrier_under_prune_guard(
+        &self,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.merge_entry_for_carrier_under_prune_and_canonical_guards(block_height, block_hash)
+    }
+
+    fn merge_entry_for_carrier_under_prune_and_canonical_guards(
+        &self,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Option<MergeLedgerEntry>> {
         self.ensure_prune_recovery_not_required()?;
         let Some(record) = self.merge_carrier_record_for_block(block_height, block_hash)? else {
             self.ensure_prune_recovery_not_required()?;
             return Ok(None);
         };
-        let entry = self.validate_merge_carrier_record(record)?;
+        let entry = self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
         self.ensure_prune_recovery_not_required()?;
         Ok(Some(entry))
     }
@@ -8455,6 +8643,18 @@ impl Kura {
     /// Returns an error if the carrier index is malformed or references a
     /// non-canonical block.
     pub(crate) fn merge_carrier_records(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.merge_carrier_records_under_prune_guard()
+    }
+
+    fn merge_carrier_records_under_prune_guard(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.merge_carrier_records_under_prune_and_canonical_guards()
+    }
+
+    fn merge_carrier_records_under_prune_and_canonical_guards(
+        &self,
+    ) -> Result<Vec<MergeLedgerCarrierRecord>> {
         self.ensure_prune_recovery_not_required()?;
         for _ in 0..2 {
             let (records, generation) = {
@@ -8464,7 +8664,8 @@ impl Kura {
                 (records, generation)
             };
             for record in records.iter().copied() {
-                let _ = self.validate_merge_carrier_record(record)?;
+                let _ =
+                    self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
             }
             if self.merge_carrier_index.lock().generation == generation {
                 self.ensure_prune_recovery_not_required()?;
@@ -8473,6 +8674,155 @@ impl Kura {
         }
         Err(Error::MergeCarrierConflict(
             "sparse merge carriers changed during validated snapshot".to_owned(),
+        ))
+    }
+
+    fn merge_carrier_records_for_prune_under_prune_and_canonical_guards(
+        &self,
+        retained_height: u64,
+    ) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        self.ensure_prune_recovery_not_required()?;
+        for _ in 0..2 {
+            let (records, generation) = {
+                let _guard = self.merge_carrier_lock.lock();
+                let records = self.merge_carrier_records_unlocked()?;
+                let generation = self.merge_carrier_index.lock().generation;
+                (records, generation)
+            };
+            for record in records.iter().copied() {
+                if record.block_height <= retained_height {
+                    let _ = self
+                        .validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
+                    continue;
+                }
+
+                // A pruned, unfinalized suffix is never exposed as committed
+                // carrier evidence. It must still bind exactly to the durable
+                // canonical body, merge log, and sparse carrier record before
+                // destructive removal. Retained records continue to require
+                // current-version QC-authenticated finality above.
+                let height =
+                    NonZeroUsize::new(usize::try_from(record.block_height)?).ok_or_else(|| {
+                        Error::MergeCarrierConflict("carrier height is zero".to_owned())
+                    })?;
+                let block = self
+                    .get_block_without_merge_sidecar(height)
+                    .ok_or_else(|| {
+                        Error::MergeCarrierConflict(format!(
+                            "pruned unfinalized carrier {} has no recoverable canonical body",
+                            record.block_height
+                        ))
+                    })?;
+                let expected = self
+                    .merge_carrier_commitment_for_finality_prepublication_under_prune_and_canonical_guards(
+                        height,
+                        &block.header(),
+                    )?;
+                let actual = Some(
+                    iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                        record.entry_hash,
+                    ),
+                );
+                if expected != actual {
+                    return Err(Error::MergeCarrierConflict(format!(
+                        "pruned unfinalized carrier {} differs from its canonical body",
+                        record.block_height
+                    )));
+                }
+            }
+            if self.merge_carrier_index.lock().generation == generation {
+                self.ensure_prune_recovery_not_required()?;
+                return Ok(records);
+            }
+        }
+        Err(Error::MergeCarrierConflict(
+            "sparse merge carriers changed during prune validation".to_owned(),
+        ))
+    }
+
+    fn merge_carrier_records_for_startup_prepublication_reconciliation(
+        &self,
+        durable_tip: u64,
+        allow_pending_tip: bool,
+    ) -> Result<(Vec<MergeLedgerCarrierRecord>, BTreeMap<u64, BlockHeader>)> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+
+        for _ in 0..2 {
+            let (records, generation) = {
+                let _guard = self.merge_carrier_lock.lock();
+                let records = self.merge_carrier_records_unlocked()?;
+                let generation = self.merge_carrier_index.lock().generation;
+                (records, generation)
+            };
+            let mut finalized_headers = BTreeMap::new();
+            for record in records.iter().copied() {
+                match self.validate_merge_carrier_record_under_prune_and_canonical_guards(record) {
+                    Ok(_) => {
+                        let (header, _, _) = self
+                            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                                record.block_height,
+                            )?
+                            .ok_or_else(|| {
+                                Error::MergeCarrierConflict(format!(
+                                    "finalized carrier {} lost its retained finality header",
+                                    record.block_height
+                                ))
+                            })?;
+                        finalized_headers.insert(record.block_height, header);
+                    }
+                    Err(strict_error) => {
+                        let finality = self
+                            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                                record.block_height,
+                            )?;
+                        if !allow_pending_tip
+                            || record.block_height != durable_tip
+                            || finality.is_some()
+                        {
+                            return Err(strict_error);
+                        }
+                        let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
+                            .ok_or_else(|| {
+                                Error::MergeCarrierConflict(
+                                    "pending carrier height is zero".to_owned(),
+                                )
+                            })?;
+                        let block = self.get_block_without_merge_sidecar(height).ok_or_else(
+                            || {
+                                Error::MergeCarrierConflict(format!(
+                                    "unfinalized carrier tip {} has no recoverable canonical body",
+                                    record.block_height
+                                ))
+                            },
+                        )?;
+                        let expected = self
+                            .merge_carrier_commitment_for_finality_prepublication_under_prune_and_canonical_guards(
+                                height,
+                                &block.header(),
+                            )?;
+                        let actual = Some(
+                            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                                record.entry_hash,
+                            ),
+                        );
+                        if expected != actual {
+                            return Err(Error::MergeCarrierConflict(format!(
+                                "unfinalized carrier tip {} differs from its prepublication body",
+                                record.block_height
+                            )));
+                        }
+                    }
+                }
+            }
+            if self.merge_carrier_index.lock().generation == generation {
+                return Ok((records, finalized_headers));
+            }
+        }
+        Err(Error::MergeCarrierConflict(
+            "sparse merge carriers changed during startup reconciliation".to_owned(),
         ))
     }
 
@@ -8583,12 +8933,13 @@ impl Kura {
             }
         }
 
-        // Existing carrier files must never silently migrate to a different
-        // block after truncation or fork replacement.
-        let _ = self.merge_carrier_records()?;
+        // Repair the sole block-first crash window from exact canonical body
+        // bytes, but keep every merge-derived transaction index explicitly
+        // incomplete until the repaired carrier is authenticated by durable
+        // current-version finality below.
         for height in 1..=block_count {
             let height = NonZeroUsize::new(height).expect("durable block height is non-zero");
-            let Some(block) = self.get_block(height) else {
+            let Some(block) = self.get_block_without_merge_sidecar(height) else {
                 continue;
             };
             let Some(reference) = Self::block_merge_reference(&block) else {
@@ -8606,18 +8957,58 @@ impl Kura {
                 )));
             }
             self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
-            self.set_transaction_entrypoint_index_entry(
+            self.set_transaction_entrypoint_index_entry_with_merge(
                 height.get(),
                 &block,
+                None,
                 block_count,
-                Some(&entry),
+                false,
             );
-            if finalization_authority.is_some() {
-                self.remove_pending_certified_merge_entry_after_authorization(
-                    reference.entry_hash,
-                )?;
+        }
+
+        // Existing carrier files must never silently migrate to another
+        // block. A normal process restart may retain only the sole durable tip
+        // as an unpublished pre-finality recovery candidate; snapshot
+        // finalization requires every carrier to be fully authenticated.
+        let (records, finalized_carrier_headers) = self
+            .merge_carrier_records_for_startup_prepublication_reconciliation(
+                block_count_u64,
+                finalization_authority.is_none(),
+            )?;
+        for record in records {
+            let Some(finalized_header) = finalized_carrier_headers.get(&record.block_height) else {
+                continue;
+            };
+            let entry = self
+                .merge_entry_by_hash(record.entry_hash)?
+                .ok_or_else(|| {
+                    Error::MergeCarrierConflict(format!(
+                        "finalized carrier {} lost its merge-log entry during startup",
+                        record.block_height
+                    ))
+                })?;
+            let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
+                .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
+            if let Some(block) = self.get_block_without_merge_sidecar(height) {
+                self.set_transaction_entrypoint_index_entry_with_merge(
+                    height.get(),
+                    &block,
+                    Some(&entry),
+                    block_count,
+                    true,
+                );
             } else {
-                self.remove_pending_certified_merge_entry(reference.entry_hash)?;
+                self.set_transaction_entrypoint_index_entry_from_finalized_bodyless_merge(
+                    height.get(),
+                    finalized_header,
+                    &entry,
+                    block_count,
+                )?;
+            }
+            if finalization_authority.is_some() {
+                self.remove_pending_certified_merge_entry_after_authorization(record.entry_hash)?;
+            } else {
+                self.remove_pending_certified_merge_entry(record.entry_hash)?;
             }
         }
         Ok(())
@@ -11444,7 +11835,11 @@ impl Kura {
                 });
             }
             let header = if block_index.is_evicted() {
-                block_store.verified_evicted_block_header(height, hashes[index])?
+                block_store.verified_evicted_block_header(
+                    height,
+                    hashes[index],
+                    block_index.length,
+                )?
             } else {
                 let end = block_index.start.checked_add(block_index.length).ok_or(
                     Error::CorruptedBlockRange {
@@ -11807,8 +12202,11 @@ impl Kura {
                     expected_hashes.and_then(|hashes| hashes.get(idx)).copied();
                 let expected_evicted_hash =
                     expected_evicted_hash.ok_or(Error::HashesFileHeightMismatch)?;
-                let signed_wire_hash =
-                    block_store.verified_v2_finality_wire_hash(height, expected_evicted_hash)?;
+                let signed_wire_hash = block_store.verified_v2_finality_wire_hash(
+                    height,
+                    expected_evicted_hash,
+                    block.length,
+                )?;
                 let payload = match block_store.read_optional_da_cache(height) {
                     Ok(payload) => payload,
                     Err(error) => {
@@ -12393,19 +12791,28 @@ impl Kura {
         heights
     }
 
-    /// Return the durable height and encoded payload length for a known canonical block hash.
-    #[cfg(test)]
+    /// Return the exact durable height and bounded encoded payload length for a
+    /// known canonical block hash.
+    ///
+    /// This read is serialized with pruning and canonical-chain replacement. It
+    /// accepts only the in-memory canonical hash-to-height binding backed by the
+    /// exact durable commit-marker count, hash journal, block-index slot, and
+    /// verified CommitQC execution commitment. Evicted bodies remain eligible
+    /// because their index slot and retained v3 record must agree with the
+    /// QC-authenticated wire length used to bound committee recovery requests.
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
     ) -> Option<(u64, u64)> {
-        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
-            return None;
-        }
-        let height = self.get_block_height_by_hash(hash)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required().ok()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned().ok()?;
+        let height = self.block_height_index.lock().get(&hash).copied()?;
         let height_u64 = u64::try_from(height.get()).ok()?;
         let mut store = self.block_store.lock();
-        if self.prune_recovery_is_required() {
+        let durable_count = store.read_exact_durable_index_count().ok()?;
+        if height_u64 == 0 || height_u64 > durable_count {
             return None;
         }
         let durable_hash = Self::read_durable_hash_at_height(&mut store, height_u64).ok()??;
@@ -12413,10 +12820,23 @@ impl Kura {
             return None;
         }
         let index = store.read_block_index(height_u64.saturating_sub(1)).ok()?;
-        if self.prune_recovery_is_required() {
+        if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
             return None;
         }
-        (index.length > 0).then_some((height_u64, index.length))
+        drop(store);
+        let (header, artifact, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height_u64)
+            .ok()??;
+        if header.hash() != hash
+            || artifact
+                .commit_qc
+                .execution_commitment
+                .executed_block_wire_len
+                != index.length
+        {
+            return None;
+        }
+        Some((height_u64, index.length))
     }
 
     /// Cache a canonical block body in the local sidecar store after remote rehydration.
@@ -12452,7 +12872,7 @@ impl Kura {
         }
         self.ensure_existing_block_wire_matches(block, height, hash)?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        let finality_wire_hash = self
+        let (finality_wire_len, finality_wire_hash) = self
             .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, hash)?
             .ok_or_else(|| {
                 Error::IO(
@@ -12463,7 +12883,7 @@ impl Kura {
                     self.v2_finality_artifact_path(height),
                 )
             })?;
-        if Hash::new(&frame) != finality_wire_hash {
+        if expected_len != finality_wire_len || Hash::new(&frame) != finality_wire_hash {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -12494,7 +12914,8 @@ impl Kura {
     /// Transaction-query budget admission uses this narrow path to inspect the
     /// compact reference and precharge its declared entrypoint count before any
     /// potentially large merge sidecar is read or decoded. A disk-loaded block
-    /// is not cached until the normal sidecar-validating path succeeds.
+    /// is cached only by the normal transaction-indexing path; its merge
+    /// association remains incomplete until strict finality publication.
     pub(crate) fn get_block_without_merge_sidecar(
         &self,
         block_height: NonZeroUsize,
@@ -12505,7 +12926,7 @@ impl Kura {
     fn get_block_inner(
         &self,
         block_height: NonZeroUsize,
-        validate_merge_sidecar: bool,
+        update_transaction_index: bool,
     ) -> Option<Arc<SignedBlock>> {
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
@@ -12576,11 +12997,12 @@ impl Kura {
 
             let block = if is_evicted {
                 let height = block_index.saturating_add(1) as u64;
-                let finality_wire_hash = match self.verified_v2_finality_wire_hash_for_eviction(
-                    &block_store.path_to_blockchain,
-                    height,
-                    expected_hash,
-                ) {
+                let (finality_wire_len, finality_wire_hash) = match self
+                    .verified_v2_finality_wire_hash_for_eviction(
+                        &block_store.path_to_blockchain,
+                        height,
+                        expected_hash,
+                    ) {
                     Ok(Some(hash)) => hash,
                     Ok(None) => {
                         error!(
@@ -12610,7 +13032,8 @@ impl Kura {
                         return None;
                     }
                 };
-                if u64::try_from(bytes.len()).ok() != Some(length)
+                if finality_wire_len != length
+                    || u64::try_from(bytes.len()).ok() != Some(length)
                     || Hash::new(&bytes) != finality_wire_hash
                 {
                     error!(
@@ -12691,41 +13114,30 @@ impl Kura {
         }
         let block_arc = Arc::new(block);
         let merge_reference_present = Self::block_merge_reference(&block_arc).is_some();
-        let associated_merge_entry = if validate_merge_sidecar && merge_reference_present {
-            match self.merge_entry_for_loaded_carrier(block_arc.as_ref()) {
-                Ok(Some(entry)) => Some(entry),
-                Ok(None) => {
-                    error!(
-                        carrier_height = block_index.saturating_add(1),
-                        ?expected_hash,
-                        "Loaded merge carrier block has no committed merge entry; marking its transaction index incomplete"
-                    );
-                    None
-                }
-                Err(error) => {
-                    error!(
-                        ?error,
-                        carrier_height = block_index.saturating_add(1),
-                        ?expected_hash,
-                        "Failed to authenticate merge association while indexing loaded block"
-                    );
-                    return None;
-                }
+        if update_transaction_index {
+            let height = NonZeroUsize::new(block_index.saturating_add(1))
+                .expect("canonical block index produces a non-zero height");
+            let already_indexed = self
+                .transaction_entrypoint_index
+                .lock()
+                .indexed_heights
+                .contains(&height);
+            if !already_indexed {
+                // Loading a body is not authority for its compact merge
+                // reference. Startup reconciliation and the canonical append
+                // path publish merge entrypoints only after verified finality;
+                // an otherwise unindexed carrier remains explicitly partial.
+                self.set_transaction_entrypoint_index_entry_with_merge(
+                    height.get(),
+                    block_arc.as_ref(),
+                    None,
+                    chain_len,
+                    !merge_reference_present,
+                );
             }
-        } else {
-            None
-        };
-        if validate_merge_sidecar {
-            self.set_transaction_entrypoint_index_entry_with_merge(
-                block_index.saturating_add(1),
-                block_arc.as_ref(),
-                associated_merge_entry.as_ref(),
-                chain_len,
-                !merge_reference_present || associated_merge_entry.is_some(),
-            );
         }
 
-        if should_cache && validate_merge_sidecar && !is_evicted {
+        if should_cache && update_transaction_index && !is_evicted {
             #[cfg(test)]
             self.maybe_pause_block_read_before_cache_recheck_for_tests();
 
@@ -13298,7 +13710,19 @@ impl Kura {
     }
 
     fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        block.executed_block_wire_hash().map_err(Error::NoritoFrame)
+        Self::canonical_block_wire_identity(block).map(|(_, hash)| hash)
+    }
+
+    fn canonical_block_wire_identity(block: &SignedBlock) -> Result<(u64, Hash)> {
+        let wire = block.encode_wire().map_err(Error::NoritoFrame)?;
+        let len = u64::try_from(wire.len())?;
+        if len == 0 || len > STRICT_INIT_MAX_BLOCK_BYTES {
+            return Err(Error::CorruptedBlockLength {
+                length: len,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
+        }
+        Ok((len, Hash::new(&wire)))
     }
 
     fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
@@ -13311,10 +13735,19 @@ impl Kura {
         height: u64,
         artifact: &V2FinalityArtifact,
         proposal_wire_hash: Hash,
+        executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<()> {
         if artifact.subject.payload_hash != proposal_wire_hash {
             return Err(Error::V2FinalityPayloadHashMismatch { height });
+        }
+        if artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_len
+            != executed_block_wire_len
+        {
+            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
         }
         if artifact
             .commit_qc
@@ -13334,31 +13767,41 @@ impl Kura {
         canonical_hash: HashOf<BlockHeader>,
     ) -> Result<()> {
         self.ensure_durable_block_at_height(height, canonical_hash)?;
-        let incoming_wire_hash = Self::canonical_block_wire_hash(block)?;
+        let (incoming_wire_len, incoming_wire_hash) = Self::canonical_block_wire_identity(block)?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let durable_index = self
             .block_store
             .lock()
             .read_block_index(height.saturating_sub(1))?;
+        if durable_index.length != incoming_wire_len {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
         if durable_index.is_evicted() {
             // An evicted index has no independently readable canonical complete wire. This is also
             // true for authenticated hash-only snapshot entries: their header hash is canonical,
             // but it does not select one SignedBlock envelope. Never let an unsigned retained
             // record fill that gap; existing-body admission requires signed complete-wire finality
             // for every evicted shape.
-            let signed_wire_hash = self
+            let (signed_wire_len, signed_wire_hash) = self
                 .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingV2FinalityArtifact { height })?;
-            if incoming_wire_hash != signed_wire_hash {
+            if incoming_wire_len != durable_index.length
+                || incoming_wire_len != signed_wire_len
+                || incoming_wire_hash != signed_wire_hash
+            {
                 return Err(Error::CanonicalBlockWireMismatch { height });
             }
             return Ok(());
         }
 
-        if let Some((retained_header, _, retained_wire_hash, _)) =
+        if let Some((retained_header, _, retained_wire_len, retained_wire_hash, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
-            if retained_header != block.header() || retained_wire_hash != incoming_wire_hash {
+            if retained_header != block.header()
+                || retained_wire_len != durable_index.length
+                || retained_wire_len != incoming_wire_len
+                || retained_wire_hash != incoming_wire_hash
+            {
                 return Err(Error::CanonicalBlockWireMismatch { height });
             }
             return Ok(());
@@ -13585,6 +14028,14 @@ impl Kura {
                 actual: actual_hash,
             });
         }
+        if record.executed_block_wire_len == 0
+            || record.executed_block_wire_len > STRICT_INIT_MAX_BLOCK_BYTES
+        {
+            return Err(Error::CorruptedBlockLength {
+                length: record.executed_block_wire_len,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
+        }
         let encoded_len = record.encode().len();
         if encoded_len > MAX_RETAINED_BLOCK_RECORD_BYTES {
             return Err(Error::RetainedBlockRecordTooLarge {
@@ -13604,6 +14055,7 @@ impl Kura {
         Option<(
             BlockHeader,
             Hash,
+            u64,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -13620,6 +14072,7 @@ impl Kura {
         Option<(
             BlockHeader,
             Hash,
+            u64,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -13638,6 +14091,7 @@ impl Kura {
             (
                 BlockHeader,
                 Hash,
+                u64,
                 Hash,
                 Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             ),
@@ -13662,6 +14116,7 @@ impl Kura {
         Option<(
             BlockHeader,
             Hash,
+            u64,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -13687,6 +14142,7 @@ impl Kura {
             (
                 BlockHeader,
                 Hash,
+                u64,
                 Hash,
                 Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             ),
@@ -13709,10 +14165,12 @@ impl Kura {
             && let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?)
             && let Some(block) = self.get_block(block_height)
         {
+            let (executed_block_wire_len, executed_block_wire_hash) =
+                Self::canonical_block_wire_identity(block.as_ref())?;
             if block.header() != record.block_header
                 || Self::canonical_proposal_wire_hash(block.as_ref())? != record.proposal_wire_hash
-                || Self::canonical_block_wire_hash(block.as_ref())?
-                    != record.executed_block_wire_hash
+                || executed_block_wire_len != record.executed_block_wire_len
+                || executed_block_wire_hash != record.executed_block_wire_hash
             {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             }
@@ -13721,6 +14179,7 @@ impl Kura {
             (
                 record.block_header,
                 record.proposal_wire_hash,
+                record.executed_block_wire_len,
                 record.executed_block_wire_hash,
                 archive,
             ),
@@ -13742,10 +14201,13 @@ impl Kura {
             });
         }
         let path = Self::retained_block_record_path_for(blocks_dir, height);
+        let (executed_block_wire_len, executed_block_wire_hash) =
+            Self::canonical_block_wire_identity(block)?;
         let record = KuraRetainedBlockRecord::new(
             block.header(),
             Self::canonical_proposal_wire_hash(block)?,
-            Self::canonical_block_wire_hash(block)?,
+            executed_block_wire_len,
+            executed_block_wire_hash,
             Self::retained_sccp_archive_from_block(block)?,
         );
         let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
@@ -13769,6 +14231,14 @@ impl Kura {
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, record)?;
+        let indexed_wire_len = self
+            .block_store
+            .lock()
+            .read_block_index(height.saturating_sub(1))?
+            .length;
+        if record.executed_block_wire_len != indexed_wire_len {
+            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+        }
         let bytes = record.encode();
         if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
             return Err(Error::RetainedBlockRecordTooLarge {
@@ -13853,7 +14323,7 @@ impl Kura {
             .get_durable_block_hash(block_height)
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some((header, _, _, archive)) =
+        if let Some((header, _, _, _, archive)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             return Ok(Some((header, archive)));
@@ -13926,7 +14396,7 @@ impl Kura {
             let canonical_hash = self
                 .get_durable_block_hash(block_height)
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let (header, _, _, archive) = self
+            let (header, _, _, _, archive) = self
                 .retained_block_record_at(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
             if archive.is_empty() {
@@ -13988,6 +14458,9 @@ impl Kura {
             let bodyless = self
                 .retained_block_record_at_with_identity(&blocks_dir, height, canonical_hash, false)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            if bodyless.0.2 != indices[index].length {
+                return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+            }
             if indices[index].is_evicted()
                 || !reuse_startup_validation
                 || !self.v2_startup_retained_entry_matches(height, &bodyless.1)
@@ -14657,13 +15130,13 @@ impl Kura {
         Ok(())
     }
 
-    /// Return the independently signed complete-wire hash required before body eviction.
+    /// Return the independently signed complete-wire length and hash required before body eviction.
     fn verified_v2_finality_wire_hash_for_eviction(
         &self,
         blocks_dir: &Path,
         height: u64,
         canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<Option<Hash>> {
+    ) -> Result<Option<(u64, Hash)>> {
         let directory = Self::v2_finality_artifact_dir_for(blocks_dir);
         let path = Self::v2_finality_artifact_path_for(blocks_dir, height);
         let Some((record, read_identity)) = self.decode_v2_finality_record_at(&path, &directory)?
@@ -14675,8 +15148,13 @@ impl Kura {
         // retained record directly here; recursively asking `get_block` to compare the live body
         // would deadlock on a cold read of an evicted height. The caller compares any available
         // body/DA bytes with the returned signed complete-wire hash before exposing them.
-        let Some((retained_header, proposal_wire_hash, executed_block_wire_hash, _)) =
-            self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
+        let Some((
+            retained_header,
+            proposal_wire_hash,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+            _,
+        )) = self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
         else {
             return Err(Error::MissingRetainedBlockRecord { height });
         };
@@ -14687,10 +15165,11 @@ impl Kura {
             height,
             &record.artifact,
             proposal_wire_hash,
+            executed_block_wire_len,
             executed_block_wire_hash,
         )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
-        Ok(Some(executed_block_wire_hash))
+        Ok(Some((executed_block_wire_len, executed_block_wire_hash)))
     }
 
     fn canonical_block_store_metadata(
@@ -15040,20 +15519,26 @@ impl Kura {
         let canonical_storage = self.canonical_block_store_metadata(&blocks_dir)?;
         let boundary = self.exact_replay_boundary()?;
         let durable_height = boundary.count;
-        let hash_only_heights = {
+        let (hash_only_heights, indexed_wire_lengths) = {
             let durable_height_usize = usize::try_from(durable_height)?;
             let mut indices = vec![BlockIndex::default(); durable_height_usize];
             self.block_store
                 .lock()
                 .read_block_indices(0, &mut indices)?;
             let mut hash_only = BTreeSet::new();
-            for (index, block_index) in indices.into_iter().enumerate() {
+            for (index, block_index) in indices.iter().copied().enumerate() {
                 let height = u64::try_from(index)?.saturating_add(1);
                 if block_index.length == 0 {
                     hash_only.insert(height);
                 }
             }
-            hash_only
+            (
+                hash_only,
+                indices
+                    .into_iter()
+                    .map(|block_index| block_index.length)
+                    .collect::<Vec<_>>(),
+            )
         };
         let finality_directory_path = Self::v2_finality_artifact_dir_for(&blocks_dir);
         let retained_directory_path = Self::retained_block_record_dir_for(&blocks_dir);
@@ -15108,18 +15593,33 @@ impl Kura {
                         &read_identity,
                     )?;
                     self.remember_verified_v2_finality_entry(finality.clone());
-                    let ((_, proposal_wire_hash, executed_block_wire_hash, _), retained_identity) =
-                        self.retained_block_record_at_with_identity(
+                    let (
+                        (
+                            _,
+                            proposal_wire_hash,
+                            executed_block_wire_len,
+                            executed_block_wire_hash,
+                            _,
+                        ),
+                        retained_identity,
+                    ) = self
+                        .retained_block_record_at_with_identity(
                             &blocks_dir,
                             height,
                             canonical_hash,
                             true,
                         )?
                         .ok_or(Error::MissingRetainedBlockRecord { height })?;
+                    if indexed_wire_lengths.get(block_index).copied()
+                        != Some(executed_block_wire_len)
+                    {
+                        return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+                    }
                     Self::validate_v2_finality_wire_bindings(
                         height,
                         &record.artifact,
                         proposal_wire_hash,
+                        executed_block_wire_len,
                         executed_block_wire_hash,
                     )?;
                     let projection = V2StartupFinalityProjection::from_artifact(&record.artifact);
@@ -15780,6 +16280,46 @@ impl Kura {
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })
     }
 
+    fn publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
+        let Some(record) = self.merge_carrier_record_for_block(height, block_hash)? else {
+            return Ok(());
+        };
+        let entry = self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
+        let block_height = NonZeroUsize::new(usize::try_from(height)?)
+            .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
+        if let Some(block) = self.get_block_without_merge_sidecar(block_height) {
+            let chain_len = self.block_data.lock().len();
+            self.set_transaction_entrypoint_index_entry_with_merge(
+                block_height.get(),
+                &block,
+                Some(&entry),
+                chain_len,
+                true,
+            );
+        } else {
+            let (retained_header, _, _) = self
+                .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+                .ok_or_else(|| {
+                    Error::MergeCarrierConflict(format!(
+                        "finalized bodyless carrier {height} lost its retained finality header"
+                    ))
+                })?;
+            let chain_len = self.block_data.lock().len();
+            self.set_transaction_entrypoint_index_entry_from_finalized_bodyless_merge(
+                block_height.get(),
+                &retained_header,
+                &entry,
+                chain_len,
+            )?;
+        }
+        self.remove_committed_pending_merge_entry_best_effort(record.entry_hash);
+        Ok(())
+    }
+
     /// Persist a cryptographically valid v2 finality artifact for an already durable block.
     ///
     /// The returned [`KuraV2CommitReceipt`] is created only after the artifact
@@ -15831,13 +16371,28 @@ impl Kura {
         let canonical_hash = self
             .get_durable_block_hash(block_height)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+        let indexed_wire_len = self
+            .block_store
+            .lock()
+            .read_block_index(height.saturating_sub(1))?
+            .length;
         let (retained_header, prepared_retained_record) =
             match self.retained_block_record_at(&blocks_dir, height, canonical_hash)? {
-                Some((header, proposal_wire_hash, executed_block_wire_hash, _)) => {
+                Some((
+                    header,
+                    proposal_wire_hash,
+                    executed_block_wire_len,
+                    executed_block_wire_hash,
+                    _,
+                )) => {
+                    if executed_block_wire_len != indexed_wire_len {
+                        return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+                    }
                     Self::validate_v2_finality_wire_bindings(
                         height,
                         artifact,
                         proposal_wire_hash,
+                        executed_block_wire_len,
                         executed_block_wire_hash,
                     )?;
                     (header, None)
@@ -15862,10 +16417,14 @@ impl Kura {
                     if prepared.block_header != header {
                         return Err(Error::ConflictingRetainedBlockRecord { height });
                     }
+                    if prepared.executed_block_wire_len != indexed_wire_len {
+                        return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+                    }
                     Self::validate_v2_finality_wire_bindings(
                         height,
                         artifact,
                         prepared.proposal_wire_hash,
+                        prepared.executed_block_wire_len,
                         prepared.executed_block_wire_hash,
                     )?;
                     (header, Some(prepared))
@@ -15877,6 +16436,16 @@ impl Kura {
             Some(retained_header),
         )?;
         artifact.validate_for_header(&canonical_header)?;
+        let expected_merge_carrier = self
+            .merge_carrier_commitment_for_finality_prepublication_under_prune_and_canonical_guards(
+                block_height,
+                &canonical_header,
+            )?;
+        if artifact.commit_qc.execution_commitment.merge_carrier != expected_merge_carrier {
+            return Err(Error::MergeCarrierConflict(format!(
+                "v2 finality for canonical block {height} does not commit to its exact merge carrier"
+            )));
+        }
 
         if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)? {
             Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;
@@ -15890,6 +16459,10 @@ impl Kura {
             if let Some(prepared) = prepared_retained_record.as_ref() {
                 self.persist_prepared_retained_block_record(&blocks_dir, canonical_hash, prepared)?;
             }
+            self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
+                height,
+                canonical_hash,
+            )?;
             return Ok(v2_commit_receipt(&existing.artifact));
         }
 
@@ -15946,11 +16519,19 @@ impl Kura {
                 return Err(Error::ConflictingV2FinalityArtifact { height });
             }
             self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;
+            self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
+                height,
+                canonical_hash,
+            )?;
             return Ok(v2_commit_receipt(&existing.artifact));
         }
         self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
         self.cache_newly_verified_v2_finality(&path, &dir, &record)?;
         accounting_mutation.finish();
+        self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
+            height,
+            canonical_hash,
+        )?;
         Ok(v2_commit_receipt(artifact))
     }
 
@@ -16148,7 +16729,13 @@ impl Kura {
             });
         };
         Self::validate_v2_finality_record_at(&path, height, block_hash, &record)?;
-        let (retained_header, proposal_wire_hash, executed_block_wire_hash, archive) = self
+        let (
+            retained_header,
+            proposal_wire_hash,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+            archive,
+        ) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         if retained_header != record.block_header {
@@ -16158,6 +16745,7 @@ impl Kura {
             height,
             &record.artifact,
             proposal_wire_hash,
+            executed_block_wire_len,
             executed_block_wire_hash,
         )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
@@ -17095,6 +17683,7 @@ impl Kura {
                     parent_commit_qc: context.parent_commit_qc.clone(),
                     snapshot_bootstrap: context.snapshot_bootstrap,
                     nexus_amx_context_hash: context.nexus_amx_context_hash,
+                    execution_policy_hash: context.execution_policy_hash,
                     da_layout: context.da_layout,
                     leader_seed: context.leader_seed,
                 },
@@ -18139,14 +18728,6 @@ impl Kura {
                         false,
                     );
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                    self.set_transaction_entrypoint_index_entry_with_merge(
-                        actual_height_usize,
-                        block,
-                        Some(entry),
-                        chain_len,
-                        true,
-                    );
-                    self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
                 } else {
                     self.set_transaction_entrypoint_index_entry(
                         actual_height_usize,
@@ -18212,14 +18793,6 @@ impl Kura {
                     false,
                 );
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                self.set_transaction_entrypoint_index_entry_with_merge(
-                    actual_height_usize,
-                    block,
-                    Some(entry),
-                    chain_len,
-                    true,
-                );
-                self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
             } else {
                 self.set_transaction_entrypoint_index_entry(
                     actual_height_usize,
@@ -18282,8 +18855,9 @@ impl Kura {
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
         // The canonical block is now durable, but its compact merge reference
-        // is not query-complete until the full entry and sparse carrier record
-        // are both durable. Passing no entry records that partial frontier.
+        // is not query-complete until the full entry, sparse carrier record,
+        // and exact finality projection are all durable. Passing no entry
+        // records that prepublication frontier.
         self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len, None);
         drop(block_data);
         // Apply associations only after block_data and the durable marker agree. The durable
@@ -18312,13 +18886,6 @@ impl Kura {
                     &err,
                 ));
             }
-            self.set_transaction_entrypoint_index_entry_with_merge(
-                actual_height_usize,
-                block,
-                Some(entry),
-                new_len,
-                true,
-            );
             // Canonical-association recovery already attempted the
             // post-commit cleanup. Preserve its redundant repair sidecar when
             // that best-effort removal failed; an idempotent store retry uses
@@ -19809,9 +20376,13 @@ impl Kura {
                 .as_deref()
                 .and_then(Self::block_merge_reference)
                 .is_some()
-                || self.merge_carrier_records()?.iter().any(|record| {
-                    record.block_height == u64::try_from(current_height.get()).unwrap_or(u64::MAX)
-                })
+                || self
+                    .merge_carrier_records_under_prune_and_canonical_guards()?
+                    .iter()
+                    .any(|record| {
+                        record.block_height
+                            == u64::try_from(current_height.get()).unwrap_or(u64::MAX)
+                    })
             {
                 return Err(Error::MergeCarrierConflict(
                     "replace_top_block cannot replace an existing compact merge carrier".to_owned(),
@@ -22375,7 +22946,8 @@ impl Kura {
                     .map(|(hash, _)| *hash),
             )
         };
-        let validated_carrier_records = self.merge_carrier_records()?;
+        let validated_carrier_records =
+            self.merge_carrier_records_for_prune_under_prune_and_canonical_guards(height)?;
         let (carrier_records, carrier_generation) = {
             let _guard = self.merge_carrier_lock.lock();
             let carrier_records = self.merge_carrier_records_unlocked()?;
@@ -25246,6 +25818,7 @@ struct AutonomousLaneBlockDurableRecord {
 include!("kura/autonomous_reservation_types.rs");
 include!("kura/autonomous_reservation_inventory.rs");
 include!("kura/autonomous_reservation_classifier.rs");
+include!("kura/historical_autonomous_recovery.rs");
 
 /// Known metadata format variants for lane-local block artifacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -26275,9 +26848,13 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
         manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
         finality: &V2FinalityArtifact,
     ) -> bool {
-        let Ok(executed_block_wire_hash) = block.executed_block_wire_hash() else {
+        let Ok(executed_block_wire) = block.encode_wire() else {
             return false;
         };
+        let Ok(executed_block_wire_len) = u64::try_from(executed_block_wire.len()) else {
+            return false;
+        };
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let execution = &finality.commit_qc.execution_commitment;
         if self.application_block_height != block.header().height().get()
             || self.application_block_hash != block.hash()
@@ -26290,6 +26867,8 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
                 != iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION
             || execution.native_amx_application_manifest_root != manifest.root()
             || execution.native_amx_application_manifest_count != manifest.count()
+            || execution.executed_block_wire_len != executed_block_wire_len
+            || execution.executed_block_wire_len != manifest.executed_block_wire_len()
             || execution.executed_block_wire_hash != executed_block_wire_hash
         {
             return false;
@@ -32520,6 +33099,7 @@ impl Kura {
     }
 
     kura_autonomous_reservation_classifier_methods!();
+    kura_historical_autonomous_recovery_methods!();
 
     /// Resolve the exact durable slot retirement owning a live reservation.
     ///
@@ -33341,7 +33921,9 @@ impl Kura {
                 self.decode_lane_merge_application_frontier(&entry, &frontier_path)?
             {
                 if self
-                    .lane_merge_application_frontier_expected_receipt(&frontier)
+                    .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                        &frontier,
+                    )
                     .is_none()
                 {
                     return Err(Self::invalid_lane_artifact_error(
@@ -33379,7 +33961,10 @@ impl Kura {
                     );
                 let Some(receipt) = receipt.filter(|receipt| {
                     receipt.proposal.descriptor.lane_incarnation == incarnation
-                        && self.lane_block_application_receipt_matches_merge_log(receipt)
+                        && self
+                            .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                                receipt,
+                            )
                 }) else {
                     // A durable merge entry may legitimately be ahead of WSV
                     // application. State repair will publish the receipt and
@@ -34610,6 +35195,11 @@ impl Kura {
                 .execution_commitment
                 .native_amx_application_manifest_count
                 != native_manifest.count()
+            || finality
+                .commit_qc
+                .execution_commitment
+                .executed_block_wire_len
+                != native_manifest.executed_block_wire_len()
             || finality
                 .commit_qc
                 .execution_commitment
@@ -37221,7 +37811,9 @@ impl Kura {
         Self::validate_lane_block_application_receipt_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
-        if !self.lane_block_application_receipt_matches_available_evidence(artifact, false) {
+        if !self.lane_block_application_receipt_matches_available_evidence_under_prune_guard(
+            artifact, false,
+        ) {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "lane application receipt no longer matches canonical execution evidence",
@@ -37248,9 +37840,12 @@ impl Kura {
             );
         let observed_existing_matches_evidence =
             observed_existing.as_ref().is_some_and(|existing| {
-                self.lane_block_application_receipt_matches_available_evidence(existing, false)
+                self.lane_block_application_receipt_matches_available_evidence_under_prune_guard(
+                    existing, false,
+                )
             });
 
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -37816,7 +38411,27 @@ impl Kura {
         }
     }
 
-    fn lane_merge_application_frontier_expected_receipt(
+    fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
+    ) -> bool {
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => {
+                self.lane_block_application_receipt_matches_canonical_results(artifact)
+            }
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
+                .lane_block_application_receipt_matches_direct_preflight(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                self.lane_block_application_receipt_matches_merge_log_under_prune_guard(artifact)
+            }
+        }
+    }
+
+    fn lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
         &self,
         frontier: &LaneMergeApplicationFrontierV1,
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
@@ -37836,7 +38451,7 @@ impl Kura {
             return None;
         }
         let carrier = self
-            .merge_carrier_for_entry(frontier.merge_entry_hash)
+            .merge_carrier_for_entry_under_prune_and_canonical_guards(frontier.merge_entry_hash)
             .ok()
             .flatten()?;
         if carrier
@@ -38075,7 +38690,9 @@ impl Kura {
         frontier: &LaneMergeApplicationFrontierV1,
     ) -> Result<bool> {
         if self
-            .lane_merge_application_frontier_expected_receipt(frontier)
+            .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                frontier,
+            )
             .is_none()
         {
             return Err(Self::invalid_lane_artifact_error(
@@ -38132,6 +38749,24 @@ impl Kura {
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
     ) -> bool {
+        let _prune_guard = self.prune_lock.lock();
+        self.lane_block_application_receipt_matches_merge_log_under_prune_guard(artifact)
+    }
+
+    fn lane_block_application_receipt_matches_merge_log_under_prune_guard(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+            artifact,
+        )
+    }
+
+    fn lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
         let (Some(epoch_id), Some(entry_hash), Some(carrier_height), Some(carrier_hash)) = (
             artifact.merge_epoch_id,
             artifact.merge_entry_hash,
@@ -38144,7 +38779,10 @@ impl Kura {
             return false;
         };
         if entry.epoch_id != epoch_id
-            || self.merge_carrier_for_entry(entry_hash).ok().flatten()
+            || self
+                .merge_carrier_for_entry_under_prune_and_canonical_guards(entry_hash)
+                .ok()
+                .flatten()
                 != Some(MergeLedgerCarrierRecord {
                     version: 1,
                     entry_hash,
@@ -45125,7 +45763,7 @@ impl BlockStore {
         &self,
         height: u64,
         canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<(Hash, Hash)> {
+    ) -> Result<(Hash, u64, Hash)> {
         let directory = Kura::retained_block_record_dir_for(&self.path_to_blockchain);
         let path = Kura::retained_block_record_path_for(&self.path_to_blockchain, height);
         let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
@@ -45150,13 +45788,18 @@ impl BlockStore {
             ));
         }
         let _ = Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        Ok((record.proposal_wire_hash, record.executed_block_wire_hash))
+        Ok((
+            record.proposal_wire_hash,
+            record.executed_block_wire_len,
+            record.executed_block_wire_hash,
+        ))
     }
 
     fn verified_v2_finality_wire_hash(
         &self,
         height: u64,
         canonical_hash: HashOf<BlockHeader>,
+        expected_wire_len: u64,
     ) -> Result<Hash> {
         let directory = Kura::v2_finality_artifact_dir_for(&self.path_to_blockchain);
         let path = Kura::v2_finality_artifact_path_for(&self.path_to_blockchain, height);
@@ -45181,12 +45824,16 @@ impl BlockStore {
             ));
         }
         Kura::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        let (proposal_wire_hash, executed_block_wire_hash) =
+        let (proposal_wire_hash, executed_block_wire_len, executed_block_wire_hash) =
             self.retained_wire_hashes(height, canonical_hash)?;
+        if executed_block_wire_len != expected_wire_len {
+            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+        }
         Kura::validate_v2_finality_wire_bindings(
             height,
             &record.artifact,
             proposal_wire_hash,
+            executed_block_wire_len,
             executed_block_wire_hash,
         )?;
         record.artifact.verify()?;
@@ -45197,6 +45844,7 @@ impl BlockStore {
         &self,
         height: u64,
         canonical_hash: HashOf<BlockHeader>,
+        expected_wire_len: u64,
     ) -> Result<BlockHeader> {
         let directory = Kura::v2_finality_artifact_dir_for(&self.path_to_blockchain);
         let path = Kura::v2_finality_artifact_path_for(&self.path_to_blockchain, height);
@@ -45221,12 +45869,16 @@ impl BlockStore {
             });
         }
         Kura::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        let (proposal_wire_hash, executed_block_wire_hash) =
+        let (proposal_wire_hash, executed_block_wire_len, executed_block_wire_hash) =
             self.retained_wire_hashes(height, canonical_hash)?;
+        if executed_block_wire_len != expected_wire_len {
+            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+        }
         Kura::validate_v2_finality_wire_bindings(
             height,
             &record.artifact,
             proposal_wire_hash,
+            executed_block_wire_len,
             executed_block_wire_hash,
         )?;
         record.artifact.verify()?;
@@ -45316,7 +45968,8 @@ impl BlockStore {
                 continue;
             }
 
-            let finality_wire_hash = self.verified_v2_finality_wire_hash(height, durable_hash)?;
+            let finality_wire_hash =
+                self.verified_v2_finality_wire_hash(height, durable_hash, index.length)?;
             let cached = self.read_optional_da_cache(height)?;
             if let Some(entry) = staged_entry {
                 let bytes = cached.ok_or_else(|| {
@@ -49084,6 +49737,11 @@ pub enum Error {
     /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical proposal wire image
     V2FinalityPayloadHashMismatch {
         /// Height whose signed subject differs from the retained resultless proposal hash.
+        height: u64,
+    },
+    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire length
+    V2FinalityExecutedBlockWireLengthMismatch {
+        /// Height whose execution commitment differs from the retained result-bearing block length.
         height: u64,
     },
     /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire image

@@ -489,6 +489,7 @@
             Hash::new(b"leader-wire Decision state root"),
             Hash::new(b"leader-wire Decision event root"),
             Hash::new(b"leader-wire Decision reject root"),
+            1,
             Hash::new(b"leader-wire Decision fee root"),
         );
         assert_eq!(
@@ -1235,6 +1236,7 @@
             Hash::new(b"decision mismatch parent state"),
             Hash::new(b"decision mismatch post state"),
             Hash::new(b"decision mismatch ordinary writes"),
+            1,
             Hash::new(b"decision mismatch executed block"),
         );
         assert_ne!(validated.execution_commitment(), conflicting_commitment);
@@ -1411,6 +1413,7 @@
                 Hash::new(b"conflicting early vote parent state"),
                 Hash::new(b"conflicting early vote post state"),
                 Hash::new(b"conflicting early vote ordinary writes"),
+                1,
                 Hash::new(b"conflicting early vote executed block"),
             );
             assert_ne!(
@@ -1621,6 +1624,7 @@
                 Hash::new(b"response capacity parent state"),
                 Hash::new(b"response capacity post state"),
                 Hash::new(b"response capacity ordinary writes"),
+                1,
                 Hash::new(b"response capacity executed block wire"),
             ),
             signers: vec![0, 1, 2],

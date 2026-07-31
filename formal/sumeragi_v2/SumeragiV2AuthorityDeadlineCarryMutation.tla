@@ -36,7 +36,7 @@ Init ==
   /\ stage = 6
   /\ stageDue =
        IF DeadlineMode = "AcceptExpiredReceipt" THEN 14 ELSE 2
-  /\ ~decided
+  /\ decided = FALSE
 
 ReceiptActive ==
   /\ stage \in 1..6
@@ -57,10 +57,10 @@ ServiceCommitQcStage ==
   /\ now >= stageDue
   /\ IF stage = 1
      THEN /\ stage' = 0
-          /\ decided'
+          /\ decided' = TRUE
           /\ stageDue' = stageDue
      ELSE /\ stage' = stage - 1
-          /\ ~decided'
+          /\ decided' = FALSE
           /\ stageDue' =
                now
                  + IF DeadlineMode = "RechargeEachKernel"

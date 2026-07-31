@@ -49,6 +49,7 @@
                 Hash::new(b"terminal ingress parent state"),
                 Hash::new(b"terminal ingress post state"),
                 Hash::new(b"terminal ingress writes"),
+                1,
                 Hash::new(b"terminal ingress executed block"),
             ),
             signers: vec![0, 1, 2],

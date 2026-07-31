@@ -11,8 +11,8 @@ use iroha_core::{
     interlane::{LanePrivacyRegistry, verify_lane_privacy_proofs},
 };
 use iroha_crypto::{
-    Hash, MerkleTree,
-    privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
+    Hash, MerkleProof,
+    privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness},
 };
 use iroha_data_model::{
     account::AccountId,
@@ -29,20 +29,11 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let lane_id = LaneId::new(5);
 
     // Build a manifest status with a registered Merkle commitment.
-    let mut leaves = Vec::new();
-    leaves.extend_from_slice(&[0xAA_u8; 32]);
-    leaves.extend_from_slice(&[0xBB_u8; 32]);
-    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
-    let merkle_root = tree.root().expect("merkle root");
-    let merkle_proof = tree.get_proof(0).expect("merkle proof");
-    let first_leaf_hash: [u8; 32] = tree
-        .leaves()
-        .next()
-        .expect("leaf hash")
-        .as_ref()
-        .as_ref()
-        .try_into()
-        .expect("hash length");
+    let first_leaf = [0xAA_u8; 32];
+    let merkle_proof = MerkleProof::from_audit_path_bytes(0, vec![[0xBB_u8; 32]]);
+    let merkle_root = MerkleWitness::new(first_leaf, merkle_proof.clone())
+        .implied_root(8)
+        .expect("valid lane proof must produce a root");
 
     let commitment_id = LaneCommitmentId::new(9);
     let manifest = LaneManifestStatus {
@@ -65,7 +56,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let proof = LanePrivacyProof {
         commitment_id,
         witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
-            leaf: first_leaf_hash,
+            leaf: first_leaf,
             proof: merkle_proof,
         }),
     };

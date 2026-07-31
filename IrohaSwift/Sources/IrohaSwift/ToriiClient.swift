@@ -134,6 +134,30 @@ public struct ToriiClientAuthentication: Equatable, Sendable {
     }
 }
 
+/// Immutable trust context required by Torii operations that return bytes for local signing.
+public struct ToriiLocalSigningContext: Equatable, Sendable {
+    /// Exact chain identity expected in every server-prepared signing payload.
+    public let chainId: String
+
+    public init(chainId: String) throws {
+        let bytes = Array(chainId.utf8)
+        func isAlphanumeric(_ byte: UInt8) -> Bool {
+            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+        }
+        guard !bytes.isEmpty, bytes.count <= 128,
+              let first = bytes.first, let last = bytes.last,
+              isAlphanumeric(first), isAlphanumeric(last),
+              bytes.allSatisfy({
+                  isAlphanumeric($0) || $0 == 46 || $0 == 95 || $0 == 58 || $0 == 45
+              }) else {
+            throw ToriiClientError.invalidPayload(
+                "local signing chainId must be exact canonical ASCII ChainId text"
+            )
+        }
+        self.chainId = chainId
+    }
+}
+
 public func decodePdpCommitmentHeader(_ headers: [String: String]) throws -> Data? {
     guard !headers.isEmpty else { return nil }
     for (key, value) in headers {
@@ -8486,23 +8510,77 @@ public struct ToriiDaManifestPersistedPaths: Sendable, Equatable {
     public let label: String
 }
 
+public struct ToriiDaCommitmentListRequest: Codable, Sendable, Equatable {
+    public let limit: UInt64?
+    public let cursor: ToriiDaCommitmentListCursor?
+
+    public init(
+        limit: UInt64? = nil,
+        cursor: ToriiDaCommitmentListCursor? = nil
+    ) {
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case cursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "cursor"],
+            debugName: "DA commitment-list request"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let limit = try container.decodeIfPresent(UInt64.self, forKey: .limit)
+        guard limit != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "DA commitment-list limit must be nonzero"
+            )
+        }
+        self.limit = limit
+        cursor = try container.decodeIfPresent(
+            ToriiDaCommitmentListCursor.self,
+            forKey: .cursor
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let limit {
+            guard limit > 0 else {
+                throw EncodingError.invalidValue(
+                    limit,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "DA commitment-list limit must be nonzero"
+                    )
+                )
+            }
+            try container.encode(limit, forKey: .limit)
+        }
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+    }
+}
+
 public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
     public let manifestHash: String?
     public let laneId: UInt32?
     public let epoch: UInt64?
     public let sequence: UInt64?
-    public let pagination: ToriiQueryPagination?
 
     public init(manifestHash: String? = nil,
                 laneId: UInt32? = nil,
                 epoch: UInt64? = nil,
-                sequence: UInt64? = nil,
-                pagination: ToriiQueryPagination? = nil) {
+                sequence: UInt64? = nil) {
         self.manifestHash = manifestHash
         self.laneId = laneId
         self.epoch = epoch
         self.sequence = sequence
-        self.pagination = pagination
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8510,23 +8588,223 @@ public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
         case laneId = "lane_id"
         case epoch
         case sequence
-        case pagination
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["manifest_hash", "lane_id", "epoch", "sequence"],
+            debugName: "DA commitment-proof request"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        manifestHash = try container
+            .decodeIfPresent(ToriiDaDigest32.self, forKey: .manifestHash)?
+            .hex
+        laneId = try container.decodeIfPresent(UInt32.self, forKey: .laneId)
+        epoch = try container.decodeIfPresent(UInt64.self, forKey: .epoch)
+        sequence = try container.decodeIfPresent(UInt64.self, forKey: .sequence)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let manifestHash {
+            try container.encode(try ToriiDaDigest32(hex: manifestHash), forKey: .manifestHash)
+        }
+        try container.encodeIfPresent(laneId, forKey: .laneId)
+        try container.encodeIfPresent(epoch, forKey: .epoch)
+        try container.encodeIfPresent(sequence, forKey: .sequence)
     }
 }
 
 public struct ToriiDaCommitmentListResponse: Decodable, Sendable, Equatable {
-    public let policies: ToriiJSONValue
-    public let commitments: [ToriiJSONValue]
+    public let policies: ToriiDaProofPolicyBundle
+    public let commitments: [ToriiDaCommitmentWithLocation]
+    public let nextCursor: ToriiDaCommitmentListCursor?
+
+    private enum CodingKeys: String, CodingKey {
+        case policies
+        case commitments
+        case nextCursor = "next_cursor"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["policies", "commitments", "next_cursor"],
+            debugName: "DA commitment-list response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA commitment-list responses require next_cursor"
+                )
+            )
+        }
+        policies = try container.decode(ToriiDaProofPolicyBundle.self, forKey: .policies)
+        commitments = try container.decode(
+            [ToriiDaCommitmentWithLocation].self,
+            forKey: .commitments
+        )
+        nextCursor = try container.decodeIfPresent(
+            ToriiDaCommitmentListCursor.self,
+            forKey: .nextCursor
+        )
+    }
 }
 
 public struct ToriiDaCommitmentProofResponse: Decodable, Sendable, Equatable {
-    public let policies: ToriiJSONValue
-    public let proof: ToriiJSONValue
+    public let policies: ToriiDaProofPolicyBundle
+    public let proof: ToriiDaCommitmentProof
+
+    private enum CodingKeys: String, CodingKey {
+        case policies
+        case proof
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["policies", "proof"],
+            debugName: "DA commitment-proof response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        policies = try container.decode(ToriiDaProofPolicyBundle.self, forKey: .policies)
+        proof = try container.decode(ToriiDaCommitmentProof.self, forKey: .proof)
+    }
 }
 
 public struct ToriiDaCommitmentVerifyResponse: Decodable, Sendable, Equatable {
     public let valid: Bool
     public let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case valid
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["valid", "error"],
+            debugName: "DA commitment verification response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.error) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.error,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA verification responses require an explicit error field"
+                )
+            )
+        }
+        valid = try container.decode(Bool.self, forKey: .valid)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        guard valid == (error == nil),
+              error.map({ !$0.isEmpty }) ?? true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .error,
+                in: container,
+                debugDescription: "DA verification validity and error fields contradict each other"
+            )
+        }
+    }
+}
+
+public struct ToriiDaPinIntentListRequest: Codable, Sendable, Equatable {
+    public let limit: UInt64?
+    public let cursor: ToriiDaPinIntentListCursor?
+
+    public init(
+        limit: UInt64? = nil,
+        cursor: ToriiDaPinIntentListCursor? = nil
+    ) {
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case cursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "cursor"],
+            debugName: "DA pin-intent-list request"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let limit = try container.decodeIfPresent(UInt64.self, forKey: .limit)
+        guard limit != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "DA pin-intent-list limit must be nonzero"
+            )
+        }
+        self.limit = limit
+        cursor = try container.decodeIfPresent(
+            ToriiDaPinIntentListCursor.self,
+            forKey: .cursor
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let limit {
+            guard limit > 0 else {
+                throw EncodingError.invalidValue(
+                    limit,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "DA pin-intent-list limit must be nonzero"
+                    )
+                )
+            }
+            try container.encode(limit, forKey: .limit)
+        }
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+    }
+}
+
+public struct ToriiDaPinIntentListResponse: Decodable, Sendable, Equatable {
+    public let intents: [ToriiDaPinIntentWithLocation]
+    public let nextCursor: ToriiDaPinIntentListCursor?
+
+    private enum CodingKeys: String, CodingKey {
+        case intents
+        case nextCursor = "next_cursor"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["intents", "next_cursor"],
+            debugName: "DA pin-intent-list response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA pin-intent-list responses require next_cursor"
+                )
+            )
+        }
+        intents = try container.decode(
+            [ToriiDaPinIntentWithLocation].self,
+            forKey: .intents
+        )
+        nextCursor = try container.decodeIfPresent(
+            ToriiDaPinIntentListCursor.self,
+            forKey: .nextCursor
+        )
+    }
 }
 
 public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
@@ -8536,22 +8814,19 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
     public let laneId: UInt32?
     public let epoch: UInt64?
     public let sequence: UInt64?
-    public let pagination: ToriiQueryPagination?
 
     public init(manifestHash: String? = nil,
                 storageTicket: String? = nil,
                 alias: String? = nil,
                 laneId: UInt32? = nil,
                 epoch: UInt64? = nil,
-                sequence: UInt64? = nil,
-                pagination: ToriiQueryPagination? = nil) {
+                sequence: UInt64? = nil) {
         self.manifestHash = manifestHash
         self.storageTicket = storageTicket
         self.alias = alias
         self.laneId = laneId
         self.epoch = epoch
         self.sequence = sequence
-        self.pagination = pagination
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8561,12 +8836,92 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
         case laneId = "lane_id"
         case epoch
         case sequence
-        case pagination
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: [
+                "manifest_hash",
+                "storage_ticket",
+                "alias",
+                "lane_id",
+                "epoch",
+                "sequence",
+            ],
+            debugName: "DA pin-intent-proof request"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        manifestHash = try container
+            .decodeIfPresent(ToriiDaDigest32.self, forKey: .manifestHash)?
+            .hex
+        storageTicket = try container
+            .decodeIfPresent(ToriiDaDigest32.self, forKey: .storageTicket)?
+            .hex
+        alias = try container.decodeIfPresent(String.self, forKey: .alias).map {
+            try requireDaPinIntentAlias($0, field: "DA pin-intent query alias")
+        }
+        laneId = try container.decodeIfPresent(UInt32.self, forKey: .laneId)
+        epoch = try container.decodeIfPresent(UInt64.self, forKey: .epoch)
+        sequence = try container.decodeIfPresent(UInt64.self, forKey: .sequence)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let manifestHash {
+            try container.encode(try ToriiDaDigest32(hex: manifestHash), forKey: .manifestHash)
+        }
+        if let storageTicket {
+            try container.encode(try ToriiDaDigest32(hex: storageTicket), forKey: .storageTicket)
+        }
+        if let alias {
+            try container.encode(
+                requireDaPinIntentAlias(alias, field: "DA pin-intent query alias"),
+                forKey: .alias
+            )
+        }
+        try container.encodeIfPresent(laneId, forKey: .laneId)
+        try container.encodeIfPresent(epoch, forKey: .epoch)
+        try container.encodeIfPresent(sequence, forKey: .sequence)
     }
 }
 
 public struct ToriiDaPinIntentVerifyResponse: Decodable, Sendable, Equatable {
     public let valid: Bool
+    public let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case valid
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["valid", "error"],
+            debugName: "DA pin-intent verification response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.error) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.error,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA verification responses require an explicit error field"
+                )
+            )
+        }
+        valid = try container.decode(Bool.self, forKey: .valid)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        guard valid == (error == nil),
+              error.map({ !$0.isEmpty }) ?? true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .error,
+                in: container,
+                debugDescription: "DA verification validity and error fields contradict each other"
+            )
+        }
+    }
 }
 
 public struct ToriiDaIngestPersistedPaths: Sendable, Equatable {
@@ -11256,7 +11611,6 @@ public struct ToriiVerifyingKeyListQuery: Sendable {
 
 public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var backend: String
     public var name: String
     public var version: UInt32
@@ -11275,7 +11629,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public var status: ToriiVerifyingKeyStatus?
 
     public init(authority: String,
-                privateKey: String,
                 backend: String,
                 name: String,
                 version: UInt32,
@@ -11286,7 +11639,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
                 verifyingKeyLength: UInt32? = nil,
                 status: ToriiVerifyingKeyStatus? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.backend = backend
         self.name = name
         self.version = version
@@ -11307,7 +11659,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case backend
         case name
         case version
@@ -11329,8 +11680,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(authority,
                                                                                             field: "authority")
-        let normalizedPrivateKey = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                             field: "private_key")
         let normalizedBackend = try ToriiVerifyingKeyRequestValidation.normalizedBackend(backend, field: "backend")
         let normalizedName = try ToriiVerifyingKeyRequestValidation.normalizedName(name, field: "name")
         let normalizedCircuitId = try ToriiVerifyingKeyRequestValidation.normalizedExactNonEmpty(circuitId,
@@ -11377,7 +11726,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
         )
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedBackend, forKey: .backend)
         try container.encode(normalizedName, forKey: .name)
         try container.encode(version, forKey: .version)
@@ -11405,7 +11753,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
 
 public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var backend: String
     public var name: String
     public var version: UInt32
@@ -11424,14 +11771,12 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public var status: ToriiVerifyingKeyStatus?
 
     public init(authority: String,
-                privateKey: String,
                 backend: String,
                 name: String,
                 version: UInt32,
                 circuitId: String,
                 publicInputsSchemaHashHex: String) {
         self.authority = authority
-        self.privateKey = privateKey
         self.backend = backend
         self.name = name
         self.version = version
@@ -11441,7 +11786,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case backend
         case name
         case version
@@ -11463,8 +11807,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(authority,
                                                                                             field: "authority")
-        let normalizedPrivateKey = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                             field: "private_key")
         let normalizedBackend = try ToriiVerifyingKeyRequestValidation.normalizedBackend(backend, field: "backend")
         let normalizedName = try ToriiVerifyingKeyRequestValidation.normalizedName(name, field: "name")
         let normalizedCircuitId = try ToriiVerifyingKeyRequestValidation.normalizedExactNonEmpty(circuitId,
@@ -11513,7 +11855,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
         )
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedBackend, forKey: .backend)
         try container.encode(normalizedName, forKey: .name)
         try container.encode(version, forKey: .version)
@@ -11537,6 +11878,140 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
             try container.encode(status.rawValue, forKey: .status)
         }
     }
+}
+
+/// Unsigned transaction material returned by verifying-key register/update routes.
+///
+/// `transactionPayload` is the canonical Norito `TransactionPayload` to pass to
+/// SDK signing abstractions that apply the Iroha prehash themselves.
+/// `signingMessage` is the already-prehashed 32-byte message intended for raw
+/// signature primitives and HSM integrations.
+public struct ToriiVerifyingKeyTransactionDraft: Sendable, Equatable {
+    public let submitted: Bool
+    public let transactionPayloadB64: String
+    public let signingMessageB64: String
+    public let transactionPayload: Data
+    public let signingMessage: Data
+
+    fileprivate init(envelope: ToriiVerifyingKeyTransactionDraftEnvelope) {
+        submitted = false
+        transactionPayloadB64 = envelope.transactionPayloadB64
+        signingMessageB64 = envelope.signingMessageB64
+        transactionPayload = envelope.transactionPayload
+        signingMessage = envelope.signingMessage
+    }
+}
+
+fileprivate struct ToriiVerifyingKeyTransactionDraftEnvelope: Decodable {
+    private static let maximumTransactionPayloadBytes = 16 * 1024 * 1024
+    private static let signingMessageBytes = 32
+
+    let transactionPayloadB64: String
+    let signingMessageB64: String
+    let transactionPayload: Data
+    let signingMessage: Data
+
+    private enum CodingKeys: String, CodingKey {
+        case submitted
+        case transactionPayloadB64 = "transaction_payload_b64"
+        case signingMessageB64 = "signing_message_b64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        let expectedFields: Set<String> = [
+            CodingKeys.submitted.rawValue,
+            CodingKeys.transactionPayloadB64.rawValue,
+            CodingKeys.signingMessageB64.rawValue,
+        ]
+        let actualFields = Set(raw.allKeys.map(\.stringValue))
+        guard actualFields == expectedFields else {
+            let unexpected = actualFields.subtracting(expectedFields).sorted()
+            let missing = expectedFields.subtracting(actualFields).sorted()
+            let details = [
+                unexpected.isEmpty ? nil : "unknown fields \(unexpected.joined(separator: ", "))",
+                missing.isEmpty ? nil : "missing fields \(missing.joined(separator: ", "))",
+            ].compactMap { $0 }.joined(separator: "; ")
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription:
+                        "verifying-key transaction draft must contain exactly submitted, transaction_payload_b64, and signing_message_b64 (\(details))"
+                )
+            )
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let submitted = try container.decode(Bool.self, forKey: .submitted)
+        guard !submitted else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .submitted,
+                in: container,
+                debugDescription: "submitted must be false for an unsigned transaction draft"
+            )
+        }
+        let transactionPayloadB64 = try container.decode(String.self, forKey: .transactionPayloadB64)
+        let signingMessageB64 = try container.decode(String.self, forKey: .signingMessageB64)
+        let transactionPayload = try Self.decodeCanonicalBase64(
+            transactionPayloadB64,
+            maximumBytes: Self.maximumTransactionPayloadBytes,
+            exactBytes: nil,
+            forKey: .transactionPayloadB64,
+            in: container
+        )
+        let signingMessage = try Self.decodeCanonicalBase64(
+            signingMessageB64,
+            maximumBytes: Self.signingMessageBytes,
+            exactBytes: Self.signingMessageBytes,
+            forKey: .signingMessageB64,
+            in: container
+        )
+        guard signingMessage == IrohaHash.hash(transactionPayload) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .signingMessageB64,
+                in: container,
+                debugDescription:
+                    "signing_message_b64 must be the exact Iroha prehash of transaction_payload_b64"
+            )
+        }
+
+        self.transactionPayloadB64 = transactionPayloadB64
+        self.signingMessageB64 = signingMessageB64
+        self.transactionPayload = transactionPayload
+        self.signingMessage = signingMessage
+    }
+
+    private static func decodeCanonicalBase64(
+        _ value: String,
+        maximumBytes: Int,
+        exactBytes: Int?,
+        forKey key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Data {
+        let encodedLengthBound = 4 * ((maximumBytes + 2) / 3)
+        guard !value.isEmpty,
+              value.utf8.count <= encodedLengthBound,
+              value.utf8.count.isMultiple(of: 4),
+              let decoded = Data(base64Encoded: value),
+              !decoded.isEmpty,
+              decoded.count <= maximumBytes,
+              decoded.base64EncodedString() == value else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be bounded canonical non-empty padded base64"
+            )
+        }
+        if let exactBytes, decoded.count != exactBytes {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must decode to exactly \(exactBytes) bytes"
+            )
+        }
+        return decoded
+    }
+
 }
 
 fileprivate enum ToriiVerifyingKeyRequestValidation {
@@ -11704,6 +12179,620 @@ fileprivate enum ToriiVerifyingKeyRequestValidation {
                 "\(field) must be greater than or equal to activation_height."
             )
         }
+    }
+}
+
+fileprivate enum ToriiVerifyingKeyDraftOperation {
+    case register
+    case update
+
+    var wireName: String {
+        switch self {
+        case .register:
+            return "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"
+        case .update:
+            return "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"
+        }
+    }
+}
+
+fileprivate struct ToriiVerifyingKeyExpectedRequest: Decodable {
+    let authority: String
+    let backend: String
+    let name: String
+    let version: UInt32
+    let circuitId: String
+    let publicInputsSchemaHashHex: String
+    let curve: String?
+    let gasScheduleId: String?
+    let verifyingKeyLength: UInt32?
+    let maxProofBytes: UInt32?
+    let metadataUriCid: String?
+    let verifyingKeyBytesCid: String?
+    let activationHeight: UInt64?
+    let withdrawHeight: UInt64?
+    let commitmentHex: String?
+    let verifyingKeyBytes: Data?
+    let status: ToriiVerifyingKeyStatus?
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case backend
+        case name
+        case version
+        case circuitId = "circuit_id"
+        case publicInputsSchemaHashHex = "public_inputs_schema_hash_hex"
+        case curve
+        case gasScheduleId = "gas_schedule_id"
+        case verifyingKeyLength = "vk_len"
+        case maxProofBytes = "max_proof_bytes"
+        case metadataUriCid = "metadata_uri_cid"
+        case verifyingKeyBytesCid = "vk_bytes_cid"
+        case activationHeight = "activation_height"
+        case withdrawHeight = "withdraw_height"
+        case commitmentHex = "commitment_hex"
+        case verifyingKeyBytes = "vk_bytes"
+        case status
+    }
+}
+
+fileprivate struct ToriiVerifyingKeyExpectedRecord {
+    let version: UInt32
+    let circuitId: String
+    let backendTag: UInt32
+    let curve: String
+    let publicInputsSchemaHash: Data
+    let commitment: Data
+    let verifyingKeyLength: UInt32
+    let maxProofBytes: UInt32
+    let gasScheduleId: String?
+    let metadataUriCid: String?
+    let verifyingKeyBytesCid: String?
+    let activationHeight: UInt64?
+    let withdrawHeight: UInt64?
+    let keyBackend: String?
+    let keyBytes: Data?
+    let status: UInt8
+}
+
+fileprivate enum ToriiVerifyingKeyDraftValidation {
+    private static let maximumInstructionArchiveBytes = 16 * 1024 * 1024
+
+    static func validate(
+        _ envelope: ToriiVerifyingKeyTransactionDraftEnvelope,
+        requestJSON: Data,
+        expectedChainId: String,
+        operation: ToriiVerifyingKeyDraftOperation
+    ) throws -> ToriiVerifyingKeyTransactionDraft {
+        let request: ToriiVerifyingKeyExpectedRequest
+        do {
+            request = try JSONDecoder().decode(ToriiVerifyingKeyExpectedRequest.self, from: requestJSON)
+        } catch {
+            throw ToriiClientError.decoding(error)
+        }
+        let expectedRecord = try makeExpectedRecord(request)
+        var transaction = ToriiVerifyingKeyCompactReader(envelope.transactionPayload)
+        let chain = try transaction.takeField("chain")
+        let authority = try transaction.takeField("authority")
+        let creationTime = try transaction.takeField("creation_time_ms")
+        let executable = try transaction.takeField("executable")
+        let timeToLive = try transaction.takeField("time_to_live_ms")
+        let nonce = try transaction.takeField("nonce")
+        let feePayment = try transaction.takeField("fee_payment")
+        let metadata = try transaction.takeField("metadata")
+        let attachments = try transaction.takeField("attachments")
+        guard transaction.isFinished,
+              creationTime.count == MemoryLayout<UInt64>.size else {
+            throw invalid("transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload")
+        }
+
+        let decodedChain = try decodeChainId(chain)
+        guard decodedChain == expectedChainId else {
+            throw invalid("verifying-key transaction draft changed the configured chain")
+        }
+        let expectedAuthority = try AccountAddress.parseEncoded(request.authority)
+            .compactNoritoAccountControllerPayload()
+        guard authority == expectedAuthority else {
+            throw invalid("verifying-key transaction draft changed the requested authority")
+        }
+        try requireCanonicalNonZeroOption(
+            timeToLive,
+            width: MemoryLayout<UInt64>.size,
+            required: true,
+            field: "time_to_live_ms"
+        )
+        try requireCanonicalNonZeroOption(
+            nonce,
+            width: MemoryLayout<UInt32>.size,
+            required: false,
+            field: "nonce"
+        )
+        do {
+            try SccpSubmitValidation.requireCanonicalTransactionFeePayment(feePayment)
+            try SccpSubmitValidation.requireEmptyTransactionMetadata(metadata)
+        } catch {
+            throw invalid("verifying-key transaction fee payment or metadata is not canonical")
+        }
+        try requireAbsentOption(attachments, field: "attachments")
+        try requireRequestedInstruction(
+            executable,
+            operation: operation,
+            request: request,
+            expectedRecord: expectedRecord
+        )
+        return ToriiVerifyingKeyTransactionDraft(envelope: envelope)
+    }
+
+    private static func makeExpectedRecord(
+        _ request: ToriiVerifyingKeyExpectedRequest
+    ) throws -> ToriiVerifyingKeyExpectedRecord {
+        guard let schemaHash = Data(hexString: request.publicInputsSchemaHashHex),
+              schemaHash.count == 32 else {
+            throw invalid("request public_inputs_schema_hash_hex is not a 32-byte hash")
+        }
+        let commitment: Data
+        if let keyBytes = request.verifyingKeyBytes {
+            commitment = verifyingKeyCommitment(backend: request.backend, bytes: keyBytes)
+        } else {
+            guard let commitmentHex = request.commitmentHex,
+                  let decoded = Data(hexString: commitmentHex),
+                  decoded.count == 32 else {
+                throw invalid("request commitment material is missing")
+            }
+            commitment = decoded
+        }
+        let keyLength: UInt32
+        if let keyBytes = request.verifyingKeyBytes {
+            guard keyBytes.count <= Int(UInt32.max) else {
+                throw invalid("request verifying key exceeds the UInt32 wire bound")
+            }
+            keyLength = UInt32(keyBytes.count)
+        } else if let explicitLength = request.verifyingKeyLength {
+            keyLength = explicitLength
+        } else {
+            throw invalid("request vk_len is missing")
+        }
+        let status: UInt8
+        switch request.status ?? .active {
+        case .proposed:
+            status = 0
+        case .active:
+            status = 1
+        case .withdrawn:
+            status = 2
+        }
+        let backendTag: UInt32 = request.backend.hasPrefix("stark/")
+            ? VerifyingKeyBackendTag.stark.noritoDiscriminant
+            : VerifyingKeyBackendTag.halo2IpaPasta.noritoDiscriminant
+        return ToriiVerifyingKeyExpectedRecord(
+            version: request.version,
+            circuitId: request.circuitId,
+            backendTag: backendTag,
+            curve: request.curve ?? "unknown",
+            publicInputsSchemaHash: schemaHash,
+            commitment: commitment,
+            verifyingKeyLength: keyLength,
+            maxProofBytes: request.maxProofBytes ?? 0,
+            gasScheduleId: request.gasScheduleId,
+            metadataUriCid: request.metadataUriCid,
+            verifyingKeyBytesCid: request.verifyingKeyBytesCid,
+            activationHeight: request.activationHeight,
+            withdrawHeight: request.withdrawHeight,
+            keyBackend: request.verifyingKeyBytes == nil ? nil : request.backend,
+            keyBytes: request.verifyingKeyBytes,
+            status: status
+        )
+    }
+
+    private static func verifyingKeyCommitment(backend: String, bytes: Data) -> Data {
+        let backendBytes = Data(backend.utf8)
+        var preimage = Data("iroha:zk:v1:vk".utf8)
+        var backendLength = UInt64(backendBytes.count).bigEndian
+        var keyLength = UInt64(bytes.count).bigEndian
+        preimage.append(withUnsafeBytes(of: &backendLength) { Data($0) })
+        preimage.append(backendBytes)
+        preimage.append(withUnsafeBytes(of: &keyLength) { Data($0) })
+        preimage.append(bytes)
+        return Data(SHA256.hash(data: preimage))
+    }
+
+    private static func decodeChainId(_ payload: Data) throws -> String {
+        var chain = ToriiVerifyingKeyCompactReader(payload)
+        let value = try decodeString(try chain.takeField("chain.value"), field: "chain.value")
+        guard chain.isFinished,
+              !value.isEmpty,
+              value.utf8.count <= 128,
+              let first = value.utf8.first,
+              let last = value.utf8.last,
+              isASCIIAlphanumeric(first),
+              isASCIIAlphanumeric(last),
+              value.utf8.allSatisfy({
+                  isASCIIAlphanumeric($0) || $0 == 46 || $0 == 95 || $0 == 58 || $0 == 45
+              }) else {
+            throw invalid("transaction chain id is not canonical")
+        }
+        return value
+    }
+
+    private static func isASCIIAlphanumeric(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+    }
+
+    private static func requireRequestedInstruction(
+        _ payload: Data,
+        operation: ToriiVerifyingKeyDraftOperation,
+        request: ToriiVerifyingKeyExpectedRequest,
+        expectedRecord: ToriiVerifyingKeyExpectedRecord
+    ) throws {
+        var executable = ToriiVerifyingKeyCompactReader(payload)
+        guard try executable.takeUInt32("executable.kind") == 0 else {
+            throw invalid("verifying-key transaction executable must contain native instructions")
+        }
+        var instructions = ToriiVerifyingKeyCompactReader(
+            try executable.takeField("executable.instructions")
+        )
+        guard executable.isFinished,
+              try instructions.takeUInt64("executable.instructions.count") == 1 else {
+            throw invalid("verifying-key transaction must contain exactly one instruction")
+        }
+        var instruction = ToriiVerifyingKeyCompactReader(
+            try instructions.takeField("executable.instruction")
+        )
+        let wireName = try decodeString(
+            try instruction.takeField("executable.instruction.wire_name"),
+            field: "executable.instruction.wire_name"
+        )
+        let archive = try decodeByteVector(
+            try instruction.takeField("executable.instruction.payload"),
+            field: "executable.instruction.payload"
+        )
+        guard instructions.isFinished, instruction.isFinished,
+              wireName == operation.wireName else {
+            throw invalid("verifying-key transaction does not contain the requested registry operation")
+        }
+        try requireInstructionArchive(
+            archive,
+            wireName: wireName,
+            request: request,
+            expectedRecord: expectedRecord
+        )
+    }
+
+    private static func requireInstructionArchive(
+        _ archive: Data,
+        wireName: String,
+        request: ToriiVerifyingKeyExpectedRequest,
+        expectedRecord: ToriiVerifyingKeyExpectedRecord
+    ) throws {
+        guard !archive.isEmpty,
+              archive.count <= maximumInstructionArchiveBytes,
+              let frame = noritoDecodeFrame(archive),
+              frame.header.schema == noritoSchemaHash(forTypeName: wireName),
+              frame.header.compression == .none,
+              frame.header.flags == NoritoHeader.compactLen,
+              frame.paddingLength == 0,
+              !frame.payload.isEmpty,
+              noritoEncode(
+                  typeName: wireName,
+                  payload: frame.payload,
+                  flags: NoritoHeader.compactLen
+              ) == archive else {
+            throw invalid("verifying-key instruction archive is not canonical for \(wireName)")
+        }
+        var instruction = ToriiVerifyingKeyCompactReader(frame.payload)
+        let id = try instruction.takeField("verifying_key.id")
+        let record = try instruction.takeField("verifying_key.record")
+        guard instruction.isFinished else {
+            throw invalid("verifying-key instruction contains trailing fields")
+        }
+        try requireIdentifier(id, backend: request.backend, name: request.name)
+        try requireRecord(record, expected: expectedRecord)
+    }
+
+    private static func requireIdentifier(
+        _ payload: Data,
+        backend: String,
+        name: String
+    ) throws {
+        var id = ToriiVerifyingKeyCompactReader(payload)
+        let decodedBackend = try decodeString(try id.takeField("id.backend"), field: "id.backend")
+        let decodedName = try decodeString(try id.takeField("id.name"), field: "id.name")
+        guard id.isFinished, decodedBackend == backend, decodedName == name else {
+            throw invalid("verifying-key instruction identifier does not match the request")
+        }
+    }
+
+    private static func requireRecord(
+        _ payload: Data,
+        expected: ToriiVerifyingKeyExpectedRecord
+    ) throws {
+        var record = ToriiVerifyingKeyCompactReader(payload)
+        let version = try decodeUInt32(try record.takeField("record.version"), field: "record.version")
+        let circuitId = try decodeString(try record.takeField("record.circuit_id"),
+                                         field: "record.circuit_id")
+        let ownerManifestId = try decodeOptionalString(
+            try record.takeField("record.owner_manifest_id"),
+            field: "record.owner_manifest_id"
+        )
+        let namespace = try decodeString(try record.takeField("record.namespace"),
+                                         field: "record.namespace")
+        let backendTag = try decodeUInt32(try record.takeField("record.backend"),
+                                          field: "record.backend")
+        let curve = try decodeString(try record.takeField("record.curve"), field: "record.curve")
+        let schemaHash = try fixedBytes(
+            try record.takeField("record.public_inputs_schema_hash"),
+            count: 32,
+            field: "record.public_inputs_schema_hash"
+        )
+        let commitment = try fixedBytes(
+            try record.takeField("record.commitment"),
+            count: 32,
+            field: "record.commitment"
+        )
+        let keyLength = try decodeUInt32(try record.takeField("record.vk_len"),
+                                         field: "record.vk_len")
+        let maxProofBytes = try decodeUInt32(try record.takeField("record.max_proof_bytes"),
+                                             field: "record.max_proof_bytes")
+        let gasScheduleId = try decodeOptionalString(
+            try record.takeField("record.gas_schedule_id"),
+            field: "record.gas_schedule_id"
+        )
+        let metadataUriCid = try decodeOptionalString(
+            try record.takeField("record.metadata_uri_cid"),
+            field: "record.metadata_uri_cid"
+        )
+        let verifyingKeyBytesCid = try decodeOptionalString(
+            try record.takeField("record.vk_bytes_cid"),
+            field: "record.vk_bytes_cid"
+        )
+        let activationHeight = try decodeOptionalUInt64(
+            try record.takeField("record.activation_height"),
+            field: "record.activation_height"
+        )
+        let withdrawHeight = try decodeOptionalUInt64(
+            try record.takeField("record.withdraw_height"),
+            field: "record.withdraw_height"
+        )
+        let key = try decodeOptionalVerifyingKey(
+            try record.takeField("record.key"),
+            field: "record.key"
+        )
+        let status = try decodeUInt8(try record.takeField("record.status"), field: "record.status")
+        guard record.isFinished,
+              version == expected.version,
+              circuitId == expected.circuitId,
+              ownerManifestId == nil,
+              namespace == "core",
+              backendTag == expected.backendTag,
+              curve == expected.curve,
+              schemaHash == expected.publicInputsSchemaHash,
+              commitment == expected.commitment,
+              keyLength == expected.verifyingKeyLength,
+              maxProofBytes == expected.maxProofBytes,
+              gasScheduleId == expected.gasScheduleId,
+              metadataUriCid == expected.metadataUriCid,
+              verifyingKeyBytesCid == expected.verifyingKeyBytesCid,
+              activationHeight == expected.activationHeight,
+              withdrawHeight == expected.withdrawHeight,
+              key?.backend == expected.keyBackend,
+              key?.bytes == expected.keyBytes,
+              status == expected.status else {
+            throw invalid("verifying-key instruction record does not match the full requested record")
+        }
+    }
+
+    private static func decodeString(_ payload: Data, field: String) throws -> String {
+        var value = ToriiVerifyingKeyCompactReader(payload)
+        let length = try value.takeLength("\(field).length")
+        guard length <= UInt64(Int.max) else {
+            throw invalid("\(field) exceeds the runtime bound")
+        }
+        let bytes = try value.takeBytes(Int(length), field: field)
+        guard value.isFinished, let decoded = String(data: bytes, encoding: .utf8) else {
+            throw invalid("\(field) is not one canonical UTF-8 string")
+        }
+        return decoded
+    }
+
+    private static func decodeByteVector(_ payload: Data, field: String) throws -> Data {
+        var value = ToriiVerifyingKeyCompactReader(payload)
+        let length = try value.takeUInt64("\(field).length")
+        guard length > 0, length <= UInt64(Int.max) else {
+            throw invalid("\(field) length is invalid")
+        }
+        let bytes = try value.takeBytes(Int(length), field: field)
+        guard value.isFinished else {
+            throw invalid("\(field) contains trailing bytes")
+        }
+        return bytes
+    }
+
+    private static func decodeUInt8(_ payload: Data, field: String) throws -> UInt8 {
+        var value = ToriiVerifyingKeyCompactReader(payload)
+        let decoded = try value.takeUInt8(field)
+        guard value.isFinished else {
+            throw invalid("\(field) contains trailing bytes")
+        }
+        return decoded
+    }
+
+    private static func decodeUInt32(_ payload: Data, field: String) throws -> UInt32 {
+        var value = ToriiVerifyingKeyCompactReader(payload)
+        let decoded = try value.takeUInt32(field)
+        guard value.isFinished else {
+            throw invalid("\(field) contains trailing bytes")
+        }
+        return decoded
+    }
+
+    private static func decodeUInt64(_ payload: Data, field: String) throws -> UInt64 {
+        var value = ToriiVerifyingKeyCompactReader(payload)
+        let decoded = try value.takeUInt64(field)
+        guard value.isFinished else {
+            throw invalid("\(field) contains trailing bytes")
+        }
+        return decoded
+    }
+
+    private static func fixedBytes(_ payload: Data, count: Int, field: String) throws -> Data {
+        guard payload.count == count else {
+            throw invalid("\(field) must contain exactly \(count) bytes")
+        }
+        return payload
+    }
+
+    private static func decodeOptionalString(_ payload: Data, field: String) throws -> String? {
+        try decodeOption(payload, field: field) { try decodeString($0, field: field) }
+    }
+
+    private static func decodeOptionalUInt64(_ payload: Data, field: String) throws -> UInt64? {
+        try decodeOption(payload, field: field) { try decodeUInt64($0, field: field) }
+    }
+
+    private static func decodeOptionalVerifyingKey(
+        _ payload: Data,
+        field: String
+    ) throws -> (backend: String, bytes: Data)? {
+        try decodeOption(payload, field: field) { value in
+            var key = ToriiVerifyingKeyCompactReader(value)
+            let backend = try decodeString(try key.takeField("\(field).backend"),
+                                           field: "\(field).backend")
+            let bytes = try decodeByteVector(try key.takeField("\(field).bytes"),
+                                             field: "\(field).bytes")
+            guard key.isFinished else {
+                throw invalid("\(field) contains trailing fields")
+            }
+            return (backend, bytes)
+        }
+    }
+
+    private static func decodeOption<T>(
+        _ payload: Data,
+        field: String,
+        decode: (Data) throws -> T
+    ) throws -> T? {
+        var option = ToriiVerifyingKeyCompactReader(payload)
+        switch try option.takeUInt8("\(field).tag") {
+        case 0:
+            guard option.isFinished else {
+                throw invalid("\(field) None encoding contains trailing bytes")
+            }
+            return nil
+        case 1:
+            let value = try decode(try option.takeField("\(field).value"))
+            guard option.isFinished else {
+                throw invalid("\(field) Some encoding contains trailing bytes")
+            }
+            return value
+        default:
+            throw invalid("\(field) has an invalid option tag")
+        }
+    }
+
+    private static func requireCanonicalNonZeroOption(
+        _ payload: Data,
+        width: Int,
+        required: Bool,
+        field: String
+    ) throws {
+        var option = ToriiVerifyingKeyCompactReader(payload)
+        switch try option.takeUInt8("\(field).tag") {
+        case 0:
+            guard !required, option.isFinished else {
+                throw invalid("\(field) must contain one canonical nonzero integer")
+            }
+        case 1:
+            let value = try option.takeField("\(field).value")
+            guard option.isFinished, value.count == width,
+                  value.contains(where: { $0 != 0 }) else {
+                throw invalid("\(field) Some value is not a canonical nonzero integer")
+            }
+        default:
+            throw invalid("\(field) has an invalid option tag")
+        }
+    }
+
+    private static func requireAbsentOption(_ payload: Data, field: String) throws {
+        var option = ToriiVerifyingKeyCompactReader(payload)
+        guard try option.takeUInt8("\(field).tag") == 0,
+              option.isFinished else {
+            throw invalid("\(field) must use the exact None encoding")
+        }
+    }
+
+    private static func invalid(_ message: String) -> ToriiClientError {
+        .invalidPayload(message)
+    }
+}
+
+fileprivate struct ToriiVerifyingKeyCompactReader {
+    private let data: Data
+    private var offset = 0
+
+    init(_ data: Data) {
+        self.data = data
+    }
+
+    var isFinished: Bool { offset == data.count }
+
+    mutating func takeUInt8(_ field: String) throws -> UInt8 {
+        guard offset < data.count else {
+            throw ToriiClientError.invalidPayload("\(field) is truncated")
+        }
+        defer { offset += 1 }
+        return data[data.startIndex + offset]
+    }
+
+    mutating func takeUInt32(_ field: String) throws -> UInt32 {
+        let bytes = try takeBytes(MemoryLayout<UInt32>.size, field: field)
+        return bytes.withUnsafeBytes {
+            UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))
+        }
+    }
+
+    mutating func takeUInt64(_ field: String) throws -> UInt64 {
+        let bytes = try takeBytes(MemoryLayout<UInt64>.size, field: field)
+        return bytes.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))
+        }
+    }
+
+    mutating func takeLength(_ field: String) throws -> UInt64 {
+        var value: UInt64 = 0
+        var shift: UInt64 = 0
+        for count in 1...10 {
+            let byte = try takeUInt8(field)
+            let chunk = UInt64(byte & 0x7f)
+            guard shift < 64, chunk <= UInt64.max >> shift else {
+                throw ToriiClientError.invalidPayload("\(field) compact length overflows UInt64")
+            }
+            value |= chunk << shift
+            if byte & 0x80 == 0 {
+                guard count == 1 || chunk != 0 else {
+                    throw ToriiClientError.invalidPayload("\(field) compact length is overlong")
+                }
+                return value
+            }
+            shift += 7
+        }
+        throw ToriiClientError.invalidPayload("\(field) compact length is overlong")
+    }
+
+    mutating func takeField(_ field: String) throws -> Data {
+        let length = try takeLength("\(field).length")
+        guard length <= UInt64(Int.max) else {
+            throw ToriiClientError.invalidPayload("\(field) exceeds the runtime bound")
+        }
+        return try takeBytes(Int(length), field: field)
+    }
+
+    mutating func takeBytes(_ count: Int, field: String) throws -> Data {
+        guard count >= 0, count <= data.count - offset else {
+            throw ToriiClientError.invalidPayload("\(field) is truncated")
+        }
+        defer { offset += count }
+        let start = data.startIndex + offset
+        return Data(data[start..<(start + count)])
     }
 }
 
@@ -22060,9 +23149,12 @@ public struct ToriiLaneGovernanceSnapshot: Decodable, Sendable, Equatable {
 
 public struct ToriiLanePrivacyCommitmentSnapshot: Decodable, Sendable, Equatable {
     public let id: UInt64
-    public let scheme: String
-    public let merkle: ToriiLaneMerkleCommitmentSnapshot?
-    public let snark: ToriiLaneSnarkCommitmentSnapshot?
+    public let scheme: ToriiLanePrivacyCommitmentScheme
+    public let merkle: ToriiLaneMerkleCommitmentSnapshot
+}
+
+public enum ToriiLanePrivacyCommitmentScheme: String, Decodable, Sendable, Equatable {
+    case merkle
 }
 
 public struct ToriiLaneMerkleCommitmentSnapshot: Decodable, Sendable, Equatable {
@@ -22072,20 +23164,6 @@ public struct ToriiLaneMerkleCommitmentSnapshot: Decodable, Sendable, Equatable 
     private enum CodingKeys: String, CodingKey {
         case root
         case maxDepth = "max_depth"
-    }
-}
-
-public struct ToriiLaneSnarkCommitmentSnapshot: Decodable, Sendable, Equatable {
-    public let circuitId: UInt64
-    public let verifyingKeyDigest: String
-    public let statementHash: String
-    public let proofHash: String
-
-    private enum CodingKeys: String, CodingKey {
-        case circuitId = "circuit_id"
-        case verifyingKeyDigest = "verifying_key_digest"
-        case statementHash = "statement_hash"
-        case proofHash = "proof_hash"
     }
 }
 
@@ -22320,6 +23398,42 @@ public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
     }
 }
 
+/// Exact merge-ledger entry identity authenticated by Sumeragi v2 finality.
+public struct ToriiSumeragiV2MergeCarrierCommitment: Decodable, Sendable, Equatable {
+    public static let canonicalVersion: UInt16 = 1
+
+    public let version: UInt16
+    public let entryHash: String
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case entryHash = "entry_hash"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: ["version", "entry_hash"],
+            context: "Sumeragi v2 merge-carrier commitment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(UInt16.self, forKey: .version)
+        guard version == Self.canonicalVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .version,
+                in: container,
+                debugDescription: "Sumeragi v2 merge-carrier version is unsupported"
+            )
+        }
+        entryHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .entryHash),
+            key: .entryHash,
+            container: container,
+            field: "Sumeragi v2 merge-carrier entry_hash"
+        )
+    }
+}
+
 /// Deterministic execution result authenticated by a Sumeragi v2 quorum certificate.
 public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable {
     public static let canonicalNativeAmxApplicationManifestVersion: UInt16 = 1
@@ -22335,6 +23449,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: String
     public let nativeAmxApplicationManifestCount: UInt32
+    public let mergeCarrier: ToriiSumeragiV2MergeCarrierCommitment?
+    public let executedBlockWireLen: UInt64
     public let executedBlockWireHash: String
 
     private enum CodingKeys: String, CodingKey {
@@ -22347,6 +23463,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             "native_amx_application_manifest_version"
         case nativeAmxApplicationManifestRoot = "native_amx_application_manifest_root"
         case nativeAmxApplicationManifestCount = "native_amx_application_manifest_count"
+        case mergeCarrier = "merge_carrier"
+        case executedBlockWireLen = "executed_block_wire_len"
         case executedBlockWireHash = "executed_block_wire_hash"
     }
 
@@ -22359,6 +23477,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
+                "merge_carrier",
+                "executed_block_wire_len",
                 "executed_block_wire_hash",
             ],
             context: "Sumeragi v2 execution commitment"
@@ -22433,6 +23553,30 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                 in: container,
                 debugDescription:
                     "Sumeragi v2 Native AMX application-manifest count/root projection is not canonical"
+            )
+        }
+        guard container.contains(.mergeCarrier) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.mergeCarrier,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Sumeragi v2 merge_carrier is mandatory on the wire"
+                )
+            )
+        }
+        mergeCarrier = try container.decodeIfPresent(
+            ToriiSumeragiV2MergeCarrierCommitment.self,
+            forKey: .mergeCarrier
+        )
+        executedBlockWireLen = try container.decode(
+            UInt64.self,
+            forKey: .executedBlockWireLen
+        )
+        guard executedBlockWireLen != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .executedBlockWireLen,
+                in: container,
+                debugDescription: "Sumeragi v2 executed block wire length must be non-zero"
             )
         }
         executedBlockWireHash = try ToriiNativeAmxWire.canonicalHash(
@@ -24412,6 +25556,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
     /// correct relative URL resolution per RFC 3986.
     public let baseURL: URL
+    /// Immutable trust context for endpoints that return bytes to be signed locally.
+    public let localSigningContext: ToriiLocalSigningContext?
     /// Default HTTP headers applied to every Torii request.
     public let defaultHeaders: [String: String]
     /// Wire-format preference used for dual-format Torii routes.
@@ -24435,6 +25581,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public init(baseURL: URL,
                 session: URLSession = .shared,
                 defaultHeaders: [String: String] = [:],
+                localSigningContext: ToriiLocalSigningContext? = nil,
                 wireFormatPreference: ToriiWireFormatPreference = .noritoPreferred,
                 currentTimeMilliseconds: @escaping @Sendable () -> UInt64 = {
                     UInt64(max(0, Date().timeIntervalSince1970 * 1_000).rounded())
@@ -24446,6 +25593,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         // Without trailing slash, URL(string:relativeTo:) replaces the last path component
         // instead of appending (per RFC 3986).
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
+        self.localSigningContext = localSigningContext
         self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
         self.currentTimeMilliseconds = currentTimeMilliseconds
@@ -24460,11 +25608,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         baseURL: URL,
         session: URLSession = .shared,
         authentication: ToriiClientAuthentication,
+        localSigningContext: ToriiLocalSigningContext? = nil,
         wireFormatPreference: ToriiWireFormatPreference = .noritoPreferred
     ) {
         self.init(baseURL: baseURL,
                   session: session,
                   defaultHeaders: authentication.headers,
+                  localSigningContext: localSigningContext,
                   wireFormatPreference: wireFormatPreference)
     }
 
@@ -25154,17 +26304,17 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getDaProofPolicies(completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
+    public func getDaProofPolicies(completion: @escaping (Result<ToriiDaProofPolicyBundle, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getDaProofPolicies() }
     }
 
     @discardableResult
-    public func getDaProofPolicySnapshot(completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
+    public func getDaProofPolicySnapshot(completion: @escaping (Result<ToriiDaProofPolicyBundle, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getDaProofPolicySnapshot() }
     }
 
     @discardableResult
-    public func listDaCommitments(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest(),
+    public func listDaCommitments(_ requestBody: ToriiDaCommitmentListRequest = ToriiDaCommitmentListRequest(),
                                   completion: @escaping (Result<ToriiDaCommitmentListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDaCommitments(requestBody) }
     }
@@ -25176,25 +26326,25 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func verifyDaCommitment(proof: ToriiJSONValue,
+    public func verifyDaCommitment(proof: ToriiDaCommitmentProof,
                                    completion: @escaping (Result<ToriiDaCommitmentVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.verifyDaCommitment(proof: proof) }
     }
 
     @discardableResult
-    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest(),
-                                 completion: @escaping (Result<[ToriiJSONValue], Swift.Error>) -> Void) -> Task<Void, Never> {
+    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentListRequest = ToriiDaPinIntentListRequest(),
+                                 completion: @escaping (Result<ToriiDaPinIntentListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDaPinIntents(requestBody) }
     }
 
     @discardableResult
     public func proveDaPinIntent(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest(),
-                                 completion: @escaping (Result<ToriiJSONValue?, Swift.Error>) -> Void) -> Task<Void, Never> {
+                                 completion: @escaping (Result<ToriiDaPinIntentProof?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.proveDaPinIntent(requestBody) }
     }
 
     @discardableResult
-    public func verifyDaPinIntent(proof: ToriiJSONValue,
+    public func verifyDaPinIntent(proof: ToriiDaPinIntentProof,
                                   completion: @escaping (Result<ToriiDaPinIntentVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.verifyDaPinIntent(proof: proof) }
     }
@@ -25345,19 +26495,17 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func registerVerifyingKey(_ requestBody: ToriiVerifyingKeyRegisterRequest,
-                                     completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
+                                     completion: @escaping (Result<ToriiVerifyingKeyTransactionDraft, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.registerVerifyingKey(requestBody)
-            return ()
         }
     }
 
     @discardableResult
     public func updateVerifyingKey(_ requestBody: ToriiVerifyingKeyUpdateRequest,
-                                   completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
+                                   completion: @escaping (Result<ToriiVerifyingKeyTransactionDraft, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.updateVerifyingKey(requestBody)
-            return ()
         }
     }
 
@@ -27263,22 +28411,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return (bundle, paths)
     }
 
-    public func getDaProofPolicies() async throws -> ToriiJSONValue {
+    public func getDaProofPolicies() async throws -> ToriiDaProofPolicyBundle {
         let request = try makeRequest(path: "/v1/da/proof-policies",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiJSONValue.self, from: data)
+        return try decodeJSON(ToriiDaProofPolicyBundle.self, from: data)
     }
 
-    public func getDaProofPolicySnapshot() async throws -> ToriiJSONValue {
+    public func getDaProofPolicySnapshot() async throws -> ToriiDaProofPolicyBundle {
         let request = try makeRequest(path: "/v1/da/proof-policies/snapshot",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiJSONValue.self, from: data)
+        return try decodeJSON(ToriiDaProofPolicyBundle.self, from: data)
     }
 
-    public func listDaCommitments(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest()) async throws -> ToriiDaCommitmentListResponse {
-        let normalized = try normalizeDaCommitmentProofRequest(requestBody)
+    public func listDaCommitments(_ requestBody: ToriiDaCommitmentListRequest = ToriiDaCommitmentListRequest()) async throws -> ToriiDaCommitmentListResponse {
+        let normalized = try normalizeDaCommitmentListRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
         let request = try makeRequest(path: "/v1/da/commitments",
@@ -27307,10 +28455,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiDaCommitmentProofResponse?.self, from: data)
     }
 
-    public func verifyDaCommitment(proof: ToriiJSONValue) async throws -> ToriiDaCommitmentVerifyResponse {
+    public func verifyDaCommitment(proof: ToriiDaCommitmentProof) async throws -> ToriiDaCommitmentVerifyResponse {
+        let encoder = JSONEncoder()
         let request = try makeRequest(path: "/v1/da/commitments/verify",
                                       method: .post,
-                                      body: try proof.encodedData(),
+                                      body: try encoder.encode(proof),
                                       headers: [
                                         "Content-Type": "application/json",
                                         "Accept": "application/json"
@@ -27319,8 +28468,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiDaCommitmentVerifyResponse.self, from: data)
     }
 
-    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> [ToriiJSONValue] {
-        let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
+    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentListRequest = ToriiDaPinIntentListRequest()) async throws -> ToriiDaPinIntentListResponse {
+        let normalized = try normalizeDaPinIntentListRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
         let request = try makeRequest(path: "/v1/da/pin-intents",
@@ -27331,10 +28480,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                         "Accept": "application/json"
                                       ])
         let data = try await data(for: request)
-        return try decodeJSON([ToriiJSONValue].self, from: data)
+        return try decodeJSON(ToriiDaPinIntentListResponse.self, from: data)
     }
 
-    public func proveDaPinIntent(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> ToriiJSONValue? {
+    public func proveDaPinIntent(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> ToriiDaPinIntentProof? {
         let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
@@ -27346,13 +28495,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                         "Accept": "application/json"
                                       ])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiJSONValue?.self, from: data)
+        return try decodeJSON(ToriiDaPinIntentProof?.self, from: data)
     }
 
-    public func verifyDaPinIntent(proof: ToriiJSONValue) async throws -> ToriiDaPinIntentVerifyResponse {
+    public func verifyDaPinIntent(proof: ToriiDaPinIntentProof) async throws -> ToriiDaPinIntentVerifyResponse {
+        let encoder = JSONEncoder()
         let request = try makeRequest(path: "/v1/da/pin-intents/verify",
                                       method: .post,
-                                      body: try proof.encodedData(),
+                                      body: try encoder.encode(proof),
                                       headers: [
                                         "Content-Type": "application/json",
                                         "Accept": "application/json"
@@ -29023,7 +30173,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
-    public func registerVerifyingKey(_ requestBody: ToriiVerifyingKeyRegisterRequest) async throws {
+    public func registerVerifyingKey(
+        _ requestBody: ToriiVerifyingKeyRegisterRequest
+    ) async throws -> ToriiVerifyingKeyTransactionDraft {
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "verifying-key draft preparation requires an immutable ToriiLocalSigningContext"
+            )
+        }
         let encoder = JSONEncoder()
         let body = try encoder.encode(requestBody)
         let request = try makeRequest(path: "/v1/zk/vk/register",
@@ -29031,10 +30188,29 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202, responseBody: data)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "verifying-key register response")
+        let envelope = try decodeJSON(
+            ToriiVerifyingKeyTransactionDraftEnvelope.self,
+            from: data
+        )
+        return try ToriiVerifyingKeyDraftValidation.validate(
+            envelope,
+            requestJSON: body,
+            expectedChainId: localSigningContext.chainId,
+            operation: .register
+        )
     }
 
-    public func updateVerifyingKey(_ requestBody: ToriiVerifyingKeyUpdateRequest) async throws {
+    public func updateVerifyingKey(
+        _ requestBody: ToriiVerifyingKeyUpdateRequest
+    ) async throws -> ToriiVerifyingKeyTransactionDraft {
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "verifying-key draft preparation requires an immutable ToriiLocalSigningContext"
+            )
+        }
         let encoder = JSONEncoder()
         let body = try encoder.encode(requestBody)
         let request = try makeRequest(path: "/v1/zk/vk/update",
@@ -29042,7 +30218,19 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
         let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202, responseBody: data)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "verifying-key update response")
+        let envelope = try decodeJSON(
+            ToriiVerifyingKeyTransactionDraftEnvelope.self,
+            from: data
+        )
+        return try ToriiVerifyingKeyDraftValidation.validate(
+            envelope,
+            requestJSON: body,
+            expectedChainId: localSigningContext.chainId,
+            operation: .update
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -30381,6 +31569,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         throw ToriiClientError.invalidPayload("chunkerHandle is required when the manifest omits chunking metadata")
     }
 
+    private func normalizeDaCommitmentListRequest(_ request: ToriiDaCommitmentListRequest) throws -> ToriiDaCommitmentListRequest {
+        if let limit = request.limit, limit == 0 {
+            throw ToriiClientError.invalidPayload("DA commitment-list limit must be nonzero")
+        }
+        return request
+    }
+
     private func normalizeDaCommitmentProofRequest(_ request: ToriiDaCommitmentProofRequest) throws -> ToriiDaCommitmentProofRequest {
         let normalizedManifest = try request.manifestHash.map {
             try ToriiClient.normalizeHex32($0, field: "manifest_hash")
@@ -30389,9 +31584,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             manifestHash: normalizedManifest,
             laneId: request.laneId,
             epoch: request.epoch,
-            sequence: request.sequence,
-            pagination: request.pagination
+            sequence: request.sequence
         )
+    }
+
+    private func normalizeDaPinIntentListRequest(_ request: ToriiDaPinIntentListRequest) throws -> ToriiDaPinIntentListRequest {
+        if let limit = request.limit, limit == 0 {
+            throw ToriiClientError.invalidPayload("DA pin-intent-list limit must be nonzero")
+        }
+        return request
     }
 
     private func normalizeDaPinIntentQueryRequest(_ request: ToriiDaPinIntentQueryRequest) throws -> ToriiDaPinIntentQueryRequest {
@@ -30401,15 +31602,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalizedTicket = try request.storageTicket.map {
             try ToriiClient.normalizeHex32($0, field: "storage_ticket")
         }
-        let normalizedAlias = request.alias?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAlias = try request.alias.map { alias in
+            try requireDaPinIntentAlias(alias, field: "DA pin-intent query alias")
+        }
         return ToriiDaPinIntentQueryRequest(
             manifestHash: normalizedManifest,
             storageTicket: normalizedTicket,
-            alias: normalizedAlias?.isEmpty == true ? nil : normalizedAlias,
+            alias: normalizedAlias,
             laneId: request.laneId,
             epoch: request.epoch,
-            sequence: request.sequence,
-            pagination: request.pagination
+            sequence: request.sequence
         )
     }
 

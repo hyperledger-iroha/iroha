@@ -8,7 +8,7 @@
 //! value to the exact integer arithmetic trace and its value-copy bus.
 
 /// Stable descriptor for the complete P-256 group formula layer.
-pub(crate) const ZK_X509_P256_GROUP_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-group-air-v1-incompatible:homogeneous-projective-x-over-z-y-over-z:identity-0-1-0:renes-costello-batina-2015-algorithm4-complete-add-43-field-ops:algorithm6-exception-free-double-34-field-ops:a-minus3:affine-and-projective-curve-equations:nonidentity-by-z-inverse:straus-64x4bit-two-scalar:variable-table-14-adds:14810-arithmetic-ops:473920-arithmetic-rows:no-host-branching:activation=false";
+pub(crate) const ZK_X509_P256_GROUP_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-group-air-v1-incompatible:homogeneous-projective-x-over-z-y-over-z:identity-0-1-0:renes-costello-batina-2015-algorithm4-complete-add-43-field-ops:algorithm6-exception-free-double-34-field-ops:a-minus3:affine-and-projective-curve-equations:nonidentity-by-z-inverse:straus-64x4bit-two-scalar:variable-table-14-adds:14810-arithmetic-ops:473920-arithmetic-rows:no-host-branching:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
 /// Exact arithmetic-operation count for one `[u1]G + [u2]Q` execution,
 /// including the fourteen-addition variable-base table.

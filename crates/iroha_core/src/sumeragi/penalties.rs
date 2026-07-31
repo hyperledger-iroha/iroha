@@ -816,6 +816,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -873,6 +874,8 @@ mod tests {
             Hash::new(b"penalties fixture parent state"),
             Hash::new(b"penalties fixture post state"),
             Hash::new(b"penalties fixture ordinary writes"),
+            u64::try_from(block.encode_wire().expect("penalties block wire").len())
+                .expect("penalties block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("canonical executed block wire"),

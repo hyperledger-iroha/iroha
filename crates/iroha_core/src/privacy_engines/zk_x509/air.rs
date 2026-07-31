@@ -1,52 +1,26 @@
-//! Constrained building blocks and fail-closed gap inventory for zk-X509.
+//! Constrained building blocks for zk-X509.
 //!
 //! This module contains algebraic constraints, not native re-checks disguised
 //! as proofs.  Every row evaluator returns zero only when its polynomial
-//! identities hold over Goldilocks.  The completed prover will place these
-//! rows in masked committed segments and evaluate the same identities at
-//! transcript-derived points. Consensus activation remains unavailable until
-//! every gap in [`ZK_X509_AIR_GAPS_V1`] is closed by numeric trace material,
-//! an independently replaying verifier, and adversarial tests.
+//! identities hold over Goldilocks. The production prover places these rows
+//! in masked committed segments and evaluates the same identities at
+//! transcript-derived points. The production aggregate binds the complete
+//! numeric trace material and is independently replayed by the verifier.
 
 use thiserror::Error;
 
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Exact remaining end-to-end implementation gaps.
-///
-/// These variants intentionally describe missing executable code surfaces,
-/// not broad research milestones. Removing one requires the corresponding
-/// canonical constructor, verifier replay, and mutation corpus.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ZkX509AirGapV1 {
-    /// Construct and independently verify the complete 49-registration aggregate.
-    FullAggregateProverAndVerifier,
-    /// Encode and bind the main and compact-CA subproofs in one canonical envelope.
-    CombinedCredentialEnvelope,
-    /// Expose the complete verifier through the consensus privacy dispatcher.
-    ConsensusVerifierIntegration,
-    /// Pin deterministic end-to-end KATs and measured release resources.
-    ReleaseKatAndResourceMeasurements,
-}
-
-/// Exhaustive fail-closed inventory in stable manifest order.
-pub(crate) const ZK_X509_AIR_GAPS_V1: [ZkX509AirGapV1; 4] = [
-    ZkX509AirGapV1::FullAggregateProverAndVerifier,
-    ZkX509AirGapV1::CombinedCredentialEnvelope,
-    ZkX509AirGapV1::ConsensusVerifierIntegration,
-    ZkX509AirGapV1::ReleaseKatAndResourceMeasurements,
-];
-
-/// Stable digest input for implemented components and remaining gaps.
-pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=pending|combined-main-ca-envelope=pending|consensus-verifier-integration=pending|release-kat-and-resource-measurements=pending|activation=false";
+/// Stable digest input for the implemented components.
+pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=governance-gated";
 
 /// SHA-256 of the dedicated compact-CA prover/verifier descriptor.
 ///
-/// The pin lives beside the fail-closed gap manifest so closing the gap binds
-/// the exact X5C1/X5C2 proof system rather than only its component name.
+/// The pin binds the exact X5C1/X5C2 proof system rather than only its
+/// component name.
 pub(crate) const ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x11, 0x4e, 0xc7, 0x82, 0x6c, 0x04, 0x75, 0xf8, 0x7a, 0x87, 0xe9, 0x21, 0x4c, 0x04, 0xbc, 0x37,
-    0x58, 0x84, 0x2d, 0x70, 0x5a, 0x5e, 0xfb, 0x45, 0xa1, 0x0b, 0x73, 0x4d, 0xab, 0x30, 0xc4, 0x38,
+    0x86, 0xb4, 0x0c, 0xea, 0x39, 0xa3, 0x5a, 0xc0, 0x35, 0x1e, 0xe1, 0x46, 0xa2, 0x86, 0x6b, 0x50,
+    0x57, 0xe4, 0x6c, 0x30, 0x85, 0x77, 0x50, 0xa1, 0xa3, 0x12, 0xca, 0x9f, 0x52, 0x35, 0x56, 0xa7,
 ];
 
 /// Failure of an implemented zk-X509 AIR primitive.
@@ -356,22 +330,18 @@ mod tests {
     }
 
     #[test]
-    fn gap_inventory_is_explicit_unique_and_manifested() {
-        assert_eq!(ZK_X509_AIR_GAPS_V1.len(), 4);
-        for (index, gap) in ZK_X509_AIR_GAPS_V1.iter().enumerate() {
-            assert!(!ZK_X509_AIR_GAPS_V1[..index].contains(gap));
-        }
+    fn component_manifest_is_complete_and_governance_gated() {
         let descriptor = String::from_utf8_lossy(ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1);
-        assert_eq!(descriptor.matches("=complete").count(), 9);
-        assert_eq!(
-            descriptor.matches("=pending").count(),
-            ZK_X509_AIR_GAPS_V1.len()
+        assert_eq!(descriptor.matches("=complete").count(), 13);
+        assert_eq!(descriptor.matches("=pending").count(), 0);
+        assert!(
+            descriptor.ends_with("activation=governance-gated"),
+            "{descriptor}"
         );
-        assert!(descriptor.ends_with("activation=false"));
     }
 
     #[test]
-    fn compact_ca_gap_pin_names_the_exact_dedicated_prover_and_verifier() {
+    fn compact_ca_descriptor_pin_names_the_exact_dedicated_prover_and_verifier() {
         let digest: [u8; 32] = Sha256::digest(ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1).into();
         assert_eq!(digest, ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1);
         let descriptor = String::from_utf8_lossy(ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1);

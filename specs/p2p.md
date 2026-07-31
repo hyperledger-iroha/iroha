@@ -435,15 +435,20 @@ Operator guidance:
   still uses the `PeerGossip` topic and the same caps/backoffs, so disabling trust gossip does not
   starve peer updates.
 
-Optional handshake hardening (chain-bound signatures):
-
-```bash
-# Build with chain-id included in handshake signatures
-cargo build --workspace -F iroha_p2p/handshake_chain_id
-```
-
-Notes
-- Enable `handshake_chain_id` when you want inbound and outbound peers to bind the signed handshake to a specific chain.
+Chain-bound signatures are mandatory. Every inbound and outbound peer
+handshake signs one canonical V1 claim containing the identity algorithm and
+public key, advertised address, relay/consensus/confidential/crypto/trust
+capabilities, configured `ChainId`, full 256-bit session binding, and optional
+TLS/QUIC certificate fingerprint. The network start API requires a `ChainId`;
+changing any advertised claim, replaying it into another session or transport,
+or connecting from another chain fails signature verification before the peer
+can enter the authenticated set or exchange genesis traffic. The compact
+64-bit disambiguator is only a simultaneous-connection tie-breaker. There is no
+feature flag or unbound mode. Plain TCP, TLS-over-TCP, and QUIC accepts all
+enter the same `ConnectedFrom` handshake state machine; TLS and QUIC only add
+their server-certificate fingerprint to that common signed claim, while plain
+TCP signs the same mandatory chain and session fields without a certificate
+binding.
 
 ### ACL: Allow/Deny (Keys and CIDRs)
 
@@ -490,7 +495,7 @@ Notes
 ### TLS-over-TCP (camouflage)
 
 - Build-time: enable `iroha_p2p/p2p_tls` to include TLS support.
-- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by a handshake signature over the address, session binding, certificate fingerprint, and optional `chain_id`; rustls separately verifies possession of the certificate key.
+- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the canonical handshake claim, including the address, capabilities, full session binding, certificate fingerprint, and configured `ChainId`; rustls separately verifies possession of the certificate key.
 - Runtime: `tls_fallback_to_plain` (bool; default `false`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=true` to opt into plaintext fallback for outbound dials.
 - Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
 - Inbound: optionally enable a TLS listener via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address. Plain TCP on `[network].address` remains enabled unless `[network].tls_inbound_only=true`.

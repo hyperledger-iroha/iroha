@@ -2,15 +2,17 @@
   "mode": "Entry",
   "listen": "0.0.0.0:4433",
   "admin_listen": "127.0.0.1:9090",
+  "admin_auth_token_path": "/etc/soranet/relay/secrets/admin-token",
   "tls": {
     "certificate_path": "/etc/soranet/relay/tls/server.crt",
     "private_key_path": "/etc/soranet/relay/tls/server.key"
   },
   "pow": {
     "required": true,
-    "difficulty": 16,
+    "difficulty": 6,
     "max_future_skew_secs": 600,
     "min_ticket_ttl_secs": 45,
+    "revocation_store_path": "/var/lib/soranet-relay/ticket_revocations.norito",
     "puzzle": {
       "enabled": true,
       "memory_kib": 8192,
@@ -22,6 +24,8 @@
       "issuer_public_key_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "max_ttl_secs": 600,
       "clock_skew_secs": 10,
+      "replay_store_capacity": 8192,
+      "replay_store_path": "/var/lib/soranet-relay/token_replays.norito",
       "revocation_list_hex": [],
       "revocation_list_path": "/etc/soranet/relay/token_revocations.json"
     }

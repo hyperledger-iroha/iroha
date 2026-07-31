@@ -1213,7 +1213,7 @@ impl VpnHelperTicketV1 {
         validate_helper_ticket_frame(bytes)?;
         let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
         let expected_mac = helper_ticket_mac(secret, &bytes[..mac_offset]);
-        if expected_mac.as_bytes() != &bytes[mac_offset..] {
+        if !helper_ticket_mac_matches(&expected_mac, &bytes[mac_offset..]) {
             return Err(VpnHelperTicketError::InvalidMac);
         }
         let ticket = decode_helper_ticket_fields(bytes)?;
@@ -1348,6 +1348,10 @@ fn helper_ticket_mac(secret: &[u8; 32], payload: &[u8]) -> blake3::Hash {
     hasher.update(b"soranet-vpn-helper-ticket-v1");
     hasher.update(payload);
     hasher.finalize()
+}
+
+fn helper_ticket_mac_matches(expected: &blake3::Hash, encoded: &[u8]) -> bool {
+    blake3::Hash::from_slice(encoded).is_ok_and(|actual| expected == &actual)
 }
 
 /// Errors surfaced while parsing or verifying helper-authenticated VPN tickets.
@@ -1742,6 +1746,22 @@ mod tests {
         let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, &secret, 1_699_999_999_000)
             .expect("helper ticket hex should verify");
         assert_eq!(ticket, parsed_hex);
+    }
+
+    #[test]
+    fn helper_ticket_mac_comparison_checks_the_complete_digest() {
+        let expected = helper_ticket_mac(&[0x42; 32], b"helper-ticket-payload");
+        assert!(helper_ticket_mac_matches(&expected, expected.as_bytes()));
+
+        for index in [0, blake3::OUT_LEN / 2, blake3::OUT_LEN - 1] {
+            let mut altered = *expected.as_bytes();
+            altered[index] ^= 0x01;
+            assert!(!helper_ticket_mac_matches(&expected, &altered));
+        }
+        assert!(!helper_ticket_mac_matches(
+            &expected,
+            &expected.as_bytes()[..blake3::OUT_LEN - 1]
+        ));
     }
 
     #[test]

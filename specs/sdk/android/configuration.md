@@ -24,6 +24,7 @@ checksums as Rust services.
    reference the git SHA + checksum of this file. The recommended layout is:
    ```jsonc
    {
+     "chain_id": "nexus-production",
      "torii": {
        "base_uri": "https://torii.nexus.sora.org",
        "sorafs_gateway_uri": "https://sorafs-gw.nexus.sora.org",
@@ -50,6 +51,11 @@ checksums as Rust services.
      }
    }
    ```
+   The optional top-level `chain_id` creates the immutable
+   `LocalSigningContext` used to validate server-prepared transaction drafts.
+   Read-only clients may omit it. Any route that returns a transaction for
+   local signing fails before sending a request when this context is absent;
+   the SDK never infers the chain from Torii or accepts a per-call override.
    The `torii` block maps directly to
    `ClientConfig.Builder.setBaseUri(...)`, `.setSorafsGatewayUri(...)`,
    `.setRequestTimeout(...)`, and `.putDefaultHeader(...)`. The `retry` section

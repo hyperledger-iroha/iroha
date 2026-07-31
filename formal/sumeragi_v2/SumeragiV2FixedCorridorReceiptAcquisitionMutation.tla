@@ -37,7 +37,7 @@ Init ==
   /\ now = 3
   /\ leaderView = 1
   /\ otherView = 1
-  /\ ~leaderArmable
+  /\ leaderArmable = FALSE
   /\ receipts = {LeaderReceipt(1, 0), OtherReceipt(1, 0)}
 
 InstallSynchronizedLeaderView ==
@@ -46,7 +46,7 @@ InstallSynchronizedLeaderView ==
   /\ now' = now
   /\ leaderView' = 2
   /\ otherView' = otherView
-  /\ leaderArmable'
+  /\ leaderArmable' = TRUE
   /\ receipts' =
        CASE ReceiptMode = "PreStateOnly" ->
               {OtherReceipt(otherView, 0)}

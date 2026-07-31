@@ -370,7 +370,7 @@ fn minimal_config_snapshot() {
                     kem_id: 1,
                     sig_id: 1,
                     resume_hash: None,
-                    pow: SoranetPow { required: true, difficulty: 0, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: Some { memory_kib: 65536, time_cost: 2, lanes: 1 }, signed_ticket_public_key: None },
+                    pow: SoranetPow { required: true, difficulty: 6, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: Some { memory_kib: 65536, time_cost: 2, lanes: 1 }, signed_ticket_public_key: None },
                 },
                 soranet_privacy: SoranetPrivacy {
                     bucket_secs: 60,
@@ -636,7 +636,7 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     require_mtls: false,
                     mtls_trusted_proxy_cidrs: [
-                        "127.0.0.0/8",
+                        "127.0.0.1/32",
                         "::1/128",
                     ],
                     token_fallback: Bootstrap,
@@ -740,6 +740,9 @@ fn minimal_config_snapshot() {
                 },
                 iso_bridge: IsoBridge {
                     enabled: false,
+                    max_body_bytes: Bytes(
+                        1048576,
+                    ),
                     dedupe_ttl_secs: 300,
                     default_profile: "generic-iso20022",
                     profiles: [],
@@ -1686,7 +1689,7 @@ fn minimal_config_snapshot() {
                         enabled: true,
                         require_mtls: false,
                         mtls_trusted_proxy_cidrs: [
-                            "127.0.0.0/8",
+                            "127.0.0.1/32",
                             "::1/128",
                         ],
                         allowed_clients: [],
@@ -2339,7 +2342,6 @@ fn minimal_config_snapshot() {
                 ivm_max_decoded_bytes: 4194304,
                 quarantine_max_txs_per_block: 0,
                 quarantine_tx_max_cycles: 0,
-                quarantine_tx_max_millis: 0,
                 query_default_cursor_mode: Ephemeral,
                 query_max_fetch_size: 500,
                 query_stored_min_gas_units: 0,
@@ -3867,6 +3869,15 @@ fn soranet_handshake_invalid_kem_suite_rejected() {
 }
 
 #[test]
+fn soranet_handshake_zero_difficulty_rejected() {
+    let result = load_config_from_fixtures("bad.soranet_handshake_zero_difficulty.toml");
+    assert!(
+        result.is_err(),
+        "zero-difficulty SoraNet admission must be rejected"
+    );
+}
+
+#[test]
 fn routing_policy_dataspace_resolution() {
     use std::num::NonZeroU32;
 
@@ -4684,8 +4695,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
         "shield",
         "zk::zk_transfer",
         "unshield",
-        "register_asset_hidden_zk_pool",
-        "asset_hidden_zk_transfer",
     ] {
         assert!(
             has_is_instruction_route(instruction),
@@ -5185,7 +5194,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
 
-    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 3);
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 4);
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);

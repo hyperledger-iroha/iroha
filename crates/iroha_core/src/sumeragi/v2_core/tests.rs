@@ -36,6 +36,7 @@ fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
         roster,
         mode,
         Digest::repeat(0x52),
+        Digest::repeat(0x55),
         Digest::repeat(0x53),
         Digest::repeat(0x54),
     )
@@ -59,6 +60,7 @@ fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
         roster.clone(),
         VotingMode::Permissioned,
         Digest::repeat(0x62),
+        Digest::repeat(0x65),
         Digest::repeat(0x63),
         Digest::repeat(0x64),
     )
@@ -75,6 +77,7 @@ fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
             roster,
             VotingMode::Permissioned,
             Digest::repeat(0x62),
+            Digest::repeat(0x65),
             Digest::repeat(0x63),
             Digest::repeat(0x64),
         ),
@@ -224,6 +227,7 @@ fn leader_rotation_reduces_the_full_hashed_seed() {
         roster,
         VotingMode::Permissioned,
         Digest::repeat(0x52),
+        Digest::repeat(0x55),
         Digest::repeat(0x53),
         Digest::new(leader_seed),
     )
@@ -258,6 +262,7 @@ fn height_context_rejects_rosters_above_first_release_bound() {
         oversized,
         VotingMode::Permissioned,
         Digest::repeat(0x52),
+        Digest::repeat(0x55),
         Digest::repeat(0x53),
         Digest::repeat(0x54),
     );
@@ -286,6 +291,7 @@ fn height_context_requires_one_same_round_parent_commit_geometry() {
             roster.clone(),
             VotingMode::Permissioned,
             Digest::repeat(0x52),
+            Digest::repeat(0x55),
             Digest::repeat(0x53),
             Digest::repeat(0x54),
         )

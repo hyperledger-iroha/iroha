@@ -11,7 +11,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPT_FILE = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = path.dirname(SCRIPT_FILE);
 const JS_DIR = path.resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../../..");
 const DEFAULT_COMPOSE_FILE = path.join(REPO_ROOT, "defaults", "docker-compose.single.yml");
@@ -78,6 +79,9 @@ const testArgs = normalizeTestArgs(positionals.length === 0 ? [DEFAULT_TEST_TARG
 async function main() {
   if (shouldStart && !existsSync(composeFile)) {
     throw new Error(`compose file not found: ${composeFile}`);
+  }
+  if (shouldStart && composeFile === DEFAULT_COMPOSE_FILE) {
+    await validateDefaultComposeGenesisCustody();
   }
 
   const composeCommand = shouldStart ? await detectComposeCommand(composeBin) : null;
@@ -146,6 +150,28 @@ async function main() {
       } catch (error) {
         console.warn(`[integration] failed to stop compose stack: ${error}`);
       }
+    }
+  }
+}
+
+export async function validateDefaultComposeGenesisCustody(env = process.env) {
+  for (const name of [
+    "IROHA_GENESIS_PUBLIC_KEY_FILE",
+    "IROHA_GENESIS_PRIVATE_KEY_FILE",
+  ]) {
+    const keyPath = env[name];
+    if (!keyPath) {
+      throw new Error(
+        `${name} is required by the default Compose stack; generate runtime-only ` +
+          "genesis key files with kagami and never commit the private file",
+      );
+    }
+    if (!existsSync(keyPath)) {
+      throw new Error(`${name} does not point to an existing file`);
+    }
+    const record = await readFile(keyPath, "utf8");
+    if (!record.endsWith("\n") || record.trim().length === 0 || record.trim().includes("\n")) {
+      throw new Error(`${name} must contain exactly one non-empty key record and a final newline`);
     }
   }
 }
@@ -292,7 +318,9 @@ function normalizeCliString(value) {
   return trimmed.length === 0 ? null : trimmed;
 }
 
-main().catch((error) => {
-  console.error(`[integration] ${error.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_FILE) {
+  main().catch((error) => {
+    console.error(`[integration] ${error.message}`);
+    process.exitCode = 1;
+  });
+}

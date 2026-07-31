@@ -156,6 +156,7 @@ pub(crate) fn validate_staged_genesis_v2_authority(
         wire::SumeragiV2GenesisContextParameters {
             da_layout: context.da_layout,
             nexus_amx_context_hash: *context.nexus_amx_context_hash.as_ref(),
+            execution_policy_hash: *context.execution_policy_hash.as_ref(),
         },
     )?;
     let (verified, _) = expected.into_parts();
@@ -258,11 +259,14 @@ pub fn freeze_staged_genesis_v2(
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let staged_nexus_amx_context_hash =
         verify_staged_nexus_amx_context_hash(staged, signed_parameters.nexus_amx_context_hash)?;
+    let staged_execution_policy_hash =
+        verify_staged_execution_policy_hash(staged, signed_parameters.execution_policy_hash)?;
     let context = build_genesis_height_context(GenesisContextInputs {
         chain_id,
         election,
         next_epoch_snapshot,
         nexus_amx_context_hash: staged_nexus_amx_context_hash,
+        execution_policy_hash: staged_execution_policy_hash,
         da_layout: signed_parameters.da_layout,
     })
     .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
@@ -360,6 +364,32 @@ fn verify_staged_nexus_amx_context_hash(
     Ok(signed)
 }
 
+/// Compute the canonical V1 execution policy from a validated, uncommitted genesis block.
+///
+/// # Errors
+///
+/// Returns an error if an enabled Nexus policy has no authenticated runtime policy set.
+pub fn staged_genesis_execution_policy_hash(
+    staged: &StateBlock<'_>,
+) -> Result<Hash, V2GenesisBootstrapError> {
+    staged
+        .execution_policy_digest_v1()
+        .map(Hash::prehashed)
+        .map_err(|error| V2GenesisBootstrapError::ExecutionPolicy(error.to_string()))
+}
+
+fn verify_staged_execution_policy_hash(
+    staged: &StateBlock<'_>,
+    signed_hash: [u8; 32],
+) -> Result<Hash, V2GenesisBootstrapError> {
+    let staged = staged_genesis_execution_policy_hash(staged)?;
+    let signed = Hash::prehashed(signed_hash);
+    if staged != signed {
+        return Err(V2GenesisBootstrapError::ExecutionPolicyHashMismatch { signed, staged });
+    }
+    Ok(signed)
+}
+
 /// Failure to derive an exact fresh-genesis reducer bootstrap.
 #[derive(Debug, Error)]
 pub enum V2GenesisBootstrapError {
@@ -411,6 +441,19 @@ pub enum V2GenesisBootstrapError {
         /// Hash recomputed from the validated staged world.
         staged: Hash,
     },
+    /// Runtime-injected or otherwise drifted execution policy differs from signed genesis.
+    #[error(
+        "Sumeragi v2 signed execution-policy hash {signed} does not match staged state {staged}"
+    )]
+    ExecutionPolicyHashMismatch {
+        /// Hash embedded in signed genesis.
+        signed: Hash,
+        /// Hash recomputed from the validated staged execution policy.
+        staged: Hash,
+    },
+    /// The staged execution policy could not be represented canonically.
+    #[error("failed to derive the staged execution-policy identity: {0}")]
+    ExecutionPolicy(String),
     /// Exact NPoS power extraction failed.
     #[error("failed to freeze the Sumeragi v2 NPoS stake snapshot: {0}")]
     Stake(String),
@@ -457,6 +500,8 @@ pub(crate) struct GenesisContextInputs {
     pub next_epoch_snapshot: Option<wire::finality::FinalizedNextEpochSnapshot>,
     /// Nexus/AMX consensus-context commitment at genesis.
     pub nexus_amx_context_hash: Hash,
+    /// Canonical V1 boot execution-policy identity.
+    pub execution_policy_hash: Hash,
     /// Mandatory deterministic data-availability layout.
     pub da_layout: wire::DataAvailabilityLayout,
 }
@@ -481,6 +526,7 @@ pub(crate) fn build_genesis_height_context(
         quorum: inputs.election.quorum()?,
         roster: inputs.election.roster,
         nexus_amx_context_hash: inputs.nexus_amx_context_hash,
+        execution_policy_hash: inputs.execution_policy_hash,
         da_layout: inputs.da_layout,
         leader_seed: inputs.election.leader_seed,
     };
@@ -521,6 +567,7 @@ pub(crate) fn build_successor_height_context(
         quorum: election.quorum()?,
         roster: election.roster,
         nexus_amx_context_hash,
+        execution_policy_hash: parent.height_context.execution_policy_hash,
         da_layout: parent.height_context.da_layout,
         leader_seed: election.leader_seed,
     };
@@ -772,6 +819,7 @@ mod tests {
             },
             next_epoch_snapshot,
             nexus_amx_context_hash: Hash::new(b"genesis nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -907,6 +955,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("canonical quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -1060,6 +1109,44 @@ mod tests {
     }
 
     #[test]
+    fn staged_execution_policy_hash_rejects_process_local_drift() {
+        let baseline = lane_hash_world(&[]);
+        let staged = baseline.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let expected =
+            staged_genesis_execution_policy_hash(&staged).expect("derive baseline policy");
+        assert_eq!(
+            verify_staged_execution_policy_hash(&staged, expected.into())
+                .expect("matching signed policy"),
+            expected
+        );
+        drop(staged);
+
+        let mut drifted = baseline;
+        let mut pipeline = drifted.pipeline_snapshot();
+        pipeline.overlay_max_bytes = pipeline.overlay_max_bytes.saturating_add(1);
+        drifted.set_pipeline(pipeline);
+        let staged = drifted.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        assert!(matches!(
+            verify_staged_execution_policy_hash(&staged, expected.into()),
+            Err(V2GenesisBootstrapError::ExecutionPolicyHashMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn staged_lane_hash_binds_catalog_routing_and_amx_policy() {
         let peer = PeerId::new(
             KeyPair::try_from_seed(vec![0x63; 32], Algorithm::BlsNormal)
@@ -1141,6 +1228,7 @@ mod tests {
                 Hash::new(b"context fixture parent state"),
                 Hash::new(b"context fixture post state"),
                 Hash::new(b"context fixture ordinary writes"),
+                1,
                 Hash::new(b"context fixture executed block wire"),
             ),
             signers: vec![0, 1, 2, 3],
@@ -1347,6 +1435,7 @@ mod tests {
             },
             next_epoch_snapshot: None,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,

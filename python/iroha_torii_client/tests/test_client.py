@@ -102,23 +102,74 @@ def _contract_operation_receipt(
     entrypoint: str = "ping",
     gas_limit: int = 5000,
     fee_payment: Optional[Dict[str, Any]] = None,
+    contract_alias: Optional[str] = "router::universal",
+    contract_address: Optional[str] = (
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    ),
 ) -> Dict[str, Any]:
     return {
         "operation_kind": "contract_call",
-        "status": "submitted",
+        "status": "pending_signature",
         "transport": "torii",
         "dataspace": "universal",
-        "contract_alias": "router::universal",
-        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        "contract_alias": contract_alias,
+        "contract_address": contract_address,
         "code_hash_hex": "22" * 32,
         "abi_hash_hex": "33" * 32,
-        "tx_hash_hex": "44" * 32,
+        "tx_hash_hex": None,
         "entrypoint": entrypoint,
         "entrypoint_hash_hex": "55" * 32,
         "gas_limit": gas_limit,
-        "gas_used": 17,
+        "gas_used": None,
         "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
         "payload_digest_hex": "66" * 32,
+    }
+
+
+def _app_api_transaction_draft(payload: bytes = b"\x01\x02\x03") -> Dict[str, Any]:
+    signing_message = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
+    signing_message[-1] |= 1
+    return {
+        "submitted": False,
+        "transaction_payload_b64": base64.b64encode(payload).decode("ascii"),
+        "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
+    }
+
+
+def _contract_call_draft(
+    *,
+    entrypoint: str = "ping",
+    contract_alias: Optional[str] = "router::universal",
+    contract_address: Optional[str] = (
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    ),
+    fee_payment: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    scaffold_b64 = base64.b64encode(b"\x01\x02\x03").decode("ascii")
+    signing_message = bytearray(hashlib.blake2b(b"payload", digest_size=32).digest())
+    signing_message[-1] |= 1
+    return {
+        "ok": True,
+        "submitted": False,
+        "dataspace": "universal",
+        "code_hash_hex": "22" * 32,
+        "abi_hash_hex": "33" * 32,
+        "creation_time_ms": 42,
+        "contract_address": contract_address,
+        "tx_hash_hex": None,
+        "pipeline_status": None,
+        "entrypoint": entrypoint,
+        "transaction_ttl_ms": 60_000,
+        "entrypoint_hash_hex": "55" * 32,
+        "transaction_scaffold_b64": scaffold_b64,
+        "signed_transaction_b64": scaffold_b64,
+        "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
+        "operation_receipt": _contract_operation_receipt(
+            entrypoint=entrypoint,
+            fee_payment=fee_payment,
+            contract_alias=contract_alias,
+            contract_address=contract_address,
+        ),
     }
 
 
@@ -139,11 +190,8 @@ def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
         "halo2/ipa",
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/kaigi-usage-v1",
-        "halo2/pasta/ivm-overlay-bind",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-        ("halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"),
-        ("halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"),
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -200,10 +248,12 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 123,
         "executed_block_wire_hash": _canonical_hash(0x37),
     }
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -2567,53 +2617,16 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
-            status_code=202,
-            payload={
-                "ok": True,
-                "submitted": True,
-                "dataspace": "universal",
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
-                "creation_time_ms": 42,
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                "tx_hash_hex": "44" * 32,
-                "pipeline_status": {
-                    "hash": "44" * 32,
-                    "status": {
-                        "kind": "Rejected",
-                        "block_height": 12,
-                        "rejection_reason": {
-                            "Validation": "missing permission",
-                        },
-                    },
-                    "summary": "Rejected: missing permission",
-                    "diagnostics": [
-                        {
-                            "category": "validation",
-                            "code": "validation",
-                            "message": "missing permission",
-                            "decoded_reason": "missing permission",
-                            "raw_reason": "Validation(missing permission)",
-                        }
-                    ],
-                    "scope": "local",
-                    "resolved_from": "state",
-                },
-                "entrypoint": "ping",
-                "transaction_ttl_ms": 60_000,
-                "entrypoint_hash_hex": "55" * 32,
-                "transaction_scaffold_b64": "AQID",
-                "signed_transaction_b64": "BAUG",
-                "signing_message_b64": "BwgJ",
-                "operation_receipt": _contract_operation_receipt(),
-            },
+            status_code=200,
+            payload=_contract_call_draft(
+                fee_payment=_authority_fee_payment(5000),
+            ),
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    result = client.call_contract(
+    result = client.prepare_contract_call(
         authority=CANONICAL_OWNER,
-        private_key="00" * 32,
         contract_alias="router::universal",
         entrypoint="ping",
         payload={"value": 1, "labels": ["alpha"]},
@@ -2628,14 +2641,12 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     assert isinstance(result.operation_receipt, ContractOperationReceipt)
     assert result.operation_receipt.gas_limit == 5000
     assert result.operation_receipt.payload_digest_hex == "66" * 32
-    assert result.pipeline_status is not None
-    assert result.pipeline_status.is_rejected
-    assert result.pipeline_status.primary_diagnostic is not None
-    assert result.pipeline_status.primary_diagnostic.decoded_reason == "missing permission"
+    assert result.submitted is False
+    assert result.pipeline_status is None
+    assert result.transaction_scaffold_b64 == result.signed_transaction_b64
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload == {
         "authority": CANONICAL_OWNER,
-        "private_key": "00" * 32,
         "contract_alias": "router::universal",
         "entrypoint": "ping",
         "payload": {"value": 1, "labels": ["alpha"]},
@@ -2667,27 +2678,17 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     session.queue(
         StubResponse(
             status_code=200,
-            payload={
-                "ok": True,
-                "submitted": False,
-                "dataspace": "universal",
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
-                "creation_time_ms": 1,
-                "entrypoint": boundary["entrypoint"],
-                "operation_receipt": _contract_operation_receipt(
-                    entrypoint=boundary["entrypoint"],
-                    gas_limit=boundary["fee_payment"]["value"]["gas_limit"],
-                    fee_payment=boundary["fee_payment"],
-                ),
-            },
+            payload=_contract_call_draft(
+                entrypoint=boundary["entrypoint"],
+                contract_alias=boundary["contract_alias"],
+                fee_payment=boundary["fee_payment"],
+            ),
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    client.call_contract(
+    client.prepare_contract_call(
         authority=boundary["authority"],
-        private_key="fixture-private-key",
         contract_alias=boundary["contract_alias"],
         entrypoint=boundary["entrypoint"],
         payload=boundary["payload"],
@@ -2697,7 +2698,6 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     submitted = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert submitted == {
         "authority": boundary["authority"],
-        "private_key": "fixture-private-key",
         "contract_alias": boundary["contract_alias"],
         "entrypoint": boundary["entrypoint"],
         "payload": boundary["payload"],
@@ -2711,26 +2711,17 @@ def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_spons
     session = RecordingSession()
     session.queue(
         StubResponse(
-            status_code=202,
-            payload={
-                "ok": True,
-                "submitted": True,
-                "dataspace": "universal",
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
-                "creation_time_ms": 42,
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                "tx_hash_hex": "44" * 32,
-                "entrypoint": "ping",
-                "operation_receipt": _contract_operation_receipt(),
-            },
+            status_code=200,
+            payload=_contract_call_draft(
+                contract_alias="router::is",
+                fee_payment=_sponsor_fee_payment(5000),
+            ),
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    client.call_contract(
+    client.prepare_contract_call(
         authority=CANONICAL_OWNER,
-        private_key="00" * 32,
         contract_alias="router::is",
         entrypoint="ping",
         payload={},
@@ -2743,10 +2734,9 @@ def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_spons
 
     adversarial = _sponsor_fee_payment(5000)
     adversarial["value"]["program_id"]["sponsor"] = "bad sponsor"
-    with pytest.raises(ValueError, match="call_contract.fee_payment.*sponsor"):
-        client.call_contract(
+    with pytest.raises(ValueError, match="prepare_contract_call.fee_payment.*sponsor"):
+        client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            private_key="00" * 32,
             contract_alias="router::is",
             entrypoint="ping",
             fee_payment=adversarial,
@@ -2758,19 +2748,17 @@ def test_call_contract_rejects_missing_entrypoint_and_non_positive_gas_before_di
     client = ToriiClient("http://node.test", session=session)
 
     for entrypoint in ("", "   "):
-        with pytest.raises(ValueError, match="call_contract.entrypoint"):
-            client.call_contract(
+        with pytest.raises(ValueError, match="prepare_contract_call.entrypoint"):
+            client.prepare_contract_call(
                 authority=CANONICAL_OWNER,
-                private_key="00" * 32,
                 contract_alias="router::universal",
                 entrypoint=entrypoint,
                 fee_payment=_authority_fee_payment(1),
             )
     for gas_limit in (None, 0, -1):
-        with pytest.raises(ValueError, match="call_contract.fee_payment.*gas_limit"):
-            client.call_contract(
+        with pytest.raises(ValueError, match="prepare_contract_call.fee_payment.*gas_limit"):
+            client.prepare_contract_call(
                 authority=CANONICAL_OWNER,
-                private_key="00" * 32,
                 contract_alias="router::universal",
                 entrypoint="ping",
                 fee_payment=_authority_fee_payment(gas_limit),
@@ -3062,9 +3050,8 @@ def test_call_contract_rejects_ambiguous_selector() -> None:
     client = ToriiClient("http://node.test", session=RecordingSession())
 
     with pytest.raises(ValueError, match="exactly one of contract_address or contract_alias"):
-        client.call_contract(
+        client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            private_key="00" * 32,
             contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3076,19 +3063,17 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="call_contract\\.contract_address must not contain surrounding whitespace"):
-        client.call_contract(
+    with pytest.raises(ValueError, match="prepare_contract_call\\.contract_address must not contain surrounding whitespace"):
+        client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            private_key="00" * 32,
             contract_address=" tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
         )
 
-    with pytest.raises(ValueError, match="call_contract\\.contract_alias must not contain surrounding whitespace"):
-        client.call_contract(
+    with pytest.raises(ValueError, match="prepare_contract_call\\.contract_alias must not contain surrounding whitespace"):
+        client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            private_key="00" * 32,
             contract_alias="router::universal ",
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
@@ -3644,32 +3629,19 @@ def test_contract_helpers_against_mock_server() -> None:
                         "code_hash_hex": "22" * 32,
                     }
                 },
-                "contract_call_response": {
-                    "ok": True,
-                    "submitted": True,
-                    "dataspace": "universal",
-                    "code_hash_hex": "22" * 32,
-                    "abi_hash_hex": "33" * 32,
-                    "creation_time_ms": 9,
-                    "contract_address": contract_address,
-                    "tx_hash_hex": "44" * 32,
-                    "entrypoint": "ping",
-                    "transaction_ttl_ms": 60_000,
-                    "entrypoint_hash_hex": "55" * 32,
-                    "transaction_scaffold_b64": "AQID",
-                    "signed_transaction_b64": "BAUG",
-                    "signing_message_b64": "BwgJ",
-                    "operation_receipt": _contract_operation_receipt(),
-                },
+                "contract_call_response": _contract_call_draft(
+                    contract_alias=None,
+                    contract_address=contract_address,
+                    fee_payment=_authority_fee_payment(5000),
+                ),
             },
             timeout=5.0,
         )
         response.raise_for_status()
 
         client = ToriiClient(server.base_url)
-        call = client.call_contract(
+        call = client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            private_key="00" * 32,
             contract_address=contract_address,
             entrypoint="ping",
             payload={"value": 1},
@@ -3706,7 +3678,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 3
+        assert payload["protocol_version"] == 4
         assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
@@ -3729,7 +3701,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
     try:
         base_url = server.base_url.rstrip("/")
         fixtures = {
-            "status": {"protocol_version": 3, "height": 42},
+            "status": {"protocol_version": 4, "height": 42},
             "leader": {"leader_index": 2},
             "telemetry": {"availability": {"total_votes_ingested": 7}},
         }
@@ -3764,7 +3736,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
 
     assert type(status) is SumeragiV2Status
     assert SumeragiV2Status is not SumeragiDiagnosticsStatus
-    assert status.protocol_version == 3
+    assert status.protocol_version == 4
     assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
@@ -3855,6 +3827,80 @@ def test_get_sumeragi_status_rejects_invalid_native_manifest(
     mutate(payload["last_commit_qc"]["certificate"]["execution_commitment"])
 
     with pytest.raises(RuntimeError, match=error):
+        _get_sumeragi_status(payload)
+
+
+def test_get_sumeragi_status_requires_exact_merge_carrier_projection() -> None:
+    payload = _sumeragi_v2_status_payload()
+    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
+    status = _get_sumeragi_status(payload)
+    assert status.last_commit_qc is not None
+    assert status.last_commit_qc.certificate.execution_commitment.merge_carrier is None
+
+    commitment["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x39),
+    }
+    status = _get_sumeragi_status(payload)
+    assert status.last_commit_qc is not None
+    carrier = status.last_commit_qc.certificate.execution_commitment.merge_carrier
+    assert carrier is not None
+    assert carrier.version == 1
+    assert carrier.entry_hash == _canonical_hash(0x39)
+
+    invalid_carriers = [
+        "missing",
+        "malformed",
+        "wrong_version",
+        "bad_hash",
+        "unknown_field",
+    ]
+    for case in invalid_carriers:
+        candidate = _sumeragi_v2_status_payload()
+        candidate_commitment = candidate["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+        if case == "missing":
+            del candidate_commitment["merge_carrier"]
+        elif case == "malformed":
+            candidate_commitment["merge_carrier"] = "carrier"
+        elif case == "wrong_version":
+            candidate_commitment["merge_carrier"] = {
+                "version": 2,
+                "entry_hash": _canonical_hash(0x39),
+            }
+        elif case == "bad_hash":
+            candidate_commitment["merge_carrier"] = {
+                "version": 1,
+                "entry_hash": "not-a-hash",
+            }
+        else:
+            candidate_commitment["merge_carrier"] = {
+                "version": 1,
+                "entry_hash": _canonical_hash(0x39),
+                "future": True,
+            }
+        with pytest.raises(RuntimeError):
+            _get_sumeragi_status(candidate)
+
+
+@pytest.mark.parametrize("invalid", [None, True, 0, -1, 1 << 64, "123"])
+def test_get_sumeragi_status_requires_exact_executed_wire_len(invalid: Any) -> None:
+    payload = _sumeragi_v2_status_payload()
+    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
+    status = _get_sumeragi_status(payload)
+    assert status.last_commit_qc is not None
+    assert (
+        status.last_commit_qc.certificate.execution_commitment.executed_block_wire_len
+        == 123
+    )
+
+    commitment["executed_block_wire_len"] = invalid
+    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
+        _get_sumeragi_status(payload)
+
+    del commitment["executed_block_wire_len"]
+    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
         _get_sumeragi_status(payload)
 
 
@@ -4859,8 +4905,8 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
         _get_sumeragi_status(legacy_field)
 
     wrong_version = _sumeragi_v2_status_payload()
-    wrong_version["protocol_version"] = 1
-    with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
+    wrong_version["protocol_version"] = 3
+    with pytest.raises(RuntimeError, match="protocol_version must equal 4"):
         _get_sumeragi_status(wrong_version)
 
     missing_restart_required = _sumeragi_v2_status_payload()
@@ -5359,7 +5405,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
 
 def test_publish_space_directory_manifest_posts_payload() -> None:
     session = RecordingSession()
-    session.queue(StubResponse(status_code=202, payload={"queued": True}))
+    session.queue(StubResponse(status_code=200, payload=_app_api_transaction_draft()))
     client = ToriiClient("http://node.test", session=session)
 
     manifest: Dict[str, Any] = {
@@ -5370,17 +5416,17 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
     }
     response = client.publish_space_directory_manifest(
         authority=CANONICAL_OWNER,
-        private_key="ed25519:AAAA",
         manifest=manifest,
         reason="demo",
     )
 
-    assert response == {"queued": True}
+    assert response.submitted is False
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/space-directory/manifests")
     assert session.calls[0]["headers"]["Content-Type"] == "application/json"
     body = json.loads(session.calls[0]["data"])
     assert body["authority"] == CANONICAL_OWNER
+    assert "private_key" not in body
     assert body["reason"] == "demo"
     assert body["manifest"]["entries"][0]["scope"]["program"] == "cbdc.transfer"
 
@@ -5390,23 +5436,23 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
 
 def test_revoke_space_directory_manifest_posts_payload() -> None:
     session = RecordingSession()
-    session.queue(StubResponse(status_code=202))
+    session.queue(StubResponse(status_code=200, payload=_app_api_transaction_draft()))
     client = ToriiClient("http://node.test", session=session)
 
     result = client.revoke_space_directory_manifest(
         authority=CANONICAL_OWNER,
-        private_key="ed25519:BBBB",
         uaid="UAID:" + "23" * 32,
         dataspace=3,
         revoked_epoch=4096,
         reason="audit",
     )
 
-    assert result is None
+    assert result.submitted is False
     call = session.calls[0]
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/space-directory/manifests/revoke")
     payload = json.loads(call["data"])
+    assert "private_key" not in payload
     assert payload["uaid"] == "uaid:" + "23" * 32
     assert payload["dataspace"] == 3
     assert payload["revoked_epoch"] == 4096
@@ -6883,7 +6929,7 @@ def test_offline_public_request_annotations_are_closed_first_release_types() -> 
     )
 
 
-def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> None:
+def test_offline_finality_execution_commitment_requires_executed_wire_identity() -> None:
     payload = {
         "parent_state_root": _canonical_hash(0x91),
         "post_state_root": _canonical_hash(0x92),
@@ -6894,6 +6940,8 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 321,
         "executed_block_wire_hash": _canonical_hash(0x94),
     }
     commitment = client_module._offline_top_up_finality_execution_commitment(
@@ -6901,6 +6949,7 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
         "test.execution_commitment",
         require_topup=False,
     )
+    assert commitment.executed_block_wire_len == payload["executed_block_wire_len"]
     assert commitment.executed_block_wire_hash == payload["executed_block_wire_hash"]
 
     payload["native_amx_application_manifest_root"] = _canonical_hash(0x95)
@@ -6914,6 +6963,25 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
     )
     assert nonempty_commitment.native_amx_application_manifest_count == 1
 
+    for invalid in (None, True, 0, -1, 1 << 64, "321"):
+        invalid_payload = dict(payload)
+        invalid_payload["executed_block_wire_len"] = invalid
+        with pytest.raises(RuntimeError, match="executed_block_wire_len"):
+            client_module._offline_top_up_finality_execution_commitment(
+                invalid_payload,
+                "test.execution_commitment",
+                require_topup=False,
+            )
+
+    missing_len = dict(payload)
+    del missing_len["executed_block_wire_len"]
+    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
+        client_module._offline_top_up_finality_execution_commitment(
+            missing_len,
+            "test.execution_commitment",
+            require_topup=False,
+        )
+
     del payload["executed_block_wire_hash"]
     with pytest.raises(RuntimeError, match="executed_block_wire_hash"):
         client_module._offline_top_up_finality_execution_commitment(
@@ -6921,6 +6989,72 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
             "test.execution_commitment",
             require_topup=False,
         )
+
+
+def test_offline_finality_execution_commitment_requires_exact_merge_carrier() -> None:
+    def payload() -> Dict[str, Any]:
+        return {
+            "parent_state_root": _canonical_hash(0x91),
+            "post_state_root": _canonical_hash(0x92),
+            "ordinary_writes_root": _canonical_hash(0x93),
+            "topup_anchor_count": 0,
+            "native_amx_application_manifest_version": 1,
+            "native_amx_application_manifest_root": (
+                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+            ),
+            "native_amx_application_manifest_count": 0,
+            "merge_carrier": None,
+            "executed_block_wire_len": 321,
+            "executed_block_wire_hash": _canonical_hash(0x94),
+        }
+
+    parsed = client_module._offline_top_up_finality_execution_commitment(
+        payload(), "test.execution_commitment", require_topup=False
+    )
+    assert parsed.merge_carrier is None
+
+    carrier_payload = payload()
+    carrier_payload["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x95),
+    }
+    parsed = client_module._offline_top_up_finality_execution_commitment(
+        carrier_payload, "test.execution_commitment", require_topup=False
+    )
+    assert parsed.merge_carrier is not None
+    assert parsed.merge_carrier.entry_hash == _canonical_hash(0x95)
+
+    invalid_payloads = []
+    missing = payload()
+    del missing["merge_carrier"]
+    invalid_payloads.append(missing)
+    malformed = payload()
+    malformed["merge_carrier"] = []
+    invalid_payloads.append(malformed)
+    wrong_version = payload()
+    wrong_version["merge_carrier"] = {
+        "version": 2,
+        "entry_hash": _canonical_hash(0x95),
+    }
+    invalid_payloads.append(wrong_version)
+    bad_hash = payload()
+    bad_hash["merge_carrier"] = {"version": 1, "entry_hash": "bad"}
+    invalid_payloads.append(bad_hash)
+    unknown = payload()
+    unknown["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x95),
+        "future": 1,
+    }
+    invalid_payloads.append(unknown)
+
+    for invalid in invalid_payloads:
+        with pytest.raises(RuntimeError):
+            client_module._offline_top_up_finality_execution_commitment(
+                invalid,
+                "test.execution_commitment",
+                require_topup=False,
+            )
 
 
 @pytest.mark.parametrize(
@@ -6965,6 +7099,8 @@ def test_offline_finality_execution_commitment_rejects_invalid_native_manifest(
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 321,
         "executed_block_wire_hash": _canonical_hash(0x94),
     }
     mutate(payload)
@@ -8580,9 +8716,8 @@ def test_create_subscription_plan_posts_payload() -> None:
     session.queue(
         StubResponse(
             payload={
-                "ok": True,
+                **_app_api_transaction_draft(),
                 "plan_id": "plan#subs",
-                "tx_hash_hex": "deadbeef",
             }
         )
     )
@@ -8590,16 +8725,15 @@ def test_create_subscription_plan_posts_payload() -> None:
 
     result = client.create_subscription_plan(
         authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        private_key="ed25519:priv",
         plan_id="plan#subs",
         plan={"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
     )
 
-    assert result.ok is True
+    assert result.submitted is False
     assert result.plan_id == "plan#subs"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload["authority"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-    assert payload["private_key"] == "ed25519:priv"
+    assert "private_key" not in payload
     assert payload["plan_id"] == "plan#subs"
     assert payload["plan"]["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
@@ -8760,22 +8894,25 @@ def test_record_subscription_usage_uses_canonical_quantity_boundary() -> None:
     for canonical in canonical_values:
         session.queue(
             StubResponse(
-                payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "e"}
+                payload={
+                    **_app_api_transaction_draft(canonical.encode("utf-8")),
+                    "subscription_id": "sub-1",
+                }
             )
         )
         result = client.record_subscription_usage(
             "sub-1",
             authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            private_key="ed25519:priv",
             unit_key="compute_ms",
             delta=canonical,
             usage_trigger_id="sub-usage",
         )
-        assert result.ok is True
+        assert result.submitted is False
         payload = json.loads(session.calls[-1]["data"].decode("utf-8"))
         assert payload["unit_key"] == "compute_ms"
         assert payload["delta"] == canonical
         assert payload["usage_trigger_id"] == "sub-usage"
+        assert "private_key" not in payload
 
     invalid_values: List[Any] = [
         0,
@@ -8799,7 +8936,6 @@ def test_record_subscription_usage_uses_canonical_quantity_boundary() -> None:
             client.record_subscription_usage(
                 "sub-1",
                 authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-                private_key="ed25519:priv",
                 unit_key="compute_ms",
                 delta=invalid,  # type: ignore[arg-type]
             )

@@ -13,7 +13,7 @@ The API mirrors the app-facing endpoints exposed by Torii:
   redemption operations using direct structured JSON.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
-* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-3 consensus
+* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-4 consensus
   and canonical lane evidence.
 
 Example
@@ -720,6 +720,7 @@ __all__ = [
     "StatusSnapshot",
     "SumeragiV2Round",
     "SumeragiV2BlockSubject",
+    "SumeragiV2MergeCarrierCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QcReference",
     "SumeragiV2TimeoutReference",
@@ -783,9 +784,7 @@ __all__ = [
     "OfflineVerifyingKeyRecordJson",
     "OfflineMerkleProofJson",
     "OfflineLanePrivacyMerkleWitnessJson",
-    "OfflineLanePrivacySnarkWitnessJson",
     "OfflineLanePrivacyMerkleVariantJson",
-    "OfflineLanePrivacySnarkVariantJson",
     "OfflineLanePrivacyWitnessJson",
     "OfflineLanePrivacyProofJson",
     "OfflineVerifiedFoldStepJson",
@@ -828,6 +827,7 @@ __all__ = [
     "OfflineTopUpFinalityHeightContextId",
     "OfflineTopUpFinalityConsensusRound",
     "OfflineTopUpFinalityBlockSubject",
+    "OfflineTopUpFinalityMergeCarrierCommitment",
     "OfflineTopUpFinalityExecutionCommitment",
     "OfflineTopUpFinalityQuorumCertificate",
     "OfflineTopUpFinalityValidatorPower",
@@ -850,6 +850,7 @@ __all__ = [
     "OfflineAppliedOperation",
     "OfflineRejectedOperation",
     "OfflineOperationStatus",
+    "AppApiTransactionDraft",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -857,6 +858,7 @@ __all__ = [
     "SubscriptionListItem",
     "SubscriptionListPage",
     "SubscriptionActionResult",
+    "SubscriptionUsageDraft",
     "SumeragiQcSnapshot",
     "SumeragiPacemakerSnapshot",
     "SumeragiPhasesSnapshot",
@@ -2755,11 +2757,8 @@ OfflineProofBackend = Literal[
     "halo2/ipa",
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -2800,7 +2799,7 @@ class OfflineMerkleProofJson(TypedDict):
     """Merkle authentication path carried by a lane-privacy witness."""
 
     leaf_index: int
-    audit_path: List[Optional[str]]
+    audit_path: List[str]
 
 
 class OfflineLanePrivacyMerkleWitnessJson(TypedDict):
@@ -2810,13 +2809,6 @@ class OfflineLanePrivacyMerkleWitnessJson(TypedDict):
     proof: OfflineMerkleProofJson
 
 
-class OfflineLanePrivacySnarkWitnessJson(TypedDict):
-    """Typed base64 SNARK lane-privacy witness."""
-
-    public_inputs: str
-    proof: str
-
-
 class OfflineLanePrivacyMerkleVariantJson(TypedDict):
     """Merkle variant of a lane-privacy witness."""
 
@@ -2824,17 +2816,7 @@ class OfflineLanePrivacyMerkleVariantJson(TypedDict):
     payload: OfflineLanePrivacyMerkleWitnessJson
 
 
-class OfflineLanePrivacySnarkVariantJson(TypedDict):
-    """SNARK variant of a lane-privacy witness."""
-
-    kind: Literal["snark"]
-    payload: OfflineLanePrivacySnarkWitnessJson
-
-
-OfflineLanePrivacyWitnessJson = Union[
-    OfflineLanePrivacyMerkleVariantJson,
-    OfflineLanePrivacySnarkVariantJson,
-]
+OfflineLanePrivacyWitnessJson = OfflineLanePrivacyMerkleVariantJson
 
 
 class OfflineLanePrivacyProofJson(TypedDict):
@@ -3118,7 +3100,8 @@ _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
 _OFFLINE_TOP_UP_FINALITY_PROOF_VERSION = 1
-_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 3
+_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 4
+_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
@@ -4279,6 +4262,14 @@ class OfflineTopUpFinalityBlockSubject:
 
 
 @dataclass(frozen=True)
+class OfflineTopUpFinalityMergeCarrierCommitment:
+    """Exact merge-ledger entry identity authenticated by finality."""
+
+    version: Literal[1]
+    entry_hash: str
+
+
+@dataclass(frozen=True)
 class OfflineTopUpFinalityExecutionCommitment:
     """Deterministic state transition authenticated by a QC."""
 
@@ -4290,6 +4281,8 @@ class OfflineTopUpFinalityExecutionCommitment:
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
+    merge_carrier: Optional[OfflineTopUpFinalityMergeCarrierCommitment]
+    executed_block_wire_len: int
     executed_block_wire_hash: str
 
 
@@ -4340,7 +4333,7 @@ class OfflineTopUpFinalityHeightContext:
 
     context_id: OfflineTopUpFinalityHeightContextId
     chain_id: str
-    protocol_version: Literal[3]
+    protocol_version: Literal[4]
     height: int
     epoch: int
     epoch_end_height: int
@@ -4348,6 +4341,7 @@ class OfflineTopUpFinalityHeightContext:
     mode: OfflineTopUpFinalityConsensusMode
     parent_commit_qc: Optional[OfflineTopUpFinalityQuorumCertificate]
     nexus_amx_context_hash: str
+    execution_policy_hash: str
     da_layout: OfflineTopUpFinalityDataAvailabilityLayout
     leader_seed: Tuple[int, ...]
 
@@ -4915,6 +4909,23 @@ def _offline_top_up_finality_execution_commitment(
     require_topup: bool,
 ) -> OfflineTopUpFinalityExecutionCommitment:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "parent_state_root",
+            "post_state_root",
+            "ordinary_writes_root",
+            "topup_anchor_count",
+            "native_amx_application_manifest_version",
+            "native_amx_application_manifest_root",
+            "native_amx_application_manifest_count",
+            "merge_carrier",
+            "executed_block_wire_len",
+            "executed_block_wire_hash",
+        ),
+        optional=("topup_anchor_root",),
+    )
     topup_anchor_count = _offline_unsigned(
         _offline_required(record, "topup_anchor_count", context),
         f"{context}.topup_anchor_count",
@@ -4963,6 +4974,35 @@ def _offline_top_up_finality_execution_commitment(
             f"{context}.native_amx_application_manifest_count must be zero exactly "
             "for the canonical empty root"
         )
+    raw_merge_carrier = _offline_required(record, "merge_carrier", context)
+    merge_carrier: Optional[OfflineTopUpFinalityMergeCarrierCommitment]
+    if raw_merge_carrier is None:
+        merge_carrier = None
+    else:
+        merge_context = f"{context}.merge_carrier"
+        merge_record = _offline_mapping(raw_merge_carrier, merge_context)
+        _offline_exact_object_fields(
+            merge_record,
+            merge_context,
+            required=("version", "entry_hash"),
+        )
+        merge_version = _offline_unsigned(
+            _offline_required(merge_record, "version", merge_context),
+            f"{merge_context}.version",
+            (1 << 16) - 1,
+        )
+        if merge_version != _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION:
+            raise RuntimeError(
+                f"{merge_context}.version must be "
+                f"{_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}"
+            )
+        merge_carrier = OfflineTopUpFinalityMergeCarrierCommitment(
+            version=1,
+            entry_hash=_offline_hash_literal(
+                _offline_required(merge_record, "entry_hash", merge_context),
+                f"{merge_context}.entry_hash",
+            ),
+        )
     return OfflineTopUpFinalityExecutionCommitment(
         parent_state_root=_offline_hash_literal(
             _offline_required(record, "parent_state_root", context),
@@ -4981,6 +5021,13 @@ def _offline_top_up_finality_execution_commitment(
         native_amx_application_manifest_version=native_manifest_version,
         native_amx_application_manifest_root=native_manifest_root,
         native_amx_application_manifest_count=native_manifest_count,
+        merge_carrier=merge_carrier,
+        executed_block_wire_len=_offline_unsigned(
+            _offline_required(record, "executed_block_wire_len", context),
+            f"{context}.executed_block_wire_len",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
         executed_block_wire_hash=_offline_hash_literal(
             _offline_required(record, "executed_block_wire_hash", context),
             f"{context}.executed_block_wire_hash",
@@ -5265,7 +5312,7 @@ def _offline_top_up_finality_height_context(
     return OfflineTopUpFinalityHeightContext(
         context_id=context_id,
         chain_id=chain_id,
-        protocol_version=3,
+        protocol_version=4,
         height=height,
         epoch=epoch,
         epoch_end_height=epoch_end_height,
@@ -5275,6 +5322,10 @@ def _offline_top_up_finality_height_context(
         nexus_amx_context_hash=_offline_hash_literal(
             _offline_required(record, "nexus_amx_context_hash", context),
             f"{context}.nexus_amx_context_hash",
+        ),
+        execution_policy_hash=_offline_hash_literal(
+            _offline_required(record, "execution_policy_hash", context),
+            f"{context}.execution_policy_hash",
         ),
         da_layout=_offline_top_up_finality_da_layout(
             _offline_required(record, "da_layout", context), f"{context}.da_layout"
@@ -5728,32 +5779,114 @@ def _offline_operation_status(
     )
 
 
-@dataclass(frozen=True)
-class SubscriptionPlanCreateResult:
-    """Response from ``POST /v1/subscriptions/plans``."""
+def _parse_app_api_transaction_draft_fields(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+    additional_fields: Sequence[str] = (),
+) -> Tuple[bool, str, str]:
+    """Validate Torii's canonical, unsigned app-API transaction draft."""
 
-    ok: bool
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"{context} must be an object")
+    expected_fields = {
+        "submitted",
+        "transaction_payload_b64",
+        "signing_message_b64",
+        *additional_fields,
+    }
+    unknown_fields = set(payload) - expected_fields
+    if unknown_fields:
+        raise RuntimeError(
+            f"{context} contains unsupported fields: {', '.join(sorted(unknown_fields))}"
+        )
+    missing_fields = expected_fields - set(payload)
+    if missing_fields:
+        raise RuntimeError(
+            f"{context} is missing fields: {', '.join(sorted(missing_fields))}"
+        )
+    if payload.get("submitted") is not False:
+        raise RuntimeError(f"{context}.submitted must be false")
+
+    def decode_exact_base64(field: str) -> Tuple[str, bytes]:
+        value = payload.get(field)
+        if not isinstance(value, str) or not value or any(char.isspace() for char in value):
+            raise RuntimeError(f"{context}.{field} must be exact standard-base64")
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(
+                f"{context}.{field} must be exact standard-base64"
+            ) from exc
+        if not decoded or base64.b64encode(decoded).decode("ascii") != value:
+            raise RuntimeError(f"{context}.{field} must be exact standard-base64")
+        return value, decoded
+
+    transaction_payload_b64, transaction_payload = decode_exact_base64(
+        "transaction_payload_b64"
+    )
+    signing_message_b64, signing_message = decode_exact_base64("signing_message_b64")
+    if len(signing_message) != 32:
+        raise RuntimeError(f"{context}.signing_message_b64 must decode to 32 bytes")
+    expected_message = bytearray(
+        hashlib.blake2b(transaction_payload, digest_size=32).digest()
+    )
+    expected_message[-1] |= 1
+    if not secrets.compare_digest(signing_message, expected_message):
+        raise RuntimeError(
+            f"{context}.signing_message_b64 must match transaction_payload_b64"
+        )
+    return False, transaction_payload_b64, signing_message_b64
+
+
+@dataclass(frozen=True)
+class AppApiTransactionDraft:
+    """Canonical transaction payload prepared by Torii for local signing."""
+
+    submitted: bool
+    transaction_payload_b64: str
+    signing_message_b64: str
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str = "app API transaction draft",
+    ) -> "AppApiTransactionDraft":
+        submitted, transaction_payload_b64, signing_message_b64 = (
+            _parse_app_api_transaction_draft_fields(payload, context=context)
+        )
+        return cls(
+            submitted=submitted,
+            transaction_payload_b64=transaction_payload_b64,
+            signing_message_b64=signing_message_b64,
+        )
+
+
+@dataclass(frozen=True)
+class SubscriptionPlanCreateResult(AppApiTransactionDraft):
+    """Unsigned plan-registration draft from ``POST /v1/subscriptions/plans``."""
+
     plan_id: str
-    tx_hash_hex: str
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanCreateResult":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription plan create response must be an object")
-
-        def require_str(key: str) -> str:
-            value = payload.get(key)
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"subscription plan create response missing `{key}`")
-            return value
-
-        ok_value = payload.get("ok")
-        if not isinstance(ok_value, bool):
-            raise RuntimeError("subscription plan create response missing `ok`")
+        submitted, transaction_payload_b64, signing_message_b64 = (
+            _parse_app_api_transaction_draft_fields(
+                payload,
+                context="subscription plan create response",
+                additional_fields=("plan_id",),
+            )
+        )
+        plan_id = payload.get("plan_id")
+        if not isinstance(plan_id, str) or not plan_id:
+            raise RuntimeError("subscription plan create response missing `plan_id`")
         return cls(
-            ok=ok_value,
-            plan_id=require_str("plan_id"),
-            tx_hash_hex=require_str("tx_hash_hex"),
+            submitted=submitted,
+            transaction_payload_b64=transaction_payload_b64,
+            signing_message_b64=signing_message_b64,
+            plan_id=plan_id,
         )
 
 
@@ -5932,6 +6065,32 @@ class SubscriptionActionResult:
             ok=ok_value,
             subscription_id=require_str("subscription_id"),
             tx_hash_hex=require_str("tx_hash_hex"),
+        )
+
+
+@dataclass(frozen=True)
+class SubscriptionUsageDraft(AppApiTransactionDraft):
+    """Unsigned usage-recording draft returned by Torii."""
+
+    subscription_id: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionUsageDraft":
+        submitted, transaction_payload_b64, signing_message_b64 = (
+            _parse_app_api_transaction_draft_fields(
+                payload,
+                context="subscription usage response",
+                additional_fields=("subscription_id",),
+            )
+        )
+        subscription_id = payload.get("subscription_id")
+        if not isinstance(subscription_id, str) or not subscription_id:
+            raise RuntimeError("subscription usage response missing `subscription_id`")
+        return cls(
+            submitted=submitted,
+            transaction_payload_b64=transaction_payload_b64,
+            signing_message_b64=signing_message_b64,
+            subscription_id=subscription_id,
         )
 
 
@@ -6944,6 +7103,14 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2MergeCarrierCommitment:
+    """Exact merge-ledger entry identity authenticated by a v2 QC."""
+
+    version: Literal[1]
+    entry_hash: str
+
+
+@dataclass(frozen=True)
 class SumeragiV2ExecutionCommitment:
     """Exact deterministic execution commitment authenticated by a v2 QC."""
 
@@ -6955,6 +7122,8 @@ class SumeragiV2ExecutionCommitment:
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
+    merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
+    executed_block_wire_len: int
     executed_block_wire_hash: str
 
 
@@ -7483,8 +7652,8 @@ class _SumeragiV2StatusParser:
             "sumeragi.protocol_version",
             maximum=0xFFFF,
         )
-        if protocol_version != 3:
-            raise RuntimeError("sumeragi.protocol_version must equal 3")
+        if protocol_version != 4:
+            raise RuntimeError("sumeragi.protocol_version must equal 4")
 
         height = cls._unsigned(record.get("height"), "sumeragi.height")
         view = cls._unsigned(record.get("view"), "sumeragi.view")
@@ -8438,11 +8607,15 @@ class _SumeragiV2StatusParser:
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
             "native_amx_application_manifest_count",
+            "merge_carrier",
+            "executed_block_wire_len",
             "executed_block_wire_hash",
         }
         unknown = set(record) - allowed_fields
         if unknown:
             raise RuntimeError(f"{context} contains unknown field {sorted(unknown)[0]}")
+        if "merge_carrier" not in record:
+            raise RuntimeError(f"{context}.merge_carrier is required")
         topup_count = cls._unsigned(
             record.get("topup_anchor_count"),
             f"{context}.topup_anchor_count",
@@ -8485,6 +8658,40 @@ class _SumeragiV2StatusParser:
                 f"{context}.native_amx_application_manifest_count must be zero exactly "
                 "for the canonical empty root"
             )
+        raw_merge_carrier = record["merge_carrier"]
+        merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
+        if raw_merge_carrier is None:
+            merge_carrier = None
+        else:
+            merge_context = f"{context}.merge_carrier"
+            merge_record = cls._mapping(raw_merge_carrier, merge_context)
+            merge_fields = {"version", "entry_hash"}
+            missing_merge = merge_fields - set(merge_record)
+            if missing_merge:
+                raise RuntimeError(
+                    f"{merge_context}.{sorted(missing_merge)[0]} is required"
+                )
+            unknown_merge = set(merge_record) - merge_fields
+            if unknown_merge:
+                raise RuntimeError(
+                    f"{merge_context} contains unknown field {sorted(unknown_merge)[0]}"
+                )
+            merge_version = cls._unsigned(
+                merge_record["version"],
+                f"{merge_context}.version",
+                maximum=(1 << 16) - 1,
+            )
+            if merge_version != _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION:
+                raise RuntimeError(
+                    f"{merge_context}.version must equal "
+                    f"{_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}"
+                )
+            merge_carrier = SumeragiV2MergeCarrierCommitment(
+                version=1,
+                entry_hash=cls._hash(
+                    merge_record["entry_hash"], f"{merge_context}.entry_hash"
+                ),
+            )
         return SumeragiV2ExecutionCommitment(
             parent_state_root=cls._hash(
                 record.get("parent_state_root"), f"{context}.parent_state_root"
@@ -8501,6 +8708,13 @@ class _SumeragiV2StatusParser:
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
+            merge_carrier=merge_carrier,
+            executed_block_wire_len=cls._unsigned(
+                record.get("executed_block_wire_len"),
+                f"{context}.executed_block_wire_len",
+                positive=True,
+                maximum=cls.MAX_U64,
+            ),
             executed_block_wire_hash=cls._hash(
                 record.get("executed_block_wire_hash"),
                 f"{context}.executed_block_wire_hash",
@@ -12144,25 +12358,21 @@ class ToriiClient:
         self,
         *,
         authority: str,
-        private_key: str,
         plan_id: str,
         plan: Mapping[str, Any],
     ) -> SubscriptionPlanCreateResult:
-        """Create a subscription plan via ``POST /v1/subscriptions/plans``."""
+        """Prepare a locally signed subscription-plan transaction draft."""
 
+        normalized_plan_id = self._require_non_empty_string(
+            plan_id,
+            "subscription plan plan_id",
+        )
         payload = {
             "authority": self._require_non_empty_string(
                 authority,
                 "subscription plan authority",
             ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription plan private_key",
-            ),
-            "plan_id": self._require_non_empty_string(
-                plan_id,
-                "subscription plan plan_id",
-            ),
+            "plan_id": normalized_plan_id,
             "plan": self._clone_json_payload(plan, context="subscription plan"),
         }
         body = self._post_json(
@@ -12171,7 +12381,12 @@ class ToriiClient:
             context="subscription plan create response",
             expected_status=(200,),
         )
-        return SubscriptionPlanCreateResult.from_payload(body)
+        result = SubscriptionPlanCreateResult.from_payload(body)
+        if result.plan_id != normalized_plan_id:
+            raise RuntimeError(
+                "subscription plan create response plan_id does not match the request"
+            )
+        return result
 
     def list_subscriptions(
         self,
@@ -12478,12 +12693,11 @@ class ToriiClient:
         subscription_id: str,
         *,
         authority: str,
-        private_key: str,
         unit_key: str,
         delta: str,
         usage_trigger_id: Optional[str] = None,
-    ) -> SubscriptionActionResult:
-        """Record usage for a subscription (`POST /v1/subscriptions/{subscription_id}/usage`)."""
+    ) -> SubscriptionUsageDraft:
+        """Prepare a locally signed usage-recording transaction draft."""
 
         normalized_id = self._require_non_empty_string(
             subscription_id,
@@ -12494,10 +12708,6 @@ class ToriiClient:
             "authority": self._require_non_empty_string(
                 authority,
                 "subscription usage authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription usage private_key",
             ),
             "unit_key": self._require_non_empty_string(
                 unit_key,
@@ -12520,7 +12730,12 @@ class ToriiClient:
             context="subscription usage response",
             expected_status=(200,),
         )
-        return SubscriptionActionResult.from_payload(body)
+        result = SubscriptionUsageDraft.from_payload(body)
+        if result.subscription_id != normalized_id:
+            raise RuntimeError(
+                "subscription usage response subscription_id does not match the request"
+            )
+        return result
 
     # ------------------------------------------------------------------
     # UAID & Space Directory surfaces
@@ -12604,20 +12819,15 @@ class ToriiClient:
         self,
         *,
         authority: str,
-        private_key: str,
         manifest: Mapping[str, Any],
         reason: Optional[str] = None,
-    ) -> Optional[Mapping[str, Any]]:
-        """Publish (or rotate) a Space Directory manifest (`POST /v1/space-directory/manifests`)."""
+    ) -> AppApiTransactionDraft:
+        """Prepare a manifest-publication transaction for local signing."""
 
         payload: Dict[str, Any] = {
             "authority": self._require_non_empty_string(
                 authority,
                 "publish_space_directory_manifest.authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "publish_space_directory_manifest.private_key",
             ),
             "manifest": self._clone_json_payload(
                 manifest,
@@ -12638,32 +12848,30 @@ class ToriiClient:
             },
             data=json.dumps(payload).encode("utf-8"),
         )
-        self._expect_status(response, {202})
+        self._expect_status(response, {200})
         ack = self._maybe_json(response)
-        if not ack:
-            return None
-        return self._ensure_mapping(ack, "space directory manifest publish response")
+        if ack is None:
+            raise RuntimeError("space directory manifest publish endpoint returned no payload")
+        return AppApiTransactionDraft.from_payload(
+            self._ensure_mapping(ack, "space directory manifest publish response"),
+            context="space directory manifest publish response",
+        )
 
     def revoke_space_directory_manifest(
         self,
         *,
         authority: str,
-        private_key: str,
         uaid: str,
         dataspace: int,
         revoked_epoch: int,
         reason: Optional[str] = None,
-    ) -> Optional[Mapping[str, Any]]:
-        """Revoke an active Space Directory manifest (`POST /v1/space-directory/manifests/revoke`)."""
+    ) -> AppApiTransactionDraft:
+        """Prepare a manifest-revocation transaction for local signing."""
 
         payload: Dict[str, Any] = {
             "authority": self._require_non_empty_string(
                 authority,
                 "revoke_space_directory_manifest.authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "revoke_space_directory_manifest.private_key",
             ),
             "uaid": self._normalize_uaid_literal(
                 uaid,
@@ -12692,11 +12900,14 @@ class ToriiClient:
             },
             data=json.dumps(payload).encode("utf-8"),
         )
-        self._expect_status(response, {202})
+        self._expect_status(response, {200})
         ack = self._maybe_json(response)
-        if not ack:
-            return None
-        return self._ensure_mapping(ack, "space directory manifest revoke response")
+        if ack is None:
+            raise RuntimeError("space directory manifest revoke endpoint returned no payload")
+        return AppApiTransactionDraft.from_payload(
+            self._ensure_mapping(ack, "space directory manifest revoke response"),
+            context="space directory manifest revoke response",
+        )
 
     # ------------------------------------------------------------------
     # First-release Kagemusha API
@@ -13137,48 +13348,43 @@ class ToriiClient:
             )
         return response
 
-    def call_contract(
+    def prepare_contract_call(
         self,
         *,
         authority: str,
-        private_key: str,
         fee_payment: Mapping[str, Any],
         entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
     ) -> ContractCallResponse:
-        """Invoke a deployed contract via ``POST /v1/contracts/call``."""
+        """Prepare a contract-call scaffold for local detached signing."""
 
         request_payload: Dict[str, Any] = {
             "authority": self._require_non_empty_string(
                 authority,
-                "call_contract.authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "call_contract.private_key",
+                "prepare_contract_call.authority",
             ),
         }
         request_payload.update(
             self._normalize_contract_selector(
                 contract_address=contract_address,
                 contract_alias=contract_alias,
-                context="call_contract",
+                context="prepare_contract_call",
             )
         )
         request_payload["entrypoint"] = self._require_non_empty_string(
             entrypoint,
-            "call_contract.entrypoint",
+            "prepare_contract_call.entrypoint",
         )
         if payload is not None:
             request_payload["payload"] = self._clone_json_value(
                 payload,
-                context="call_contract.payload",
+                context="prepare_contract_call.payload",
             )
         normalized_fee_payment = self._normalize_fee_payment_intent(
             fee_payment,
-            context="call_contract.fee_payment",
+            context="prepare_contract_call.fee_payment",
             require_gas_limit=True,
         )
         request_payload["fee_payment"] = normalized_fee_payment
@@ -13191,15 +13397,22 @@ class ToriiClient:
             },
             data=json.dumps(request_payload).encode("utf-8"),
         )
-        self._expect_status(response, {200, 202})
+        self._expect_status(response, {200})
         body = self._maybe_json(response)
         if body is None:
             raise RuntimeError("contract call endpoint returned no payload")
         record = self._ensure_mapping(body, "contract call response")
-        return self._parse_contract_call_response(
+        result = self._parse_contract_call_response(
             record,
             context="contract call response",
         )
+        self._validate_contract_call_draft(
+            result,
+            entrypoint=request_payload["entrypoint"],
+            contract_address=request_payload.get("contract_address"),
+            contract_alias=request_payload.get("contract_alias"),
+        )
+        return result
 
     def propose_multisig(
         self,
@@ -18607,6 +18820,36 @@ class ToriiClient:
         context: str,
     ) -> ContractCallResponse:
         record = ToriiClient._ensure_mapping(payload, context)
+        supported_fields = {
+            "ok",
+            "submitted",
+            "dataspace",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "tx_hash_hex",
+            "pipeline_status",
+            "entrypoint_hash_hex",
+            "transaction_scaffold_b64",
+            "signed_transaction_b64",
+            "signing_message_b64",
+            "entrypoint",
+            "operation_receipt",
+        }
+        unknown_fields = set(record) - supported_fields
+        if unknown_fields:
+            raise RuntimeError(
+                f"{context} contains unsupported fields: "
+                f"{', '.join(sorted(unknown_fields))}"
+            )
+        ok_value = record.get("ok")
+        submitted_value = record.get("submitted")
+        if not isinstance(ok_value, bool):
+            raise RuntimeError(f"{context}.ok must be a boolean")
+        if not isinstance(submitted_value, bool):
+            raise RuntimeError(f"{context}.submitted must be a boolean")
         tx_hash_hex_value = record.get("tx_hash_hex")
         tx_hash_hex = None
         if tx_hash_hex_value is not None:
@@ -18631,8 +18874,8 @@ class ToriiClient:
             context=f"{context}.operation_receipt",
         )
         return ContractCallResponse(
-            ok=bool(record.get("ok")),
-            submitted=bool(record.get("submitted")),
+            ok=ok_value,
+            submitted=submitted_value,
             dataspace=ToriiClient._require_string(
                 record.get("dataspace"),
                 f"{context}.dataspace",
@@ -18669,20 +18912,91 @@ class ToriiClient:
                 context=f"{context}.transaction_ttl_ms",
             ),
             entrypoint_hash_hex=entrypoint_hash_hex,
-            transaction_scaffold_b64=ToriiClient._normalize_optional_base64_payload(
-                record.get("transaction_scaffold_b64"),
-                context=f"{context}.transaction_scaffold_b64",
+            transaction_scaffold_b64=(
+                None
+                if record.get("transaction_scaffold_b64") is None
+                else ToriiClient._normalize_required_exact_base64_payload(
+                    record.get("transaction_scaffold_b64"),
+                    f"{context}.transaction_scaffold_b64",
+                )
             ),
-            signed_transaction_b64=ToriiClient._normalize_optional_base64_payload(
-                record.get("signed_transaction_b64"),
-                context=f"{context}.signed_transaction_b64",
+            signed_transaction_b64=(
+                None
+                if record.get("signed_transaction_b64") is None
+                else ToriiClient._normalize_required_exact_base64_payload(
+                    record.get("signed_transaction_b64"),
+                    f"{context}.signed_transaction_b64",
+                )
             ),
-            signing_message_b64=ToriiClient._normalize_optional_base64_payload(
-                record.get("signing_message_b64"),
-                context=f"{context}.signing_message_b64",
+            signing_message_b64=(
+                None
+                if record.get("signing_message_b64") is None
+                else ToriiClient._normalize_required_exact_base64_payload(
+                    record.get("signing_message_b64"),
+                    f"{context}.signing_message_b64",
+                )
             ),
             operation_receipt=operation_receipt,
         )
+
+    @staticmethod
+    def _validate_contract_call_draft(
+        response: ContractCallResponse,
+        *,
+        entrypoint: str,
+        contract_address: Optional[str],
+        contract_alias: Optional[str],
+    ) -> None:
+        """Fail closed unless a contract response is the requested unsigned draft."""
+
+        receipt = response.operation_receipt
+        if not response.ok or response.submitted:
+            raise RuntimeError(
+                "contract call response must be a successful unsubmitted draft"
+            )
+        if response.tx_hash_hex is not None or response.pipeline_status is not None:
+            raise RuntimeError(
+                "contract call draft must not contain transaction submission state"
+            )
+        scaffold = response.transaction_scaffold_b64
+        if scaffold is None or scaffold != response.signed_transaction_b64:
+            raise RuntimeError(
+                "contract call draft must contain one exact transaction scaffold"
+            )
+        if response.signing_message_b64 is None:
+            raise RuntimeError("contract call draft must contain a signing message")
+        signing_message = base64.b64decode(
+            response.signing_message_b64,
+            validate=True,
+        )
+        if len(signing_message) != 32:
+            raise RuntimeError(
+                "contract call draft signing_message_b64 must decode to 32 bytes"
+            )
+        if (
+            response.entrypoint != entrypoint
+            or receipt.operation_kind != "contract_call"
+            or receipt.status != "pending_signature"
+            or receipt.entrypoint != entrypoint
+            or receipt.tx_hash_hex is not None
+        ):
+            raise RuntimeError(
+                "contract call draft is not bound to the requested entrypoint"
+            )
+        if contract_address is not None and (
+            response.contract_address != contract_address
+            or receipt.contract_address != contract_address
+        ):
+            raise RuntimeError(
+                "contract call draft is not bound to the requested contract address"
+            )
+        if (
+            contract_alias is not None
+            and receipt.contract_alias != contract_alias
+        ):
+            raise RuntimeError(
+                "contract call draft is not bound to the requested contract alias"
+            )
 
     @staticmethod
     def _parse_contract_operation_receipt(

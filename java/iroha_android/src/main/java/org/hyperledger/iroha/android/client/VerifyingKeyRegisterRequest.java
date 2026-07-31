@@ -3,7 +3,6 @@ package org.hyperledger.iroha.android.client;
 /** Request body for {@code POST /v1/zk/vk/register}. */
 public final class VerifyingKeyRegisterRequest {
   private final String authority;
-  private final String privateKey;
   private final String backend;
   private final String name;
   private final long version;
@@ -23,7 +22,6 @@ public final class VerifyingKeyRegisterRequest {
 
   private VerifyingKeyRegisterRequest(final Builder builder) {
     this.authority = builder.authority;
-    this.privateKey = builder.privateKey;
     this.backend = builder.backend;
     this.name = builder.name;
     this.version = builder.version;
@@ -44,7 +42,6 @@ public final class VerifyingKeyRegisterRequest {
   }
 
   public String authority() { return authority; }
-  public String privateKey() { return privateKey; }
   public String backend() { return backend; }
   public String name() { return name; }
   public long version() { return version; }
@@ -68,7 +65,6 @@ public final class VerifyingKeyRegisterRequest {
 
   public static final class Builder {
     private String authority;
-    private String privateKey;
     private String backend;
     private String name;
     private long version;
@@ -89,7 +85,6 @@ public final class VerifyingKeyRegisterRequest {
     private Builder() {}
 
     public Builder authority(final String value) { authority = value; return this; }
-    public Builder privateKey(final String value) { privateKey = value; return this; }
     public Builder backend(final String value) { backend = value; return this; }
     public Builder name(final String value) { name = value; return this; }
     public Builder version(final long value) { version = value; return this; }

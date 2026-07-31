@@ -225,17 +225,17 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
             "self.write_native_amx_participant_application_receipt_artifact_"
             "only_with_retention_policy_under_publication_guard(",
         ),
-        (
-            "self.write_native_amx_participant_application_receipt_artifact_"
-            "only_with_retention_policy_under_publication_guard(",
-            "self.write_native_amx_participant_receipt_latest_index_"
-            "under_publication_guard(",
-        ),
-        (
-            "self.write_native_amx_participant_receipt_latest_index_"
-            "under_publication_guard(",
-            "self.authenticate_native_amx_participant_application_"
-            "prepublication_under_publication_guard(",
+            (
+                "self.write_native_amx_participant_application_receipt_artifact_"
+                "only_with_retention_policy_under_publication_guard(",
+                "self.write_native_amx_participant_receipt_latest_index_for_prepublication_"
+                "under_publication_guard(",
+            ),
+            (
+                "self.write_native_amx_participant_receipt_latest_index_for_prepublication_"
+                "under_publication_guard(",
+                "self.authenticate_native_amx_participant_application_"
+                "prepublication_under_publication_guard(",
         ),
     ),
     ids=(

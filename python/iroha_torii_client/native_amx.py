@@ -38,6 +38,7 @@ _PROPOSAL_PREIMAGE_TYPE = (
     "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
 )
 _SETTLEMENT_TYPE = "iroha_data_model::block::consensus::LaneBlockCommitment"
+_SETTLEMENT_HASH_DOMAIN = b"iroha.nexus.lane-relay.settlement.v1"
 
 
 def _crc16_ccitt_false(payload: bytes) -> int:
@@ -430,4 +431,7 @@ def compute_native_amx_participant_settlement_hash(
             _vector((), lambda value: value),
         )
     )
-    return _hash_literal(_norito_frame(_SETTLEMENT_TYPE, payload))
+    frame = _norito_frame(_SETTLEMENT_TYPE, payload)
+    return _hash_literal(
+        _u64(len(_SETTLEMENT_HASH_DOMAIN)) + _SETTLEMENT_HASH_DOMAIN + frame
+    )

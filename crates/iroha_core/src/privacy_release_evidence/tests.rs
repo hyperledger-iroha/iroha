@@ -11,6 +11,146 @@
 
     const RAYON_POOL_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_RAYON_POOL_CHILD_V1";
 
+    fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1); 5] {
+        [
+            |profile| profile.parameter_id.0[0] ^= 1,
+            |profile| profile.parameter_digest.0[0] ^= 1,
+            |profile| profile.verifier_digest.0[0] ^= 1,
+            |profile| profile.statement_schema_digest.0[0] ^= 1,
+            |profile| profile.engine_manifest_digest.0[0] ^= 1,
+        ]
+    }
+
+    #[test]
+    fn zk_ace_and_bootle_release_contexts_bind_every_compiled_profile_digest() {
+        for protocol_id in [
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        ] {
+            let profile = compiled_privacy_profile_v1(protocol_id).expect("compiled profile");
+            let baseline =
+                norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
+                    &profile,
+                    ChainId::from("taira-privacy-release-evidence-v1"),
+                    3,
+                    PrivacyTransactionIntentDigestV1::new([0x51; 32]),
+                ))
+                .expect("release context");
+            for mutate in compiled_profile_digest_mutations_v1() {
+                let mut changed = profile;
+                mutate(&mut changed);
+                let changed =
+                    norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
+                        &changed,
+                        ChainId::from("taira-privacy-release-evidence-v1"),
+                        3,
+                        PrivacyTransactionIntentDigestV1::new([0x51; 32]),
+                    ))
+                    .expect("changed release context");
+                assert_ne!(
+                    changed,
+                    baseline,
+                    "{} release context omitted one compiled-profile digest",
+                    protocol_id.canonical_label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verange_release_transcript_binds_every_compiled_profile_digest() {
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            .expect("compiled VeRange profile");
+        let parameters = VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
+            .expect("VeRange parameters");
+        let encode = |profile: &CompiledPrivacyProfileV1| {
+            let binding = verange_binding_from_compiled_profile_v1(
+                [0x61; 32],
+                parameters.generator_digest(),
+                profile,
+            );
+            let mut material = Vec::new();
+            append_p256_binding_material_v1(&mut material, &binding);
+            material
+        };
+        let baseline = encode(&profile);
+        for mutate in compiled_profile_digest_mutations_v1() {
+            let mut changed = profile;
+            mutate(&mut changed);
+            assert_ne!(
+                encode(&changed),
+                baseline,
+                "VeRange release transcript omitted one compiled-profile digest"
+            );
+        }
+    }
+
+    #[test]
+    fn fcmp_release_statement_length_frames_every_compiled_profile_digest() {
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
+            .expect("compiled FCMP++ profile");
+        let encode = |profile: &CompiledPrivacyProfileV1| {
+            let mut material = Vec::new();
+            append_fcmp_compiled_profile_tuple_v1(&mut material, profile)
+                .expect("FCMP++ profile tuple");
+            material
+        };
+        let baseline = encode(&profile);
+        let baseline_context =
+            fcmp_release_context_hash_v1(&profile).expect("FCMP++ release context hash");
+        let domain_length = usize::from(u16::from_be_bytes(
+            baseline[..2].try_into().expect("domain length"),
+        ));
+        assert_eq!(
+            &baseline[2..2 + domain_length],
+            b"iroha.privacy.release.fcmp-plus-plus.compiled-profile-tuple.v1"
+        );
+        let count_offset = 2 + domain_length;
+        assert_eq!(
+            u16::from_be_bytes(
+                baseline[count_offset..count_offset + 2]
+                    .try_into()
+                    .expect("field count")
+            ),
+            5
+        );
+        let mut offset = count_offset + 2;
+        for expected in [
+            profile.parameter_id.as_bytes().as_slice(),
+            profile.parameter_digest.as_bytes().as_slice(),
+            profile.verifier_digest.as_bytes().as_slice(),
+            profile.statement_schema_digest.as_bytes().as_slice(),
+            profile.engine_manifest_digest.as_bytes().as_slice(),
+        ] {
+            let length = usize::try_from(u64::from_be_bytes(
+                baseline[offset..offset + 8]
+                    .try_into()
+                    .expect("field length"),
+            ))
+            .expect("field length fits usize");
+            assert_eq!(length, 32);
+            offset += 8;
+            assert_eq!(&baseline[offset..offset + length], expected);
+            offset += length;
+        }
+        assert_eq!(offset, baseline.len(), "profile tuple has trailing bytes");
+
+        for mutate in compiled_profile_digest_mutations_v1() {
+            let mut changed = profile;
+            mutate(&mut changed);
+            assert_ne!(
+                encode(&changed),
+                baseline,
+                "FCMP++ release statement omitted one compiled-profile digest"
+            );
+            assert_ne!(
+                fcmp_release_context_hash_v1(&changed).expect("changed FCMP++ release context hash"),
+                baseline_context,
+                "FCMP++ proof context omitted one compiled-profile digest"
+            );
+        }
+    }
+
     #[test]
     fn zk_ams_release_lineage_uses_distinct_single_action_transactions() {
         let admission =
@@ -421,6 +561,7 @@
                 protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
                 elapsed_ceiling_millis: 300_000,
                 peak_rss_ceiling_bytes: 12_884_901_888,
+                address_space_ceiling_bytes: 34_359_738_368,
             }]
         );
         assert_eq!(
@@ -431,6 +572,10 @@
             profiles[0].peak_rss_ceiling_bytes,
             ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
         );
+        assert_eq!(
+            profiles[0].address_space_ceiling_bytes,
+            ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1
+        );
     }
 
     #[test]
@@ -438,8 +583,24 @@
         if std::env::var_os(RAYON_POOL_CHILD_MARKER_V1).is_none() {
             return;
         }
+        assert_eq!(
+            std::env::var("RUST_MIN_STACK").as_deref(),
+            Ok("1048576"),
+            "the child must exercise the release override under a hostile one-MiB default"
+        );
         assert_eq!(PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1, 4);
+        assert_eq!(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1, 8 * 1024 * 1024);
         initialize_privacy_release_rayon_pool_v1().expect("initialize exact release Rayon pool");
+        let worker_stack_probes = rayon::broadcast(|_| {
+            let stack_probe = [0xA5_u8; 2 * 1024 * 1024];
+            assert_eq!(stack_probe[0], 0xA5);
+            assert_eq!(stack_probe[stack_probe.len() - 1], 0xA5);
+            std::hint::black_box(&stack_probe);
+        });
+        assert_eq!(
+            worker_stack_probes.len(),
+            usize::from(PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1)
+        );
         assert_eq!(
             rayon::current_num_threads(),
             usize::from(PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1)
@@ -458,6 +619,7 @@
             .arg("privacy_release_rayon_pool_fresh_process_child_v1")
             .arg("--nocapture")
             .env(RAYON_POOL_CHILD_MARKER_V1, "1")
+            .env("RUST_MIN_STACK", "1048576")
             .output()
             .expect("execute release Rayon API child");
         assert!(
@@ -493,28 +655,16 @@
     }
 
     #[test]
-    fn resource_facts_are_frozen_for_available_stages_and_x509_remains_pending() {
+    fn resource_facts_are_frozen_for_every_exact12_stage() {
         for protocol_id in PrivacyProtocolIdV1::ALL {
             for case_kind in PrivacyReleaseCaseKindV1::ALL {
-                let facts = privacy_release_resource_facts_v1(protocol_id, case_kind);
-                if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                    assert_eq!(facts, None);
-                    assert_eq!(
-                        run_privacy_release_stage_v1(protocol_id, case_kind),
-                        Err(PrivacyReleaseEvidenceErrorV1 {
-                            protocol_id,
-                            case_kind,
-                            class: PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
-                        })
-                    );
-                } else {
-                    let facts = facts.expect("implemented stage has frozen resource facts");
-                    assert!(facts.validate());
-                    if case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource {
-                        assert_eq!(facts.primary_units, facts.primary_ceiling);
-                        assert_eq!(facts.secondary_units, facts.secondary_ceiling);
-                        assert_eq!(facts.relation_depth, facts.relation_depth_ceiling);
-                    }
+                let facts = privacy_release_resource_facts_v1(protocol_id, case_kind)
+                    .expect("every exact-12 stage has frozen resource facts");
+                assert!(facts.validate());
+                if case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource {
+                    assert_eq!(facts.primary_units, facts.primary_ceiling);
+                    assert_eq!(facts.secondary_units, facts.secondary_ceiling);
+                    assert_eq!(facts.relation_depth, facts.relation_depth_ceiling);
                 }
             }
         }
@@ -592,16 +742,26 @@
     }
 
     #[test]
-    fn unavailable_protocols_fail_closed_without_placeholder_evidence() {
-        let error = run_privacy_release_stage_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-            PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
-        )
-        .expect_err("incomplete X.509 release fixture must fail closed");
+    fn zk_x509_candidate_profile_and_resource_facts_are_total_before_capture() {
+        let first =
+            compiled_zk_x509_profile_material_v1().expect("release-candidate profile material");
+        let second =
+            compiled_zk_x509_profile_material_v1().expect("deterministic profile material");
+        assert_eq!(first, second);
         assert_eq!(
-            error.class,
-            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
+            first.protocol_id,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         );
+        assert_ne!(first.parameter_id.0, [0; 32]);
+        assert_ne!(first.parameter_digest.0, [0; 32]);
+        assert_ne!(first.verifier_digest.0, [0; 32]);
+        assert_ne!(first.statement_schema_digest.0, [0; 32]);
+        assert_ne!(first.engine_manifest_digest.0, [0; 32]);
+        for case_kind in PrivacyReleaseCaseKindV1::ALL {
+            let resources = privacy_release_resource_facts_v1(first.protocol_id, case_kind)
+                .expect("every X.509 release coordinate has frozen resource facts");
+            assert!(resources.validate());
+        }
     }
 
     #[test]
@@ -834,6 +994,132 @@
             case_kind,
             core::slice::from_ref(&artifact),
         ));
+    }
+
+    #[test]
+    fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+        let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
+        let exact_x5s1_ceiling = u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1);
+        assert_eq!(
+            privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0),
+            Some(exact_x5s1_ceiling)
+        );
+        assert!(exact_x5s1_ceiling < PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+        let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
+        assert!(descriptor.contains("proof-artifact-cap=8212538 exact X5S1 bytes"));
+        assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
+
+        let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
+        let mut artifact = PrivacyReleaseProofArtifactEvidenceV1 {
+            artifact_ordinal: 0,
+            proof_sha256: sha256_v1(&canonical_proof_bytes),
+            canonical_proof_bytes,
+            proof_bytes_ceiling: exact_x5s1_ceiling,
+        };
+        assert!(validate_privacy_release_proof_artifacts_v1(
+            protocol_id,
+            case_kind,
+            core::slice::from_ref(&artifact),
+        ));
+
+        for substituted_ceiling in [
+            exact_x5s1_ceiling - 1,
+            exact_x5s1_ceiling + 1,
+            PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1,
+        ] {
+            artifact.proof_bytes_ceiling = substituted_ceiling;
+            assert!(
+                !validate_privacy_release_proof_artifacts_v1(
+                    protocol_id,
+                    case_kind,
+                    core::slice::from_ref(&artifact),
+                ),
+                "a lower, higher, or outer action ceiling cannot replace the exact X5S1 ceiling"
+            );
+        }
+    }
+
+    #[test]
+    fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
+        let context = crate::privacy_engines::zk_x509::relation::release_fixture::
+            reference_statement_context_v1();
+        let canonical = build_zk_x509_release_fixture_v1(context.clone(), false)
+            .expect("canonical X.509 release fixture");
+        let maximum =
+            build_zk_x509_release_fixture_v1(context, true).expect("maximum X.509 release fixture");
+        canonical
+            .resource_shape
+            .validate_v1()
+            .expect("canonical resource shape");
+        maximum
+            .resource_shape
+            .validate_v1()
+            .expect("maximum resource shape");
+        assert_eq!(maximum.resource_shape.certificate_chain_depth, 3);
+        assert_eq!(maximum.resource_shape.maximum_serial_bytes, 20);
+        assert_eq!(
+            maximum.resource_shape.disclosed_value_lengths,
+            [2, 256, 256, 256]
+        );
+        assert_eq!(maximum.resource_shape.maximum_disclosed_value_bytes, 256);
+        assert_eq!(maximum.resource_shape.ca_membership_index, 1);
+        assert!(
+            maximum
+                .resource_shape
+                .ca_membership_path_has_nonzero_sibling
+        );
+
+        let statement_material = b"canonical-statement".to_vec();
+        let canonical_material = zk_x509_release_public_statement_material_v1(
+            statement_material.clone(),
+            canonical.resource_shape,
+        )
+        .expect("canonical shape material");
+        let maximum_material = zk_x509_release_public_statement_material_v1(
+            statement_material.clone(),
+            maximum.resource_shape,
+        )
+        .expect("maximum shape material");
+        assert_ne!(canonical_material, maximum_material);
+        assert_ne!(sha256_v1(&canonical_material), sha256_v1(&maximum_material));
+        assert!(maximum_material.starts_with(ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1));
+        let statement_len_offset = ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1.len();
+        assert_eq!(
+            &maximum_material[statement_len_offset..statement_len_offset + size_of::<u64>()],
+            &u64::try_from(statement_material.len())
+                .expect("statement length fits u64")
+                .to_be_bytes()
+        );
+        assert_eq!(
+            &maximum_material[statement_len_offset + size_of::<u64>()
+                ..statement_len_offset + size_of::<u64>() + statement_material.len()],
+            statement_material.as_slice()
+        );
+
+        let shape_wire_bytes = size_of::<u8>()
+            + ZK_X509_MAX_CHAIN_DEPTH_V1 * size_of::<u32>()
+            + size_of::<u32>()
+            + size_of::<u8>()
+            + 4 * size_of::<u16>()
+            + size_of::<u16>()
+            + size_of::<u16>()
+            + size_of::<u8>();
+        let shape_wire = &maximum_material[maximum_material.len() - shape_wire_bytes..];
+        assert_eq!(shape_wire.len(), 31);
+        assert_eq!(shape_wire[0], 3);
+        assert_eq!(shape_wire[17], 20);
+        assert_eq!(&shape_wire[18..26], &[0, 2, 1, 0, 1, 0, 1, 0]);
+        assert_eq!(&shape_wire[26..28], &256_u16.to_be_bytes());
+        assert_eq!(&shape_wire[28..30], &1_u16.to_be_bytes());
+        assert_eq!(shape_wire[30], 1);
+
+        let mut invalid_shape = maximum.resource_shape;
+        invalid_shape.crl_der_length = 0;
+        assert_eq!(
+            zk_x509_release_public_statement_material_v1(statement_material, invalid_shape,),
+            Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)
+        );
     }
 
     #[test]

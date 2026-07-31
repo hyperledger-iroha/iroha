@@ -10,9 +10,9 @@ governance checks. All payloads are Norito-encoded; no retired codec or ad-hoc J
 
 ## Objectives
 
-- Carry per-blob commitments (chunk root + manifest hash + optional KZG
-  commitment) inside every Nexus block so peers can reconstruct availability
-  state without consulting off-ledger storage.
+- Carry per-blob Merkle commitments (chunk root + manifest hash) inside every
+  Nexus block so peers can reconstruct availability state without consulting
+  off-ledger storage.
 - Provide deterministic membership proofs so light clients can verify that a
   manifest hash was finalised in a given block.
 - Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
@@ -46,9 +46,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -56,12 +55,14 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. Merkle lanes leave it empty; `kzg_bls12_381` lanes now
-  receive a deterministic BLAKE3-XOF commitment derived from the chunk root and
-  storage ticket so block hashes stay stable without an external prover.
-- `proof_scheme` is derived from the lane catalog; Merkle lanes reject stray KZG
-  payloads while `kzg_bls12_381` lanes require non-zero KZG commitments.
+- V1 contains no KZG proof-scheme variant, commitment field, setup,
+  commitment generation, or proof verification. Unknown future enum
+  discriminants fail decoding, and configuration strings other than
+  `merkle_sha256` are rejected before a node starts.
+- `proof_scheme` is derived from the lane catalog and is
+  `merkle_sha256` in V1. KZG can be introduced only by a separately reviewed
+  protocol version with an explicit wire-layout change. In particular, hashes
+  expanded to 48 bytes are not elliptic-curve commitments.
 - `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
   enumerates the sampling schedule used to keep blobs live.
 
@@ -79,8 +80,11 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-overhead.
+For every non-empty V1 bundle, `da_commitments_hash` is a domain-separated
+commitment to the tree descriptor `(version, leaf_count, merkle_root)`, not the
+canonical Norito hash of the full bundle. The descriptor is covered by the
+signed block header, while the full bundle remains an authenticated
+`SignedBlockWire` sidecar. Empty bundles leave the field as `None`.
 
 Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose
 `da_commitments` setters/getters (see `BlockBuilder::set_da_commitments` and
@@ -93,11 +97,11 @@ until Torii threads real bundles through.
 - `SignedBlockWire::canonical_wire()` appends the Norito header for
   `DaCommitmentBundle` immediately after the existing transaction list. The
   version byte is `0x01`.
-- `SignedBlockWire::decode_wire()` rejects bundles whose `version` is unknown,
-  matching the Norito policy described in `norito.md`.
-- Hash derivation updates exist only in `block::Hasher`; light clients decoding
-  the existing wire format automatically gain the new field because the Norito
-  header advertises its presence.
+- Block admission rejects bundles whose `version` is unknown, matching the
+  Norito policy described in `norito.md`.
+- Builders derive the header descriptor from the exact sidecar before signing.
+  Admission independently reconstructs it from the decoded sidecar and rejects
+  a missing or mismatched body.
 
 ## 2. Block Production Flow
 
@@ -110,18 +114,19 @@ until Torii threads real bundles through.
    `(lane, epoch)`. If a reachable receipt lacks a matching commitment or the
    manifest hash diverges the proposal aborts instead of silently omitting it.
 3. Right before sealing, the builder slices the commitment bundle to the
-   receipt-driven set, sorts by `(lane_id, epoch, sequence)`, encodes the
-   bundle with the Norito codec, and updates `da_commitments_hash`.
+   receipt-driven set, sorts by `(lane_id, epoch, sequence)`, constructs its
+   versioned `(version, leaf_count, merkle_root)` descriptor, and writes that
+   commitment to `da_commitments_hash`.
 4. The full bundle is stored in the WSV and emitted alongside the block inside
    `SignedBlockWire`; committed bundles advance the receipt cursors (hydrated
    from Kura on restart) and prune stale spool entries to bound disk growth.
 
 Block assembly and `BlockCreated` ingestion re-validate each commitment against
-the lane catalog: Merkle lanes reject stray KZG commitments, KZG lanes require a
-non-zero KZG commitment and non-zero `chunk_root`, and unknown lanes are
-dropped. Torii’s `/v1/da/commitments/verify` endpoint mirrors the same guard,
-and ingest now threads the deterministic KZG commitment into every
-`kzg_bls12_381` record so policy-compliant bundles reach block assembly.
+the lane catalog: V1 admits only Merkle records, requires a non-zero
+`chunk_root`, and rejects unknown lanes. Because the data model has no KZG
+variant or field, neither Torii nor a lifecycle transition can construct or
+sign a KZG policy/record; an unknown wire discriminant fails decoding.
+`/v1/da/commitments/verify` applies the same V1 policy to historical proofs.
 
 The manifest fixtures described in the DA-2 ingest plan double as the source of
 truth for the commitment bundler. The Torii test
@@ -140,9 +145,9 @@ Torii exposes three endpoints:
 
 | Route | Method | Payload | Notes |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentProofRequest` (optional manifest/lane/epoch/sequence filters and pagination). | Returns located records plus the node's active policy snapshot for discovery. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest`. | Responds with the Merkle proof and the proof-policy sidecar committed by the referenced block. |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Loads the exact Kura block and validates the proof against its canonical committed block header and committed policy sidecar, independent of later lane-policy changes. It does not independently verify block signatures or finality. |
 
 All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
 the handlers next to the existing DA ingest endpoints to reuse token/mTLS
@@ -151,10 +156,26 @@ policies.
 ## 4. Inclusion Proofs & Light Clients
 
 - The block producer builds a binary Merkle tree over the serialized
-  `DaCommitmentRecord` list. The root feeds `da_commitments_hash`.
+  `DaCommitmentRecord` list. V1 separates the two hash domains:
+  leaves hash `b"iroha:da:commitment-merkle:leaf:v1\0" || norito(record)`,
+  while internal nodes hash
+  `b"iroha:da:commitment-merkle:internal:v1\0" || left || right`.
+  Odd nodes are promoted unchanged. `da_commitments_hash` commits the domain,
+  V1 bundle version, leaf count, and Merkle root, so a logarithmic proof can
+  reconstruct the exact value committed by the block header without the
+  complete bundle.
 - `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
-  position)` entries so verifiers can reconstruct the root. Proofs also include
-  the block hash and signed header so light clients can verify finality.
+  position)` entries, the leaf count, tree root, and referenced block height.
+  A verifier supplies a caller-authenticated canonical block header and the
+  policy sidecar whose hash that header commits; the helper verifies neither
+  block signatures nor finality and does not consult mutable current Nexus policy.
+- Pin-intent `prove` and `verify` use the same authenticated shape rather than
+  treating equality with a node's current index as a proof. `DaPinIntentProof`
+  binds the intent, block height, bundle index and length, the versioned
+  pin-intent tree descriptor from the block header, and a Merkle path. Its leaf
+  and internal-node domains are respectively
+  `iroha:da:pin-intent-merkle:leaf:v1\0` and
+  `iroha:da:pin-intent-merkle:internal:v1\0`.
 - CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
   cycle and surface Norito/hex outputs for operators.
 
@@ -204,9 +225,11 @@ allowing catch-up nodes to rebuild the index quickly from the block log.
 
 ## Open Questions
 
-1. **KZG vs Merkle defaults** — Should small blobs always skip KZG commitments to
-   reduce block size? Proposal: keep `kzg_commitment` optional and gate via
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later
+   protocol version must specify a real polynomial encoding, trusted/setup
+   provenance, commitment and opening algorithms, consensus verification, test
+   vectors, hardware-deterministic behavior, and a versioned wire-layout change.
+   There is no V1 enable toggle or reserved accepted value.
 2. **Sequence gaps** — Do we allow out-of-order lanes? Current plan rejects gaps
    unless governance toggles `allow_sequence_skips` for emergency replay.
 3. **Light-client cache** — SDK team requested a lightweight SQLite cache for

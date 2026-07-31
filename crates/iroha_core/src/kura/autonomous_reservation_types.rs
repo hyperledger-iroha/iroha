@@ -100,6 +100,7 @@ pub(crate) enum AutonomousLaneReservationEvidenceError {
 
 #[derive(Debug, Default)]
 struct AutonomousReservationLaneInventory {
+    directory_present: bool,
     attempts: BTreeMap<(u64, u64), u64>,
     view_states: BTreeMap<(u64, u64), u64>,
     lane_latest: BTreeMap<u64, u64>,

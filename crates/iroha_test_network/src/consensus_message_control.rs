@@ -1492,6 +1492,7 @@ mod tests {
             CryptoHash::new(b"descriptor-parent-state"),
             CryptoHash::new(b"descriptor-post-state"),
             CryptoHash::new(b"descriptor-writes"),
+            1,
             CryptoHash::new(b"descriptor-executed-wire"),
         )
     }

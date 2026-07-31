@@ -36,7 +36,12 @@ All manifests consume the same Norito JSON configuration file and rely on the
 1. Install the `soranet-relay` binary (for example under `/usr/local/bin/`).
 2. Copy `config/relay.entry.json` to `/etc/soranet/relay/relay.json` and edit
    the policy values:
-   - Set `listen`/`admin_listen` to the desired bind addresses.
+   - Set `listen` to the desired public bind address. `admin_listen` must stay
+     on a loopback address. Set `admin_auth_token_path` to a root/operator-only
+     file containing 32–256 random printable ASCII bytes; the relay rejects
+     group-writable or world-accessible token files. Export admin telemetry through a
+     separately authenticated and encrypted local proxy when remote scraping is
+     required.
    - Replace the TLS certificate paths or remove the `tls` section to use the
      built-in self-signed certificate during testing.
    - Update the `descriptor_commit_hex` to match the directory-issued descriptor
@@ -49,7 +54,10 @@ All manifests consume the same Norito JSON configuration file and rely on the
     `/etc/soranet/relay/guards/current_snapshot.norito`) and set the
     `guard_directory` block so the runtime can verify that the descriptor
     commitment and ML-KEM key published by the directory match the local
-    configuration. Use the required `expected_snapshot_digest_hex` field to pin
+    configuration. First-release snapshots and relay certificate configuration
+    always require both Ed25519 and ML-DSA-65 signatures; there is no
+    validation-phase downgrade setting. Use the required
+    `expected_snapshot_digest_hex` field to pin
     the domain-separated BLAKE3 digest printed by `soranet-directory build`.
     Distribute that digest over an independent governance channel; the
     snapshot's embedded `directory_hash` does not authenticate its issuer set.
@@ -70,6 +78,14 @@ All manifests consume the same Norito JSON configuration file and rely on the
     without editing the JSON by hand.
   - Review the `congestion` block (`max_circuits_per_client`,
     `handshake_cooldown_millis`) and tune it for your operator policy.
+  - Keep `pow.revocation_store_path` on durable storage writable only by the
+    relay account. The sample systemd unit creates `/var/lib/soranet-relay`
+    automatically. Startup fails closed if this replay ledger cannot be read or
+    parsed; do not delete it while unexpired tickets exist.
+  - When `pow.token.enabled` is true, keep
+    `pow.token.replay_store_path` on the same class of durable storage. Active
+    token records are never evicted; exhausted capacity rejects new token
+    admissions, and malformed/over-capacity snapshots fail startup.
    - Set the `compliance` block to match your log retention requirements. The
      default writes JSON Lines events to `/var/log/soranet/relay_compliance.jsonl`,
      rotates the file when it reaches 64 MiB (retaining seven backups), and mirrors
@@ -81,6 +97,10 @@ All manifests consume the same Norito JSON configuration file and rely on the
    `config/relay-descriptor-manifest.sample.json`) at
    `/etc/soranet/relay/secrets/relay-descriptor-manifest.json` with
    permissions `0640` and ownership restricted to the relay operator.
+   Create `/etc/soranet/relay/secrets/admin-token` with at least 32 random
+   printable ASCII bytes and permissions `0600`, or `0640` with a dedicated
+   read-only relay group; do not place this bearer token in the JSON
+   configuration or an environment variable.
 4. Optionally create `/etc/soranet/relay/relay.env` using
    `systemd/relay.env.example` to set `RUST_LOG` or other environment variables.
 5. Copy `systemd/soranet-relay.service` to `/etc/systemd/system/` and adjust the
@@ -91,13 +111,28 @@ All manifests consume the same Norito JSON configuration file and rely on the
    sudo systemctl enable soranet-relay
    sudo systemctl start soranet-relay
    ```
-7. Confirm the QUIC listener and metrics port are reachable and monitor logs
-   via `journalctl -u soranet-relay`.
+7. Confirm the QUIC listener is reachable, query the loopback admin endpoint
+   with its bearer token, and monitor logs via
+   `journalctl -u soranet-relay`.
+
+The relay requires `SNR1` protected records on every post-handshake application
+stream. There is no plaintext-stream compatibility mode: clients must retain
+the hybrid handshake session key and derive the direction- and stream-specific
+ChaCha20-Poly1305 record keys. The shipped Sora VPN helper implements this
+protocol. Relay QUIC endpoints reject TLS 0-RTT and the helper does not offer
+it, so application traffic cannot precede authenticated hybrid key derivation.
 
 ## Using the Kubernetes manifests
 
-The sample manifest targets the `soranet` namespace and runs two relay replicas
-behind a ClusterIP service. Before applying it:
+The sample manifest targets the `soranet` namespace and runs one relay identity
+behind a ClusterIP service. Its spent-ticket ledger is mounted from a
+`ReadWriteOnce` persistent volume claim. A relay identity must have exactly one
+authoritative ledger: scale out by deploying separate relay identities and
+descriptors, not by cloning one identity across pods with independent replay
+state. The sample uses the `Recreate` update strategy so a rollout cannot
+overlap two processes using the same identity; the relay also takes an
+exclusive process-lifetime sidecar lock on each replay ledger and fails startup
+if another owner is active. Before applying it:
 
 1. Replace the inline configuration under `ConfigMap.data["relay.json"]` with
    policy values produced by your directory tooling.
@@ -106,6 +141,9 @@ behind a ClusterIP service. Before applying it:
    issued for the relay.
    - Populate the ML-KEM keypair fields alongside the Ed25519 seed (`ml_kem_private_key_hex`
      and `ml_kem_public_hex`) so the runtime can advertise PQ capabilities.
+   - Replace `Secret.stringData["admin-token"]` with at least 32 random
+     printable ASCII bytes. The sample projects the secret with mode `0440`
+     to the relay pod's dedicated `fsGroup`.
 3. Mount the guard directory snapshot (for example via an additional `Secret`
    or CSI driver) at the path referenced by `guard_directory.snapshot_path` and
    update `expected_snapshot_digest_hex` whenever the committee publishes a new
@@ -120,14 +158,21 @@ behind a ClusterIP service. Before applying it:
 4. Adjust the congestion/compliance blocks in the inline configuration to match
    your policy (limits propagate directly to the runtime guard counters and
    compliance logger).
-5. Adjust the container image (defaults to
-   `ghcr.io/sora-nexus/soranet-relay:latest`), resource requests, probes, and
-   security context as needed.
-6. Apply the manifest:
+5. Bind `soranet-relay-state` to durable storage appropriate for the cluster.
+   The relay refuses startup if a persisted spent-ticket or consumed-token
+   snapshot is unreadable or malformed.
+6. Adjust the container image (defaults to
+   `ghcr.io/sora-nexus/soranet-relay:latest`), resource requests, and security
+   context as needed. The sample deliberately does not publish or probe the
+   admin listener through the pod IP. For remote Prometheus collection, add a
+   co-located scraper/proxy that reads the bearer token, talks to
+   `127.0.0.1:9090`, and exposes metrics over an authenticated encrypted
+   transport.
+7. Apply the manifest:
    ```
    kubectl apply -f kubernetes/soranet-relay.yaml
    ```
-7. Expose the QUIC service externally using your preferred ingress mechanism
+8. Expose the QUIC service externally using your preferred ingress mechanism
    (for example, a LoadBalancer Service or MetalLB) and map UDP port 4433.
 
 Both deployment paths expect deterministic configuration management. Whenever
@@ -221,8 +266,11 @@ after signing; Torii verifies the body hash in the canonical request headers.
 
 ## Runtime endpoints and persistence
 
-The relay exposes an admin HTTP listener at `admin_listen` for operational
-telemetry and policy signals:
+The relay exposes an authenticated admin HTTP listener at `admin_listen` for
+operational telemetry and policy signals. The listener is accepted only on a
+loopback address, and every route except the non-sensitive `GET /healthz`
+requires `Authorization: Bearer <token>` using the secret loaded from
+`admin_auth_token_path`:
 
 - `GET /metrics` returns Prometheus metrics for handshakes, constant-rate lanes,
   privacy counters, and incentive summaries.

@@ -84,7 +84,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DomainId {
         use std::alloc::{Layout, alloc, dealloc};
         let _g = norito::core::PayloadCtxGuard::enter(bytes);
         let layout =
-            Layout::from_size_align(bytes.len(), core::mem::align_of::<norito::Archived<Self>>())
+            Layout::from_size_align(bytes.len(), norito::core::archived_payload_align::<Self>())
                 .map_err(|_| norito::Error::LengthMismatch)?;
         let tmp = unsafe { alloc(layout) };
         if tmp.is_null() {
@@ -107,7 +107,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
         use std::alloc::{Layout, alloc, dealloc};
         let _g = norito::core::PayloadCtxGuard::enter(bytes);
         let layout =
-            Layout::from_size_align(bytes.len(), core::mem::align_of::<norito::Archived<Self>>())
+            Layout::from_size_align(bytes.len(), norito::core::archived_payload_align::<Self>())
                 .map_err(|_| norito::Error::LengthMismatch)?;
         let tmp = unsafe { alloc(layout) };
         if tmp.is_null() {
@@ -130,7 +130,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AssetDefinitionId {
         use std::alloc::{Layout, alloc, dealloc};
         let _g = norito::core::PayloadCtxGuard::enter(bytes);
         let layout =
-            Layout::from_size_align(bytes.len(), core::mem::align_of::<norito::Archived<Self>>())
+            Layout::from_size_align(bytes.len(), norito::core::archived_payload_align::<Self>())
                 .map_err(|_| norito::Error::LengthMismatch)?;
         let tmp = unsafe { alloc(layout) };
         if tmp.is_null() {

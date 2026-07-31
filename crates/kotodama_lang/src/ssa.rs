@@ -2812,6 +2812,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         EncodeInt { value, .. } | PointerToNorito { value, .. } => f(value),
         PointerFromNorito { blob, .. } => f(blob),
+        StatePathFromName { name, .. } => f(name),
         PathMapKeyNorito { base, key_blob, .. } => {
             f(base);
             f(key_blob);
@@ -2995,7 +2996,9 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::JsonObject { dest, .. } => Some(dest),
         ir::Instr::JsonSetInt { dest, .. } => Some(dest),
         ir::Instr::JsonSetAccountId { dest, .. } => Some(dest),
-        ir::Instr::PathMapKeyNorito { dest, .. } => Some(dest),
+        ir::Instr::StatePathFromName { dest, .. } | ir::Instr::PathMapKeyNorito { dest, .. } => {
+            Some(dest)
+        }
         ir::Instr::JsonEncode { dest, .. } => Some(dest),
         ir::Instr::JsonDecode { dest, .. } => Some(dest),
         ir::Instr::JsonGetNumeric { dest, .. }

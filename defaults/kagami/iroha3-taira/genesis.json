@@ -1,9 +1,9 @@
 {
   "chain": "iroha3-taira",
   "chain_discriminant": 369,
-  "consensus_fingerprint": "0x8942a47e7f584e232968f30e1f4065051a9ed531d41f39421b45d68b951a64d2",
+  "consensus_fingerprint": "0x61a83b5a6a9956419e69bb4d5df522b98774991318608c72c8a2b717f0451f3c",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":22020096,"max_chunk_count":1024},"nexus_amx_context_hash":"388D0CF4F8EDD439871E967D0C0E9237C7F97C40BA1C4C3BDD1339E388D07CF1"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":22020096,"max_chunk_count":1024},"nexus_amx_context_hash":"FF1129DB002E7291DAA1903E4D8574B9BE9A082C3B01A5242063A3DB8AE8BC8F","execution_policy_hash":"DC2E70977C15AE195EC16C216B75053C75DADBECAB79B4462CD6D1F60AA81B89"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -208,6 +208,19 @@
             "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "lease_expiry_ms": null
           }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7",
+              "object": {
+                "name": "CanManageFeeSponsorProgram",
+                "payload": {
+                  "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+                }
+              }
+            }
+          }
         }
       ],
       "ivm_triggers": [],
@@ -231,8 +244,8 @@
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
               "max_validators": 128,
-              "min_nomination_bond": 1,
-              "min_self_bond": 1000,
+              "min_nomination_bond": "1",
+              "min_self_bond": "1000",
               "seat_band_pct": 5,
               "slashing_delay_blocks": 259200,
               "vrf_commit_window_blocks": 100,
@@ -548,7 +561,7 @@
             "AssetDefinition": {
               "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
+              "source": "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
             }
           }
         },
@@ -606,5 +619,5 @@
       ]
     }
   ],
-  "wire_protocol_version": 3
+  "wire_protocol_version": 4
 }

@@ -56,8 +56,12 @@ public final class NativeAmxV2GroupedFixtureTests {
         "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
         firstLeg.participantProposal().proposalHash().value());
     assertEquals(
-        "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C",
+        "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
         firstLeg.participantSettlementHash().value());
+    final NativeAmxV2Models.Leg remoteLeg = group.receipts().get(0).legs().get(1);
+    assertEquals(
+        "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+        remoteLeg.participantSettlementHash().value());
     assertTrue(
         NativeAmxV2Models.isCanonicalBlsNormalPeerId(
             firstLeg.participantProposal().descriptor().validatorSet().get(0)));
@@ -216,6 +220,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     final Map<String, Object> execution = object(evidence, "execution_commitment");
     final List<Object> artifacts = array(evidence, "manifest_artifacts");
     require(number(execution, "native_amx_application_manifest_version") == 1L);
+    require(execution.containsKey("merge_carrier") && execution.get("merge_carrier") == null);
     require(
         number(execution, "native_amx_application_manifest_count") == artifacts.size()
             && artifacts.size() == 1);
@@ -234,6 +239,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     require(
         Objects.equals(
             leaf.get("executed_block_wire_hash"), execution.get("executed_block_wire_hash")));
+    require(unsigned64(execution, "executed_block_wire_len").equals(BigInteger.valueOf(49)));
     require(number(leaf, "predecessor_height") + 1L == number(leaf, "participant_height"));
 
     final Map<String, Object> active =

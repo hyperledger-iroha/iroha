@@ -108,6 +108,7 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         quorum: DualQuorum::from_roster(&roster).expect("valid powered fixture roster"),
         roster,
         nexus_amx_context_hash: Hash::new(b"Torii exact-v2 bridge context"),
+        execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
             encoding: PayloadEncoding::Plain,
             chunk_size_bytes: 1024,
@@ -129,6 +130,8 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         Hash::new(b"Torii exact-v2 parent state"),
         Hash::new(b"Torii exact-v2 post state"),
         Hash::new(b"Torii exact-v2 ordinary writes"),
+        u64::try_from(block.encode_wire().expect("exact block wire").len())
+            .expect("exact block wire length fits u64"),
         block
             .executed_block_wire_hash()
             .expect("hash exact bridge fixture block wire"),

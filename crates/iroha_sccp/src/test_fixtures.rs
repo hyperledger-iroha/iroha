@@ -20,7 +20,7 @@ use iroha_data_model::{
     },
     block::{BlockHeader, BlockSignature, SignedBlock},
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
+        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofV1,
         SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
         SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
@@ -397,6 +397,16 @@ fn exact_fixture_executed_wire_hash(block: &SignedBlock) -> Hash {
         .expect("exact SCCP fixture executed block has canonical wire bytes")
 }
 
+fn exact_fixture_executed_wire_len(block: &SignedBlock) -> u64 {
+    u64::try_from(
+        block
+            .encode_wire()
+            .expect("exact SCCP fixture executed block has canonical wire bytes")
+            .len(),
+    )
+    .expect("exact SCCP fixture executed block wire length fits u64")
+}
+
 fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV1) {
     assert_eq!(fixture.proof.block_header, fixture.block.header());
     assert_eq!(
@@ -407,6 +417,16 @@ fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV
         fixture.proof.finality_artifact.subject.payload_hash,
         exact_fixture_proposal_wire_hash(&fixture.block),
         "the finality subject must bind the canonical resultless proposal wire image"
+    );
+    assert_eq!(
+        fixture
+            .proof
+            .finality_artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_len,
+        exact_fixture_executed_wire_len(&fixture.block),
+        "the execution commitment must bind the complete result-bearing block wire length"
     );
     assert_eq!(
         fixture
@@ -632,6 +652,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             quorum,
             roster,
             nexus_amx_context_hash: Hash::new(b"exact SCCP fixture Nexus/AMX context"),
+            execution_policy_hash: Hash::new(b"exact SCCP fixture execution policy"),
             da_layout,
             leader_seed: [0x5a; 32],
         },
@@ -663,6 +684,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 quorum: parent_context.quorum,
                 roster: parent_context.roster.clone(),
                 nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+                execution_policy_hash: parent_context.execution_policy_hash,
                 da_layout: parent_context.da_layout,
                 leader_seed: parent_context.leader_seed,
             }
@@ -692,6 +714,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
+            exact_fixture_executed_wire_len(block),
             exact_fixture_executed_wire_hash(block),
         ),
         signers: vec![0, 1, 2],
@@ -726,7 +749,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     let finalized = SccpFinalizedBlockTestFixtureV1 {
         block: block.clone(),
         proof: TairaBridgeFinalityProofV1 {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header,
             finality_artifact,
         },

@@ -18,7 +18,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 )]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct BlobDigest(
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
@@ -88,7 +87,6 @@ pub type ChunkDigest = BlobDigest;
 )]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct StorageTicketId(
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );

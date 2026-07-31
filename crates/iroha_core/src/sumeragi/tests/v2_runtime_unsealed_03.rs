@@ -756,6 +756,7 @@
                 Hash::new(b"conflicting parent state"),
                 Hash::new(b"conflicting post state"),
                 Hash::new(b"conflicting ordinary writes"),
+                1,
                 Hash::new(b"conflicting executed body"),
             ),
         );

@@ -93,6 +93,7 @@ fn fixture() -> Fixture {
         quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
         roster,
         nexus_amx_context_hash: Hash::new(b"bridge core v2 context"),
+        execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
             encoding: PayloadEncoding::Plain,
             chunk_size_bytes: 1024,
@@ -115,6 +116,8 @@ fn fixture() -> Fixture {
         Hash::new(b"bridge core v2 parent state"),
         Hash::new(b"bridge core v2 post state"),
         Hash::new(b"bridge core v2 ordinary writes"),
+        u64::try_from(block.encode_wire().expect("bridge block wire").len())
+            .expect("bridge block wire length fits u64"),
         block
             .executed_block_wire_hash()
             .expect("canonical bridge executed block wire"),

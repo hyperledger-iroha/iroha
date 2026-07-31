@@ -351,6 +351,7 @@
                     Hash::new(b"capacity parent state"),
                     Hash::new(b"capacity post state"),
                     Hash::new(b"capacity ordinary writes"),
+                    1,
                     Hash::new(b"capacity executed block wire"),
                 ),
                 signers: vec![0, 1, 2],

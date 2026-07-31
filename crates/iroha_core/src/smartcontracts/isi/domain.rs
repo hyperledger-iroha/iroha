@@ -1941,21 +1941,19 @@ pub mod isi {
             }
             if let Some((settlement_id, _)) = state_transaction
                 .world
-                .settlement_ledgers
+                .settlement_receipts
                 .iter()
-                .find(|(_, ledger)| {
-                    ledger.entries.iter().any(|entry| {
-                        entry.authority == account_id
-                            || entry
-                                .legs
-                                .iter()
-                                .any(|leg| leg.leg.from == account_id || leg.leg.to == account_id)
-                    })
+                .find(|(_, receipt)| {
+                    receipt.authority == account_id
+                        || receipt
+                            .legs
+                            .iter()
+                            .any(|leg| leg.leg.from == account_id || leg.leg.to == account_id)
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it has active settlement ledger state ({settlement_id}); retain account for settlement audit references"
+                        "cannot unregister account {account_id}: it is referenced by committed settlement receipt {settlement_id}"
                     )
                     .into(),
                 )
@@ -2602,20 +2600,18 @@ pub mod isi {
             }
             if let Some((settlement_id, _)) = state_transaction
                 .world
-                .settlement_ledgers
+                .settlement_receipts
                 .iter()
-                .find(|(_, ledger)| {
-                    ledger.entries.iter().any(|entry| {
-                        entry
-                            .legs
-                            .iter()
-                            .any(|leg| leg.leg.asset_definition_id() == &asset_definition_id)
-                    })
+                .find(|(_, receipt)| {
+                    receipt
+                        .legs
+                        .iter()
+                        .any(|leg| leg.leg.asset_definition_id() == &asset_definition_id)
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is referenced by settlement ledger state ({settlement_id}); retain asset definition for settlement audit references"
+                        "cannot unregister asset definition {asset_definition_id}: it is referenced by committed settlement receipt {settlement_id}"
                     )
                     .into(),
                 )
@@ -9379,7 +9375,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_rejects_when_account_has_settlement_ledger_state() {
+    fn unregister_account_rejects_when_account_has_committed_settlement_receipt() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -9396,45 +9392,47 @@ mod tests {
 
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settleguard".parse().expect("settlement id");
-        let mut ledger = iroha_data_model::isi::SettlementLedger::default();
-        ledger.push(iroha_data_model::isi::SettlementLedgerEntry {
-            settlement_id: settlement_id.clone(),
+        let receipt = iroha_data_model::isi::SettlementReceipt {
             kind: iroha_data_model::isi::SettlementKind::Dvp,
             authority: account_id.clone(),
             plan: iroha_data_model::isi::SettlementPlan::default(),
             metadata: Metadata::default(),
             block_height: 1,
-            block_hash: iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0; Hash::LENGTH]),
-            ),
-            executed_at_ms: 1,
-            legs: vec![iroha_data_model::isi::SettlementLegSnapshot {
-                role: iroha_data_model::isi::SettlementLegRole::Delivery,
-                leg: iroha_data_model::isi::SettlementLeg::new(
-                    AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
-                    Quantity::one(),
-                    account_id.clone(),
-                    authority.clone(),
+            block_hash:
+                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([0; Hash::LENGTH]),
                 ),
-                committed: true,
-            }],
-            fx_corridor: None,
-            outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
-                iroha_data_model::isi::SettlementSuccessRecord {
-                    first_committed: true,
-                    second_committed: true,
-                    fx_window_ms: None,
+            executed_at_ms: 1,
+            legs: [
+                iroha_data_model::isi::SettlementLegSnapshot {
+                    role: iroha_data_model::isi::SettlementLegRole::Delivery,
+                    leg: iroha_data_model::isi::SettlementLeg::new(
+                        AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
+                        Quantity::one(),
+                        account_id.clone(),
+                        authority.clone(),
+                    ),
                 },
-            ),
-        });
-        tx.world.settlement_ledgers.insert(settlement_id, ledger);
+                iroha_data_model::isi::SettlementLegSnapshot {
+                    role: iroha_data_model::isi::SettlementLegRole::Payment,
+                    leg: iroha_data_model::isi::SettlementLeg::new(
+                        AssetDefinitionId::new(domain_id.clone(), "eur".parse().unwrap()),
+                        Quantity::one(),
+                        authority.clone(),
+                        account_id.clone(),
+                    ),
+                },
+            ],
+            fx_corridor: None,
+        };
+        tx.world.settlement_receipts.insert(settlement_id, receipt);
 
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
-            .expect_err("account with settlement ledger state must not be unregistered");
+            .expect_err("account with a committed settlement receipt must not be unregistered");
         let err_string = err.to_string();
         assert!(
-            err_string.contains("active settlement ledger state"),
+            err_string.contains("committed settlement receipt"),
             "error should explain settlement-state conflict: {err_string}"
         );
         assert!(
@@ -12657,7 +12655,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_asset_definition_rejects_when_definition_has_settlement_ledger_state() {
+    fn unregister_asset_definition_rejects_when_definition_has_committed_settlement_receipt() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
@@ -12684,48 +12682,53 @@ mod tests {
 
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settle_asset_guard".parse().expect("settlement id");
-        let mut ledger = iroha_data_model::isi::SettlementLedger::default();
-        ledger.push(iroha_data_model::isi::SettlementLedgerEntry {
-            settlement_id: settlement_id.clone(),
+        let receipt = iroha_data_model::isi::SettlementReceipt {
             kind: iroha_data_model::isi::SettlementKind::Dvp,
             authority: from.clone(),
             plan: iroha_data_model::isi::SettlementPlan::default(),
             metadata: Metadata::default(),
             block_height: 1,
-            block_hash: iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0; Hash::LENGTH]),
-            ),
-            executed_at_ms: 1,
-            legs: vec![iroha_data_model::isi::SettlementLegSnapshot {
-                role: iroha_data_model::isi::SettlementLegRole::Delivery,
-                leg: iroha_data_model::isi::SettlementLeg::new(
-                    asset_definition_id.clone(),
-                    Quantity::one(),
-                    from,
-                    to,
+            block_hash:
+                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([0; Hash::LENGTH]),
                 ),
-                committed: true,
-            }],
-            fx_corridor: None,
-            outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
-                iroha_data_model::isi::SettlementSuccessRecord {
-                    first_committed: true,
-                    second_committed: true,
-                    fx_window_ms: None,
+            executed_at_ms: 1,
+            legs: [
+                iroha_data_model::isi::SettlementLegSnapshot {
+                    role: iroha_data_model::isi::SettlementLegRole::Delivery,
+                    leg: iroha_data_model::isi::SettlementLeg::new(
+                        asset_definition_id.clone(),
+                        Quantity::one(),
+                        from.clone(),
+                        to.clone(),
+                    ),
                 },
-            ),
-        });
-        tx.world.settlement_ledgers.insert(settlement_id, ledger);
+                iroha_data_model::isi::SettlementLegSnapshot {
+                    role: iroha_data_model::isi::SettlementLegRole::Payment,
+                    leg: iroha_data_model::isi::SettlementLeg::new(
+                        AssetDefinitionId::new(
+                            counterparty_domain,
+                            "eur".parse().expect("asset name"),
+                        ),
+                        Quantity::one(),
+                        to,
+                        from,
+                    ),
+                },
+            ],
+            fx_corridor: None,
+        };
+        tx.world.settlement_receipts.insert(settlement_id, receipt);
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err(
-                "asset definition with settlement ledger reference must not be unregistered",
+                "asset definition with a committed settlement receipt must not be unregistered",
             );
         let err_string = err.to_string();
         assert!(
-            err_string.contains("settlement ledger state"),
-            "error should explain settlement ledger conflict: {err_string}"
+            err_string.contains("committed settlement receipt"),
+            "error should explain settlement receipt conflict: {err_string}"
         );
         assert!(
             tx.world

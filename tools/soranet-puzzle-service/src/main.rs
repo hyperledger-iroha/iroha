@@ -273,21 +273,18 @@ impl PuzzleService {
     fn mint_ticket<R: RngCore + CryptoRng>(
         &self,
         ttl: Duration,
-        transcript_hash: Option<[u8; 32]>,
+        transcript_hash: [u8; 32],
         rng: &mut R,
     ) -> Result<PowTicket, ChallengeMintError> {
         if let Some(params) = &self.puzzle_params {
-            let binding = PuzzleBinding::new(
-                &self.descriptor_commit,
-                &self.relay_id,
-                transcript_hash.as_ref().map(|hash| hash.as_slice()),
-            );
+            let binding =
+                PuzzleBinding::new(&self.descriptor_commit, &self.relay_id, &transcript_hash);
             puzzle::mint_ticket(params, &binding, ttl, rng).map_err(ChallengeMintError::Puzzle)
         } else {
             let binding = pow::ChallengeBinding::new(
                 &self.descriptor_commit,
                 &self.relay_id,
-                transcript_hash.as_ref().map(|hash| hash.as_slice()),
+                &transcript_hash,
             );
             pow::mint_ticket(&self.pow_params, &binding, ttl, rng).map_err(ChallengeMintError::Pow)
         }
@@ -732,8 +729,7 @@ impl TokenConfigResponse {
 struct MintRequest {
     #[norito(default)]
     ttl_secs: Option<u64>,
-    #[norito(default)]
-    transcript_hash_hex: Option<String>,
+    transcript_hash_hex: String,
     #[norito(default)]
     signed: bool,
 }
@@ -809,25 +805,23 @@ async fn mint_ticket(
     State(state): State<Arc<PuzzleService>>,
     body: Bytes,
 ) -> Result<JsonBytes, ApiError> {
-    let payload = if body.is_empty() {
-        MintRequest {
-            ttl_secs: None,
-            transcript_hash_hex: None,
-            signed: false,
-        }
-    } else {
-        json::from_slice::<MintRequest>(&body)
-            .map_err(|err| ApiError::BadRequest(format!("invalid JSON body: {err}")))?
-    };
+    if body.is_empty() {
+        return Err(ApiError::BadRequest(
+            "transcript_hash_hex is required".to_owned(),
+        ));
+    }
+    let payload = json::from_slice::<MintRequest>(&body)
+        .map_err(|err| ApiError::BadRequest(format!("invalid JSON body: {err}")))?;
 
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let ttl = state.clamp_ttl(ttl_override);
-    let transcript_hash = match payload.transcript_hash_hex.as_ref() {
-        Some(hex) => Some(hex_to_fixed::<32>(hex).map_err(|reason| {
-            ApiError::BadRequest(format!("transcript_hash_hex invalid: {reason}"))
-        })?),
-        None => None,
-    };
+    let transcript_hash = hex_to_fixed::<32>(&payload.transcript_hash_hex)
+        .map_err(|reason| ApiError::BadRequest(format!("transcript_hash_hex invalid: {reason}")))?;
+    if transcript_hash.iter().all(|byte| *byte == 0) {
+        return Err(ApiError::BadRequest(
+            "transcript_hash_hex must not be all zeros".to_owned(),
+        ));
+    }
     let signed = payload.signed;
 
     let mut rng = StdRng::from_os_rng();
@@ -846,7 +840,7 @@ async fn mint_ticket(
             )
         })?;
         let signed_ticket =
-            SignedTicket::sign(ticket, &state.relay_id, transcript_hash.as_ref(), secret)
+            SignedTicket::sign(ticket, &state.relay_id, &transcript_hash, secret)
                 .map_err(|err| ApiError::Internal(format!("signed ticket mint failed: {err}")))?;
         signed_ticket_b64 = Some(STANDARD.encode(signed_ticket.encode()));
         signed_ticket_fingerprint_hex = Some(encode(signed_ticket.revocation_fingerprint()));
@@ -906,6 +900,11 @@ async fn mint_token(
     }
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
+    if transcript_hash.iter().all(|byte| *byte == 0) {
+        return Err(ApiError::BadRequest(
+            "transcript_hash_hex must not be all zeros".to_owned(),
+        ));
+    }
 
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let issued_at = payload
@@ -1430,7 +1429,7 @@ mod tests {
         let mut rng = StdRng::from_seed([7u8; 32]);
         let ttl = service.clamp_ttl(Some(Duration::from_secs(40)));
         let ticket = service
-            .mint_ticket(ttl, None, &mut rng)
+            .mint_ticket(ttl, [0x10; 32], &mut rng)
             .expect("pow mint should succeed");
 
         assert_eq!(ticket.difficulty, service.pow_params.difficulty());
@@ -1452,7 +1451,7 @@ mod tests {
         let mut rng = StdRng::from_seed([9u8; 32]);
         let ttl = service.clamp_ttl(Some(Duration::from_secs(60)));
         let ticket = service
-            .mint_ticket(ttl, None, &mut rng)
+            .mint_ticket(ttl, [0x20; 32], &mut rng)
             .expect("puzzle mint should succeed");
 
         assert_eq!(
@@ -1468,10 +1467,10 @@ mod tests {
         service.descriptor_commit = [0xAB; 32];
         service.relay_id = [0xCD; 32];
         service.puzzle_params = Some(PuzzleParameters::new(
-            NonZeroU32::new(1_024).unwrap(),
+            NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
-            8,
+            1,
             Duration::from_secs(90),
             Duration::from_secs(30),
         ));
@@ -1480,28 +1479,22 @@ mod tests {
         let transcript = [0xAA; 32];
         let ttl = service.clamp_ttl(Some(Duration::from_secs(40)));
         let ticket = service
-            .mint_ticket(ttl, Some(transcript), &mut rng)
+            .mint_ticket(ttl, transcript, &mut rng)
             .expect("puzzle mint should succeed");
 
         let params = service.puzzle_params.as_ref().expect("params");
-        let binding = PuzzleBinding::new(
-            &service.descriptor_commit,
-            &service.relay_id,
-            Some(&transcript),
-        );
+        let binding =
+            PuzzleBinding::new(&service.descriptor_commit, &service.relay_id, &transcript);
         puzzle::verify(&ticket, &binding, params).expect("verification should succeed");
 
         let wrong_binding =
-            PuzzleBinding::new(&service.descriptor_commit, &[0xEF; 32], Some(&transcript));
+            PuzzleBinding::new(&service.descriptor_commit, &[0xEF; 32], &transcript);
         let err =
             puzzle::verify(&ticket, &wrong_binding, params).expect_err("wrong relay id must fail");
         assert!(matches!(err, puzzle::Error::InvalidSolution));
 
-        let wrong_transcript = PuzzleBinding::new(
-            &service.descriptor_commit,
-            &service.relay_id,
-            Some(&[0xBB; 32]),
-        );
+        let wrong_transcript =
+            PuzzleBinding::new(&service.descriptor_commit, &service.relay_id, &[0xBB; 32]);
         let err = puzzle::verify(&ticket, &wrong_transcript, params)
             .expect_err("wrong transcript must fail");
         assert!(matches!(err, puzzle::Error::InvalidSolution));
@@ -1515,7 +1508,7 @@ mod tests {
         service.descriptor_commit = [0x01; 32];
         service.relay_id = [0x02; 32];
         service.puzzle_params = Some(PuzzleParameters::new(
-            NonZeroU32::new(512).unwrap(),
+            NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             3,
@@ -1540,8 +1533,7 @@ mod tests {
         let ticket = PowTicket::parse(&ticket_bytes).expect("ticket parse");
 
         let params = state.puzzle_params.as_ref().expect("params");
-        let binding =
-            PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, Some(&transcript));
+        let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &transcript);
         puzzle::verify(&ticket, &binding, params).expect("verification succeeds");
     }
 
@@ -1576,7 +1568,7 @@ mod tests {
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket payload");
 
         assert_eq!(signed.relay_id, state.relay_id);
-        assert_eq!(signed.transcript_hash.as_ref(), Some(&transcript));
+        assert_eq!(signed.transcript_hash, transcript);
 
         let ticket_bytes = STANDARD
             .decode(minted.ticket_b64.as_bytes())
@@ -1621,20 +1613,15 @@ mod tests {
         let transcript_hash = [0x11; 32];
         let mut rng = StdRng::from_seed([0x55; 32]);
         let pow_ticket = service
-            .mint_ticket(service.ticket_ttl, Some(transcript_hash), &mut rng)
+            .mint_ticket(service.ticket_ttl, transcript_hash, &mut rng)
             .expect("mint ticket");
-        let signed = SignedTicket::sign(
-            pow_ticket,
-            &service.relay_id,
-            Some(&transcript_hash),
-            &secret,
-        )
-        .expect("sign ticket");
+        let signed = SignedTicket::sign(pow_ticket, &service.relay_id, &transcript_hash, &secret)
+            .expect("sign ticket");
 
         let binding = ChallengeBinding::new(
             &service.descriptor_commit,
             &service.relay_id,
-            Some(&transcript_hash),
+            &transcript_hash,
         );
         pow::verify_signed_ticket(&signed, &public, &binding, &service.pow_params, None)
             .expect("signed ticket should verify");
@@ -1648,7 +1635,7 @@ mod tests {
         let state = Arc::new(service);
         let request = MintRequest {
             ttl_secs: Some(30),
-            transcript_hash_hex: Some("11".repeat(32)),
+            transcript_hash_hex: "11".repeat(32),
             signed: true,
         };
         let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
@@ -1669,8 +1656,7 @@ mod tests {
             .clone();
         let signed_bytes = STANDARD.decode(signed_b64).expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket");
-        let binding =
-            ChallengeBinding::new(&state.descriptor_commit, &state.relay_id, Some(&[0x11; 32]));
+        let binding = ChallengeBinding::new(&state.descriptor_commit, &state.relay_id, &[0x11; 32]);
         pow::verify_signed_ticket(&signed, &public, &binding, &state.pow_params, None)
             .expect("signed ticket verifies");
         assert_eq!(
@@ -1688,7 +1674,7 @@ mod tests {
         let state = Arc::new(service);
         let request = MintRequest {
             ttl_secs: Some(30),
-            transcript_hash_hex: None,
+            transcript_hash_hex: "22".repeat(32),
             signed: true,
         };
         let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
@@ -1696,6 +1682,49 @@ mod tests {
             .await
             .expect_err("should fail");
         assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn http_mint_without_transcript_binding_is_rejected() {
+        use axum::{body::Bytes, extract::State};
+
+        let state = Arc::new(base_service());
+        let err = mint_ticket(State(Arc::clone(&state)), Bytes::new())
+            .await
+            .expect_err("unbound ticket minting must fail");
+        assert!(matches!(
+            err,
+            ApiError::BadRequest(message) if message == "transcript_hash_hex is required"
+        ));
+
+        let err = mint_ticket(State(state), Bytes::from_static(b"{}"))
+            .await
+            .expect_err("JSON without a transcript binding must fail");
+        assert!(
+            matches!(err, ApiError::BadRequest(message) if message.contains("transcript_hash_hex")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_mint_rejects_zero_transcript_binding() {
+        use axum::{body::Bytes, extract::State};
+
+        let state = Arc::new(base_service());
+        let request = MintRequest {
+            ttl_secs: Some(30),
+            transcript_hash_hex: "00".repeat(32),
+            signed: false,
+        };
+        let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
+        let err = mint_ticket(State(state), body)
+            .await
+            .expect_err("zero transcript binding must fail");
+        assert!(matches!(
+            err,
+            ApiError::BadRequest(message)
+                if message == "transcript_hash_hex must not be all zeros"
+        ));
     }
 
     #[test]

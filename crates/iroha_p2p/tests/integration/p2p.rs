@@ -17,7 +17,10 @@ use iroha_config::parameters::{
         LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
         SoranetPow, SoranetPrivacy, SoranetVpn,
     },
-    defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, PEER_GOSSIP_PERIOD, RELAY_TTL},
+    defaults::network::{
+        DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, PEER_GOSSIP_PERIOD, RELAY_TTL,
+        REPLY_WRITER_FLUSH_TIMEOUT,
+    },
 };
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
@@ -108,8 +111,7 @@ fn trust_config(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
-        reply_writer_flush_timeout:
-            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -294,8 +296,7 @@ async fn network_create() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
-        reply_writer_flush_timeout:
-            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -414,7 +415,7 @@ async fn network_create() {
     let started = NetworkHandle::start(
         key_pair,
         config,
-        Some(chain_id),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -460,7 +461,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     let started_a = NetworkHandle::<MultiTopic>::start(
         kp_a.clone(),
         trust_config(addr_a.clone(), false, Duration::from_secs(60)),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -474,7 +475,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     let started_b = NetworkHandle::<MultiTopic>::start(
         kp_b.clone(),
         trust_config(addr_b.clone(), true, Duration::from_secs(60)),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -618,7 +619,7 @@ async fn trust_gossip_enabled_flows_through() {
     let started_a = NetworkHandle::<MultiTopic>::start(
         kp_a.clone(),
         trust_config(addr_a.clone(), true, Duration::from_secs(60)),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -632,7 +633,7 @@ async fn trust_gossip_enabled_flows_through() {
     let started_b = NetworkHandle::<MultiTopic>::start(
         kp_b.clone(),
         trust_config(addr_b.clone(), true, Duration::from_secs(60)),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -725,7 +726,7 @@ async fn ws_fallback_connects_and_handshakes() {
     let (peer2_network, _peer2_child) = NetworkHandle::<TestMessage>::start(
         peer2_key_pair.clone(),
         websocket_test_config(peer2_listen_address, idle_timeout, false),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -753,7 +754,7 @@ async fn ws_fallback_connects_and_handshakes() {
     let (mut peer1_network, _peer1_child) = NetworkHandle::<TestMessage>::start(
         peer1_key_pair,
         websocket_test_config(peer1_listen_address, idle_timeout, true),
-        Some(chain_id),
+        chain_id,
         None,
         None,
         ShutdownSignal::new(),
@@ -896,8 +897,7 @@ async fn two_networks() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
-        reply_writer_flush_timeout:
-            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1018,7 +1018,7 @@ async fn two_networks() {
     let (mut network1, _) = NetworkHandle::start(
         key_pair1,
         config1,
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -1041,8 +1041,7 @@ async fn two_networks() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
-        reply_writer_flush_timeout:
-            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1163,7 +1162,7 @@ async fn two_networks() {
     let (mut network2, _) = NetworkHandle::<TestMessage>::start(
         key_pair2,
         config2,
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -1276,8 +1275,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1388,7 +1386,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -1419,8 +1417,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1531,7 +1528,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -1607,8 +1604,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1719,7 +1715,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -1751,8 +1747,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1863,7 +1858,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -1963,8 +1958,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -2075,7 +2069,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2107,8 +2101,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -2219,7 +2212,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2349,8 +2342,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -2466,7 +2458,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
         hub_kp.clone(),
         make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2486,7 +2478,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             RelayMode::Spoke,
             vec![hub_addr.clone()],
         ),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2506,7 +2498,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             RelayMode::Spoke,
             vec![hub_addr.clone()],
         ),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2623,8 +2615,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout,
-                reply_writer_flush_timeout:
-                    iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+                reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
                 connect_startup_delay:
                     iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
@@ -2738,7 +2729,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
         hub_kp.clone(),
         make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2754,7 +2745,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     let (mut spoke_net, _spoke_child) = match NetworkHandle::<ConsensusMessage>::start(
         spoke_kp.clone(),
         make_config(spoke_addr.clone(), RelayMode::Spoke, vec![hub_addr.clone()]),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2776,7 +2767,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             RelayMode::Assist,
             vec![hub_addr.clone()],
         ),
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -2971,8 +2962,7 @@ async fn start_network(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
-        reply_writer_flush_timeout:
-            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -3088,16 +3078,10 @@ async fn start_network(
         tls_only_v1_3: true,
         quic_max_idle_timeout: None,
     };
-    let (mut network, _) = NetworkHandle::start(
-        key_pair,
-        config,
-        Some(chain_id),
-        None,
-        None,
-        shutdown_signal,
-    )
-    .await
-    .unwrap();
+    let (mut network, _) =
+        NetworkHandle::start(key_pair, config, chain_id, None, None, shutdown_signal)
+            .await
+            .unwrap();
     if let Err(sender) = network.subscribe_to_peers_messages(actor) {
         drop(sender);
         panic!("failed to subscribe actor to network messages");
@@ -3195,8 +3179,7 @@ async fn tls_inbound_listener_smoke() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
-        reply_writer_flush_timeout:
-            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -3320,7 +3303,7 @@ async fn tls_inbound_listener_smoke() {
             tls_listen_address: Some(WithOrigin::inline(tls_listen_addr.clone())),
             ..config1
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -3352,8 +3335,7 @@ async fn tls_inbound_listener_smoke() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
-            reply_writer_flush_timeout:
-                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -3464,7 +3446,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
-        Some(chain_id.clone()),
+        chain_id.clone(),
         None,
         None,
         ShutdownSignal::new(),

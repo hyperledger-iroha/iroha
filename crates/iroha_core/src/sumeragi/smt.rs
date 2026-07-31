@@ -35,6 +35,12 @@ pub struct KvPair {
 
 /// Dedicated execution-witness key tag for a finalized Kagemusha V2 top-up.
 pub(crate) const KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG: u8 = 0xD2;
+/// Execution-witness key tag for one Kagemusha V4 anchor drawdown balance.
+///
+/// Unlike the anchor tag, this is an ordinary state write. It must not enter
+/// the block-local top-up finality tree, but it does remain committed by the
+/// ordinary-writes root.
+pub(crate) const KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG: u8 = 0xD3;
 /// Exact tagged-key length: one domain byte and a 32-byte operation id.
 pub(crate) const KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES: usize = 33;
 /// Maximum top-up anchors committed by one block.

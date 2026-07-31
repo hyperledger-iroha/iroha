@@ -31,10 +31,26 @@ Alignment padding:
   accept any zero padding up to 64 bytes and treat the remaining bytes as the
   payload. Extra non-zero bytes are rejected.
 
-Schema enforcement:
+In-memory archived handles:
+- `Archived<T>` is a zero-sized, byte-aligned address marker. It never contains
+  a Rust `T`, so unvalidated wire bytes are not exposed as a typed Rust value.
+- Payload footprint and alignment are separate properties exposed by
+  `archived_payload_size::<T>()` and `archived_payload_align::<T>()`. Framing
+  uses those properties, so making the marker opaque does not alter padding or
+  the v1 wire layout.
+- Retagging an archived marker changes only the decoder type at the same byte
+  address. Every decoder must obtain bytes through an active payload context
+  and validate the requested range; a marker alone never authorizes a pointer
+  read. An outer/root decode span never widens a nested field's active context,
+  so a field pointer cannot consume sibling bytes. Missing context, truncated
+  scalar ranges, invalid Boolean tags, and invalid Unicode scalar values are
+  decode errors.
+
+Schema and resource enforcement:
 - Typed decoders must reject payloads whose header schema hash does not match
   the expected type. `ArchiveView::decode` performs this check; use
-  `ArchiveView::decode_unchecked` only for raw inspection tools.
+  `ArchiveView::decode_unchecked` only for raw inspection tools. Both methods,
+  plus `decode_exact`, always install payload-derived resource limits.
 
 ## Header Flags
 
@@ -113,13 +129,16 @@ layout:
 Archive byte limits do not bound collection reservations: an eight-byte
 sequence header can advertise an element count far larger than the containing
 payload, while nested length-delimited fields can amplify otherwise modest
-archives. Hosts decoding untrusted data with known semantic bounds
-must use `decode_from_bytes_with_limits` (or
-`decode_from_reader_with_limits`) and an explicit `DecodeLimits` value. The
-budget specifies a per-sequence element count, a per-field/blob byte length,
-cumulative element and allocation-byte totals, and a maximum nesting depth.
-Norito validates declared bodies against the bytes remaining before allocating
-temporary storage and returns typed resource-limit errors on violation.
+archives. Exact-slice decoders and all `ArchiveView` decode methods therefore
+install `canonical_decode_limits(payload_len)` automatically. Hosts decoding
+untrusted data with narrower semantic bounds must additionally use
+`decode_from_bytes_with_limits` (or `decode_from_reader_with_limits`) and an
+explicit `DecodeLimits` value. Nested scopes compose by selecting the stricter
+member in every dimension. The budget specifies a per-sequence element count,
+a per-field/blob byte length, cumulative element and allocation-byte totals,
+and a maximum nesting depth. Norito validates declared bodies against the bytes
+remaining before allocating temporary storage and returns typed resource-limit
+errors on violation.
 Compatibility layout fallbacks treat every resource-limit and allocation error
 as terminal: they never retry the same field through an alternate decoder after
 a budget has rejected it.
@@ -133,10 +152,12 @@ pass a bounded decode operation explicitly. Lazy callers must use
 and reapplies it for every `next`/`finish` call. No thread-local guard is moved
 with an iterator.
 
-The ordinary unbounded decode and iterator APIs remain available for trusted
-callers. A host must choose cumulative budgets with enough headroom for
-temporary alignment copies and container metadata; accounting is intentionally
-conservative and may charge both a declared field body and a temporary copy.
+Explicitly unbounded low-level decode scopes remain an internal trusted-data
+concern; public framed and exact-slice boundaries retain their payload-derived
+defaults. A host must choose stricter cumulative budgets with enough headroom
+for temporary alignment copies and container metadata; accounting is
+intentionally conservative and may charge both a declared field body and a
+temporary copy.
 
 ## Bounded data-model text leaves
 
@@ -550,8 +571,9 @@ encoded as a single packed payload with one of two layouts:
 - Compat packed-struct (no `FIELD_BITSET`): `(field_count + 1)` little-endian
   `u64` offsets followed by concatenated field payloads. Offsets start at 0,
   are cumulative byte lengths of each field payload in declaration order, and
-  the final offset equals the total data length. Offsets are fixed-width even
-  when `COMPACT_LEN` is enabled.
+  the final offset equals the total data length and must fit inside the active
+  struct payload before any field is decoded. Offsets are fixed-width even when
+  `COMPACT_LEN` is enabled.
 - Hybrid packed-struct (`FIELD_BITSET` + `COMPACT_LEN`): a bitset of length
   `ceil(field_count / 8)` bytes, followed by size prefixes for fields whose
   bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
@@ -566,6 +588,19 @@ encoded as a single packed payload with one of two layouts:
 
 Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
 `COMPACT_LEN`) when encoding nested collections or string/blob values.
+Length-framed enum fields are decoded only from the bytes inside their declared
+frame; there is no compatibility retry that can consume following variant
+fields.
+
+### Derive attribute contract
+
+The `#[norito(...)]` namespace is closed: derive entry points validate every
+container, enum variant, and field before code generation. Unknown keys,
+malformed helper paths, valued flag attributes, and duplicate options are
+compile-time errors. Representation keywords that Norito does not implement,
+including `transparent` and `untagged`, are rejected rather than ignored.
+Tuple newtypes therefore keep the ordinary tuple layout; changing that layout
+requires a deliberately specified and tested wire-format change.
 
 ## Compression Selection and Validation
 
@@ -608,4 +643,5 @@ named schema hash; changing the explicit name does.
 
 Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`
-is reserved for tooling that explicitly opts out of schema validation.
+is reserved for tooling that explicitly opts out of schema validation. Schema
+opt-out never disables the payload-derived resource budget.

@@ -99,6 +99,11 @@ EXPECTED_CLOSURE_INVARIANTS = {
         "MLMergeCandidateExactPrefix",
         "MLCarrierExactlyOnce",
         "MLRestartOwnershipPartition",
+        "MLRecoveredCarrierBodyAuthenticated",
+        "MLRecoveredCarrierLengthAuthenticated",
+        "MLHistoricalRecoveryContextExact",
+        "MLHistoricalQueueGateOrder",
+        "MLHistoricalAllGroupsPreflight",
         "MLStageEvidenceMonotonic",
     ),
     "SumeragiV2QueuePlanAdmissionRegistry": (
@@ -1344,6 +1349,38 @@ EXPECTED_CLOSURE_MUTATIONS = {
             "multilane_autonomous_restart_drops_ownership_bug.cfg",
         ),
     ),
+    "ML-MUT-AUT-07": (
+        TLA_COUNTEREXAMPLE,
+        "MLRecoveredCarrierBodyAuthenticated",
+        (
+            "multilane_autonomous_unauthenticated_recovery_body_bug.cfg",
+            "multilane_autonomous_mixed_signer_recovery_body_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-08": (
+        TLA_COUNTEREXAMPLE,
+        "MLHistoricalRecoveryContextExact",
+        ("multilane_autonomous_historical_context_drift_bug.cfg",),
+    ),
+    "ML-MUT-AUT-09": (
+        TLA_COUNTEREXAMPLE,
+        "MLHistoricalQueueGateOrder",
+        ("multilane_autonomous_open_queue_before_recovery_install_bug.cfg",),
+    ),
+    "ML-MUT-AUT-10": (
+        TLA_COUNTEREXAMPLE,
+        "MLHistoricalAllGroupsPreflight",
+        (
+            "multilane_autonomous_partial_recovery_group_preflight_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-11": (
+        TLA_COUNTEREXAMPLE,
+        "MLRecoveredCarrierLengthAuthenticated",
+        (
+            "multilane_autonomous_inflated_recovery_wire_length_bug.cfg",
+        ),
+    ),
     "ML-MUT-LIFE-01": (
         TLA_COUNTEREXAMPLE,
         "MLActivationAfterAtomicCreate",
@@ -1429,7 +1466,7 @@ CLOSURE_MUTATION_ID_RE = re.compile(r"`(ML-MUT-[A-Z]+-[0-9]{2})`")
 FORBIDDEN_PRODUCTION_TOKENS = {
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
-        "reconcile_lane_reservation_ownership",
+        "plan_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
 }
 NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
@@ -1597,7 +1634,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         "V2ApplyService::validate_and_apply",
         (
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
-            "execution_commitment_from_witness",
+            "execution_commitment_from_validated_block",
             "store_block",
             "store_v2_finality_artifact",
             "prepublish_native_amx_participant_application_evidence",
@@ -1750,13 +1787,17 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "self.ensure_plan_journal_replay_startup_shape_locked()?",
             "self.plan_journal_replay_reservation_shape_locked()?",
             "journal_hashes.len() != records.len()",
-            ".is_subset(&journal_hashes)",
+            ".missing_payload_hashes",
+            ".difference(&journal_hashes)",
+            "commit_barrier_hashes.contains(hash)",
+            "state_view.transactions.get(hash).is_none()",
             "let replay_observed_at = self.time_source.get_unix_time();",
             "AcceptedTransaction::accept_entrypoint_at_time",
             "accepted.hash_as_entrypoint() != entrypoint_hash",
-            "restored_reservation_fifo_order_for_identity",
+            "queue_plan_replay_reservation_owner",
             "reservation_shape.durable_owned_hashes.contains(&hash)",
-            "restored_fifo_order.is_some()",
+            "reservation_owner.is_present()",
+            "reservation_owner.fifo_order()",
             "state_view.transactions.get(&hash).is_some()",
             "recorded_global_admission_identity",
             "queue_plan_admission_registry_match",
@@ -1837,10 +1878,32 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
     (
         "crates/iroha_core/src/queue.rs",
         "method",
-        "Queue::finalize_plan_journal_startup_recovery",
+        "Queue::complete_lane_reservation_startup_reconciliation",
         (
-            "self.finalize_completed_releases(None)",
-            ".map_err(std::io::Error::other)",
+            "self.lane_reservation_transition_lock.lock()",
+            "self.push_remove_lock.lock()",
+            "self.transaction_selection_durability_faulted()",
+            "!store.commit_barriers.is_empty()",
+            "!store.release_barriers.is_empty()",
+            "!store.completed_releases.is_empty()",
+            "!store.missing_payload_hashes.is_empty()",
+            "lane_reservation_reconciliation_pending",
+            ".store(false, Ordering::Release)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "apply_lane_reservation_reconciliation_plan",
+        (
+            "historical_autonomous_lane_recovery_matches",
+            "lane_reservation_reconciliation_snapshot",
+            "lane_reservation_commit_barriers",
+            "lane_reservation_release_barriers",
+            "commit_lane_reservation",
+            "retire_autonomous_lane_slot_and_release_reservations",
+            "release_lane_reservations_in_order",
+            "complete_lane_reservation_startup_reconciliation",
         ),
     ),
     (
@@ -1851,7 +1914,6 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "finalize_plan_journal_startup_recovery()",
             "IrohaNetwork::start_with_crypto(",
         ),
     ),
@@ -1901,11 +1963,13 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "self.ensure_plan_journal_replay_startup_shape_locked()?;",
             "self.plan_journal_replay_reservation_shape_locked()?;",
             "let journal_hashes = records",
+            ".missing_payload_hashes",
+            ".difference(&journal_hashes)",
             "let replay_observed_at = self.time_source.get_unix_time();",
             "for record in records {",
             "AcceptedTransaction::accept_entrypoint_at_time(",
-            "restored_reservation_fifo_order_for_identity(",
-            "if state_view.transactions.get(&hash).is_some()",
+            "queue_plan_replay_reservation_owner(",
+            "let state_committed = state_view.transactions.get(&hash).is_some();",
             "let global_registry_match =",
             "self.is_expired_at_with_enqueue_timestamp(",
             "resolve_routing_plan_for_queue_admission(",
@@ -1970,7 +2034,6 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "finalize_plan_journal_startup_recovery()",
             "IrohaNetwork::start_with_crypto(",
         ),
     ),
@@ -2380,9 +2443,9 @@ def _validate_closure_mutation_ledger(
             "conceptual closure mappings must cover every and only the model "
             "mutation configs"
         )
-    if len(model_configs) != 46:
+    if len(model_configs) != 52:
         errors.append(
-            f"reviewed multilane mutation inventory must contain 46 configs, "
+            f"reviewed multilane mutation inventory must contain 52 configs, "
             f"found {len(model_configs)}"
         )
 
@@ -2624,7 +2687,7 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$AUTONOMOUS_MODULE" \\
   multilane_autonomous_reservation_carrier_fixed.cfg \\
   10 \\
-  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLStageEvidenceMonotonic\"""",
+  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic\"""",
         """run_positive \\
   queue-plan-admission-registry \\
   "$QUEUE_PLAN_ADMISSION_MODULE" \\
@@ -2674,6 +2737,11 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_autonomous_noncanonical_merge_prefix_bug.cfg",
         "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
         "multilane_autonomous_restart_drops_ownership_bug.cfg",
+        "multilane_autonomous_unauthenticated_recovery_body_bug.cfg",
+        "multilane_autonomous_mixed_signer_recovery_body_bug.cfg",
+        "multilane_autonomous_historical_context_drift_bug.cfg",
+        "multilane_autonomous_open_queue_before_recovery_install_bug.cfg",
+        "multilane_autonomous_partial_recovery_group_preflight_bug.cfg",
         "multilane_autonomous_volatile_stage_diagnostics_bug.cfg",
         "multilane_queue_plan_split_route_public_acceptance_bug.cfg",
         "multilane_queue_plan_execution_before_global_cas_bug.cfg",

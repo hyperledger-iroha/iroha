@@ -2425,14 +2425,17 @@ pub mod isi {
         source_id: AssetId,
         destination_id: AssetId,
         amount: Quantity,
+        control_update: Option<AssetTransferControlRecord>,
         delta: TransferDeltaTranscript,
     }
 
     /// Validate an SCCP custody release before reserving or executing proof work.
     ///
     /// Keeping this preparation separate from proof verification ensures predictable ledger
-    /// failures (including recipient overflow) neither debit custody nor consume the transaction's
-    /// verifier-work allowance. The returned plan is applied only after the source proof succeeds.
+    /// failures (including recipient overflow, custody blacklisting, and rolling-cap exhaustion)
+    /// neither debit custody nor consume the transaction's verifier-work allowance. The returned
+    /// plan carries the prepared control-usage update and is applied only after the source proof
+    /// succeeds.
     pub(crate) fn prepare_sccp_inbound_numeric_asset_release(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: AssetId,
@@ -2449,6 +2452,8 @@ pub mod isi {
             &amount,
             NumericAssetTransferSourcePolicy::SccpInboundSettlement,
         )?;
+        let control_update =
+            prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, &amount)?;
         let delta = state_transaction
             .world
             .precheck_numeric_asset_transfer_delta_exact(&source_id, &destination_id, &amount)?;
@@ -2456,6 +2461,7 @@ pub mod isi {
             source_id,
             destination_id,
             amount,
+            control_update,
             delta,
         })
     }
@@ -2477,8 +2483,12 @@ pub mod isi {
             source_id,
             destination_id,
             amount,
+            control_update,
             delta,
         } = prepared;
+        if let Some(record) = control_update {
+            update_control_record(state_transaction, source_id.account(), record)?;
+        }
         state_transaction.record_transfer_transcript(submitting_authority, delta)?;
         emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
         Ok(())

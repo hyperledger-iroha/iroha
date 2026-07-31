@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 This document defines the first-release bridge finality surface. It carries the
 exact durable finality evidence produced by Sumeragi v2. The proof envelope has
-schema version `1`, while the consensus protocol inside it is version `3`.
+schema version `2`, while the consensus protocol inside it is version `4`.
 There is no Sumeragi-v1 certificate projection, decoder, or fallback path.
 
 ## Exact proof format
@@ -22,7 +22,7 @@ fields:
 }
 ```
 
-- `version` must equal `BRIDGE_FINALITY_PROOF_VERSION_V1` (`1`).
+- `version` must equal `BRIDGE_FINALITY_PROOF_VERSION_V2` (`2`).
 - `block_header` is the canonical `BlockHeader` selected by the requested
   height.
 - `finality_artifact` is the exact `V2FinalityArtifact` persisted by the
@@ -88,8 +88,8 @@ closed.
 `iroha_data_model::bridge::verify_bridge_finality_proof` performs the stateless
 structural and cryptographic checks:
 
-1. Require proof schema version `1`, finality-artifact format version `3`, and
-   Sumeragi protocol version `3` in both the artifact and height context.
+1. Require proof schema version `2`, finality-artifact format version `4`, and
+   Sumeragi protocol version `4` in both the artifact and height context.
 2. Validate the height context, its ordered powered roster, canonical dual
    quorum, parent certificate rules, DA layout, and epoch bounds.
 3. Require the artifact height, context id, block subject, repeated block hash,
@@ -118,7 +118,7 @@ the following Norito payload:
 
 ```text
 {
-  protocol_version: 3,
+  protocol_version: 4,
   round: { context_id, height, view },
   proposal_round: { context_id, height, view },
   phase: Commit,
@@ -132,6 +132,8 @@ the following Norito payload:
     native_amx_application_manifest_version,
     native_amx_application_manifest_root,
     native_amx_application_manifest_count,
+    merge_carrier,
+    executed_block_wire_len,
     executed_block_wire_hash
   }
 }
@@ -146,6 +148,11 @@ bytes or deterministic execution results while preserving the other binding.
 The versioned Native AMX application-manifest root additionally authenticates
 the ordered participant-application leaves and their proofs. A zero leaf count
 must use the canonical empty root; a nonzero count must not use that root.
+The `merge_carrier` option is always present in the execution-commitment wire
+layout: it is empty for an ordinary block and otherwise carries the exact V1
+merge-ledger entry hash authenticated by finality. It is followed by the
+mandatory non-zero `executed_block_wire_len` and then `executed_block_wire_hash`,
+binding both the exact byte length and digest of the canonical result-bearing wire.
 
 The signer index and individual signature are not part of the same-message
 preimage. The CommitQC's strictly ordered signer list selects the BLS keys and
@@ -189,7 +196,7 @@ artifact's frozen roster.
 
 Self-consistency is not the SCCP trust decision. Each governed outbound route
 pins an `SccpSoraFinalityAnchorV1` containing the exact Taira source network,
-protocol version `3`, Taira chain-id hash, checkpoint height and block hash,
+protocol version `4`, Taira chain-id hash, checkpoint height and block hash,
 checkpoint `HeightContextId`, and a domain-separated hash of the canonical
 checkpoint finality artifact. The governed semantic circuit exposes the hash of
 this typed anchor as its final public signal.

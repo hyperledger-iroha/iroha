@@ -1327,7 +1327,7 @@ impl Builtin {
             Self::SoracloudEgressFetch => "soracloud::egress_fetch",
             Self::SoracloudReadConfig => "soracloud::read_config",
             Self::SoracloudReadSecretEnvelope => "soracloud::read_secret_envelope",
-            Self::Path => "codec::path",
+            Self::Path => "path",
             Self::NameDecode => "codec::decode_name",
             Self::TlvEq => "codec::tlv_eq",
             Self::TlvLen => "codec::tlv_len",
@@ -1433,7 +1433,8 @@ impl Builtin {
             | Self::GetOrDefault
             | Self::GetOr
             | Self::Ensure
-            | Self::StateMapRemove => BuiltinSurface::MethodOnly,
+            | Self::StateMapRemove
+            | Self::Path => BuiltinSurface::MethodOnly,
             Self::GetInt
             | Self::GetDecimal
             | Self::GetQuantity
@@ -1685,7 +1686,6 @@ impl Builtin {
             | Self::SoracloudReadSecretEnvelope
             | Self::PointerToNorito
             | Self::JsonSetInt
-            | Self::Path
             | Self::NameDecode
             | Self::TlvEq
             | Self::TlvLen
@@ -2179,12 +2179,12 @@ impl Builtin {
                 S::new(&["StateMap<int,int>", "int", "int"], "int")
             }
             Self::KeysValuesTake2 => S::new(&["StateMap<int,int>", "int", "int"], "(int,int)"),
-            Self::StateGet => S::new(&["Name"], "bytes"),
-            Self::StateSet => S::new(&["Name", "bytes"], "()"),
-            Self::StateDel => S::new(&["Name"], "()"),
-            Self::StateKeys => S::new(&["Name", "int", "int"], "bytes"),
-            Self::StateHas => S::new(&["Name"], "bool"),
-            Self::StateLen | Self::StateCount => S::new(&["Name"], "int"),
+            Self::StateGet => S::new(&["bytes"], "bytes"),
+            Self::StateSet => S::new(&["bytes", "bytes"], "()"),
+            Self::StateDel => S::new(&["bytes"], "()"),
+            Self::StateKeys => S::new(&["bytes", "int", "int"], "bytes"),
+            Self::StateHas => S::new(&["bytes"], "bool"),
+            Self::StateLen | Self::StateCount => S::new(&["bytes"], "int"),
             Self::QueryExecuteNorito
             | Self::QueryGetContractManifest
             | Self::ZkRootsGet
@@ -2389,7 +2389,7 @@ impl Builtin {
             }
             Self::AddSignatory | Self::RemoveSignatory => S::new(&["AccountId", "Json"], "()"),
             Self::SetAccountQuorum => S::new(&["AccountId", "int"], "()"),
-            Self::Path => S::new(&["Name", "int|bytes"], "Name"),
+            Self::Path => S::new(&["Name", "int|bytes"], "bytes"),
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),
             Self::TlvLen => S::new(&["pointer-ABI"], "int"),
@@ -2423,7 +2423,7 @@ impl Builtin {
             Self::JsonGetBlobHexDirect | Self::GetBlobHex => {
                 S::new(&["Json", "Name"], "Option<bytes>")
             }
-            Self::BuildPathKeyNoritoDirect => S::new(&["Name", "bytes"], "Name"),
+            Self::BuildPathKeyNoritoDirect => S::new(&["Name", "bytes"], "bytes"),
             Self::SchemaEncode | Self::SchemaEncodeDirect => S::new(&["Name", "Json"], "bytes"),
             Self::SchemaDecode | Self::SchemaDecodeDirect => S::new(&["Name", "bytes"], "Json"),
             Self::SchemaInfo | Self::SchemaInfoDirect => S::new(&["Name"], "Json"),
@@ -3310,13 +3310,14 @@ mod tests {
     }
 
     #[test]
-    fn state_map_helpers_are_method_only() {
+    fn state_map_and_path_helpers_are_method_only() {
         for builtin in [
             Builtin::Contains,
             Builtin::GetOrDefault,
             Builtin::GetOr,
             Builtin::Ensure,
             Builtin::StateMapRemove,
+            Builtin::Path,
         ] {
             assert_eq!(builtin.surface(), BuiltinSurface::MethodOnly, "{builtin:?}");
             assert_eq!(

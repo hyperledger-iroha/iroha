@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Enforce the Kotodama V1 Criterion regression budget.
 
-The gate compares every pre-reset compiler/runtime workload against Criterion's
-real ``base`` samples or an explicit checked-in baseline. New V1 List, decimal,
+The gate compares every source-proven pre-reset compiler/runtime workload
+against Criterion's runner-local ``base`` samples. New V1 List, decimal,
 quantity, compiler/runtime-phase, and typed-query workloads are mandatory
 candidate evidence; missing or malformed samples fail closed. A comparable
 workload fails when its median is more than five percent slower, and List sugar
 has an independent zero-slowdown check against its manual-loop counterpart.
+
+Comparison is disabled until the selected predecessor's independently archived
+original ``Cargo.lock`` digest is authenticated in this policy. Candidate
+samples can never be captured as a portable or self baseline.
 """
 
 from __future__ import annotations
@@ -17,13 +21,13 @@ import hashlib
 import json
 import math
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 
-SCHEMA = "kotodama-perf-baseline-v1"
 MAX_REGRESSION = 0.05
 LIST_SUGAR_MAX_SLOWDOWN = 0.0
 # `2ca45d754d0a993009dc45fc33d4e1976b39d087` introduced the reset
@@ -31,6 +35,11 @@ LIST_SUGAR_MAX_SLOWDOWN = 0.0
 # parent is this revision, whose native benchmark sources contain exactly the
 # 33 comparable identities below and none of the 13 candidate-only identities.
 PREDECESSOR_SHA = "a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab"
+# Deliberately unavailable. The selected predecessor does not contain
+# `Cargo.lock`, and no authenticated digest of its original lockfile is
+# archived in this repository. Populate this only from independently recovered
+# provenance; never derive it from the candidate lockfile.
+PREDECESSOR_CARGO_LOCK_SHA256: str | None = None
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
 LIST_MANUAL_BENCHMARK = "kotodama_list_manual_runtime_64"
 DECIMAL_BENCHMARKS = (
@@ -59,29 +68,32 @@ SOURCE_BOUND_BENCHMARKS = (
     + RUNTIME_PHASE_BENCHMARKS
 )
 CANDIDATE_ONLY_BENCHMARKS = SOURCE_BOUND_BENCHMARKS
-IVM_BENCHMARK_SOURCE = (
-    Path(__file__).resolve().parents[1]
-    / "crates"
-    / "ivm"
-    / "benches"
-    / "bench_kotodama.rs"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+BENCHMARK_SOURCE_PATHS = (
+    Path("crates/ivm/benches/bench_kotodama.rs"),
+    Path("crates/iroha_core/benches/kotodama_runtime_cache.rs"),
+    Path("crates/iroha_core/benches/queries.rs"),
 )
-BENCHMARK_SOURCES = (
-    IVM_BENCHMARK_SOURCE,
-    Path(__file__).resolve().parents[1]
-    / "crates"
-    / "iroha_core"
-    / "benches"
-    / "kotodama_runtime_cache.rs",
-    Path(__file__).resolve().parents[1]
-    / "crates"
-    / "iroha_core"
-    / "benches"
-    / "queries.rs",
+BENCHMARK_SOURCES = tuple(
+    REPOSITORY_ROOT / relative for relative in BENCHMARK_SOURCE_PATHS
 )
+IVM_BENCHMARK_SOURCE = BENCHMARK_SOURCES[0]
 TYPED_QUERY_BENCHMARK_MARKER = "c.bench_function(family.benchmark_name, |b| {"
 TYPED_QUERY_TIMED_BODY_MARKER = "|mut vm| {"
 TYPED_QUERY_TIMED_BODY_END = "BatchSize::SmallInput,"
+TYPED_QUERY_RAW_RESPONSE_FUNCTION = "fn raw_core_query_response("
+TYPED_QUERY_RAW_BYTES_STATEMENT = (
+    "let raw_query_response_bytes = TYPED_CORE_QUERY_FAMILIES.map("
+)
+TYPED_QUERY_RAW_CONTRACT_MARKERS = (
+    "QueryRequest::Start(",
+    "run_on_snapshot(",
+    "let QueryResponse::Iterable(output)",
+    "output.batch.len(), QUERY_PAGE_CAPACITY_V1",
+    "!output.has_more && output.continue_cursor.is_none()",
+    "norito::to_bytes(&raw_core_query_response(",
+    ".len(),",
+)
 TYPED_QUERY_TIMED_CONTRACT_MARKERS = (
     ".syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm)",
     "ivm::list::read_words(&vm, vm.register(10), page_layout)",
@@ -211,6 +223,140 @@ class GateError(RuntimeError):
     """Raised when performance evidence is absent or invalid."""
 
 
+def _benchmark_sources_at(root: Path) -> tuple[Path, ...]:
+    """Return the revision-native benchmark source paths under ``root``."""
+
+    return tuple(root / relative for relative in BENCHMARK_SOURCE_PATHS)
+
+
+def _git_head(root: Path) -> str:
+    """Return the exact commit checked out at ``root``."""
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as error:
+        raise GateError(f"failed to inspect predecessor Git revision: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git exited {result.returncode}"
+        raise GateError(f"failed to inspect predecessor Git revision: {detail}")
+    revision = result.stdout.strip()
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise GateError(
+            "predecessor Git revision must be one lowercase 40-hex commit"
+        )
+    return revision
+
+
+def _require_git_paths_clean(root: Path, relative_paths: Sequence[Path]) -> None:
+    """Reject tracked changes outside the selected predecessor commit."""
+
+    command = [
+        "git",
+        "-C",
+        str(root),
+        "diff",
+        "--quiet",
+        "HEAD",
+        "--",
+        *(relative.as_posix() for relative in relative_paths),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as error:
+        raise GateError(
+            f"failed to verify predecessor benchmark source provenance: {error}"
+        ) from error
+    if result.returncode == 1:
+        raise GateError(
+            "predecessor tracked sources differ from the selected Git commit"
+        )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git exited {result.returncode}"
+        raise GateError(
+            f"failed to verify predecessor benchmark source provenance: {detail}"
+        )
+
+
+def _sha256_regular_file(path: Path, label: str) -> str:
+    """Hash one required regular, non-symlink provenance file."""
+
+    if path.is_symlink() or not path.is_file():
+        raise GateError(f"{label} must be a regular, non-symlink file: {path}")
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise GateError(f"failed to hash {label} {path}: {error}") from error
+    return digest.hexdigest()
+
+
+def validate_predecessor_provenance(
+    predecessor_root: Path,
+    candidate_sources: Sequence[Path] = BENCHMARK_SOURCES,
+) -> None:
+    """Require an exact source and lockfile identity before median comparison.
+
+    The selected predecessor commit lacks ``Cargo.lock``. Consequently this
+    function intentionally fails until an independently authenticated digest of
+    that revision's original lockfile is added to the policy.
+    """
+
+    expected_lock = PREDECESSOR_CARGO_LOCK_SHA256
+    if expected_lock is None:
+        raise GateError(
+            "authenticated predecessor Cargo.lock provenance is unavailable; "
+            "the <=5% comparison is disabled"
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", expected_lock) is None:
+        raise GateError(
+            "predecessor Cargo.lock policy digest must be lowercase 64-hex"
+        )
+    try:
+        root = predecessor_root.resolve(strict=True)
+    except OSError as error:
+        raise GateError(
+            f"failed to resolve predecessor checkout {predecessor_root}: {error}"
+        ) from error
+    if not root.is_dir():
+        raise GateError(f"predecessor checkout is not a directory: {root}")
+
+    revision = _git_head(root)
+    if revision != PREDECESSOR_SHA:
+        raise GateError(
+            "predecessor checkout revision mismatch: "
+            f"expected {PREDECESSOR_SHA}, got {revision}"
+        )
+    _require_git_paths_clean(root, ())
+
+    actual_lock = _sha256_regular_file(
+        root / "Cargo.lock", "predecessor Cargo.lock"
+    )
+    if actual_lock != expected_lock:
+        raise GateError(
+            "predecessor Cargo.lock digest mismatch: "
+            f"expected {expected_lock}, got {actual_lock}"
+        )
+
+    validate_revision_inventories(
+        base_sources=_benchmark_sources_at(root),
+        candidate_sources=candidate_sources,
+    )
+
+
 _OPEN_DELIMITERS = {"(": ")", "[": "]", "{": "}"}
 _CLOSE_DELIMITERS = {value: key for key, value in _OPEN_DELIMITERS.items()}
 
@@ -322,6 +468,50 @@ def _top_level_rust_arguments(
     return [
         text[start:end].strip() for start, end in zip(starts, boundaries, strict=True)
     ]
+
+
+def _rust_function_from_marker(
+    text: str, marker: str, revision: str, context: str
+) -> str:
+    """Extract one uniquely marked Rust function."""
+
+    if text.count(marker) != 1:
+        raise GateError(f"{revision} {context} function must be declared exactly once")
+    start = text.index(marker)
+    body_open = text.find("{", start + len(marker))
+    if body_open < 0:
+        raise GateError(f"{revision} {context} function body is missing")
+    body_close = _matching_rust_delimiter(
+        text, body_open, revision, f"{context} function"
+    )
+    return " ".join(text[start : body_close + 1].split())
+
+
+def _rust_statement_from_marker(
+    text: str, marker: str, revision: str, context: str
+) -> str:
+    """Extract one uniquely marked top-level Rust statement."""
+
+    if text.count(marker) != 1:
+        raise GateError(f"{revision} {context} statement must be declared exactly once")
+    start = text.index(marker)
+    stack: list[str] = []
+    cursor = start
+    while cursor < len(text):
+        skipped = _skip_rust_non_code(text, cursor)
+        if skipped is not None:
+            cursor = skipped
+            continue
+        char = text[cursor]
+        if char in _OPEN_DELIMITERS:
+            stack.append(_OPEN_DELIMITERS[char])
+        elif char in _CLOSE_DELIMITERS:
+            if not stack or char != stack.pop():
+                raise GateError(f"{revision} {context} statement is malformed")
+        elif char == ";" and not stack:
+            return " ".join(text[start : cursor + 1].split())
+        cursor += 1
+    raise GateError(f"{revision} {context} statement is unterminated")
 
 
 def _criterion_invocation(
@@ -579,6 +769,55 @@ def _typed_query_timed_body(sources: Sequence[Path], revision: str) -> str:
     return body
 
 
+def _typed_query_raw_entity_contract(
+    sources: Sequence[Path], revision: str
+) -> str:
+    """Extract the full-entity response used as the projection-size baseline."""
+
+    text = _read_sources(sources, revision)
+    contract = " ".join(
+        (
+            _rust_function_from_marker(
+                text,
+                TYPED_QUERY_RAW_RESPONSE_FUNCTION,
+                revision,
+                "typed-query raw response",
+            ),
+            _rust_statement_from_marker(
+                text,
+                TYPED_QUERY_RAW_BYTES_STATEMENT,
+                revision,
+                "typed-query raw response bytes",
+            ),
+        )
+    )
+    cursor = 0
+    for marker in TYPED_QUERY_RAW_CONTRACT_MARKERS:
+        offset = contract.find(marker, cursor)
+        if offset < 0:
+            raise GateError(
+                f"{revision} typed-query raw-entity contract is missing or "
+                f"reordered: {marker}"
+            )
+        cursor = offset + len(marker)
+    return contract
+
+
+def validate_typed_query_raw_entity_contract(
+    base_sources: Sequence[Path], candidate_sources: Sequence[Path]
+) -> None:
+    """Require the comparable projection-size baseline to remain identical."""
+
+    base = _typed_query_raw_entity_contract(base_sources, "base")
+    candidate = _typed_query_raw_entity_contract(candidate_sources, "candidate")
+    if candidate != base:
+        raise GateError(
+            "comparable typed-query raw-entity baseline drift; preserve the "
+            "exact full-entity QueryResponse workload or rename and reclassify "
+            "all five typed query benchmark identities"
+        )
+
+
 def validate_benchmark_policy(
     sources: Sequence[Path] = BENCHMARK_SOURCES,
 ) -> dict[str, str]:
@@ -632,6 +871,7 @@ def validate_benchmark_policy(
         raise GateError(
             "candidate-only benchmark coverage drift (" + "; ".join(details) + ")"
         )
+    _typed_query_raw_entity_contract(sources, "candidate")
     _typed_query_timed_body(sources, "candidate")
     return validate_comparable_timed_bodies(sources, "candidate")
 
@@ -680,6 +920,7 @@ def validate_revision_inventories(
             "predecessor workload or rename and reclassify all five typed "
             "query benchmark identities"
         )
+    validate_typed_query_raw_entity_contract(base_sources, candidate_sources)
 
 
 @dataclass(frozen=True)
@@ -746,58 +987,6 @@ def read_criterion_base(
         )
         for name in benchmarks
     }
-
-
-def read_baseline(path: Path, benchmarks: Sequence[str]) -> dict[str, float]:
-    """Read and strictly validate a portable Kotodama baseline document."""
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise GateError(f"failed to read baseline {path}: {error}") from error
-    except json.JSONDecodeError as error:
-        raise GateError(f"invalid baseline JSON {path}: {error}") from error
-    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
-        raise GateError(f"baseline {path} must declare schema {SCHEMA!r}")
-    if payload.get("unit") != "ns":
-        raise GateError(f"baseline {path} must declare nanosecond units")
-    values = payload.get("benchmarks")
-    if not isinstance(values, dict):
-        raise GateError(f"baseline {path} is missing its benchmarks object")
-    expected = set(benchmarks)
-    actual = set(values)
-    missing = sorted(expected - actual)
-    extra = sorted(actual - expected)
-    if missing or extra:
-        details = []
-        if missing:
-            details.append("missing: " + ", ".join(missing))
-        if extra:
-            details.append("unexpected: " + ", ".join(extra))
-        raise GateError(
-            f"baseline {path} benchmark coverage mismatch ("
-            + "; ".join(details)
-            + ")"
-        )
-    return {
-        name: _positive_finite(values[name], f"baseline value for {name}")
-        for name in benchmarks
-    }
-
-
-def write_baseline(path: Path, samples: Mapping[str, float]) -> None:
-    """Atomically write a canonical baseline captured from current samples."""
-
-    payload = {
-        "schema": SCHEMA,
-        "unit": "ns",
-        "benchmarks": {name: samples[name] for name in sorted(samples)},
-    }
-    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(encoded, encoding="utf-8")
-    temporary.replace(path)
 
 
 def compare_samples(
@@ -881,16 +1070,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--criterion-dir", type=Path, default=Path("target/criterion")
     )
-    baseline_mode = parser.add_mutually_exclusive_group()
-    baseline_mode.add_argument(
-        "--baseline",
+    parser.add_argument(
+        "--predecessor-root",
         type=Path,
-        help="checked-in baseline JSON; defaults to Criterion base samples",
-    )
-    baseline_mode.add_argument(
-        "--write-baseline",
-        type=Path,
-        help="capture current samples instead of comparing them",
+        required=True,
+        help=(
+            "exact checkout of the policy-pinned predecessor; its Git revision, "
+            "native benchmark sources, and authenticated original Cargo.lock "
+            "must match before comparison"
+        ),
     )
     parser.add_argument("--threshold", type=float, default=MAX_REGRESSION)
     return parser.parse_args(argv)
@@ -900,22 +1088,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         validate_benchmark_policy()
+        validate_predecessor_provenance(args.predecessor_root)
         current = read_current_samples(
             args.criterion_dir, REPRESENTATIVE_BENCHMARKS
         )
         enforce_list_sugar(current)
-        if args.write_baseline is not None:
-            write_baseline(
-                args.write_baseline,
-                {name: current[name] for name in REGRESSION_BENCHMARKS},
-            )
-            print(f"wrote Kotodama performance baseline to {args.write_baseline}")
-            return 0
-        baseline = (
-            read_baseline(args.baseline, REGRESSION_BENCHMARKS)
-            if args.baseline is not None
-            else read_criterion_base(args.criterion_dir, REGRESSION_BENCHMARKS)
-        )
+        baseline = read_criterion_base(args.criterion_dir, REGRESSION_BENCHMARKS)
         comparisons = compare_samples(
             baseline,
             {name: current[name] for name in REGRESSION_BENCHMARKS},

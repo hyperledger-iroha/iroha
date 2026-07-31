@@ -122,9 +122,8 @@ and record lifecycle events in world state (`iroha_core::state::space_directory_
 
 #### Torii APIs
 
-Operators and SDKs can perform the same actions over HTTPS. Torii enforces the
-same permission checks and signs transactions on behalf of the supplied
-authority (private keys travel only in-memory inside Torii’s secure handler):
+Operators and SDKs can prepare the same actions over HTTPS. Torii validates and
+quotes each mutation, but private keys remain with the client:
 
 - `GET /v1/space-directory/uaids/{uaid}` — resolve the current dataspace bindings
   for a UAID (normalized addresses, dataspace ids, program bindings). Add
@@ -135,12 +134,15 @@ authority (private keys travel only in-memory inside Torii’s secure handler):
   `asset_id=<canonical_base58_asset_definition_id>` to filter the snapshot down to one asset.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — fetch the
   canonical manifest JSON, lifecycle metadata, and manifest hash for audits.
-- `POST /v1/space-directory/manifests` — submit new or replacement manifests
-  from JSON (`authority`, `private_key`, `manifest`, optional `reason`). Torii
-  returns `202 Accepted` once the transaction is queued.
-- `POST /v1/space-directory/manifests/revoke` — enqueue emergency revocations
-  with the UAID, dataspace id, effective epoch, and optional reason (mirrors the
-  CLI layout).
+- `POST /v1/space-directory/manifests` — prepare new or replacement manifests
+  from JSON (`authority`, `manifest`, optional `reason`).
+- `POST /v1/space-directory/manifests/revoke` — prepare emergency revocations
+  with the authority, UAID, dataspace id, effective epoch, and optional reason.
+
+Both mutation routes reject unknown fields, including `private_key`, and return
+`submitted: false` with canonical `transaction_payload_b64` and
+`signing_message_b64`. The caller validates the payload, signs locally, and
+submits through the ordinary transaction pipeline.
 
 The JS SDK (`javascript/iroha_js/src/toriiClient.js`) wraps these read surfaces
 via `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, and

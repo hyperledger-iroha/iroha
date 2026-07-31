@@ -30,9 +30,12 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
         abi_hash_hex: "22".repeat(32),
         creation_time_ms: 1,
         entrypoint: boundary.entrypoint,
+        transaction_scaffold_b64: "AQ==",
+        signed_transaction_b64: "AQ==",
+        signing_message_b64: Buffer.alloc(32, 1).toString("base64"),
         operation_receipt: {
           operation_kind: "contract_call",
-          status: "prepared",
+          status: "pending_signature",
           transport: "torii",
           dataspace: "universal",
           contract_alias: boundary.contract_alias,
@@ -47,14 +50,10 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
   };
   const client = new ToriiClient("https://fixture.invalid", { fetchImpl });
 
-  await client.callContract({
-    ...boundary,
-    private_key: "fixture-private-key",
-  });
+  await client.prepareContractCall(boundary);
 
   assert.deepEqual(submittedBody, {
     authority: boundary.authority,
-    private_key: "fixture-private-key",
     contract_alias: boundary.contract_alias,
     entrypoint: boundary.entrypoint,
     payload: boundary.payload,

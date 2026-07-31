@@ -3523,7 +3523,7 @@ mod test {
                     resume_hash_hex: None,
                     pow: SoranetHandshakePowSummary {
                         required: true,
-                        difficulty: 0,
+                        difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
                         ticket_ttl_secs: 60,
@@ -3555,7 +3555,7 @@ mod test {
                 max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
-                protocol_version: 3,
+                protocol_version: 4,
                 role: "validator".to_string(),
             },
             confidential_gas: ConfidentialGas {
@@ -3619,7 +3619,7 @@ mod test {
                   "resume_hash_hex": null,
                   "pow": {
                     "required": true,
-                    "difficulty": 0,
+                    "difficulty": 6,
                     "max_future_skew_secs": 300,
                     "min_ticket_ttl_secs": 30,
                     "ticket_ttl_secs": 60,
@@ -3677,7 +3677,7 @@ mod test {
                 "max_retained_bytes": 123456789
               },
               "consensus": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "role": "validator"
               },
               "confidential_gas": {

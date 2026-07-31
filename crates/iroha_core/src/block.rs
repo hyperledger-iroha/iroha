@@ -1081,10 +1081,9 @@ fn validate_native_amx_attestation_qc(
             expected.round, expected.epoch, body.round, body.epoch
         ));
     }
-    if qc.validator_set.is_empty()
-        || qc.validator_set.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-        || qc.validator_set_pops.len() != qc.validator_set.len()
-        || qc.validator_set.windows(2).any(|pair| pair[0] >= pair[1])
+    if qc.validator_set().is_empty()
+        || qc.validator_set().len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+        || qc.validator_set().windows(2).any(|pair| pair[0] >= pair[1])
         || qc.signers_bitmap.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS.div_ceil(8)
         || qc.bls_aggregate_signature.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
     {
@@ -1159,7 +1158,7 @@ fn validate_native_amx_attestation_qc(
     let Ok(body_min_quorum) = usize::try_from(body.participant_min_quorum) else {
         return Err("native AMX attestation participant quorum is invalid".to_owned());
     };
-    if body_validator_count != qc.validator_set.len()
+    if body_validator_count != qc.validator_set().len()
         || body_validator_count == 0
         || body_validator_count > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
         || body_min_quorum == 0
@@ -1176,16 +1175,16 @@ fn validate_native_amx_attestation_qc(
             qc.validator_set_hash_version
         ));
     }
-    if qc.validator_set_hash != HashOf::new(&qc.validator_set) {
+    if qc.validator_set_hash != qc.computed_validator_set_hash() {
         return Err("native AMX attestation validator-set hash mismatch".to_owned());
     }
-    if body.participant_validator_set_hash != HashOf::new(&qc.validator_set) {
+    if body.participant_validator_set_hash != qc.computed_validator_set_hash() {
         return Err(
             "native AMX attestation body does not bind the authoritative participant committee"
                 .to_owned(),
         );
     }
-    if authoritative_validator_set.is_some_and(|expected| qc.validator_set != expected) {
+    if authoritative_validator_set.is_some_and(|expected| qc.validator_set() != expected) {
         return Err(
             "native AMX attestation validator set is not the authoritative height committee"
                 .to_owned(),
@@ -1208,29 +1207,29 @@ fn validate_native_amx_attestation_qc(
             .saturating_add(1),
     )
     .unwrap_or(usize::MAX);
-    if qc.validator_set.len() < minimum_committee {
+    if qc.validator_set().len() < minimum_committee {
         return Err(format!(
             "native AMX attestation validator set too small: expected at least {minimum_committee}, got {}",
-            qc.validator_set.len()
+            qc.validator_set().len()
         ));
     }
 
-    let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
+    let expected_bitmap_len = qc.validator_set().len().div_ceil(8);
     if qc.signers_bitmap.len() != expected_bitmap_len {
         return Err(format!(
             "native AMX attestation signer bitmap length mismatch: expected {expected_bitmap_len}, got {}",
             qc.signers_bitmap.len()
         ));
     }
-    for (validator, pop) in qc.validator_set.iter().zip(&qc.validator_set_pops) {
+    for (validator, pop) in qc.validators_with_pops() {
         if pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
             || !crate::sumeragi::is_bls_normal_public_key(validator.public_key())
-            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop.as_slice()).is_err()
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
             || !authority.consensus_pop_matches_authority(
                 leg.lane_id,
                 validator,
                 body.authority_context_height,
-                pop.as_slice(),
+                pop,
             )
         {
             return Err(
@@ -1252,23 +1251,22 @@ fn validate_native_amx_attestation_qc(
                 continue;
             }
             let signer_index = base + bit;
-            if signer_index >= qc.validator_set.len() {
+            let Some((signer, signer_pop)) = qc.validators_with_pops().nth(signer_index) else {
                 return Err(format!(
                     "native AMX attestation signer index {signer_index} exceeds validator set size {}",
-                    qc.validator_set.len()
+                    qc.validator_set().len()
                 ));
-            }
+            };
             signer_count = signer_count.saturating_add(1);
-            let signer = &qc.validator_set[signer_index];
             if !crate::sumeragi::is_bls_normal_public_key(signer.public_key()) {
                 return Err("native AMX attestation signer is not a BLS normal key".to_owned());
             }
             signer_keys.push(signer.public_key());
-            signer_pops.push(qc.validator_set_pops[signer_index].clone());
+            signer_pops.push(signer_pop.to_vec());
         }
     }
     let required_quorum =
-        crate::sumeragi::network_topology::commit_quorum_from_len(qc.validator_set.len()).max(1);
+        crate::sumeragi::network_topology::commit_quorum_from_len(qc.validator_set().len()).max(1);
     if body_min_quorum != required_quorum {
         return Err("native AMX attestation signed quorum policy mismatch".to_owned());
     }
@@ -1529,17 +1527,13 @@ fn record_lane_settlement_metrics(
         );
     }
 }
-// Quarantine lane: classification hook (opt-in).
-// By default, no transaction is classified as quarantine.
-// Tests or embedding code may set a classifier at runtime.
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
     executor::{
         charge_fees_for_applied_overlay_with_encoded_len, charge_fees_for_rejected_live_batch,
-        configure_executor_fuel_budget,
     },
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
@@ -1566,7 +1560,6 @@ use crate::{
         enforce_fraud_policy,
     },
 };
-type QuarantineClassifier = fn(&iroha_data_model::transaction::SignedTransaction) -> bool;
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
 type WithCommittedBlockEvents = WithEvents<CommittedBlockEval>;
 
@@ -1574,15 +1567,21 @@ struct PreparedBlockTransaction {
     metadata: crate::tx::PreparedTransactionMetadata,
 }
 
-static QUARANTINE_CLASSIFIER: OnceLock<Mutex<Option<QuarantineClassifier>>> = OnceLock::new();
+const QUARANTINE_METADATA_KEY: &str = "quarantine";
 
-/// Install a quarantine classifier hook. Passing `None` disables classification.
-/// The classifier should be pure and deterministic (no side-effects, no randomness).
-pub fn set_quarantine_classifier(f: Option<QuarantineClassifier>) {
-    let slot = QUARANTINE_CLASSIFIER.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = f;
-    }
+/// Classify a transaction from its authenticated metadata.
+///
+/// Only the exact Norito JSON boolean `true` opts into the quarantine lane.
+/// Missing values, `false`, and string or numeric lookalikes remain in the
+/// normal lane.
+fn is_quarantine_transaction(tx: &SignedTransaction) -> bool {
+    let Ok(key) = iroha_data_model::name::Name::from_str(QUARANTINE_METADATA_KEY) else {
+        return false;
+    };
+    tx.metadata()
+        .get(&key)
+        .and_then(|value| value.clone().try_into_any_norito::<bool>().ok())
+        .unwrap_or(false)
 }
 
 #[derive(Clone)]
@@ -2929,27 +2928,6 @@ impl Clone for DisjointSet {
     }
 }
 
-/// Sample quarantine classifier for tests: returns true if transaction metadata contains
-/// a key `quarantine` with a truthy value (bool true, non-zero number, or "true"/"1"/"yes").
-#[cfg(test)]
-pub fn sample_quarantine_classifier(tx: &iroha_data_model::transaction::SignedTransaction) -> bool {
-    use core::str::FromStr as _;
-    let key = iroha_data_model::name::Name::from_str("quarantine").unwrap();
-    if let Some(json) = tx.metadata().get(&key) {
-        if let Ok(b) = json.clone().try_into_any_norito::<bool>() {
-            return b;
-        }
-        if let Ok(u) = json.clone().try_into_any_norito::<u64>() {
-            return u != 0;
-        }
-        if let Ok(s) = json.clone().try_into_any_norito::<String>() {
-            let t = s.to_ascii_lowercase();
-            return t == "true" || t == "1" || t == "yes";
-        }
-    }
-    false
-}
-
 /// Structured context for AXT envelope validation failures.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AxtEnvelopeValidationDetails {
@@ -3116,6 +3094,15 @@ pub enum BlockValidationError {
         /// Hash embedded in the incoming header.
         actual: Option<HashOf<DaProofPolicyBundle>>,
     },
+    /// DA proof-policy sidecar hash does not match the signed header. Expected: {expected:?}, actual: {actual:?}
+    DaProofPolicySidecarHashMismatch {
+        /// Hash derived from the embedded policy sidecar.
+        expected: Option<HashOf<DaProofPolicyBundle>>,
+        /// Hash embedded in the incoming header.
+        actual: Option<HashOf<DaProofPolicyBundle>>,
+    },
+    /// DA proof-policy sidecar differs from the active policy snapshot.
+    DaProofPolicyBundleMismatch,
     /// DA commitment hash mismatch. Expected: {expected:?}, actual: {actual:?}
     DaCommitmentHashMismatch {
         /// Hash derived from the embedded DA commitment bundle.
@@ -3123,6 +3110,8 @@ pub enum BlockValidationError {
         /// Hash embedded in the incoming header.
         actual: Option<HashOf<DaCommitmentBundle>>,
     },
+    /// An empty DA commitment sidecar must be represented as `None`.
+    NonCanonicalEmptyDaCommitmentBundle,
     /// DA pin-intent hash mismatch. Expected: {expected:?}, actual: {actual:?}
     DaPinIntentHashMismatch {
         /// Hash derived from the embedded DA pin-intent bundle.
@@ -3130,6 +3119,8 @@ pub enum BlockValidationError {
         /// Hash embedded in the incoming header.
         actual: Option<HashOf<DaPinIntentBundle>>,
     },
+    /// An empty DA pin-intent sidecar must be represented as `None`.
+    NonCanonicalEmptyDaPinIntentBundle,
     /// Previous-roster evidence is invalid: {0}
     PreviousRosterEvidenceInvalid(String),
     /// DA commitment bundle failed validation: {0}
@@ -3213,6 +3204,8 @@ pub enum InvalidGenesisError {
     ChainIdMismatch,
     /// Genesis DA commitment hash does not match embedded bundle
     DaCommitmentMismatch,
+    /// Genesis DA proof-policy hash does not match a valid embedded policy bundle
+    DaProofPolicyMismatch,
     /// Genesis DA pin intent hash does not match embedded bundle
     DaPinIntentMismatch,
 }
@@ -3283,10 +3276,19 @@ pub fn check_genesis_block(
     if block.header().result_merkle_root() != expected_result_root {
         return Err(InvalidGenesisError::ResultMerkleMismatch);
     }
+    match (
+        block.header().da_proof_policies_hash(),
+        block.da_proof_policies(),
+    ) {
+        (Some(hash), Some(bundle))
+            if hash == HashOf::new(bundle)
+                && crate::da::validate_committed_proof_policy_bundle(bundle).is_ok() => {}
+        _ => return Err(InvalidGenesisError::DaProofPolicyMismatch),
+    }
     match (block.header().da_commitments_hash(), block.da_commitments()) {
         (None, None) => {}
         (Some(hash), Some(bundle)) => {
-            if bundle.is_empty() || bundle.canonical_hash() != hash {
+            if bundle.merkle_commitment() != Some(hash) {
                 return Err(InvalidGenesisError::DaCommitmentMismatch);
             }
         }
@@ -3295,9 +3297,7 @@ pub fn check_genesis_block(
     match (block.header().da_pin_intents_hash(), block.da_pin_intents()) {
         (None, None) => {}
         (Some(hash), Some(bundle)) => {
-            let expected = bundle
-                .merkle_root()
-                .map(HashOf::<DaPinIntentBundle>::from_untyped_unchecked);
+            let expected = bundle.merkle_commitment();
             if expected != Some(hash) {
                 return Err(InvalidGenesisError::DaPinIntentMismatch);
             }
@@ -3690,13 +3690,9 @@ mod chained {
         /// Attach a DA commitment bundle and update the header hash accordingly.
         #[must_use]
         pub fn with_da_commitments(mut self, commitments: Option<DaCommitmentBundle>) -> Self {
-            let hash = commitments.as_ref().and_then(|bundle| {
-                if bundle.is_empty() {
-                    None
-                } else {
-                    Some(bundle.canonical_hash())
-                }
-            });
+            let hash = commitments
+                .as_ref()
+                .and_then(DaCommitmentBundle::merkle_commitment);
             self.0.header.set_da_commitments_hash(hash);
             self.0.da_commitments = commitments;
             self
@@ -3716,7 +3712,7 @@ mod chained {
         pub fn with_da_pin_intents(mut self, intents: Option<DaPinIntentBundle>) -> Self {
             let hash = intents
                 .as_ref()
-                .and_then(|bundle| bundle.merkle_root().map(HashOf::from_untyped_unchecked));
+                .and_then(DaPinIntentBundle::merkle_commitment);
             self.0.header.set_da_pin_intents_hash(hash);
             self.0.da_pin_intents = intents;
             self
@@ -7328,13 +7324,17 @@ pub(crate) mod valid {
 
             let block_height = block.header().height().get();
             let nexus = state.nexus();
-            let expected_policy_hash =
-                crate::da::active_proof_policy_bundle_hash_at_height(nexus, block_height);
+            let expected_policy_bundle =
+                crate::da::active_proof_policy_bundle_at_height(nexus, block_height);
+            let expected_policy_hash = HashOf::new(&expected_policy_bundle);
             if block.header().da_proof_policies_hash() != Some(expected_policy_hash) {
                 return Err(BlockValidationError::ProofPolicyHashMismatch {
                     expected: expected_policy_hash,
                     actual: block.header().da_proof_policies_hash(),
                 });
+            }
+            if block.da_proof_policies() != Some(&expected_policy_bundle) {
+                return Err(BlockValidationError::DaProofPolicyBundleMismatch);
             }
 
             let computed_digest = compute_confidential_feature_digest(
@@ -7458,13 +7458,24 @@ pub(crate) mod valid {
         }
 
         fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
-            let expected_commitments = block.da_commitments().and_then(|bundle| {
-                if bundle.is_empty() {
-                    None
-                } else {
-                    Some(bundle.canonical_hash())
-                }
-            });
+            let expected_policies = block.da_proof_policies().map(HashOf::new);
+            let actual_policies = block.header().da_proof_policies_hash();
+            if expected_policies.is_none() || actual_policies != expected_policies {
+                return Err(BlockValidationError::DaProofPolicySidecarHashMismatch {
+                    expected: expected_policies,
+                    actual: actual_policies,
+                });
+            }
+
+            if block
+                .da_commitments()
+                .is_some_and(DaCommitmentBundle::is_empty)
+            {
+                return Err(BlockValidationError::NonCanonicalEmptyDaCommitmentBundle);
+            }
+            let expected_commitments = block
+                .da_commitments()
+                .and_then(DaCommitmentBundle::merkle_commitment);
             let actual_commitments = block.header().da_commitments_hash();
             if actual_commitments != expected_commitments {
                 return Err(BlockValidationError::DaCommitmentHashMismatch {
@@ -7473,9 +7484,15 @@ pub(crate) mod valid {
                 });
             }
 
+            if block
+                .da_pin_intents()
+                .is_some_and(DaPinIntentBundle::is_empty)
+            {
+                return Err(BlockValidationError::NonCanonicalEmptyDaPinIntentBundle);
+            }
             let expected_pin_intents = block
                 .da_pin_intents()
-                .and_then(|bundle| bundle.merkle_root().map(HashOf::from_untyped_unchecked));
+                .and_then(DaPinIntentBundle::merkle_commitment);
             let actual_pin_intents = block.header().da_pin_intents_hash();
             if actual_pin_intents != expected_pin_intents {
                 return Err(BlockValidationError::DaPinIntentHashMismatch {
@@ -11989,54 +12006,47 @@ pub(crate) mod valid {
                 eprintln!("[scheduler-input] call_hashes={input_hashes:?}");
             }
 
-            // Quarantine classification (opt-in via hook; disabled by default or when cap==0)
+            // Quarantine classification is canonical over the signed transaction metadata.
             let q_cap = state_block.pipeline.quarantine_max_txs_per_block;
             let q_cycle_cap = state_block.pipeline.quarantine_tx_max_cycles;
-            let q_time_cap = state_block.pipeline.quarantine_tx_max_millis;
             let upper_cycle_cap = state_block.pipeline.ivm_max_cycles_upper_bound;
-            let classifier = QUARANTINE_CLASSIFIER
-                .get()
-                .and_then(|m| m.lock().ok())
-                .and_then(|g| *g);
             let mut is_quarantine: Vec<bool> = vec![false; txs.len()];
             let mut quarantine_candidates: Vec<usize> = Vec::new();
             let mut quarantine_allowed: std::collections::BTreeSet<usize> =
                 std::collections::BTreeSet::new();
             let mut quarantine_overflow: std::collections::BTreeSet<usize> =
                 std::collections::BTreeSet::new();
-            if let Some(f) = classifier {
-                for (i, tx) in txs.iter().enumerate() {
-                    if f(tx) {
-                        is_quarantine[i] = true;
-                        quarantine_candidates.push(i);
-                    }
+            for (i, tx) in txs.iter().enumerate() {
+                if is_quarantine_transaction(tx) {
+                    is_quarantine[i] = true;
+                    quarantine_candidates.push(i);
                 }
-                quarantine_candidates.sort_by_key(|&i| (call_hashes[i], i));
-                if q_cap > 0 {
-                    for &i in quarantine_candidates.iter().take(q_cap) {
-                        quarantine_allowed.insert(i);
-                    }
-                    for &i in quarantine_candidates.iter().skip(q_cap) {
-                        quarantine_overflow.insert(i);
-                    }
-                } else {
-                    // cap 0 → reject all classified
-                    for &i in &quarantine_candidates {
-                        quarantine_overflow.insert(i);
-                    }
+            }
+            quarantine_candidates.sort_by_key(|&i| (call_hashes[i], i));
+            if q_cap > 0 {
+                for &i in quarantine_candidates.iter().take(q_cap) {
+                    quarantine_allowed.insert(i);
                 }
-                #[cfg(feature = "telemetry")]
-                {
-                    let aggregate_lane = state_block.nexus.routing_policy.default_lane;
-                    state_block.metrics().set_pipeline_quarantine_classified(
-                        aggregate_lane,
-                        quarantine_candidates.len() as u64,
-                    );
-                    state_block.metrics().set_pipeline_quarantine_overflow(
-                        aggregate_lane,
-                        quarantine_overflow.len() as u64,
-                    );
+                for &i in quarantine_candidates.iter().skip(q_cap) {
+                    quarantine_overflow.insert(i);
                 }
+            } else {
+                // A zero cap disables the lane and rejects explicitly classified transactions.
+                for &i in &quarantine_candidates {
+                    quarantine_overflow.insert(i);
+                }
+            }
+            #[cfg(feature = "telemetry")]
+            {
+                let aggregate_lane = state_block.nexus.routing_policy.default_lane;
+                state_block.metrics().set_pipeline_quarantine_classified(
+                    aggregate_lane,
+                    quarantine_candidates.len() as u64,
+                );
+                state_block.metrics().set_pipeline_quarantine_overflow(
+                    aggregate_lane,
+                    quarantine_overflow.len() as u64,
+                );
             }
 
             // Snapshot accounts for overlay building (prepass) — reused across txs
@@ -12307,7 +12317,6 @@ pub(crate) mod valid {
                                 Arc::clone(&accounts_snapshot),
                                 state_block,
                                 q_cycle_cap,
-                                q_time_cap,
                                 upper_cycle_cap,
                                 metadata,
                                 &mut ivm_cache,
@@ -12564,7 +12573,6 @@ pub(crate) mod valid {
                         accounts,
                         state_ro,
                         q_cycle_cap,
-                        q_time_cap,
                         upper_cycle_cap,
                         metadata,
                         &mut ivm_cache,
@@ -13773,14 +13781,6 @@ pub(crate) mod valid {
                                 tx,
                                 routing_decisions[idx],
                             )?;
-                            let executor = state_tx.world.executor.clone();
-                            if let Err(err) = configure_executor_fuel_budget(
-                                &executor,
-                                &mut state_tx,
-                                tx.metadata(),
-                            ) {
-                                return Err(TransactionRejectionReason::Validation(err));
-                            }
                             let result = match overlay.apply_signed_transaction_with_chunk(
                                 &mut state_tx,
                                 &authority,
@@ -14439,90 +14439,74 @@ pub(crate) mod valid {
                                 } else {
                                     let admission =
                                         admission.expect("admission result checked above");
-                                    let executor = state_tx.world.executor.clone();
-                                    if let Err(err) = configure_executor_fuel_budget(
-                                        &executor,
+                                    match overlay.apply_signed_transaction_with_chunk(
                                         &mut state_tx,
-                                        tx.metadata(),
+                                        &authority,
+                                        chunk_size,
+                                        contract_deployment_bootstrap.as_ref(),
                                     ) {
-                                        Err(
-                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                err,
-                                            ),
-                                        )
-                                    } else {
-                                        match overlay.apply_signed_transaction_with_chunk(
-                                            &mut state_tx,
-                                            &authority,
-                                            chunk_size,
-                                            contract_deployment_bootstrap.as_ref(),
-                                        ) {
-                                            Err(e) => {
-                                                let rejection_reason =
-                                                    TransactionRejectionReason::Validation(e);
-                                                drop(state_tx);
-                                                match charge_rejected_overlay_fees(
-                                                    state_block,
-                                                    tx,
+                                        Err(e) => {
+                                            let rejection_reason =
+                                                TransactionRejectionReason::Validation(e);
+                                            drop(state_tx);
+                                            match charge_rejected_overlay_fees(
+                                                state_block,
+                                                tx,
+                                                &authority,
+                                                overlay.as_ref(),
+                                                prepared_txs[idx].metadata.encoded_len,
+                                                routing_decisions[idx].lane_id,
+                                                routing_decisions[idx].dataspace_id,
+                                                &rejection_reason,
+                                            ) {
+                                                Ok(()) => Err(rejection_reason),
+                                                Err(err) => Err(err),
+                                            }
+                                        }
+                                        Ok(()) => {
+                                            if let Err(err) =
+                                                charge_fees_for_applied_overlay_with_encoded_len(
+                                                    &mut state_tx,
                                                     &authority,
+                                                    tx,
                                                     overlay.as_ref(),
                                                     prepared_txs[idx].metadata.encoded_len,
-                                                    routing_decisions[idx].lane_id,
-                                                    routing_decisions[idx].dataspace_id,
-                                                    &rejection_reason,
-                                                ) {
-                                                    Ok(()) => Err(rejection_reason),
-                                                    Err(err) => Err(err),
-                                                }
-                                            }
-                                            Ok(()) => {
-                                                if let Err(err) =
-                                                    charge_fees_for_applied_overlay_with_encoded_len(
-                                                        &mut state_tx,
-                                                        &authority,
-                                                        tx,
-                                                        overlay.as_ref(),
-                                                        prepared_txs[idx].metadata.encoded_len,
-                                                    )
-                                                {
-                                                    Err(
+                                                )
+                                            {
+                                                Err(
                                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                         err,
                                                     ),
                                                 )
-                                                } else {
-                                                    match state_tx
-                                                        .execute_data_triggers_dfs(&authority)
-                                                    {
-                                                        Err(err) => {
-                                                            drop(state_tx);
-                                                            match charge_rejected_overlay_fees(
-                                                                state_block,
-                                                                tx,
-                                                                &authority,
-                                                                overlay.as_ref(),
-                                                                prepared_txs[idx]
-                                                                    .metadata
-                                                                    .encoded_len,
-                                                                routing_decisions[idx].lane_id,
-                                                                routing_decisions[idx].dataspace_id,
-                                                                &err,
-                                                            ) {
-                                                                Ok(()) => Err(err),
-                                                                Err(fee_err) => Err(fee_err),
-                                                            }
+                                            } else {
+                                                match state_tx.execute_data_triggers_dfs(&authority)
+                                                {
+                                                    Err(err) => {
+                                                        drop(state_tx);
+                                                        match charge_rejected_overlay_fees(
+                                                            state_block,
+                                                            tx,
+                                                            &authority,
+                                                            overlay.as_ref(),
+                                                            prepared_txs[idx].metadata.encoded_len,
+                                                            routing_decisions[idx].lane_id,
+                                                            routing_decisions[idx].dataspace_id,
+                                                            &err,
+                                                        ) {
+                                                            Ok(()) => Err(err),
+                                                            Err(fee_err) => Err(fee_err),
                                                         }
-                                                        Ok(trigger_sequence) => {
-                                                            match commit_stateful_admission_sequence(
-                                                                &mut state_tx,
-                                                                &admission,
-                                                            ) {
-                                                                Ok(()) => {
-                                                                    state_tx.apply();
-                                                                    Ok(trigger_sequence)
-                                                                }
-                                                                Err(reason) => Err(reason),
+                                                    }
+                                                    Ok(trigger_sequence) => {
+                                                        match commit_stateful_admission_sequence(
+                                                            &mut state_tx,
+                                                            &admission,
+                                                        ) {
+                                                            Ok(()) => {
+                                                                state_tx.apply();
+                                                                Ok(trigger_sequence)
                                                             }
+                                                            Err(reason) => Err(reason),
                                                         }
                                                     }
                                                 }
@@ -14661,87 +14645,73 @@ pub(crate) mod valid {
                                 Err(reason)
                             } else {
                                 let admission = admission.expect("admission result checked above");
-                                let executor = state_tx.world.executor.clone();
-                                if let Err(err) = configure_executor_fuel_budget(
-                                    &executor,
+                                match overlay.apply_signed_transaction_with_chunk(
                                     &mut state_tx,
-                                    tx.metadata(),
+                                    &authority,
+                                    chunk_size,
+                                    contract_deployment_bootstrap.as_ref(),
                                 ) {
-                                    Err(
-                                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                            err,
-                                        ),
-                                    )
-                                } else {
-                                    match overlay.apply_signed_transaction_with_chunk(
-                                        &mut state_tx,
-                                        &authority,
-                                        chunk_size,
-                                        contract_deployment_bootstrap.as_ref(),
-                                    ) {
-                                        Err(e) => {
-                                            let rejection_reason =
-                                                TransactionRejectionReason::Validation(e);
-                                            drop(state_tx);
-                                            match charge_rejected_overlay_fees(
-                                                state_block,
-                                                tx,
+                                    Err(e) => {
+                                        let rejection_reason =
+                                            TransactionRejectionReason::Validation(e);
+                                        drop(state_tx);
+                                        match charge_rejected_overlay_fees(
+                                            state_block,
+                                            tx,
+                                            &authority,
+                                            overlay.as_ref(),
+                                            prepared_txs[idx].metadata.encoded_len,
+                                            routing_decisions[idx].lane_id,
+                                            routing_decisions[idx].dataspace_id,
+                                            &rejection_reason,
+                                        ) {
+                                            Ok(()) => Err(rejection_reason),
+                                            Err(err) => Err(err),
+                                        }
+                                    }
+                                    Ok(()) => {
+                                        if let Err(err) =
+                                            charge_fees_for_applied_overlay_with_encoded_len(
+                                                &mut state_tx,
                                                 &authority,
+                                                tx,
                                                 overlay.as_ref(),
                                                 prepared_txs[idx].metadata.encoded_len,
-                                                routing_decisions[idx].lane_id,
-                                                routing_decisions[idx].dataspace_id,
-                                                &rejection_reason,
-                                            ) {
-                                                Ok(()) => Err(rejection_reason),
-                                                Err(err) => Err(err),
-                                            }
-                                        }
-                                        Ok(()) => {
-                                            if let Err(err) =
-                                                charge_fees_for_applied_overlay_with_encoded_len(
-                                                    &mut state_tx,
-                                                    &authority,
-                                                    tx,
-                                                    overlay.as_ref(),
-                                                    prepared_txs[idx].metadata.encoded_len,
-                                                )
-                                            {
-                                                Err(
+                                            )
+                                        {
+                                            Err(
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     err,
                                                 ),
                                             )
-                                            } else {
-                                                match state_tx.execute_data_triggers_dfs(&authority)
-                                                {
-                                                    Err(err) => {
-                                                        drop(state_tx);
-                                                        match charge_rejected_overlay_fees(
-                                                            state_block,
-                                                            tx,
-                                                            &authority,
-                                                            overlay.as_ref(),
-                                                            prepared_txs[idx].metadata.encoded_len,
-                                                            routing_decisions[idx].lane_id,
-                                                            routing_decisions[idx].dataspace_id,
-                                                            &err,
-                                                        ) {
-                                                            Ok(()) => Err(err),
-                                                            Err(fee_err) => Err(fee_err),
-                                                        }
+                                        } else {
+                                            match state_tx.execute_data_triggers_dfs(&authority) {
+                                                Err(err) => {
+                                                    drop(state_tx);
+                                                    match charge_rejected_overlay_fees(
+                                                        state_block,
+                                                        tx,
+                                                        &authority,
+                                                        overlay.as_ref(),
+                                                        prepared_txs[idx].metadata.encoded_len,
+                                                        routing_decisions[idx].lane_id,
+                                                        routing_decisions[idx].dataspace_id,
+                                                        &err,
+                                                    ) {
+                                                        Ok(()) => Err(err),
+                                                        Err(fee_err) => Err(fee_err),
                                                     }
-                                                    Ok(trigger_sequence) => {
-                                                        match commit_stateful_admission_sequence(
-                                                            &mut state_tx,
-                                                            &admission,
-                                                        ) {
-                                                            Ok(()) => {
-                                                                state_tx.apply();
-                                                                Ok(trigger_sequence)
-                                                            }
-                                                            Err(reason) => Err(reason),
+                                                }
+                                                Ok(trigger_sequence) => {
+                                                    match commit_stateful_admission_sequence(
+                                                        &mut state_tx,
+                                                        &admission,
+                                                    ) {
+                                                        Ok(()) => {
+                                                            state_tx.apply();
+                                                            Ok(trigger_sequence)
                                                         }
+                                                        Err(reason) => Err(reason),
                                                     }
                                                 }
                                             }
@@ -15311,11 +15281,22 @@ pub(crate) mod valid {
                     self.block.canonical_proposal_wire_hash().map_err(|error| {
                         BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
                     })?;
-                let executed_block_wire_hash =
-                    self.block.executed_block_wire_hash().map_err(|error| {
-                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                let executed_block_wire = self.block.encode_wire().map_err(|error| {
+                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                })?;
+                let executed_block_wire_len =
+                    u64::try_from(executed_block_wire.len()).map_err(|_| {
+                        BlockValidationError::V2FinalityAuthorityInvalid(
+                            "executed block wire length does not fit u64".to_owned(),
+                        )
                     })?;
+                let executed_block_wire_hash = Hash::new(&executed_block_wire);
                 if proposal_wire_hash != artifact.subject.payload_hash
+                    || executed_block_wire_len
+                        != artifact
+                            .commit_qc
+                            .execution_commitment
+                            .executed_block_wire_len
                     || executed_block_wire_hash
                         != artifact
                             .commit_qc
@@ -15676,6 +15657,51 @@ pub(crate) mod valid {
                 .expect("checked core block DA acknowledgement signature fixture")
         }
 
+        fn raw_block_with_da_sidecars(
+            da_commitments: Option<DaCommitmentBundle>,
+            da_pin_intents: Option<DaPinIntentBundle>,
+        ) -> SignedBlock {
+            let signer = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let policies = iroha_data_model::da::commitment::DaProofPolicyBundle::new(Vec::new());
+            let mut header = BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0);
+            header.set_da_proof_policies_hash(Some(HashOf::new(&policies)));
+            let signature = BlockSignature::new(
+                0,
+                checked_block_signature(signer.private_key(), header.hash()),
+            );
+            let mut block = SignedBlock::presigned_with_payload(
+                signature,
+                BlockPayload {
+                    header,
+                    transactions: Vec::new(),
+                    external_entrypoints: Vec::new(),
+                    execution_context: None,
+                    da_commitments: None,
+                    da_proof_policies: Some(policies),
+                    da_pin_intents: None,
+                    previous_roster_evidence: None,
+                    npos_consensus_effects: None,
+                },
+            );
+            block.replace_da_sidecars_for_testing(da_commitments, da_pin_intents);
+            block
+        }
+
+        #[test]
+        fn da_sidecar_validation_rejects_noncanonical_empty_bundles() {
+            let commitments = raw_block_with_da_sidecars(Some(DaCommitmentBundle::default()), None);
+            assert_eq!(
+                ValidBlock::validate_da_sidecar_hashes(&commitments),
+                Err(BlockValidationError::NonCanonicalEmptyDaCommitmentBundle)
+            );
+
+            let pin_intents = raw_block_with_da_sidecars(None, Some(DaPinIntentBundle::default()));
+            assert_eq!(
+                ValidBlock::validate_da_sidecar_hashes(&pin_intents),
+                Err(BlockValidationError::NonCanonicalEmptyDaPinIntentBundle)
+            );
+        }
+
         fn settlement_merge_reference_fixture() -> CertifiedMergeLedgerReference {
             let validator_set = Vec::<PeerId>::new();
             CertifiedMergeLedgerReference {
@@ -15808,6 +15834,7 @@ pub(crate) mod valid {
                     .expect("weighted fixture has a canonical dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"weighted-merge-nexus-context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
                     encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::Plain,
                     chunk_size_bytes: 1_024,
@@ -18339,6 +18366,7 @@ pub(crate) mod valid {
                     .expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
                     encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -18366,6 +18394,13 @@ pub(crate) mod valid {
                     Hash::new(b"artifact-bound parent state"),
                     Hash::new(b"artifact-bound post state"),
                     Hash::new(b"artifact-bound ordinary writes"),
+                    u64::try_from(
+                        signed
+                            .encode_wire()
+                            .expect("artifact-bound block wire")
+                            .len(),
+                    )
+                    .expect("artifact-bound block wire length fits u64"),
                     signed
                         .executed_block_wire_hash()
                         .expect("canonical executed block wire"),
@@ -19286,6 +19321,7 @@ pub(crate) mod valid {
                 quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"forged-first-seal-nexus"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
                     encoding: PayloadEncoding::Plain,
                     chunk_size_bytes: 1_024,
@@ -21378,6 +21414,54 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_da_sidecars_rejects_missing_policy_body_under_signed_hash() {
+            let signer = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut block: SignedBlock = BlockBuilder::new(Vec::new())
+                .chain(0, None)
+                .sign(signer.private_key())
+                .unpack(|_| {})
+                .into();
+            let signed_header = block.header();
+            assert!(block.da_proof_policies().is_some());
+            block.set_da_proof_policies(None);
+            block.replace_header_for_testing(signed_header);
+
+            assert!(matches!(
+                ValidBlock::validate_da_sidecar_hashes(&block),
+                Err(BlockValidationError::DaProofPolicySidecarHashMismatch {
+                    expected: None,
+                    actual: Some(_),
+                })
+            ));
+        }
+
+        #[test]
+        fn validate_da_sidecars_rejects_policy_body_substitution() {
+            let signer = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut block: SignedBlock = BlockBuilder::new(Vec::new())
+                .chain(0, None)
+                .sign(signer.private_key())
+                .unpack(|_| {})
+                .into();
+            let signed_header = block.header();
+            let mut substituted = block
+                .da_proof_policies()
+                .expect("builder must attach default policies")
+                .clone();
+            substituted.policies[0].alias.push_str("-substituted");
+            block.set_da_proof_policies(Some(substituted));
+            block.replace_header_for_testing(signed_header);
+
+            assert!(matches!(
+                ValidBlock::validate_da_sidecar_hashes(&block),
+                Err(BlockValidationError::DaProofPolicySidecarHashMismatch {
+                    expected: Some(_),
+                    actual: Some(_),
+                })
+            ));
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_future_created_autoscale_da_policy_hash() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -21964,7 +22048,6 @@ pub(crate) mod valid {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
                 checked_da_ack_signature(0x11),
@@ -22059,7 +22142,6 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -22303,7 +22385,6 @@ pub(crate) mod valid {
                     DaProofScheme::MerkleSha256,
                     Hash::prehashed([tag; 32]),
                     None,
-                    None,
                     RetentionClass::default(),
                     StorageTicketId::new([tag; 32]),
                     checked_da_ack_signature(tag),
@@ -22374,7 +22455,6 @@ pub(crate) mod valid {
                     DaProofScheme::MerkleSha256,
                     Hash::prehashed([tag; 32]),
                     None,
-                    None,
                     RetentionClass::default(),
                     StorageTicketId::new([0xDD; 32]),
                     checked_da_ack_signature(tag),
@@ -22444,13 +22524,12 @@ pub(crate) mod valid {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xDD; 32]),
                 checked_da_ack_signature(0xEE),
             );
             let bundle = DaCommitmentBundle::new(vec![record]);
-            let expected = Some(bundle.canonical_hash());
+            let expected = bundle.merkle_commitment();
             let forged = Some(HashOf::<DaCommitmentBundle>::from_untyped_unchecked(
                 Hash::prehashed([0xFA; 32]),
             ));
@@ -22514,9 +22593,7 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
             );
             let bundle = DaPinIntentBundle::new(vec![intent]);
-            let expected = bundle
-                .merkle_root()
-                .map(HashOf::<DaPinIntentBundle>::from_untyped_unchecked);
+            let expected = bundle.merkle_commitment();
             let forged = Some(HashOf::<DaPinIntentBundle>::from_untyped_unchecked(
                 Hash::prehashed([0xFB; 32]),
             ));
@@ -22864,7 +22941,6 @@ pub(crate) mod valid {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCD; 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEF; 32]),
                 checked_da_ack_signature(0x12),
@@ -22894,7 +22970,6 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -23635,6 +23710,7 @@ pub(crate) mod valid {
                 quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {
                     encoding: consensus_v2::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -23736,7 +23812,6 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -24840,6 +24915,39 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn check_genesis_block_rejects_proof_policy_sidecar_substitution() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let mut block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let signed_header = block.header();
+
+            block.set_da_proof_policies(Some(
+                iroha_data_model::da::commitment::DaProofPolicyBundle::new(Vec::new()),
+            ));
+            block.replace_header_for_testing(signed_header);
+
+            assert_eq!(
+                check_genesis_block(&block, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::DaProofPolicyMismatch)
+            );
+        }
+
+        #[test]
         fn check_genesis_block_rejects_height_above_one() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
@@ -25034,7 +25142,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn genesis_block_with_da_commitments_uses_canonical_bundle_hash() {
+        fn genesis_block_with_da_commitments_uses_header_tree_commitment() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
@@ -25057,13 +25165,14 @@ pub(crate) mod valid {
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
                 None,
-                None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xDD; 32]),
                 checked_da_ack_signature(0xEE),
             );
             let bundle = DaCommitmentBundle::new(vec![record]);
-            let canonical_hash = bundle.canonical_hash();
+            let tree_commitment = bundle
+                .merkle_commitment()
+                .expect("non-empty bundle must have a tree commitment");
 
             let block = SignedBlock::genesis(
                 vec![tx],
@@ -25072,7 +25181,7 @@ pub(crate) mod valid {
                 Some(bundle),
             );
 
-            assert_eq!(block.header().da_commitments_hash(), Some(canonical_hash));
+            assert_eq!(block.header().da_commitments_hash(), Some(tree_commitment));
             assert!(check_genesis_block(&block, &genesis_account, &chain_id).is_ok());
         }
 
@@ -27690,9 +27799,13 @@ mod event {
             BlockValidationError::ConfidentialFeaturesMismatch { .. } => {
                 Reason::ConfidentialFeatureDigestMismatch
             }
-            BlockValidationError::ProofPolicyHashMismatch { .. } => Reason::DaProofPolicyMismatch,
+            BlockValidationError::ProofPolicyHashMismatch { .. }
+            | BlockValidationError::DaProofPolicySidecarHashMismatch { .. }
+            | BlockValidationError::DaProofPolicyBundleMismatch => Reason::DaProofPolicyMismatch,
             BlockValidationError::DaCommitmentHashMismatch { .. }
-            | BlockValidationError::DaPinIntentHashMismatch { .. } => {
+            | BlockValidationError::NonCanonicalEmptyDaCommitmentBundle
+            | BlockValidationError::DaPinIntentHashMismatch { .. }
+            | BlockValidationError::NonCanonicalEmptyDaPinIntentBundle => {
                 Reason::DaShardCursorViolation
             }
             BlockValidationError::PreviousRosterEvidenceInvalid(_) => Reason::TopologyMismatch,
@@ -28545,6 +28658,44 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    fn signed_transaction_with_quarantine_marker(marker: Json) -> SignedTransaction {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let (account_id, keypair) = gen_account_in("quarantine");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            QUARANTINE_METADATA_KEY
+                .parse()
+                .expect("canonical quarantine metadata key"),
+            marker,
+        );
+        TransactionBuilder::new(
+            chain_id,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "quarantine marker".to_owned())])
+        .with_metadata(metadata)
+        .sign(keypair.private_key())
+    }
+
+    #[test]
+    fn quarantine_classifier_accepts_only_exact_signed_boolean_true() {
+        assert!(is_quarantine_transaction(
+            &signed_transaction_with_quarantine_marker(Json::new(true))
+        ));
+        assert!(!is_quarantine_transaction(
+            &signed_transaction_with_quarantine_marker(Json::new(false))
+        ));
+        assert!(!is_quarantine_transaction(
+            &signed_transaction_with_quarantine_marker(Json::new("true"))
+        ));
+        assert!(!is_quarantine_transaction(
+            &signed_transaction_with_quarantine_marker(Json::new(1_u64))
+        ));
+    }
+
     #[test]
     fn legacy_taira_confidential_policy_hash_is_rejected() {
         let historical_policy_hash = [
@@ -29010,15 +29161,17 @@ mod tests {
         for idx in 0..signer_count.min(validator_set.len()) {
             signers_bitmap[idx / 8] |= 1_u8 << (idx % 8);
         }
-        NativeAmxAttestationQcV2 {
+        let validator_set_hash = HashOf::new(&validator_set);
+        NativeAmxAttestationQcV2::try_new(
             body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
             validator_set,
             validator_set_pops,
             signers_bitmap,
             bls_aggregate_signature,
-        }
+        )
+        .expect("fixture validator set and proofs must align")
     }
 
     fn signed_native_amx_receipt(
@@ -29082,7 +29235,7 @@ mod tests {
                 );
                 let participant_proposal = native_amx_test_participant_proposal(
                     &prepare_qc.body,
-                    prepare_qc.validator_set.clone(),
+                    prepare_qc.validator_set().to_vec(),
                     &coordinator_proposal,
                 );
                 let participant_settlement = prepare_qc
@@ -29639,7 +29792,7 @@ mod tests {
         );
         let historical_authority = NativeAmxTestAuthority {
             world: World::new(),
-            committee: receipt.legs[0].prepare_qc.validator_set.clone(),
+            committee: receipt.legs[0].prepare_qc.validator_set().to_vec(),
         };
 
         let validate = |candidate: &NativeAmxReceipt| {
@@ -29658,7 +29811,19 @@ mod tests {
         validate(&receipt).expect("embedded historical PoPs survive live-key retirement");
 
         let mut tampered = receipt;
-        tampered.legs[0].prepare_qc.validator_set_pops[0][0] ^= 0x80;
+        let qc = &mut tampered.legs[0].prepare_qc;
+        let mut validator_set_pops = qc.validator_set_pops().to_vec();
+        validator_set_pops[0][0] ^= 0x80;
+        *qc = NativeAmxAttestationQcV2::try_new(
+            qc.body,
+            qc.validator_set_hash_version,
+            qc.validator_set_hash,
+            qc.validator_set().to_vec(),
+            validator_set_pops,
+            qc.signers_bitmap.clone(),
+            qc.bls_aggregate_signature.clone(),
+        )
+        .expect("tampered fixture validator set and proofs remain aligned");
         assert!(
             validate(&tampered).is_err(),
             "tampered historical PoP must fail closed"
@@ -29717,7 +29882,7 @@ mod tests {
         )
         .expect("3-of-4 AMX QCs should validate");
 
-        assert_eq!(receipt.legs[0].prepare_qc.validator_set.len(), 4);
+        assert_eq!(receipt.legs[0].prepare_qc.validator_set().len(), 4);
         assert_eq!(receipt.legs[0].prepare_qc.signers_bitmap, vec![0b0000_0111]);
     }
 
@@ -29892,19 +30057,30 @@ mod tests {
             signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
         for leg in &mut foreign_committee.legs {
             for qc in [&mut leg.prepare_qc, &mut leg.commit_qc] {
-                qc.validator_set.pop();
-                qc.validator_set_pops.pop();
-                qc.validator_set_hash = HashOf::new(&qc.validator_set);
-                qc.body.participant_validator_set_hash = qc.validator_set_hash;
-                qc.body.participant_validator_count =
-                    u32::try_from(qc.validator_set.len()).expect("fixture validator count");
-                qc.body.participant_min_quorum = u32::try_from(
-                    crate::sumeragi::network_topology::commit_quorum_from_len(
-                        qc.validator_set.len(),
-                    )
-                    .max(1),
+                let mut validator_set = qc.validator_set().to_vec();
+                let mut validator_set_pops = qc.validator_set_pops().to_vec();
+                validator_set.pop();
+                validator_set_pops.pop();
+                let validator_set_hash = HashOf::new(&validator_set);
+                let mut body = qc.body;
+                body.participant_validator_set_hash = validator_set_hash;
+                body.participant_validator_count =
+                    u32::try_from(validator_set.len()).expect("fixture validator count");
+                body.participant_min_quorum = u32::try_from(
+                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
+                        .max(1),
                 )
                 .expect("fixture participant quorum");
+                *qc = NativeAmxAttestationQcV2::try_new(
+                    body,
+                    qc.validator_set_hash_version,
+                    validator_set_hash,
+                    validator_set,
+                    validator_set_pops,
+                    qc.signers_bitmap.clone(),
+                    qc.bls_aggregate_signature.clone(),
+                )
+                .expect("foreign committee fixture validator set and proofs remain aligned");
             }
         }
         let error = validate(&foreign_committee).expect_err("foreign committee must fail");
@@ -30615,7 +30791,7 @@ mod tests {
         assert_eq!(envelopes[0].manifest_root, Some(manifest_root));
         assert!(envelopes[0].fastpq_proof.is_some());
         envelopes[0]
-            .verify_fastpq_proof_material()
+            .validate_fastpq_proof_metadata()
             .expect("FastPQ proof material must validate");
     }
 
@@ -31193,7 +31369,7 @@ seiyaku DynamicAccessCounter {
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_id = contract_address.to_string();
         let scope_digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
-        let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
+        let scoped_path: StatePath = format!("sc/{scope_digest}/{logical_path}")
             .parse()
             .expect("valid scoped StateMap path");
         let stored = state_block
@@ -31420,7 +31596,7 @@ seiyaku DynamicTarget {
                 .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-        let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
+        let scoped_path: StatePath = format!("sc/{scope_digest}/{logical_path}")
             .parse()
             .expect("valid scoped StateMap path");
         let stored = state_block
@@ -31437,9 +31613,10 @@ seiyaku DynamicTarget {
         let guarded_key =
             ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
                 .expect("encode canonical guarded StateMap int key");
-        let guarded_path: Name = format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))
-            .parse()
-            .expect("valid guarded StateMap path");
+        let guarded_path: StatePath =
+            format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))
+                .parse()
+                .expect("valid guarded StateMap path");
         let guarded_stored = state_block
             .world
             .smart_contract_state

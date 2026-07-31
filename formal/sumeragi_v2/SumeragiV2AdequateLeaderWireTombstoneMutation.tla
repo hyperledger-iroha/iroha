@@ -280,22 +280,22 @@ Init ==
   /\ phase = "Fresh"
   /\ height = 0
   /\ slotRecords = {}
-  /\ ~candidateOwned
-  /\ ~selectorBarrier
-  /\ ~packetPresent
-  /\ ~capacityAvailable
+  /\ candidateOwned = FALSE
+  /\ selectorBarrier = FALSE
+  /\ packetPresent = FALSE
+  /\ capacityAvailable = FALSE
   /\ ownerCount = 0
-  /\ ~laterTargetOwned
-  /\ ~laterTargetPrecharged
+  /\ laterTargetOwned = FALSE
+  /\ laterTargetPrecharged = FALSE
 
 AdmitFirstOwner ==
   /\ phase = "Fresh"
   /\ phase' = "Active"
   /\ slotRecords' = {RecordA("Ingress", 1, FALSE)}
-  /\ candidateOwned'
-  /\ selectorBarrier'
-  /\ ~packetPresent'
-  /\ capacityAvailable'
+  /\ candidateOwned' = TRUE
+  /\ selectorBarrier' = TRUE
+  /\ packetPresent' = FALSE
+  /\ capacityAvailable' = TRUE
   /\ ownerCount' = 1
   /\ UNCHANGED <<height, laterTargetOwned, laterTargetPrecharged>>
 
@@ -318,14 +318,14 @@ RestartUnconsumedSameHeight ==
   /\ candidateOwned' = DormantOwnsImmediatelyAfterRestart
   /\ selectorBarrier' = DormantOwnsImmediatelyAfterRestart
   /\ packetPresent' = SynthesizePacketOnRestart
-  /\ ~capacityAvailable'
+  /\ capacityAvailable' = FALSE
   /\ ownerCount' = 1
   /\ UNCHANGED <<height, laterTargetOwned, laterTargetPrecharged>>
 
 AdmitLaterTargetWhileDormant ==
   /\ phase = "UnconsumedRestarted"
   /\ phase' = "LaterTargetAdmitted"
-  /\ laterTargetOwned'
+  /\ laterTargetOwned' = TRUE
   /\ laterTargetPrecharged' =
        PrechargeDormantPotentialBeforeLaterOwner
   /\ UNCHANGED
@@ -335,7 +335,7 @@ AdmitLaterTargetWhileDormant ==
 RetransmitAfterUnconsumedRestart ==
   /\ phase = "LaterTargetAdmitted"
   /\ phase' = "UnconsumedRetransmitted"
-  /\ packetPresent'
+  /\ packetPresent' = TRUE
   /\ UNCHANGED
        <<height, slotRecords, candidateOwned, selectorBarrier,
          capacityAvailable, ownerCount,
@@ -348,8 +348,8 @@ AttemptCapacityBlockedReactivation ==
   /\ IF RequireCapacityForReactivation
      THEN UNCHANGED <<slotRecords, candidateOwned, selectorBarrier>>
      ELSE /\ slotRecords' = {RecordA("Ingress", 1, FALSE)}
-          /\ candidateOwned'
-          /\ selectorBarrier'
+          /\ candidateOwned' = TRUE
+          /\ selectorBarrier' = TRUE
   /\ UNCHANGED
        <<height, packetPresent, capacityAvailable, ownerCount,
          laterTargetOwned, laterTargetPrecharged>>
@@ -357,7 +357,7 @@ AttemptCapacityBlockedReactivation ==
 OpenLocalCapacity ==
   /\ phase = "CapacityChecked"
   /\ phase' = "CapacityReady"
-  /\ capacityAvailable'
+  /\ capacityAvailable' = TRUE
   /\ UNCHANGED
        <<height, slotRecords, candidateOwned, selectorBarrier,
          packetPresent, ownerCount,
@@ -374,9 +374,9 @@ ReactivateAfterCapacityAcceptance ==
             THEN {RecordA("Ingress", 0, FALSE)}
             ELSE {RecordA("Ingress", 1, FALSE)}
        ELSE {RecordAReallocated}
-  /\ candidateOwned'
-  /\ selectorBarrier'
-  /\ ~packetPresent'
+  /\ candidateOwned' = TRUE
+  /\ selectorBarrier' = TRUE
+  /\ packetPresent' = FALSE
   /\ UNCHANGED
        <<height, capacityAvailable, ownerCount,
          laterTargetOwned, laterTargetPrecharged>>
@@ -412,9 +412,9 @@ ServiceFirstOwner ==
   /\ phase = "ForeignTerminalChecked"
   /\ phase' = "Serviced"
   /\ slotRecords' = {RecordA("Terminal", 0, TRUE)}
-  /\ ~candidateOwned'
-  /\ ~selectorBarrier'
-  /\ ~packetPresent'
+  /\ candidateOwned' = FALSE
+  /\ selectorBarrier' = FALSE
+  /\ packetPresent' = FALSE
   /\ ownerCount' = 1
   /\ UNCHANGED
        <<height, capacityAvailable,
@@ -425,7 +425,7 @@ RetransmitConsumedOwner ==
   /\ phase' = "ConsumedRetried"
   /\ candidateOwned' = IF DropConsumedRetry THEN FALSE ELSE TRUE
   /\ selectorBarrier' = IF DropConsumedRetry THEN FALSE ELSE TRUE
-  /\ ~packetPresent'
+  /\ packetPresent' = FALSE
   /\ UNCHANGED
        <<height, slotRecords, capacityAvailable, ownerCount,
          laterTargetOwned, laterTargetPrecharged>>
@@ -437,10 +437,10 @@ RestartSameHeight ==
        IF PreserveStableTerminalAcrossRestart
        THEN slotRecords
        ELSE {RecordA("Dormant", 0, TRUE)}
-  /\ ~candidateOwned'
-  /\ ~selectorBarrier'
-  /\ ~packetPresent'
-  /\ ~capacityAvailable'
+  /\ candidateOwned' = FALSE
+  /\ selectorBarrier' = FALSE
+  /\ packetPresent' = FALSE
+  /\ capacityAvailable' = FALSE
   /\ ownerCount' = 1
   /\ UNCHANGED <<height, laterTargetOwned, laterTargetPrecharged>>
 
@@ -451,10 +451,10 @@ AdmitStrictlyNewerView ==
        IF KeepSlotTableBounded
        THEN {RecordC}
        ELSE slotRecords \cup {RecordC}
-  /\ candidateOwned'
-  /\ selectorBarrier'
-  /\ packetPresent'
-  /\ capacityAvailable'
+  /\ candidateOwned' = TRUE
+  /\ selectorBarrier' = TRUE
+  /\ packetPresent' = TRUE
+  /\ capacityAvailable' = TRUE
   /\ ownerCount' = IF KeepSlotTableBounded THEN 1 ELSE 2
   /\ UNCHANGED <<height, laterTargetOwned, laterTargetPrecharged>>
 
@@ -463,10 +463,10 @@ RolloverSuccessorHeight ==
   /\ phase' = "RolledOver"
   /\ height' = 1
   /\ slotRecords' = IF ResetAtRollover THEN {} ELSE slotRecords
-  /\ ~candidateOwned'
-  /\ ~selectorBarrier'
-  /\ ~packetPresent'
-  /\ ~capacityAvailable'
+  /\ candidateOwned' = FALSE
+  /\ selectorBarrier' = FALSE
+  /\ packetPresent' = FALSE
+  /\ capacityAvailable' = FALSE
   /\ ownerCount' = IF ResetAtRollover THEN 0 ELSE ownerCount
   /\ laterTargetOwned' = IF ResetAtRollover THEN FALSE ELSE laterTargetOwned
   /\ laterTargetPrecharged' =

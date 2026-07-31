@@ -50,7 +50,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path(f"tests/v2_runner_unsealed_{index:02}.rs") for index in range(3)
     ),
     Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): tuple(
-        Path(f"tests/v2_apply_unsealed_{index:02}.rs") for index in range(2)
+        Path(f"tests/v2_apply_unsealed_{index:02}.rs") for index in range(3)
     ),
     Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"): (
         Path("tests/v2_core_reducer_primitive_projection.rs"),
@@ -77,6 +77,10 @@ def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
     kura = tmp_path / "crates/iroha_core/src/kura.rs"
+    kura_production_includes = "\n".join(
+        f'include!("{relative.relative_to("crates/iroha_core/src").as_posix()}");'
+        for relative in KURA_PRODUCTION_COMPONENT_FILES
+    )
     kura.write_text(
         """
 pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits() {
@@ -151,13 +155,11 @@ pub fn persist_pending_queue_plan_admission_certificate() {
     }
 }
 
-include!("kura/startup_finality_support.rs");
-include!("kura/bound_progress_and_retained_support.rs");
-include!("kura/prune_commit_merge_support.rs");
+__KURA_PRODUCTION_INCLUDES__
 
 #[cfg(test)]
 mod tests {}
-""",
+""".replace("__KURA_PRODUCTION_INCLUDES__", kura_production_includes),
         encoding="utf-8",
     )
     for relative in KURA_PRODUCTION_COMPONENT_FILES:

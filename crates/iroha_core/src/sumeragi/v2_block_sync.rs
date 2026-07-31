@@ -10,10 +10,12 @@
 //! decision, requests the body, validates and stores the response, and applies
 //! it through the normal WAL path.
 //!
-//! Responders load historical immutable finality artifacts from Kura. Their
+//! Responders load self-contained historical finality artifacts from Kura.
+//! Each artifact carries the exact frozen context and roster-aligned proofs of
+//! possession needed to verify the historical CommitQC, so serving never
+//! depends on a second mutable-or-missing copy of the same authority. Their
 //! response signature uses their current P2P identity, so validator key
-//! rotation does not make a retired height unservable. The historical CommitQC
-//! remains independently verified under the height's frozen roster.
+//! rotation does not make a retired height unservable.
 
 use core::fmt;
 use std::{
@@ -32,9 +34,8 @@ use super::v2_transport::{
     authenticate_commit_certificate_request_identity,
 };
 use super::{
-    v2::verify_persisted_quorum_certificate,
+    v2::verify_historical_quorum_certificate,
     v2_chunks::encode_payload,
-    v2_context_store::V2ContextStore,
     v2_core::{
         CanonicalIdentityProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_PAYLOAD,
         IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
@@ -157,17 +158,15 @@ impl V2BlockSyncServer {
     /// that height's frozen roster and its durable history contains the applied
     /// block and matching finality artifact.
     ///
-    /// The historical context and PoPs are loaded from the immutable context
-    /// store, while Kura supplies both the canonical finality artifact and
-    /// exact block bytes. The archive peer need not have signed the historical
-    /// QC: the QC authenticates the subject, and the peer signs the response
-    /// containing the exact subject-bound bytes. The receiver still stores and
-    /// validates the returned body through its active reducer effects; this
-    /// service never imports or applies a block locally.
+    /// Kura's self-contained finality artifact supplies the historical context,
+    /// roster proofs, and exact certified subject. The archive peer need not
+    /// have signed the historical QC: the QC authenticates the subject, and the
+    /// peer signs the response containing the exact subject-bound bytes. The
+    /// receiver still stores and validates the returned body through its active
+    /// reducer effects; this service never imports or applies a block locally.
     pub(crate) fn serve_historical_body(
         &mut self,
         kura: &Kura,
-        context_store: &V2ContextStore,
         request: wire::CertifiedBodyRequest,
         authenticated_requester: &PeerId,
         responder_key: &KeyPair,
@@ -179,7 +178,6 @@ impl V2BlockSyncServer {
             |request| {
                 build_historical_body_response(
                     kura,
-                    context_store,
                     request.clone(),
                     authenticated_requester,
                     responder_key,
@@ -620,7 +618,6 @@ fn serve_commit_certificate_from_artifact(
 
 fn build_historical_body_response(
     kura: &Kura,
-    context_store: &V2ContextStore,
     request: wire::CertifiedBodyRequest,
     authenticated_requester: &PeerId,
     responder_key: &KeyPair,
@@ -629,22 +626,14 @@ fn build_historical_body_response(
     let Some(artifact) = kura.v2_finality_artifact(height)? else {
         return Ok(None);
     };
-    let persisted = context_store
-        .load(height)?
-        .ok_or(V2BlockSyncError::MissingHistoricalContext { height })?;
-    if persisted.context() != &artifact.height_context {
-        return Err(V2BlockSyncError::HistoricalContextMismatch { height });
-    }
+    let context = &artifact.height_context;
+    let proofs_of_possession = &artifact.validator_set_pops;
     let authenticated: AuthenticatedCertifiedBodyRequest = authenticate_certified_body_request(
-        persisted.context(),
+        context,
         request,
         authenticated_requester,
         |context, certificate| {
-            verify_persisted_quorum_certificate(
-                context,
-                persisted.proofs_of_possession(),
-                certificate,
-            )
+            verify_historical_quorum_certificate(context, proofs_of_possession, certificate)
         },
     )?;
     let request = authenticated.request();
@@ -656,8 +645,7 @@ fn build_historical_body_response(
     }
 
     let responder_peer = PeerId::new(responder_key.public_key().clone());
-    let Some(responder_position) = persisted
-        .context()
+    let Some(responder_position) = context
         .roster
         .iter()
         .position(|entry| entry.validator == responder_peer)
@@ -684,7 +672,7 @@ fn build_historical_body_response(
     if !proposal.is_resultless_proposal() || Hash::new(&body) != request.subject.payload_hash {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
     }
-    let encoded = encode_payload(persisted.context(), request.round, request.subject, &body)?;
+    let encoded = encode_payload(context, request.round, request.subject, &body)?;
     let (manifest, _) = encoded.into_parts();
     let mut response = wire::CertifiedBodyResponse {
         request_hash: authenticated.request_hash(),
@@ -697,7 +685,7 @@ fn build_historical_body_response(
         Signature::new(responder_key.private_key(), &response.signature_preimage())
             .payload()
             .to_vec();
-    response.validate_against(persisted.context(), request, &responder_peer)?;
+    response.validate_against(context, request, &responder_peer)?;
     Ok(Some(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
     )))
@@ -731,9 +719,6 @@ pub(crate) enum V2BlockSyncError {
     /// Kura could not read or validate its immutable canonical finality sidecar.
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
-    /// Immutable historical context or PoP record could not be loaded.
-    #[error(transparent)]
-    ContextStore(#[from] super::v2_context_store::V2ContextStoreError),
     /// Canonical body chunking under the frozen DA layout failed.
     #[error(transparent)]
     Chunk(#[from] super::v2_chunks::V2ChunkError),
@@ -754,18 +739,6 @@ pub(crate) enum V2BlockSyncError {
     /// Internal bounded response-cache indexes diverged.
     #[error("Sumeragi v2 block-sync response cache is internally inconsistent")]
     CorruptServerCache,
-    /// Kura finality exists but its immutable context/PoP record is absent.
-    #[error("Sumeragi v2 historical context is missing at height {height}")]
-    MissingHistoricalContext {
-        /// Requested historical height.
-        height: wire::Height,
-    },
-    /// Kura finality and the immutable context record disagree.
-    #[error("Sumeragi v2 historical context differs from finality at height {height}")]
-    HistoricalContextMismatch {
-        /// Conflicting historical height.
-        height: wire::Height,
-    },
     /// The requested CommitQC subject differs from Kura's canonical decision.
     #[error("Sumeragi v2 historical certified subject differs at height {height}")]
     HistoricalSubjectMismatch {
@@ -831,13 +804,7 @@ pub(super) mod tests {
     use iroha_data_model::{ChainId, block::BlockHeader};
 
     use super::*;
-    use crate::{
-        block::ValidBlock,
-        sumeragi::{
-            v2::VerifiedHeightContext, v2_context_store::PersistedHeightContext,
-            v2_transport::OutstandingCertifiedBodyRequests,
-        },
-    };
+    use crate::{block::ValidBlock, sumeragi::v2_transport::OutstandingCertifiedBodyRequests};
 
     struct Fixture {
         context: wire::HeightContext,
@@ -877,6 +844,7 @@ pub(super) mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2 sync nexus/amx context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -1004,6 +972,7 @@ pub(super) mod tests {
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            1,
             Hash::new([seed, 4]),
         )
     }
@@ -1081,9 +1050,12 @@ pub(super) mod tests {
         executed_block
             .set_transaction_results(Vec::new(), &[], Vec::new())
             .expect("attach deterministic history-fixture results");
-        let executed_block_wire_hash = executed_block
-            .executed_block_wire_hash()
+        let executed_block_wire = executed_block
+            .encode_wire()
             .expect("encode executed history-fixture block");
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("executed wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let proposal = executed_block.canonical_resultless_proposal();
         let canonical_wire = proposal
             .encode_wire()
@@ -1099,6 +1071,7 @@ pub(super) mod tests {
             payload_hash: Hash::new(&canonical_wire),
         };
         let mut execution = execution_commitment(0x43);
+        execution.executed_block_wire_len = executed_block_wire_len;
         execution.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
@@ -1132,14 +1105,6 @@ pub(super) mod tests {
         let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("store history-fixture finality");
-        let context_store =
-            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("history context store");
-        let verified =
-            VerifiedHeightContext::genesis(context.clone(), fixture.proofs_of_possession.clone())
-                .expect("verify history-fixture context");
-        context_store
-            .persist(&PersistedHeightContext::from_verified(&verified))
-            .expect("persist history-fixture context");
 
         let requester = peer(&fixture.requester);
         let mut commit_request = wire::CommitCertificateRequest {
@@ -1161,7 +1126,6 @@ pub(super) mod tests {
         let body_request = fixture.body_request(certificate);
         let body_response = build_historical_body_response(
             kura.as_ref(),
-            &context_store,
             body_request,
             &requester,
             &fixture.old_validators[3],
@@ -1666,7 +1630,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn historical_body_comes_from_kura_and_a_non_signer_archive_can_serve() {
+    fn historical_body_uses_self_contained_kura_finality_without_context_store() {
         let fixture = Fixture::new();
         let committed = ValidBlock::new_dummy_and_modify_header(
             fixture.old_validators[0].private_key(),
@@ -1684,9 +1648,12 @@ pub(super) mod tests {
             .set_transaction_results(Vec::new(), &[], Vec::new())
             .expect("attach an empty deterministic execution result");
         assert!(!executed_block.is_resultless_proposal());
-        let executed_block_wire_hash = executed_block
-            .executed_block_wire_hash()
+        let executed_block_wire = executed_block
+            .encode_wire()
             .expect("canonical executed block wire");
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("executed wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let proposal = executed_block.canonical_resultless_proposal();
         let canonical_wire = proposal
             .encode_wire()
@@ -1703,6 +1670,7 @@ pub(super) mod tests {
             payload_hash: Hash::new(&canonical_wire),
         };
         let mut exact_execution_commitment = execution_commitment(0x43);
+        exact_execution_commitment.executed_block_wire_len = executed_block_wire_len;
         exact_execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
@@ -1734,14 +1702,10 @@ pub(super) mod tests {
         let _ = kura
             .store_v2_finality_artifact(&artifact)
             .expect("store finality artifact");
-        let context_store =
-            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("context store");
-        let verified =
-            VerifiedHeightContext::genesis(context.clone(), fixture.proofs_of_possession.clone())
-                .expect("verified historical context");
-        context_store
-            .persist(&PersistedHeightContext::from_verified(&verified))
-            .expect("persist historical context");
+        assert!(
+            !kura.sumeragi_v2_storage_root().join("contexts").exists(),
+            "the regression must not create a duplicate historical context record"
+        );
 
         let request = fixture.body_request(certificate.clone());
         let request_hash = HashOf::new(&request);
@@ -1749,7 +1713,6 @@ pub(super) mod tests {
         let response = server
             .serve_historical_body(
                 kura.as_ref(),
-                &context_store,
                 request.clone(),
                 &peer(&fixture.requester),
                 &fixture.old_validators[0],
@@ -1791,7 +1754,7 @@ pub(super) mod tests {
             request.clone(),
             &peer(&fixture.requester),
             |context, certificate| {
-                verify_persisted_quorum_certificate(
+                verify_historical_quorum_certificate(
                     context,
                     &fixture.proofs_of_possession,
                     certificate,
@@ -1815,7 +1778,6 @@ pub(super) mod tests {
         let archive_response = server
             .serve_historical_body(
                 kura.as_ref(),
-                &context_store,
                 request.clone(),
                 &peer(&fixture.requester),
                 &fixture.old_validators[3],
@@ -1835,7 +1797,7 @@ pub(super) mod tests {
             request.clone(),
             &peer(&fixture.requester),
             |context, certificate| {
-                verify_persisted_quorum_certificate(
+                verify_historical_quorum_certificate(
                     context,
                     &fixture.proofs_of_possession,
                     certificate,
@@ -1876,7 +1838,6 @@ pub(super) mod tests {
             server
                 .serve_historical_body(
                     kura.as_ref(),
-                    &context_store,
                     request.clone(),
                     &peer(&fixture.requester),
                     &fixture.rotated_responder,
@@ -1897,7 +1858,6 @@ pub(super) mod tests {
         assert!(matches!(
             server.serve_historical_body(
                 kura.as_ref(),
-                &context_store,
                 forged,
                 &peer(&fixture.requester),
                 &fixture.old_validators[0],

@@ -21,7 +21,6 @@ use crate::{
 /// Canonical namespace for Musubi packages and Kotodama dapp links.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct MusubiNamespace(String);
 
 impl MusubiNamespace {
@@ -116,7 +115,6 @@ impl FromStr for MusubiNamespace {
 /// Canonical Musubi package name segment.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct MusubiPackageName(String);
 
 impl MusubiPackageName {
@@ -237,7 +235,6 @@ impl FromStr for MusubiPackageId {
 /// Exact semantic version for a Musubi release.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct MusubiVersion(String);
 
 impl MusubiVersion {
@@ -293,7 +290,6 @@ impl FromStr for MusubiVersion {
 /// Version requirement accepted by Musubi manifests and resolved into exact releases.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct MusubiVersionReq(String);
 
 impl MusubiVersionReq {

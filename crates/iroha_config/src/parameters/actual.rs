@@ -1613,7 +1613,7 @@ impl SoranetPow {
     pub const fn default_const() -> Self {
         Self {
             required: true,
-            difficulty: 0,
+            difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
             max_future_skew: Duration::from_secs(300),
             min_ticket_ttl: Duration::from_secs(30),
             ticket_ttl: Duration::from_secs(60),
@@ -2006,12 +2006,15 @@ pub struct Network {
     pub p2p_post_queue_cap: NonZeroUsize,
     /// Maximum high-priority stream wire bytes (prefix plus AEAD body) retained by each
     /// connected sender queue and by the process-wide connected-post owner, and the
-    /// ordinary-high actor byte subcap. The actor adds disjoint maximum safety and route-qualified
-    /// semantic-progress frame charges; each authenticated peer separately gets one such progress
-    /// charge, bounded by `max_total_connections` and shared by replacement sessions.
+    /// ordinary-high actor byte subcap. Inbound readers mirror the value as separate
+    /// process-wide source and alignment-scratch pools and decrypt inside the source allocation.
+    /// The actor adds disjoint maximum safety and route-qualified semantic-progress frame
+    /// charges; each authenticated peer separately gets one such progress charge, bounded by
+    /// `max_total_connections` and shared by replacement sessions.
     pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
     /// Maximum low-priority stream wire bytes retained by each connected sender queue and by
-    /// the process-wide connected-post owner, including frame prefixes.
+    /// the process-wide connected-post owner, including frame prefixes. Inbound readers mirror
+    /// the value as separate process-wide source and alignment-scratch pools.
     pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
     /// Maximum encrypted high-priority outbound frames retained per peer.
     pub p2p_outbound_frame_queue_max_high_frames: NonZeroUsize,
@@ -2853,7 +2856,7 @@ pub struct NexusRelayWorker {
     pub enabled: bool,
     /// Optional account id that must match the node signing key's account id.
     pub authority_account_id: Option<String>,
-    /// Maximum relay envelopes retained for retry.
+    /// Hard per-kind cap for durable relay/allocation work and verified-relay announcement history.
     pub max_pending_relays: NonZeroUsize,
     /// Delay between proof/submission retry passes.
     pub retry_backoff: Duration,
@@ -3848,6 +3851,762 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
     Ok(Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into())
 }
 
+#[derive(Encode)]
+struct ExecutionPolicyFieldV1 {
+    name: String,
+    value: Vec<u8>,
+}
+
+#[derive(Encode)]
+struct ExecutionPolicyPreimageV1 {
+    version: u16,
+    fields: Vec<ExecutionPolicyFieldV1>,
+}
+
+#[derive(Default)]
+struct ExecutionPolicyFieldsV1 {
+    fields: Vec<ExecutionPolicyFieldV1>,
+}
+
+impl ExecutionPolicyFieldsV1 {
+    fn push<T: Encode>(&mut self, name: &'static str, value: &T) {
+        self.fields.push(ExecutionPolicyFieldV1 {
+            name: name.to_owned(),
+            value: value.encode(),
+        });
+    }
+}
+
+fn execution_policy_usize(value: usize) -> u64 {
+    u64::try_from(value)
+        .expect("Iroha execution policy requires a pointer width of at most 64 bits")
+}
+
+fn execution_policy_optional_usize(value: Option<usize>) -> Option<u64> {
+    value.map(execution_policy_usize)
+}
+
+fn execution_policy_duration(value: Duration) -> (u64, u32) {
+    (value.as_secs(), value.subsec_nanos())
+}
+
+fn execution_policy_canonical_set<'a, T: Encode + 'a>(
+    values: impl IntoIterator<Item = &'a T>,
+) -> Vec<Vec<u8>> {
+    let mut encoded = values
+        .into_iter()
+        .map(|value| value.encode())
+        .collect::<Vec<_>>();
+    encoded.sort_unstable();
+    encoded.dedup();
+    encoded
+}
+
+/// Compute the canonical first-release identity of process-local execution policy.
+///
+/// The digest covers every boot-snapshot value which can change transaction admission,
+/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles are
+/// supplied as authenticated digests so filesystem placement never becomes consensus state.
+///
+/// Deliberately excluded values are limited to operational implementations which must preserve
+/// identical results: worker and cache sizing, parallel/GPU selection, signature batch sizing,
+/// tracing and telemetry, service endpoints and request timeouts, gateway-only content limits,
+/// filesystem paths, and settlement artifact locations. Quarantine execution has no wall-clock
+/// validity setting because consensus execution is cycle-bounded and must never branch on elapsed
+/// host time.
+#[must_use]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn execution_policy_digest_v1(
+    pipeline: &Pipeline,
+    oracle: &Oracle,
+    crypto: &Crypto,
+    fraud_monitoring: &FraudMonitoring,
+    governance: &Governance,
+    content: &Content,
+    settlement: &Settlement,
+    nexus_policy_digest: [u8; 32],
+    zk_policy_digest: [u8; 32],
+    kagemusha_release_policy_digest: Option<[u8; 32]>,
+) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
+    const VERSION: u16 = 1;
+
+    let mut policy = ExecutionPolicyFieldsV1::default();
+
+    // Pipeline validity and deterministic-effect boundaries. Parallelism, caches, tracing,
+    // acceleration selection, and exact signature batching are implementation details.
+    policy.push("pipeline.dynamic_prepass", &pipeline.dynamic_prepass);
+    policy.push(
+        "pipeline.overlay_max_instructions",
+        &execution_policy_usize(pipeline.overlay_max_instructions),
+    );
+    policy.push("pipeline.overlay_max_bytes", &pipeline.overlay_max_bytes);
+    policy.push(
+        "pipeline.overlay_chunk_instructions",
+        &execution_policy_usize(pipeline.overlay_chunk_instructions),
+    );
+    policy.push(
+        "pipeline.gas.tech_account_id",
+        &pipeline.gas.tech_account_id,
+    );
+    policy.push(
+        "pipeline.gas.accepted_assets",
+        &execution_policy_canonical_set(pipeline.gas.accepted_assets.iter()),
+    );
+    let gas_rates = pipeline
+        .gas
+        .units_per_gas
+        .iter()
+        .map(|rate| {
+            (
+                rate.asset.clone(),
+                rate.units_per_gas,
+                rate.twap_local_per_xor.clone(),
+                match rate.liquidity {
+                    GasLiquidity::Tier1 => 1_u8,
+                    GasLiquidity::Tier2 => 2,
+                    GasLiquidity::Tier3 => 3,
+                },
+                match rate.volatility {
+                    GasVolatility::Stable => 1_u8,
+                    GasVolatility::Elevated => 2,
+                    GasVolatility::Dislocated => 3,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    policy.push("pipeline.gas.units_per_gas", &gas_rates);
+    policy.push(
+        "pipeline.ivm_max_cycles_upper_bound",
+        &pipeline.ivm_max_cycles_upper_bound.get(),
+    );
+    policy.push(
+        "pipeline.ivm_max_decoded_instructions",
+        &pipeline.ivm_max_decoded_instructions,
+    );
+    policy.push(
+        "pipeline.ivm_max_decoded_bytes",
+        &pipeline.ivm_max_decoded_bytes,
+    );
+    policy.push(
+        "pipeline.quarantine_max_txs_per_block",
+        &execution_policy_usize(pipeline.quarantine_max_txs_per_block),
+    );
+    policy.push(
+        "pipeline.quarantine_tx_max_cycles",
+        &pipeline.quarantine_tx_max_cycles,
+    );
+    policy.push(
+        "pipeline.query_max_fetch_size",
+        &pipeline.query_max_fetch_size,
+    );
+    policy.push(
+        "pipeline.query_stored_min_gas_units",
+        &pipeline.query_stored_min_gas_units,
+    );
+    policy.push(
+        "pipeline.amx_per_dataspace_budget_ms",
+        &pipeline.amx_per_dataspace_budget_ms,
+    );
+    policy.push(
+        "pipeline.amx_group_budget_ms",
+        &pipeline.amx_group_budget_ms,
+    );
+    policy.push(
+        "pipeline.amx_per_instruction_ns",
+        &pipeline.amx_per_instruction_ns,
+    );
+    policy.push(
+        "pipeline.amx_per_memory_access_ns",
+        &pipeline.amx_per_memory_access_ns,
+    );
+    policy.push("pipeline.amx_per_syscall_ns", &pipeline.amx_per_syscall_ns);
+
+    // Cryptographic admission and host-surface policy. Backend selection is operational.
+    policy.push("crypto.default_hash", &crypto.default_hash);
+    policy.push(
+        "crypto.allowed_signing",
+        &execution_policy_canonical_set(crypto.allowed_signing.iter()),
+    );
+    policy.push("crypto.sm2_distid_default", &crypto.sm2_distid_default);
+    let mut allowed_curve_ids = crypto.allowed_curve_ids.clone();
+    allowed_curve_ids.sort_unstable();
+    allowed_curve_ids.dedup();
+    policy.push("crypto.allowed_curve_ids", &allowed_curve_ids);
+
+    // Oracle state transitions, economics, governance, and binding admission.
+    policy.push(
+        "oracle.history_depth",
+        &execution_policy_usize(oracle.history_depth.get()),
+    );
+    let economics = &oracle.economics;
+    policy.push("oracle.economics.reward_asset", &economics.reward_asset);
+    policy.push("oracle.economics.reward_pool", &economics.reward_pool);
+    policy.push("oracle.economics.reward_amount", &economics.reward_amount);
+    policy.push("oracle.economics.slash_asset", &economics.slash_asset);
+    policy.push("oracle.economics.slash_receiver", &economics.slash_receiver);
+    policy.push(
+        "oracle.economics.slash_outlier_amount",
+        &economics.slash_outlier_amount,
+    );
+    policy.push(
+        "oracle.economics.slash_error_amount",
+        &economics.slash_error_amount,
+    );
+    policy.push(
+        "oracle.economics.slash_no_show_amount",
+        &economics.slash_no_show_amount,
+    );
+    policy.push(
+        "oracle.economics.dispute_bond_asset",
+        &economics.dispute_bond_asset,
+    );
+    policy.push(
+        "oracle.economics.dispute_bond_amount",
+        &economics.dispute_bond_amount,
+    );
+    policy.push(
+        "oracle.economics.dispute_reward_amount",
+        &economics.dispute_reward_amount,
+    );
+    policy.push(
+        "oracle.economics.frivolous_slash_amount",
+        &economics.frivolous_slash_amount,
+    );
+    let oracle_governance = oracle.governance;
+    policy.push(
+        "oracle.governance.intake_sla_blocks",
+        &oracle_governance.intake_sla_blocks,
+    );
+    policy.push(
+        "oracle.governance.rules_sla_blocks",
+        &oracle_governance.rules_sla_blocks,
+    );
+    policy.push(
+        "oracle.governance.cop_sla_blocks",
+        &oracle_governance.cop_sla_blocks,
+    );
+    policy.push(
+        "oracle.governance.technical_sla_blocks",
+        &oracle_governance.technical_sla_blocks,
+    );
+    policy.push(
+        "oracle.governance.policy_jury_sla_blocks",
+        &oracle_governance.policy_jury_sla_blocks,
+    );
+    policy.push(
+        "oracle.governance.enact_sla_blocks",
+        &oracle_governance.enact_sla_blocks,
+    );
+    policy.push(
+        "oracle.governance.intake_min_votes",
+        &execution_policy_usize(oracle_governance.intake_min_votes.get()),
+    );
+    policy.push(
+        "oracle.governance.rules_min_votes",
+        &execution_policy_usize(oracle_governance.rules_min_votes.get()),
+    );
+    policy.push(
+        "oracle.governance.cop_min_votes",
+        &(
+            execution_policy_usize(oracle_governance.cop_min_votes.low.get()),
+            execution_policy_usize(oracle_governance.cop_min_votes.medium.get()),
+            execution_policy_usize(oracle_governance.cop_min_votes.high.get()),
+        ),
+    );
+    policy.push(
+        "oracle.governance.technical_min_votes",
+        &execution_policy_usize(oracle_governance.technical_min_votes.get()),
+    );
+    policy.push(
+        "oracle.governance.policy_jury_min_votes",
+        &(
+            execution_policy_usize(oracle_governance.policy_jury_min_votes.low.get()),
+            execution_policy_usize(oracle_governance.policy_jury_min_votes.medium.get()),
+            execution_policy_usize(oracle_governance.policy_jury_min_votes.high.get()),
+        ),
+    );
+    let twitter = &oracle.twitter_binding;
+    policy.push("oracle.twitter_binding.feed_id", &twitter.feed_id);
+    policy.push("oracle.twitter_binding.pepper_id", &twitter.pepper_id);
+    policy.push("oracle.twitter_binding.max_ttl_ms", &twitter.max_ttl_ms);
+    policy.push("oracle.twitter_binding.min_ttl_ms", &twitter.min_ttl_ms);
+    policy.push(
+        "oracle.twitter_binding.min_update_spacing_ms",
+        &twitter.min_update_spacing_ms,
+    );
+
+    // Fraud transport and timeout settings only obtain assessments. Consensus binds the
+    // deterministic metadata gate, its grace semantics, and the attester trust set.
+    policy.push("fraud.enabled", &fraud_monitoring.enabled);
+    policy.push(
+        "fraud.required_minimum_band",
+        &fraud_monitoring
+            .required_minimum_band
+            .map(|band| match band {
+                FraudRiskBand::Low => 1_u8,
+                FraudRiskBand::Medium => 2,
+                FraudRiskBand::High => 3,
+                FraudRiskBand::Critical => 4,
+            }),
+    );
+    policy.push(
+        "fraud.missing_assessment_permitted",
+        &(!fraud_monitoring.missing_assessment_grace.is_zero()),
+    );
+    let fraud_attesters = fraud_monitoring
+        .attesters
+        .iter()
+        .map(|attester| (attester.engine_id.clone(), attester.public_key.clone()))
+        .collect::<Vec<_>>();
+    policy.push(
+        "fraud.attesters",
+        &execution_policy_canonical_set(fraud_attesters.iter()),
+    );
+
+    // Governance fields that drive admission, tallying, slashing, on-chain policy and triggers.
+    policy.push(
+        "governance.vk_ballot",
+        &governance
+            .vk_ballot
+            .as_ref()
+            .map(|vk| (vk.backend.clone(), vk.name.clone())),
+    );
+    policy.push(
+        "governance.vk_tally",
+        &governance
+            .vk_tally
+            .as_ref()
+            .map(|vk| (vk.backend.clone(), vk.name.clone())),
+    );
+    policy.push("governance.voting_asset_id", &governance.voting_asset_id);
+    policy.push(
+        "governance.citizenship_asset_id",
+        &governance.citizenship_asset_id,
+    );
+    policy.push(
+        "governance.citizenship_bond_amount",
+        &governance.citizenship_bond_amount,
+    );
+    policy.push(
+        "governance.citizenship_escrow_account",
+        &governance.citizenship_escrow_account,
+    );
+    policy.push("governance.min_bond_amount", &governance.min_bond_amount);
+    policy.push(
+        "governance.bond_escrow_account",
+        &governance.bond_escrow_account,
+    );
+    policy.push(
+        "governance.slash_receiver_account",
+        &governance.slash_receiver_account,
+    );
+    policy.push(
+        "governance.slash_double_vote_bps",
+        &governance.slash_double_vote_bps,
+    );
+    policy.push(
+        "governance.slash_invalid_proof_bps",
+        &governance.slash_invalid_proof_bps,
+    );
+    policy.push(
+        "governance.slash_ineligible_proof_bps",
+        &governance.slash_ineligible_proof_bps,
+    );
+    policy.push(
+        "governance.alias_teu_minimum",
+        &governance.alias_teu_minimum,
+    );
+    policy.push(
+        "governance.jdg_signature_schemes",
+        &governance
+            .jdg_signature_schemes
+            .iter()
+            .map(|scheme| scheme.scheme_id())
+            .collect::<Vec<_>>(),
+    );
+    let provenance = &governance.runtime_upgrade_provenance;
+    policy.push(
+        "governance.runtime_upgrade_provenance.mode",
+        &match provenance.mode {
+            RuntimeUpgradeProvenanceMode::Optional => 1_u8,
+            RuntimeUpgradeProvenanceMode::Required => 2,
+        },
+    );
+    policy.push(
+        "governance.runtime_upgrade_provenance.require_sbom",
+        &provenance.require_sbom,
+    );
+    policy.push(
+        "governance.runtime_upgrade_provenance.require_slsa",
+        &provenance.require_slsa,
+    );
+    policy.push(
+        "governance.runtime_upgrade_provenance.trusted_signers",
+        &execution_policy_canonical_set(provenance.trusted_signers.iter()),
+    );
+    policy.push(
+        "governance.runtime_upgrade_provenance.signature_threshold",
+        &execution_policy_usize(provenance.signature_threshold),
+    );
+    let citizen = &governance.citizen_service;
+    policy.push(
+        "governance.citizen_service.seat_cooldown_blocks",
+        &citizen.seat_cooldown_blocks,
+    );
+    policy.push(
+        "governance.citizen_service.max_seats_per_epoch",
+        &citizen.max_seats_per_epoch,
+    );
+    policy.push(
+        "governance.citizen_service.free_declines_per_epoch",
+        &citizen.free_declines_per_epoch,
+    );
+    policy.push(
+        "governance.citizen_service.decline_slash_bps",
+        &citizen.decline_slash_bps,
+    );
+    policy.push(
+        "governance.citizen_service.no_show_slash_bps",
+        &citizen.no_show_slash_bps,
+    );
+    policy.push(
+        "governance.citizen_service.misconduct_slash_bps",
+        &citizen.misconduct_slash_bps,
+    );
+    policy.push(
+        "governance.citizen_service.role_bond_multipliers",
+        &citizen.role_bond_multipliers,
+    );
+    let viral = &governance.viral_incentives;
+    policy.push(
+        "governance.viral.incentive_pool_account",
+        &viral.incentive_pool_account,
+    );
+    policy.push("governance.viral.escrow_account", &viral.escrow_account);
+    policy.push(
+        "governance.viral.reward_asset_definition_id",
+        &viral.reward_asset_definition_id,
+    );
+    policy.push(
+        "governance.viral.follow_reward_amount",
+        &viral.follow_reward_amount,
+    );
+    policy.push(
+        "governance.viral.sender_bonus_amount",
+        &viral.sender_bonus_amount,
+    );
+    policy.push(
+        "governance.viral.max_daily_claims_per_uaid",
+        &viral.max_daily_claims_per_uaid,
+    );
+    policy.push(
+        "governance.viral.max_claims_per_binding",
+        &viral.max_claims_per_binding,
+    );
+    policy.push("governance.viral.daily_budget", &viral.daily_budget);
+    policy.push("governance.viral.halt", &viral.halt);
+    policy.push(
+        "governance.viral.deny_uaids",
+        &execution_policy_canonical_set(viral.deny_uaids.iter()),
+    );
+    policy.push(
+        "governance.viral.deny_binding_digests",
+        &execution_policy_canonical_set(viral.deny_binding_digests.iter()),
+    );
+    policy.push(
+        "governance.viral.promo_starts_at_ms",
+        &viral.promo_starts_at_ms,
+    );
+    policy.push("governance.viral.promo_ends_at_ms", &viral.promo_ends_at_ms);
+    policy.push("governance.viral.campaign_cap", &viral.campaign_cap);
+    let pin = &governance.sorafs_pin_policy;
+    policy.push(
+        "governance.sorafs_pin.min_replicas_floor",
+        &pin.min_replicas_floor,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_replicas_ceiling",
+        &pin.max_replicas_ceiling,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_retention_epoch",
+        &pin.max_retention_epoch,
+    );
+    policy.push(
+        "governance.sorafs_pin.allowed_storage_classes",
+        &pin.allowed_storage_classes,
+    );
+    policy.push(
+        "governance.sorafs_pin.require_council_signatures",
+        &pin.require_council_signatures,
+    );
+    policy.push(
+        "governance.sorafs_pin.approval_quorum",
+        &pin.approval_quorum,
+    );
+    let pin_signers = pin
+        .approval_signers
+        .iter()
+        .map(|signer| {
+            (
+                signer.signer_id.clone(),
+                signer.public_key.clone(),
+                signer.valid_from_block_height,
+                signer.revoked_at_block_height,
+            )
+        })
+        .collect::<Vec<_>>();
+    policy.push("governance.sorafs_pin.approval_signers", &pin_signers);
+    policy.push(
+        "governance.sorafs_pin_fee_asset_id",
+        &governance.sorafs_pin_fee_asset_id,
+    );
+    policy.push(
+        "governance.sorafs_pin_fee_treasury_account",
+        &governance.sorafs_pin_fee_treasury_account,
+    );
+    policy.push("governance.sorafs_pricing", &governance.sorafs_pricing);
+    let penalty = governance.sorafs_penalty;
+    policy.push(
+        "governance.sorafs_penalty",
+        &(
+            penalty.utilisation_floor_bps,
+            penalty.uptime_floor_bps,
+            penalty.por_success_floor_bps,
+            penalty.strike_threshold,
+            penalty.penalty_bond_bps,
+            penalty.cooldown_windows,
+            penalty.max_pdp_failures,
+            penalty.max_potr_breaches,
+        ),
+    );
+    let sorafs_telemetry = &governance.sorafs_telemetry;
+    policy.push(
+        "governance.sorafs_telemetry.require_submitter",
+        &sorafs_telemetry.require_submitter,
+    );
+    policy.push(
+        "governance.sorafs_telemetry.require_nonce",
+        &sorafs_telemetry.require_nonce,
+    );
+    policy.push(
+        "governance.sorafs_telemetry.max_window_gap",
+        &execution_policy_duration(sorafs_telemetry.max_window_gap),
+    );
+    policy.push(
+        "governance.sorafs_telemetry.reject_zero_capacity",
+        &sorafs_telemetry.reject_zero_capacity,
+    );
+    policy.push(
+        "governance.sorafs_telemetry.submitters",
+        &execution_policy_canonical_set(sorafs_telemetry.submitters.iter()),
+    );
+    let per_provider_submitters = sorafs_telemetry
+        .per_provider_submitters
+        .iter()
+        .map(|(provider, accounts)| {
+            (
+                provider.clone(),
+                execution_policy_canonical_set(accounts.iter()),
+            )
+        })
+        .collect::<Vec<_>>();
+    policy.push(
+        "governance.sorafs_telemetry.per_provider_submitters",
+        &per_provider_submitters,
+    );
+    policy.push(
+        "governance.sorafs_provider_owners",
+        &governance.sorafs_provider_owners,
+    );
+    policy.push(
+        "governance.conviction_step_blocks",
+        &governance.conviction_step_blocks,
+    );
+    policy.push("governance.max_conviction", &governance.max_conviction);
+    policy.push(
+        "governance.min_enactment_delay",
+        &governance.min_enactment_delay,
+    );
+    policy.push("governance.window_span", &governance.window_span);
+    policy.push(
+        "governance.plain_voting_enabled",
+        &governance.plain_voting_enabled,
+    );
+    policy.push(
+        "governance.approval_threshold_q_num",
+        &governance.approval_threshold_q_num,
+    );
+    policy.push(
+        "governance.approval_threshold_q_den",
+        &governance.approval_threshold_q_den,
+    );
+    policy.push("governance.min_turnout", &governance.min_turnout);
+    policy.push(
+        "governance.parliament_committee_size",
+        &execution_policy_usize(governance.parliament_committee_size),
+    );
+    policy.push(
+        "governance.parliament_term_blocks",
+        &governance.parliament_term_blocks,
+    );
+    policy.push(
+        "governance.parliament_min_stake",
+        &governance.parliament_min_stake,
+    );
+    policy.push(
+        "governance.parliament_eligibility_asset_id",
+        &governance.parliament_eligibility_asset_id,
+    );
+    policy.push(
+        "governance.parliament_alternate_size",
+        &execution_policy_optional_usize(governance.parliament_alternate_size),
+    );
+    policy.push(
+        "governance.parliament_quorum_bps",
+        &governance.parliament_quorum_bps,
+    );
+    for (name, size) in [
+        (
+            "governance.rules_committee_size",
+            governance.rules_committee_size,
+        ),
+        (
+            "governance.agenda_council_size",
+            governance.agenda_council_size,
+        ),
+        (
+            "governance.interest_panel_size",
+            governance.interest_panel_size,
+        ),
+        ("governance.review_panel_size", governance.review_panel_size),
+        ("governance.policy_jury_size", governance.policy_jury_size),
+        (
+            "governance.oversight_committee_size",
+            governance.oversight_committee_size,
+        ),
+        (
+            "governance.fma_committee_size",
+            governance.fma_committee_size,
+        ),
+    ] {
+        policy.push(name, &execution_policy_usize(size));
+    }
+    for (name, blocks) in [
+        (
+            "governance.pipeline_study_sla_blocks",
+            governance.pipeline_study_sla_blocks,
+        ),
+        (
+            "governance.pipeline_review_sla_blocks",
+            governance.pipeline_review_sla_blocks,
+        ),
+        (
+            "governance.pipeline_decision_sla_blocks",
+            governance.pipeline_decision_sla_blocks,
+        ),
+        (
+            "governance.pipeline_enactment_sla_blocks",
+            governance.pipeline_enactment_sla_blocks,
+        ),
+        (
+            "governance.pipeline_rules_sla_blocks",
+            governance.pipeline_rules_sla_blocks,
+        ),
+        (
+            "governance.pipeline_agenda_sla_blocks",
+            governance.pipeline_agenda_sla_blocks,
+        ),
+    ] {
+        policy.push(name, &blocks);
+    }
+
+    // Content execution policy. Gateway quotas/SLOs/PoW are deliberately not ledger policy.
+    policy.push("content.max_bundle_bytes", &content.max_bundle_bytes);
+    policy.push("content.max_files", &content.max_files);
+    policy.push("content.max_path_len", &content.max_path_len);
+    policy.push(
+        "content.max_retention_blocks",
+        &content.max_retention_blocks,
+    );
+    policy.push("content.chunk_size_bytes", &content.chunk_size_bytes);
+    policy.push(
+        "content.publish_allow_accounts",
+        &execution_policy_canonical_set(content.publish_allow_accounts.iter()),
+    );
+    policy.push(
+        "content.default_cache_max_age_secs",
+        &content.default_cache_max_age_secs,
+    );
+    policy.push(
+        "content.max_cache_max_age_secs",
+        &content.max_cache_max_age_secs,
+    );
+    policy.push("content.immutable_bundles", &content.immutable_bundles);
+    policy.push("content.default_auth_mode", &content.default_auth_mode);
+    policy.push("content.stripe_layout", &content.stripe_layout);
+
+    // Offline-cash and deterministic settlement routing. Artifact paths are authenticated by the
+    // promoted release policy digest instead of their local filesystem names.
+    policy.push("settlement.offline.enabled", &settlement.offline.enabled);
+    policy.push(
+        "settlement.offline.escrow_required",
+        &settlement.offline.escrow_required,
+    );
+    policy.push(
+        "settlement.offline.escrow_accounts",
+        &settlement.offline.escrow_accounts,
+    );
+    policy.push(
+        "settlement.offline.kagemusha_max_decoded_bytes",
+        &settlement.offline.kagemusha_max_decoded_bytes,
+    );
+    policy.push(
+        "settlement.router.twap_window",
+        &execution_policy_duration(settlement.router.twap_window),
+    );
+    policy.push(
+        "settlement.router.epsilon_bps",
+        &settlement.router.epsilon_bps,
+    );
+    policy.push(
+        "settlement.router.buffer_alert_pct",
+        &settlement.router.buffer_alert_pct,
+    );
+    policy.push(
+        "settlement.router.buffer_throttle_pct",
+        &settlement.router.buffer_throttle_pct,
+    );
+    policy.push(
+        "settlement.router.buffer_xor_only_pct",
+        &settlement.router.buffer_xor_only_pct,
+    );
+    policy.push(
+        "settlement.router.buffer_halt_pct",
+        &settlement.router.buffer_halt_pct,
+    );
+    policy.push(
+        "settlement.router.buffer_horizon_hours",
+        &settlement.router.buffer_horizon_hours,
+    );
+
+    // These sections already have independently audited canonical digests.
+    policy.push("nexus.policy_digest", &nexus_policy_digest);
+    policy.push("zk.policy_digest", &zk_policy_digest);
+    policy.push(
+        "kagemusha.release_policy_digest",
+        &kagemusha_release_policy_digest,
+    );
+
+    let encoded = ExecutionPolicyPreimageV1 {
+        version: VERSION,
+        fields: policy.fields,
+    }
+    .encode();
+    Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into()
+}
+
 /// Lane manifest registry configuration.
 #[derive(Debug, Clone)]
 pub struct LaneRegistry {
@@ -4649,8 +5408,6 @@ pub struct Pipeline {
     pub quarantine_max_txs_per_block: usize,
     /// Per-transaction cycle cap for quarantine lane (0 = unlimited).
     pub quarantine_tx_max_cycles: u64,
-    /// Per-transaction wall-clock budget for quarantine lane in milliseconds (0 = unlimited).
-    pub quarantine_tx_max_millis: u64,
     /// Default cursor mode for server-facing query endpoints.
     pub query_default_cursor_mode: QueryCursorMode,
     /// Maximum fetch size for iterable queries executed inside the IVM.
@@ -4704,7 +5461,6 @@ impl Default for Pipeline {
             ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
             quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
             quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-            quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: QueryCursorMode::Ephemeral,
             query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
@@ -7083,7 +7839,8 @@ pub struct AppApi {
     pub rate_limit_cost_per_row: NonZeroU32,
     /// Maximum allowed clock skew for signed app requests.
     pub request_signature_max_clock_skew: Duration,
-    /// TTL for app-request nonces retained for replay detection.
+    /// TTL for app-request nonces retained for replay detection. Configuration
+    /// parsing requires it to exceed twice the maximum clock skew.
     pub request_signature_nonce_ttl: Duration,
     /// Maximum number of nonce entries held in memory for replay detection.
     pub request_signature_replay_cache_capacity: NonZeroUsize,
@@ -7287,7 +8044,7 @@ pub struct Torii {
     pub preauth_burst_per_ip: Option<NonZeroU32>,
     /// Optional temporary ban duration applied on repeated violations.
     pub preauth_temp_ban: Option<Duration>,
-    /// CIDR allowlist for bypassing pre-auth limits.
+    /// Explicit source hosts allowed to bypass pre-auth limits.
     pub preauth_allow_cidrs: Vec<String>,
     /// Optional per-scheme pre-auth concurrency caps.
     pub preauth_scheme_limits: Vec<PreauthSchemeLimit>,
@@ -7517,7 +8274,8 @@ pub struct ToriiOperatorSignatures {
     pub allowed_public_keys: Vec<PublicKey>,
     /// Maximum allowed clock skew for signed requests.
     pub max_clock_skew: Duration,
-    /// TTL for nonces retained for replay detection.
+    /// TTL for nonces retained for replay detection. Configuration parsing
+    /// requires it to exceed twice the maximum clock skew.
     pub nonce_ttl: Duration,
     /// Maximum number of nonce entries held for replay detection.
     pub replay_cache_capacity: NonZeroUsize,
@@ -7534,7 +8292,7 @@ impl Default for ToriiOperatorSignatures {
             ),
             nonce_ttl: Duration::from_secs(defaults::torii::operator_signatures::NONCE_TTL_SECS),
             replay_cache_capacity: NonZeroUsize::new(
-                defaults::torii::operator_signatures::REPLAY_CACHE_CAPACITY.max(1),
+                defaults::torii::operator_signatures::REPLAY_CACHE_CAPACITY,
             )
             .expect("default operator signature replay cache capacity must be non-zero"),
         }
@@ -7548,7 +8306,7 @@ pub struct ToriiOperatorAuth {
     pub enabled: bool,
     /// Require mTLS at ingress before allowing operator endpoints.
     pub require_mtls: bool,
-    /// Trusted proxy CIDRs allowed to assert forwarded client certificates.
+    /// Explicit trusted proxy hosts allowed to assert forwarded client certificates.
     pub mtls_trusted_proxy_cidrs: Vec<String>,
     /// Token fallback mode for operator auth.
     pub token_fallback: OperatorTokenFallback,
@@ -7767,7 +8525,8 @@ impl Default for SoranetPrivacyIngest {
 /// Transport-specific configuration exposed by Torii.
 #[derive(Debug, Clone, Default)]
 pub struct ToriiTransport {
-    /// Trusted proxy CIDRs allowed to assert the canonical remote IP header.
+    /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain is
+    /// used to derive the canonical remote IP.
     pub trusted_proxy_cidrs: Vec<String>,
     /// Norito-RPC rollout settings.
     pub norito_rpc: NoritoRpcTransport,
@@ -7884,7 +8643,7 @@ pub struct NoritoRpcTransport {
     pub enabled: bool,
     /// Require mTLS at the ingress tier before allowing Norito-RPC (surfaced via `/rpc/capabilities`).
     pub require_mtls: bool,
-    /// Trusted proxy CIDRs allowed to assert forwarded client certificates.
+    /// Explicit trusted proxy hosts allowed to assert forwarded client certificates.
     pub mtls_trusted_proxy_cidrs: Vec<String>,
     /// Explicit list of client tokens permitted during the `canary` stage.
     pub allowed_clients: Vec<String>,
@@ -10888,6 +11647,8 @@ pub struct Connect {
 pub struct IsoBridge {
     /// Enable ISO 20022 ingestion endpoints.
     pub enabled: bool,
+    /// Maximum request body accepted by an ISO 20022 submission endpoint.
+    pub max_body_bytes: Bytes<u64>,
     /// TTL for deduplication records (seconds).
     pub dedupe_ttl_secs: u64,
     /// Default rail/profile identifier used when requests do not select one.
@@ -11004,6 +11765,8 @@ pub struct IsoCurrencyAsset {
     pub currency: String,
     /// Asset definition selector (canonical Base58 or leased alias).
     pub asset_definition: String,
+    /// Maximum settlement quantity accepted for one bridge message.
+    pub max_amount: Quantity,
 }
 
 /// Reference data inputs (ISIN/CUSIP, BIC↔LEI, MIC, securities ledger maps).
@@ -12275,6 +13038,12 @@ mod tests_npos_timeouts {
         const CONST_PUZZLE: SoranetPuzzle = SoranetPuzzle::default_const();
 
         let runtime = SoranetPow::default();
+        assert!(runtime.required, "first-release PoW must be mandatory");
+        assert_eq!(
+            runtime.difficulty,
+            iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY
+        );
+        assert_ne!(runtime.difficulty, 0);
         assert_eq!(CONST_POW.required, runtime.required);
         assert_eq!(CONST_POW.difficulty, runtime.difficulty);
         assert_eq!(CONST_POW.max_future_skew, runtime.max_future_skew);
@@ -13010,6 +13779,150 @@ mod tests {
             nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x22; 32]))
                 .expect("bound lane manifest policy set");
         assert_ne!(left, right);
+    }
+
+    fn execution_policy_hash(config: &Root) -> [u8; 32] {
+        execution_policy_digest_v1(
+            &config.pipeline,
+            &config.oracle,
+            &config.crypto,
+            &config.fraud_monitoring,
+            &config.gov,
+            &config.content,
+            &config.settlement,
+            [0x11; 32],
+            [0x22; 32],
+            Some([0x44; 32]),
+        )
+    }
+
+    #[test]
+    fn execution_policy_digest_binds_every_process_local_decision_family() {
+        let baseline = super::sora_profile_tests::minimal_root();
+        let expected = execution_policy_hash(&baseline);
+        let assert_changed = |label: &str, changed: Root| {
+            assert_ne!(
+                execution_policy_hash(&changed),
+                expected,
+                "{label} must change the execution-policy identity"
+            );
+        };
+
+        let mut changed = baseline.clone();
+        changed.pipeline.overlay_max_bytes = changed.pipeline.overlay_max_bytes.saturating_add(1);
+        assert_changed("pipeline validity policy", changed);
+
+        let mut changed = baseline.clone();
+        changed.crypto.default_hash.push_str("-different");
+        assert_changed("cryptographic admission policy", changed);
+
+        let mut changed = baseline.clone();
+        changed.oracle.history_depth =
+            NonZeroUsize::new(changed.oracle.history_depth.get().saturating_add(1))
+                .expect("nonzero history depth");
+        assert_changed("oracle execution policy", changed);
+
+        let mut changed = baseline.clone();
+        changed.fraud_monitoring.enabled = !changed.fraud_monitoring.enabled;
+        assert_changed("fraud admission policy", changed);
+
+        let mut changed = baseline.clone();
+        changed.gov.plain_voting_enabled = !changed.gov.plain_voting_enabled;
+        assert_changed("governance execution policy", changed);
+
+        let mut changed = baseline.clone();
+        changed.content.max_files = changed.content.max_files.saturating_add(1);
+        assert_changed("content admission policy", changed);
+
+        let mut changed = baseline;
+        changed.settlement.router.epsilon_bps =
+            changed.settlement.router.epsilon_bps.saturating_add(1);
+        assert_changed("settlement execution policy", changed);
+
+        let fixed = super::sora_profile_tests::minimal_root();
+        for (label, nexus, zk, kagemusha) in [
+            (
+                "Nexus runtime policy",
+                [0x12; 32],
+                [0x22; 32],
+                Some([0x44; 32]),
+            ),
+            (
+                "ZK runtime policy",
+                [0x11; 32],
+                [0x23; 32],
+                Some([0x44; 32]),
+            ),
+            (
+                "Kagemusha release policy",
+                [0x11; 32],
+                [0x22; 32],
+                Some([0x45; 32]),
+            ),
+        ] {
+            assert_ne!(
+                execution_policy_digest_v1(
+                    &fixed.pipeline,
+                    &fixed.oracle,
+                    &fixed.crypto,
+                    &fixed.fraud_monitoring,
+                    &fixed.gov,
+                    &fixed.content,
+                    &fixed.settlement,
+                    nexus,
+                    zk,
+                    kagemusha,
+                ),
+                execution_policy_hash(&fixed),
+                "{label} must change the execution-policy identity"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_policy_digest_excludes_only_result_preserving_operational_drift() {
+        let mut baseline = super::sora_profile_tests::minimal_root();
+        baseline.fraud_monitoring.missing_assessment_grace = Duration::from_secs(1);
+        let expected = execution_policy_hash(&baseline);
+        let mut operational = baseline;
+
+        operational.pipeline.workers = operational.pipeline.workers.saturating_add(1);
+        operational.pipeline.parallel_overlay = !operational.pipeline.parallel_overlay;
+        operational.pipeline.parallel_apply = !operational.pipeline.parallel_apply;
+        operational.pipeline.gpu_key_bucket = !operational.pipeline.gpu_key_bucket;
+        operational.pipeline.cache_size = operational.pipeline.cache_size.saturating_add(1);
+        operational.pipeline.ivm_prover_threads =
+            operational.pipeline.ivm_prover_threads.saturating_add(1);
+        operational.pipeline.signature_batch_max =
+            operational.pipeline.signature_batch_max.saturating_add(1);
+        operational.pipeline.debug_trace_tx_eval = !operational.pipeline.debug_trace_tx_eval;
+        operational.crypto.enable_sm_openssl_preview =
+            !operational.crypto.enable_sm_openssl_preview;
+        operational.fraud_monitoring.request_timeout += Duration::from_millis(1);
+        operational.fraud_monitoring.missing_assessment_grace += Duration::from_secs(1);
+        operational.gov.alias_frontier_telemetry = !operational.gov.alias_frontier_telemetry;
+        operational.gov.debug_trace_pipeline = !operational.gov.debug_trace_pipeline;
+        operational.content.limits.max_requests_per_second = NonZeroU32::new(
+            operational
+                .content
+                .limits
+                .max_requests_per_second
+                .get()
+                .saturating_add(1),
+        )
+        .expect("nonzero gateway limit");
+        operational.content.pow.difficulty_bits =
+            operational.content.pow.difficulty_bits.saturating_add(1);
+        operational.settlement.offline.kagemusha_release_policy_path =
+            Some(PathBuf::from("/srv/iroha/policy.norito"));
+        operational.settlement.offline.kagemusha_artifact_dir =
+            Some(PathBuf::from("/srv/iroha/artifacts"));
+
+        assert_eq!(
+            execution_policy_hash(&operational),
+            expected,
+            "worker, cache, accelerator, tracing, transport, gateway, and path drift must not partition validators"
+        );
     }
 
     #[test]

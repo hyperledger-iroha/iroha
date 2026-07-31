@@ -5,6 +5,8 @@
 //! parameter that can affect consensus.  Changing any value creates a new
 //! protocol identifier; there is no legacy decoder or parameter negotiation.
 
+mod readiness_certificates;
+
 use thiserror::Error;
 
 use crate::privacy_engines::{
@@ -242,6 +244,12 @@ pub(crate) const ZK_X509_LDE_COLUMN_BATCH_V1: u16 = 8;
 /// release ceiling, not a claimed measurement; activation stays closed until
 /// the optimized prover is measured below it on the release benchmark.
 pub(crate) const ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1: u64 = 12 * 1024 * 1024 * 1024;
+/// Exact virtual-address-space containment ceiling for one release proof.
+///
+/// This is deliberately larger than the resident-set ceiling so the sealed
+/// process can accommodate non-resident mappings, thread stacks, and allocator
+/// reserves without weakening the exact first-release process profile.
+pub(crate) const ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1: u64 = 32 * 1024 * 1024 * 1024;
 /// Hard wall-clock target for one proof on the release benchmark machine.
 pub(crate) const ZK_X509_PROVER_TARGET_SECONDS_V1: u64 = 300;
 /// Maximum algebraic constraint degree before quotienting.
@@ -328,21 +336,159 @@ pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
 pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_212_538;
-/// Provisional first-release transparent-proof envelope descriptor.
+/// Exact encoded byte length of the deterministic first-release X5S1 KAT.
 ///
-/// Its algebraic and wire bounds are fixed for implementation, but it is not
-/// activatable until the full credential constructor/verifier, combined CA
-/// envelope, KATs, and measured resource run exist.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max116|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8212538|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|resource-measurement=pending|full-credential-verifier=pending|activation=false";
-/// Whether the implementation-derived full credential soundness analysis is fixed.
-pub(crate) const ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1: bool = false;
-/// Whether release-machine row, time, and peak-memory measurements are fixed.
-pub(crate) const ZK_X509_RESOURCE_PROFILE_FINALIZED_V1: bool = false;
+/// This stays zero only while the one-time capture corridor is open. The
+/// production activation gate rejects a zero length or a length above the
+/// canonical X5S1 ceiling.
+pub(crate) const ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1: u32 = 0;
+/// SHA-256 of the deterministic first-release X5S1 KAT proof.
+pub(crate) const ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1: [u8; 32] = [0; 32];
+/// SHA-256 of the authoritative native-release expectations Norito fixture.
+pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1: [u8; 32] = [0; 32];
+/// SHA-256 of the typed-equal native-release expectations JSON projection.
+pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1: [u8; 32] = [0; 32];
+/// Frozen first-release transparent-proof envelope descriptor.
+///
+/// Consensus activation remains governance-gated until the deterministic KAT
+/// and maximum-shape process measurements are pinned below.
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max116|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8212538|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|full-credential-verifier=complete|activation=governance-gated";
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) use readiness_certificates::{
+    ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1, ZkX509ResourceCertificateV1,
+    ZkX509ResourceEnvironmentV1, ZkX509ResourceObservationV1, ZkX509ResourceProcessLimitsV1,
+    canonical_resource_environment_v1, canonical_resource_process_limits_v1,
+    resource_certificate_matches_source_v1, validate_resource_certificate_payload_v1,
+};
+use readiness_certificates::{
+    ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
+    ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
+    ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1, ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1,
+    ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
+    ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
+    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
+};
 
-/// Whether consensus may expose a compiled profile for this engine.
-///
-/// This remains false until the canonical full credential proof is executable.
-pub(crate) const ZK_X509_ENGINE_ACTIVATION_READY_V1: bool = false;
+const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
+    let mut index = 0;
+    while index < digest.len() {
+        if digest[index] != 0 {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+const fn digests_differ_v1(left: [u8; 32], right: [u8; 32]) -> bool {
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+const fn release_evidence_pins_are_complete_v1(
+    kat_proof_bytes: u32,
+    kat_proof_sha256: [u8; 32],
+    expectations_norito_sha256: [u8; 32],
+    expectations_json_sha256: [u8; 32],
+) -> bool {
+    kat_proof_bytes > 0
+        && kat_proof_bytes <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1
+        && digest_is_nonzero_v1(kat_proof_sha256)
+        && digest_is_nonzero_v1(expectations_norito_sha256)
+        && digest_is_nonzero_v1(expectations_json_sha256)
+        && digests_differ_v1(expectations_norito_sha256, expectations_json_sha256)
+}
+
+#[derive(Clone, Copy)]
+struct ZkX509ReleaseCapturePinsV1 {
+    kat_proof_bytes: u32,
+    kat_proof_sha256: [u8; 32],
+    expectations_norito_sha256: [u8; 32],
+    expectations_json_sha256: [u8; 32],
+    resource_certificate_sha256: [u8; 32],
+    positive_elapsed_millis: u64,
+    positive_peak_rss_bytes: u64,
+    positive_peak_address_space_bytes: u64,
+    maximum_elapsed_millis: u64,
+    maximum_peak_rss_bytes: u64,
+    maximum_peak_address_space_bytes: u64,
+}
+
+const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
+    ZkX509ReleaseCapturePinsV1 {
+        kat_proof_bytes: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
+        kat_proof_sha256: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1,
+        expectations_norito_sha256: ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1,
+        expectations_json_sha256: ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1,
+        resource_certificate_sha256: ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1,
+        positive_elapsed_millis: ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1,
+        positive_peak_rss_bytes: ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1,
+        positive_peak_address_space_bytes: ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
+        maximum_elapsed_millis: ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
+        maximum_peak_rss_bytes: ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1,
+        maximum_peak_address_space_bytes: ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
+    }
+}
+
+const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
+    pins.kat_proof_bytes == 0
+        && !digest_is_nonzero_v1(pins.kat_proof_sha256)
+        && !digest_is_nonzero_v1(pins.expectations_norito_sha256)
+        && !digest_is_nonzero_v1(pins.expectations_json_sha256)
+        && !digest_is_nonzero_v1(pins.resource_certificate_sha256)
+        && pins.positive_elapsed_millis == 0
+        && pins.positive_peak_rss_bytes == 0
+        && pins.positive_peak_address_space_bytes == 0
+        && pins.maximum_elapsed_millis == 0
+        && pins.maximum_peak_rss_bytes == 0
+        && pins.maximum_peak_address_space_bytes == 0
+}
+
+const fn native_release_expectation_digests_match_with_pins_v1(
+    expected_norito_sha256: [u8; 32],
+    expected_json_sha256: [u8; 32],
+    actual_norito_sha256: [u8; 32],
+    actual_json_sha256: [u8; 32],
+) -> bool {
+    digest_is_nonzero_v1(expected_norito_sha256)
+        && digest_is_nonzero_v1(expected_json_sha256)
+        && !digests_differ_v1(actual_norito_sha256, expected_norito_sha256)
+        && !digests_differ_v1(actual_json_sha256, expected_json_sha256)
+}
+
+/// Whether every deterministic proof and native fixture pin is populated.
+pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
+    release_evidence_pins_are_complete_v1(
+        ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
+        ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1,
+        ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1,
+        ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1,
+    )
+}
+
+/// Whether the one-time native expectation capture corridor remains open.
+pub(crate) const fn zk_x509_native_release_expectation_capture_open_v1() -> bool {
+    native_release_capture_open_with_pins_v1(source_release_capture_pins_v1())
+}
+
+/// Whether an expectation pair matches both compiled release pins exactly.
+pub(crate) const fn zk_x509_native_release_expectation_digests_match_v1(
+    norito_sha256: [u8; 32],
+    json_sha256: [u8; 32],
+) -> bool {
+    native_release_expectation_digests_match_with_pins_v1(
+        ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1,
+        ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1,
+        norito_sha256,
+        json_sha256,
+    )
+}
 
 /// Closed checklist that must be true before activation can be compiled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -388,6 +534,38 @@ impl ZkX509ReadinessV1 {
             && self.differential_tests
             && self.soundness_analysis
             && self.resource_benchmarks
+    }
+}
+
+/// Canonical production checklist derived from concrete release pins and
+/// independently validated certificate payloads.
+pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
+    let deterministic_release_corpus = ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1 > 0
+        && ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1 <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1
+        && digest_is_nonzero_v1(ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1);
+    let soundness_pin_populated = digest_is_nonzero_v1(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1);
+    let resource_pin_populated = digest_is_nonzero_v1(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1);
+    let compiled_profile_digest = (soundness_pin_populated || resource_pin_populated)
+        .then(|| super::engine::construct_zk_x509_compiled_profile_v1().ok())
+        .flatten()
+        .map(super::engine::ZkX509CompiledProfileV1::digest);
+    let soundness_analysis = soundness_pin_populated
+        && compiled_profile_digest.is_some_and(soundness_certificate_is_pinned_v1);
+    let resource_benchmarks = resource_pin_populated
+        && compiled_profile_digest.is_some_and(resource_certificate_is_pinned_v1);
+    ZkX509ReadinessV1 {
+        der_and_rfc5280_air: true,
+        sha256_air: true,
+        p256_air: true,
+        accumulator_air: true,
+        output_projection_air: true,
+        prover: true,
+        verifier: true,
+        known_answer_tests: deterministic_release_corpus,
+        adversarial_tests: deterministic_release_corpus,
+        differential_tests: true,
+        soundness_analysis,
+        resource_benchmarks,
     }
 }
 
@@ -577,9 +755,12 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         || ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1 < ZK_X509_LOGICAL_REGISTRATIONS_V1
         || ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 != 64
         || ZK_X509_LDE_COLUMN_BATCH_V1 == 0
+        || usize::from(ZK_X509_LDE_COLUMN_BATCH_V1)
+            != super::super::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
         || ZK_X509_LDE_COLUMN_BATCH_V1 > ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1
         || ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 % ZK_X509_LDE_COLUMN_BATCH_V1 != 0
         || streaming_lde_batch_bytes > ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
+        || ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1 < ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
         || ZK_X509_PROVER_TARGET_SECONDS_V1 == 0
     {
         return Err(ZkX509ProfileErrorV1::InvalidTraceEnvelope);
@@ -651,11 +832,8 @@ pub(crate) fn require_activation_readiness_v1(
     readiness: ZkX509ReadinessV1,
 ) -> Result<(), ZkX509ProfileErrorV1> {
     validate_profile_v1()?;
-    if !ZK_X509_ENGINE_ACTIVATION_READY_V1
-        || !ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1
-        || !ZK_X509_RESOURCE_PROFILE_FINALIZED_V1
-        || !readiness.is_complete()
-    {
+    let canonical = zk_x509_activation_readiness_v1();
+    if readiness != canonical || !canonical.is_complete() {
         return Err(ZkX509ProfileErrorV1::EngineIncomplete);
     }
     Ok(())
@@ -665,8 +843,42 @@ pub(crate) fn require_activation_readiness_v1(
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SourceReleasePinStateV1 {
+        BootstrapOpen,
+        FullyPinned,
+        Mixed,
+    }
+
+    const fn release_capture_pins_are_fully_populated_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
+        release_evidence_pins_are_complete_v1(
+            pins.kat_proof_bytes,
+            pins.kat_proof_sha256,
+            pins.expectations_norito_sha256,
+            pins.expectations_json_sha256,
+        ) && digest_is_nonzero_v1(pins.resource_certificate_sha256)
+            && pins.positive_elapsed_millis > 0
+            && pins.positive_peak_rss_bytes > 0
+            && pins.positive_peak_address_space_bytes > 0
+            && pins.maximum_elapsed_millis > 0
+            && pins.maximum_peak_rss_bytes > 0
+            && pins.maximum_peak_address_space_bytes > 0
+    }
+
+    const fn source_release_pin_state_v1(
+        pins: ZkX509ReleaseCapturePinsV1,
+    ) -> SourceReleasePinStateV1 {
+        if native_release_capture_open_with_pins_v1(pins) {
+            SourceReleasePinStateV1::BootstrapOpen
+        } else if release_capture_pins_are_fully_populated_v1(pins) {
+            SourceReleasePinStateV1::FullyPinned
+        } else {
+            SourceReleasePinStateV1::Mixed
+        }
+    }
+
     #[test]
-    fn fixed_algebraic_profile_is_consistent_but_activation_stays_closed() {
+    fn fixed_algebraic_profile_and_activation_match_the_source_pin_state() {
         validate_profile_v1().expect("fixed zk-X509 profile");
         assert_eq!(ZK_X509_LOGICAL_REGISTRATIONS_V1, 49);
         assert_eq!(ZK_X509_TRACE_GROUPS_V1, 6);
@@ -687,13 +899,205 @@ mod tests {
         assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 305);
         assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1);
         assert_eq!(ZK_X509_TARGET_SOUNDNESS_BITS_V1, 128);
-        assert!(!ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1);
-        assert!(!ZK_X509_RESOURCE_PROFILE_FINALIZED_V1);
-        assert!(!ZK_X509_ENGINE_ACTIVATION_READY_V1);
+        assert_eq!(ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1, 12 * 1024 * 1024 * 1024);
         assert_eq!(
-            require_activation_readiness_v1(complete_readiness()),
-            Err(ZkX509ProfileErrorV1::EngineIncomplete)
+            ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1,
+            32 * 1024 * 1024 * 1024
         );
+        assert!(
+            String::from_utf8_lossy(ZK_X509_STARK_PROFILE_DESCRIPTOR_V1)
+                .contains("address-space-ceiling-bytes=34359738368")
+        );
+        assert_ne!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
+        let readiness = zk_x509_activation_readiness_v1();
+        assert!(readiness.soundness_analysis);
+        match source_release_pin_state_v1(source_release_capture_pins_v1()) {
+            SourceReleasePinStateV1::BootstrapOpen => {
+                assert_eq!(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, [0; 32]);
+                assert!(!readiness.resource_benchmarks);
+                assert!(!readiness.is_complete());
+                assert_eq!(
+                    require_activation_readiness_v1(complete_readiness()),
+                    Err(ZkX509ProfileErrorV1::EngineIncomplete)
+                );
+            }
+            SourceReleasePinStateV1::FullyPinned => {
+                assert_ne!(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, [0; 32]);
+                assert!(readiness.resource_benchmarks);
+                assert!(readiness.is_complete());
+                assert_eq!(require_activation_readiness_v1(readiness), Ok(()));
+                assert_eq!(
+                    require_activation_readiness_v1(complete_readiness()),
+                    Ok(())
+                );
+            }
+            SourceReleasePinStateV1::Mixed => {
+                panic!("source release pins must be wholly open or wholly installed")
+            }
+        }
+    }
+
+    #[test]
+    fn release_evidence_pin_state_machine_is_fail_closed() {
+        let kat = [0x11; 32];
+        let norito = [0x22; 32];
+        let json = [0x33; 32];
+        let source_pins = source_release_capture_pins_v1();
+        let readiness = zk_x509_activation_readiness_v1();
+        assert!(readiness.soundness_analysis);
+        match source_release_pin_state_v1(source_pins) {
+            SourceReleasePinStateV1::BootstrapOpen => {
+                assert!(!zk_x509_release_evidence_pins_complete_v1());
+                assert!(zk_x509_native_release_expectation_capture_open_v1());
+                assert!(!zk_x509_native_release_expectation_digests_match_v1(
+                    norito, json
+                ));
+                assert!(!readiness.known_answer_tests);
+                assert!(!readiness.adversarial_tests);
+                assert!(!readiness.resource_benchmarks);
+                assert!(!readiness.is_complete());
+            }
+            SourceReleasePinStateV1::FullyPinned => {
+                assert!(zk_x509_release_evidence_pins_complete_v1());
+                assert!(!zk_x509_native_release_expectation_capture_open_v1());
+                assert!(zk_x509_native_release_expectation_digests_match_v1(
+                    source_pins.expectations_norito_sha256,
+                    source_pins.expectations_json_sha256,
+                ));
+                assert!(readiness.known_answer_tests);
+                assert!(readiness.adversarial_tests);
+                assert!(readiness.resource_benchmarks);
+                assert!(readiness.is_complete());
+            }
+            SourceReleasePinStateV1::Mixed => {
+                panic!("source release pins must be wholly open or wholly installed")
+            }
+        }
+
+        assert!(release_evidence_pins_are_complete_v1(1, kat, norito, json));
+        for (proof_bytes, proof_digest, norito_digest, json_digest) in [
+            (0, kat, norito, json),
+            (ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 + 1, kat, norito, json),
+            (1, [0; 32], norito, json),
+            (1, kat, [0; 32], json),
+            (1, kat, norito, [0; 32]),
+            (1, kat, norito, norito),
+        ] {
+            assert!(!release_evidence_pins_are_complete_v1(
+                proof_bytes,
+                proof_digest,
+                norito_digest,
+                json_digest,
+            ));
+        }
+
+        let empty_capture_pins = ZkX509ReleaseCapturePinsV1 {
+            kat_proof_bytes: 0,
+            kat_proof_sha256: [0; 32],
+            expectations_norito_sha256: [0; 32],
+            expectations_json_sha256: [0; 32],
+            resource_certificate_sha256: [0; 32],
+            positive_elapsed_millis: 0,
+            positive_peak_rss_bytes: 0,
+            positive_peak_address_space_bytes: 0,
+            maximum_elapsed_millis: 0,
+            maximum_peak_rss_bytes: 0,
+            maximum_peak_address_space_bytes: 0,
+        };
+        assert!(native_release_capture_open_with_pins_v1(empty_capture_pins));
+        assert_eq!(
+            source_release_pin_state_v1(empty_capture_pins),
+            SourceReleasePinStateV1::BootstrapOpen
+        );
+        for partial in [
+            ZkX509ReleaseCapturePinsV1 {
+                kat_proof_bytes: 1,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                kat_proof_sha256: kat,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                expectations_norito_sha256: norito,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                expectations_json_sha256: json,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                resource_certificate_sha256: kat,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                positive_elapsed_millis: 1,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                positive_peak_rss_bytes: 1,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                positive_peak_address_space_bytes: 1,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                maximum_elapsed_millis: 1,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                maximum_peak_rss_bytes: 1,
+                ..empty_capture_pins
+            },
+            ZkX509ReleaseCapturePinsV1 {
+                maximum_peak_address_space_bytes: 1,
+                ..empty_capture_pins
+            },
+        ] {
+            assert!(!native_release_capture_open_with_pins_v1(partial));
+            assert_eq!(
+                source_release_pin_state_v1(partial),
+                SourceReleasePinStateV1::Mixed,
+                "every one-pin partial source state must be rejected as mixed"
+            );
+        }
+
+        let populated_capture_pins = ZkX509ReleaseCapturePinsV1 {
+            kat_proof_bytes: 1,
+            kat_proof_sha256: kat,
+            expectations_norito_sha256: norito,
+            expectations_json_sha256: json,
+            resource_certificate_sha256: [0x44; 32],
+            positive_elapsed_millis: 1,
+            positive_peak_rss_bytes: 1,
+            positive_peak_address_space_bytes: 1,
+            maximum_elapsed_millis: 1,
+            maximum_peak_rss_bytes: 1,
+            maximum_peak_address_space_bytes: 1,
+        };
+        assert_eq!(
+            source_release_pin_state_v1(populated_capture_pins),
+            SourceReleasePinStateV1::FullyPinned
+        );
+
+        assert!(native_release_expectation_digests_match_with_pins_v1(
+            norito, json, norito, json
+        ));
+        for (expected_norito, expected_json, actual_norito, actual_json) in [
+            ([0; 32], json, norito, json),
+            (norito, [0; 32], norito, json),
+            (norito, json, json, norito),
+            (norito, json, kat, json),
+            (norito, json, norito, kat),
+        ] {
+            assert!(!native_release_expectation_digests_match_with_pins_v1(
+                expected_norito,
+                expected_json,
+                actual_norito,
+                actual_json,
+            ));
+        }
     }
 
     #[test]
@@ -790,6 +1194,18 @@ mod tests {
 
     #[test]
     fn independent_readiness_requirements_fail_closed() {
+        let canonical = zk_x509_activation_readiness_v1();
+        assert!(!canonical.is_complete());
+        assert_eq!(
+            require_activation_readiness_v1(canonical),
+            Err(ZkX509ProfileErrorV1::EngineIncomplete)
+        );
+        assert_eq!(
+            require_activation_readiness_v1(complete_readiness()),
+            Err(ZkX509ProfileErrorV1::EngineIncomplete),
+            "a caller-supplied all-true checklist cannot bypass derived readiness"
+        );
+
         let gates = [
             ZkX509ReadinessV1 {
                 der_and_rfc5280_air: false,

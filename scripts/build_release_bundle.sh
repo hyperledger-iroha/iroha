@@ -237,10 +237,12 @@ if [[ "$profile" == "iroha2" ]]; then
   cli_bin="iroha2"
 fi
 utility_bin="kagami"
+sanitizer_bin="attachment_sanitizer"
 if [[ "$os_tag" == "win" ]]; then
   daemon_bin="${daemon_bin}.exe"
   cli_bin="${cli_bin}.exe"
   utility_bin="${utility_bin}.exe"
+  sanitizer_bin="${sanitizer_bin}.exe"
 fi
 
 artifacts_dir="$(
@@ -313,11 +315,13 @@ fixed_files=(
   "bin/$daemon_bin"
   "bin/$cli_bin"
   "bin/$utility_bin"
+  "bin/$sanitizer_bin"
 )
 executables=(
   "bin/$daemon_bin"
   "bin/$cli_bin"
   "bin/$utility_bin"
+  "bin/$sanitizer_bin"
 )
 python3 "$repo_root/scripts/copy_release_file.py" \
   --source "$binary_root/$daemon_bin" \
@@ -332,6 +336,11 @@ python3 "$repo_root/scripts/copy_release_file.py" \
 python3 "$repo_root/scripts/copy_release_file.py" \
   --source "$binary_root/$utility_bin" \
   --output "$stage_root/bin/$utility_bin" \
+  --mode 0755 \
+  --require-executable
+python3 "$repo_root/scripts/copy_release_file.py" \
+  --source "$binary_root/$sanitizer_bin" \
+  --output "$stage_root/bin/$sanitizer_bin" \
   --mode 0755 \
   --require-executable
 python3 "$repo_root/scripts/copy_release_file.py" \

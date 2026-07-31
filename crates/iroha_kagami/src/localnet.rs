@@ -69,7 +69,9 @@ use iroha_genesis::{
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, Quantity};
-use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
+use iroha_test_samples::ALICE_ID;
+#[cfg(test)]
+use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 use iroha_version::BuildLine;
 use rand::{TryRngCore as _, rngs::OsRng};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -1438,12 +1440,15 @@ fn generate_localnet_with_line<T: Write>(
     let genesis = genesis
         .with_consensus_mode(opts.consensus_mode)
         .with_consensus_meta();
-    if redact_seed_metadata {
-        write_fresh_genesis_private_key(
-            &out_dir.join(FRESH_GENESIS_PRIVATE_KEY_FILE),
-            &genesis_private,
-        )?;
-    }
+    let genesis_public_key_path = out_dir.join(GENESIS_PUBLIC_KEY_FILE);
+    let genesis_private_key_path = out_dir.join(GENESIS_PRIVATE_KEY_FILE);
+    write_genesis_key_files(
+        &genesis_public_key_path,
+        &genesis_private_key_path,
+        &genesis_public_key,
+        &genesis_private,
+        redact_seed_metadata,
+    )?;
     write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public_key,
@@ -1570,6 +1575,8 @@ fn generate_localnet_with_line<T: Write>(
         &primary_torii_url,
         &genesis_json_path,
         &genesis_signed_path,
+        &genesis_public_key_path,
+        &genesis_private_key_path,
         &client_config_path,
         &start_path,
         &stop_path,
@@ -1599,6 +1606,16 @@ fn generate_localnet_with_line<T: Write>(
     writeln!(writer, "torii_url: {}", primary_torii_url)?;
     writeln!(writer, "genesis_json: {}", genesis_json_path.display())?;
     writeln!(writer, "genesis_signed: {}", genesis_signed_path.display())?;
+    writeln!(
+        writer,
+        "genesis_public_key: {}",
+        genesis_public_key_path.display()
+    )?;
+    writeln!(
+        writer,
+        "genesis_private_key: {}",
+        genesis_private_key_path.display()
+    )?;
     writeln!(writer, "client_config: {}", client_config_path.display())?;
     writeln!(
         writer,
@@ -4147,16 +4164,38 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<()> {
     Ok(())
 }
 
-fn write_fresh_genesis_private_key(path: &Path, key: &ExposedPrivateKey) -> Result<()> {
+fn write_genesis_key_files(
+    public_path: &Path,
+    private_path: &Path,
+    public_key: &iroha_crypto::PublicKey,
+    private_key: &ExposedPrivateKey,
+    private_tree: bool,
+) -> Result<()> {
     let canonical = Zeroizing::new(
-        key.try_to_multihash_string()
-            .wrap_err("encode fresh genesis private key")?,
+        private_key
+            .try_to_multihash_string()
+            .wrap_err("encode genesis private key")?,
     );
     let mut raw = Zeroizing::new(Vec::with_capacity(canonical.len() + 1));
     raw.extend_from_slice(canonical.as_bytes());
     raw.push(b'\n');
-    crate::secure_fs::write_private_file_atomic(path, raw.as_slice())
-        .wrap_err("write fresh genesis private key")
+    if private_tree {
+        crate::secure_fs::write_private_file_atomic(private_path, raw.as_slice())
+            .wrap_err("write genesis private key")?;
+    } else {
+        write_owner_only_localnet_file(private_path, raw.as_slice())
+            .wrap_err("write genesis private key")?;
+    }
+
+    let mut public = public_key.to_string();
+    public.push('\n');
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    let mut file = options
+        .open(public_path)
+        .wrap_err_with(|| format!("create genesis public-key file {}", public_path.display()))?;
+    file.write_all(public.as_bytes())
+        .wrap_err_with(|| format!("write genesis public-key file {}", public_path.display()))
 }
 
 fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
@@ -4184,23 +4223,23 @@ pub(crate) fn generate_genesis_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
 ) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey)> {
-    if base_seed.is_none() {
-        return Ok((
-            REAL_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-            ExposedPrivateKey(REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone()),
-        ));
-    }
-
-    let (public_key, private_key) = iroha_crypto::KeyPair::try_from_seed(
-        base_seed
-            .expect("covered by early return for None seeds")
-            .iter()
-            .chain(extra_seed)
-            .copied()
-            .collect::<Vec<_>>(),
-        iroha_crypto::Algorithm::default(),
-    )?
-    .into_parts();
+    let key_pair = match base_seed {
+        Some(base_seed) => iroha_crypto::KeyPair::try_from_seed(
+            base_seed
+                .iter()
+                .chain(extra_seed)
+                .copied()
+                .collect::<Vec<_>>(),
+            iroha_crypto::Algorithm::default(),
+        )?,
+        #[cfg(test)]
+        None => KeyPair::from(REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone()),
+        #[cfg(not(test))]
+        None => {
+            iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::default())?
+        }
+    };
+    let (public_key, private_key) = key_pair.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key)))
 }
 
@@ -4680,8 +4719,10 @@ const CLIENT_ACCOUNT_PUBLIC: &str =
 #[cfg(test)]
 const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
-/// Owner-only genesis signing key emitted by `--fresh-random-keys`.
-pub const FRESH_GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
+/// Public genesis verifier key emitted for runtime configuration.
+pub const GENESIS_PUBLIC_KEY_FILE: &str = "genesis.public_key";
+/// Owner-only genesis signing key emitted for runtime custody.
+pub const GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
 
 struct LocalnetClientIdentity {
     account_id: AccountId,
@@ -4892,6 +4933,8 @@ fn write_localnet_readme(
     torii_url: &str,
     genesis_json_path: &Path,
     genesis_signed_path: &Path,
+    genesis_public_key_path: &Path,
+    genesis_private_key_path: &Path,
     client_config_path: &Path,
     start_path: &Path,
     stop_path: &Path,
@@ -4922,6 +4965,8 @@ fn write_localnet_readme(
             "- Primary Torii URL: `{torii_url}`\n",
             "- Genesis JSON: `{genesis_json}`\n",
             "- Signed genesis: `{genesis_signed}`\n",
+            "- Genesis verifier key: `{genesis_public_key}`\n",
+            "- Owner-held genesis signing key: `{genesis_private_key}`\n",
             "- Client config: `{client_config}`\n\n",
             "## Built-in App API bootstrap\n\n",
             "- Kagemusha asset definition: `{kagemusha_asset}`\n",
@@ -4935,6 +4980,8 @@ fn write_localnet_readme(
             "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
             "- Generated peer configs enable structural `torii.account_onboarding` and Kagemusha escrow routing\n",
             "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
+            "The genesis key files can be supplied directly to `kagami docker` output through ",
+            "`IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE`. Never commit the private file.\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -4954,6 +5001,8 @@ fn write_localnet_readme(
         torii_url = torii_url,
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
+        genesis_public_key = genesis_public_key_path.display(),
+        genesis_private_key = genesis_private_key_path.display(),
         client_config = client_config_path.display(),
         kagemusha_asset = LOCALNET_KAGEMUSHA_ASSET_ID,
         kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS,
@@ -5044,6 +5093,65 @@ mod tests {
         assert_eq!(
             fs::read_to_string(path).expect("read preserved owner-only config"),
             "private_key = 'secret'\n"
+        );
+    }
+
+    #[test]
+    fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
+        let temp = tempfile::tempdir().expect("make genesis key temp dir");
+        let public_path = temp.path().join(GENESIS_PUBLIC_KEY_FILE);
+        let private_path = temp.path().join(GENESIS_PRIVATE_KEY_FILE);
+        let (public_key, private_key) =
+            KeyPair::try_from_seed([41_u8; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive fixture genesis key")
+                .into_parts();
+        let private_key = ExposedPrivateKey(private_key);
+
+        write_genesis_key_files(
+            &public_path,
+            &private_path,
+            &public_key,
+            &private_key,
+            false,
+        )
+        .expect("write genesis key files");
+
+        let public_record = fs::read_to_string(&public_path).expect("read public key file");
+        assert_eq!(public_record, format!("{public_key}\n"));
+        let private_record = fs::read_to_string(&private_path).expect("read private key file");
+        assert_eq!(
+            private_record,
+            format!(
+                "{}\n",
+                private_key
+                    .try_to_multihash_string()
+                    .expect("canonical private key")
+            )
+        );
+        let reconstructed = KeyPair::from_private_key(private_key.0.clone())
+            .expect("derive public key from private file");
+        assert_eq!(reconstructed.public_key(), &public_key);
+
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&private_path)
+                .expect("private key metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        assert!(
+            write_genesis_key_files(
+                &public_path,
+                &private_path,
+                &public_key,
+                &private_key,
+                false,
+            )
+            .is_err(),
+            "existing genesis key custody must never be overwritten"
         );
     }
 
@@ -7010,7 +7118,7 @@ mod tests {
     }
 
     #[test]
-    fn genesis_key_defaults_to_real_keypair_when_unseeded() {
+    fn test_build_uses_explicit_fixture_for_unseeded_genesis_helpers() {
         let (public_key, _) = generate_genesis_key_pair(None, GENESIS_SEED)
             .expect("unseeded genesis key fixture should succeed");
         assert_eq!(

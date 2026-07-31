@@ -17,6 +17,7 @@ use crate::{
     ChainId,
     account::AccountId,
     block::consensus::LaneBlockCommitment,
+    merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneId, PublicLaneValidatorRecord},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
@@ -28,7 +29,7 @@ pub mod finality;
 pub mod fingerprint;
 
 /// Sumeragi v2 wire protocol version.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 /// Consensus-wide upper bound for one voting roster.
 ///
 /// This is a protocol admission limit, not a local resource-tuning knob.  It
@@ -43,7 +44,7 @@ pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT
 const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 4;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 5;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// `NPoS` Sumeragi v2 handshake and domain-separation tag.
@@ -68,6 +69,8 @@ pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 =
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS: usize = 4_096;
 const NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:native-amx-application-manifest:v1:empty";
+/// Current merge-carrier commitment layout authenticated by global finality.
+pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Canonical Nexus/AMX context commitment for the repository's recommended
 /// single-lane defaults and no staged public-lane validators.
 ///
@@ -77,6 +80,14 @@ const NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN: &[u8] =
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
     234, 106, 76, 240, 125, 39, 95, 30, 253, 3, 79, 200, 36, 73, 150, 119, 19, 65, 12, 108, 19,
     223, 247, 205, 27, 171, 181, 31, 56, 200, 112, 91,
+];
+/// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
+///
+/// Genesis materialization replaces this template value with the identity derived from the
+/// complete staged runtime policy before signing. Startup never treats it as a fallback.
+pub const RECOMMENDED_EXECUTION_POLICY_HASH: [u8; 32] = [
+    63, 148, 116, 83, 117, 143, 142, 233, 11, 44, 102, 67, 122, 18, 143, 194, 45, 147, 196, 210,
+    224, 202, 96, 194, 97, 216, 40, 183, 224, 184, 151, 195,
 ];
 
 /// Block height in the v2 protocol.
@@ -271,6 +282,8 @@ pub struct SumeragiV2GenesisContextParameters {
     /// routing policy, deterministic AMX budgets, and active public-lane
     /// validator records after staged genesis execution.
     pub nexus_amx_context_hash: [u8; 32],
+    /// Canonical V1 identity of every process-local policy input which can affect execution.
+    pub execution_policy_hash: [u8; 32],
 }
 
 impl SumeragiV2GenesisContextParameters {
@@ -290,6 +303,7 @@ impl SumeragiV2GenesisContextParameters {
                 max_chunk_count: 1024,
             },
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
+            execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
         }
     }
 
@@ -299,8 +313,14 @@ impl SumeragiV2GenesisContextParameters {
     /// # Errors
     ///
     /// Returns [`ValidationError::InvalidDataAvailabilityLayout`] for a zero
-    /// limit or an encoding/shard mismatch.
+    /// limit or an encoding/shard mismatch, and rejects zero policy commitments.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.nexus_amx_context_hash == [0; 32] {
+            return Err(ValidationError::InvalidNexusAmxContextHash);
+        }
+        if self.execution_policy_hash == [0; 32] {
+            return Err(ValidationError::InvalidExecutionPolicyHash);
+        }
         let layout = self.da_layout;
         if layout.chunk_size_bytes == 0
             || layout.max_payload_size_bytes == 0
@@ -442,6 +462,8 @@ pub struct HeightContext {
     /// Hash of all frozen Nexus/AMX inputs that proposal assembly and
     /// deterministic validation must bind.
     pub nexus_amx_context_hash: Hash,
+    /// Canonical V1 identity of process-local execution policy.
+    pub execution_policy_hash: Hash,
     /// Data-availability layout used by proposals at this height.
     pub da_layout: DataAvailabilityLayout,
     /// Finalized seed used to choose the view-zero roster offset.
@@ -481,6 +503,7 @@ impl HeightContext {
             roster: self.roster.clone(),
             quorum: self.quorum,
             nexus_amx_context_hash: self.nexus_amx_context_hash,
+            execution_policy_hash: self.execution_policy_hash,
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
@@ -504,6 +527,12 @@ impl HeightContext {
         }
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
+        }
+        if self.nexus_amx_context_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(ValidationError::InvalidNexusAmxContextHash);
+        }
+        if self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(ValidationError::InvalidExecutionPolicyHash);
         }
         match (
             self.height == self.epoch_end_height,
@@ -627,6 +656,7 @@ struct HeightContextIdentity {
     roster: Vec<ValidatorPower>,
     quorum: DualQuorum,
     nexus_amx_context_hash: Hash,
+    execution_policy_hash: Hash,
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
 }
@@ -870,6 +900,47 @@ pub fn native_amx_application_manifest_empty_root() -> Hash {
     Hash::new(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN)
 }
 
+/// Exact merge-ledger identity authenticated by a global execution commitment.
+///
+/// The compact block reference remains the complete carrier proof while the
+/// block body is locally available. This small projection preserves the same
+/// association after body pruning through retained header/finality evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct MergeCarrierCommitmentV1 {
+    /// Exact first-release projection version.
+    pub version: u16,
+    /// Canonical hash of the complete merge-ledger entry carried by the block.
+    pub entry_hash: HashOf<MergeLedgerEntry>,
+}
+
+impl MergeCarrierCommitmentV1 {
+    /// Construct the current exact merge-carrier projection.
+    #[must_use]
+    pub const fn new(entry_hash: HashOf<MergeLedgerEntry>) -> Self {
+        Self {
+            version: MERGE_CARRIER_COMMITMENT_VERSION_V1,
+            entry_hash,
+        }
+    }
+
+    /// Validate the current-only projection layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a legacy or future projection version is used.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.version != MERGE_CARRIER_COMMITMENT_VERSION_V1 {
+            return Err(ValidationError::InvalidMergeCarrierCommitmentVersion);
+        }
+        Ok(())
+    }
+}
+
 /// Deterministic state-transition commitment authenticated by every Prepare and Commit vote.
 ///
 /// The commitment is derived from the exact state-block execution witness
@@ -900,6 +971,14 @@ pub struct ExecutionCommitment {
     pub native_amx_application_manifest_root: Hash,
     /// Number of leaves committed by `native_amx_application_manifest_root`.
     pub native_amx_application_manifest_count: u32,
+    /// Exact compact merge-carrier identity, explicitly absent for ordinary blocks.
+    ///
+    /// This option is mandatory on the current wire. It deliberately has no
+    /// default or omission annotation, so pre-v4 commitments cannot decode as
+    /// an implicitly carrier-free transition.
+    pub merge_carrier: Option<MergeCarrierCommitmentV1>,
+    /// Exact non-zero byte length of the canonical result-bearing block wire.
+    pub executed_block_wire_len: u64,
     /// Hash of the canonical result-bearing block wire produced by deterministic execution.
     pub executed_block_wire_hash: Hash,
 }
@@ -911,6 +990,7 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
+        executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Self {
         Self {
@@ -922,6 +1002,8 @@ impl ExecutionCommitment {
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
+            merge_carrier: None,
+            executed_block_wire_len,
             executed_block_wire_hash,
         }
     }
@@ -939,6 +1021,7 @@ impl ExecutionCommitment {
         ordinary_writes_root: Hash,
         topup_anchor_root: Option<Hash>,
         topup_anchor_count: u32,
+        executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
         Self::new_with_native_amx_application_manifest(
@@ -950,6 +1033,7 @@ impl ExecutionCommitment {
             NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_empty_root(),
             0,
+            executed_block_wire_len,
             executed_block_wire_hash,
         )
     }
@@ -962,7 +1046,7 @@ impl ExecutionCommitment {
     /// versioned Native AMX manifest commitment is non-canonical.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the constructor mirrors the nine canonical V1 execution-commitment fields without an alternate aggregate wire contract"
+        reason = "the constructor mirrors the current clean-break execution-commitment wire"
     )]
     pub fn new_with_native_amx_application_manifest(
         parent_state_root: Hash,
@@ -973,6 +1057,45 @@ impl ExecutionCommitment {
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
+        executed_block_wire_len: u64,
+        executed_block_wire_hash: Hash,
+    ) -> Result<Self, ValidationError> {
+        Self::new_with_native_amx_application_manifest_and_merge_carrier(
+            parent_state_root,
+            post_state_root,
+            ordinary_writes_root,
+            topup_anchor_root,
+            topup_anchor_count,
+            native_amx_application_manifest_version,
+            native_amx_application_manifest_root,
+            native_amx_application_manifest_count,
+            None,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+        )
+    }
+
+    /// Construct a commitment with explicit Native AMX and merge-carrier projections.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any state-transition, Native AMX, or merge-carrier
+    /// projection is non-canonical.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the current clean-break execution-commitment wire"
+    )]
+    pub fn new_with_native_amx_application_manifest_and_merge_carrier(
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+        topup_anchor_root: Option<Hash>,
+        topup_anchor_count: u32,
+        native_amx_application_manifest_version: u16,
+        native_amx_application_manifest_root: Hash,
+        native_amx_application_manifest_count: u32,
+        merge_carrier: Option<MergeCarrierCommitmentV1>,
+        executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
         let commitment = Self {
@@ -984,6 +1107,8 @@ impl ExecutionCommitment {
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
+            merge_carrier,
+            executed_block_wire_len,
             executed_block_wire_hash,
         };
         commitment.validate()?;
@@ -999,6 +1124,12 @@ impl ExecutionCommitment {
     /// incorrect, or the Native AMX manifest version or empty-root convention
     /// is non-canonical.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.executed_block_wire_len == 0 {
+            return Err(ValidationError::InvalidExecutedBlockWireLength);
+        }
+        if let Some(merge_carrier) = self.merge_carrier {
+            merge_carrier.validate()?;
+        }
         match (self.topup_anchor_count, self.topup_anchor_root) {
             (0, None) => {}
             (0, Some(_)) | (_, None) => {
@@ -3693,6 +3824,10 @@ pub enum ValidationError {
     InvalidSnapshotBootstrap,
     /// The mandatory data-availability layout is internally inconsistent.
     InvalidDataAvailabilityLayout,
+    /// The mandatory Nexus/AMX context commitment is all zero.
+    InvalidNexusAmxContextHash,
+    /// The mandatory process-local execution-policy commitment is all zero.
+    InvalidExecutionPolicyHash,
     /// A certificate or message is bound to another height context.
     WrongHeightContext,
     /// Signer count cannot be represented on the wire.
@@ -3707,6 +3842,8 @@ pub enum ValidationError {
     MissingSignature,
     /// Execution commitment count/root presence is not canonical.
     InvalidExecutionCommitment,
+    /// The result-bearing block wire commitment declares a zero byte length.
+    InvalidExecutedBlockWireLength,
     /// The advertised Kagemusha top-up count exceeds the consensus bound.
     TooManyKagemushaTopupAnchors,
     /// A top-up execution commitment's combined post root is not canonical.
@@ -3715,6 +3852,8 @@ pub enum ValidationError {
     InvalidNativeAmxApplicationManifestVersion,
     /// A Native AMX application manifest count/root pair is not canonical.
     InvalidNativeAmxApplicationManifestCommitment,
+    /// A merge-carrier commitment declared an unsupported projection version.
+    InvalidMergeCarrierCommitmentVersion,
     /// A Native AMX application manifest exceeds the route-leaf bound.
     TooManyNativeAmxApplicationManifestLeaves,
     /// A Native AMX application leaf carries an invalid route or block identity.
@@ -3854,6 +3993,12 @@ impl fmt::Display for ValidationError {
             Self::InvalidDataAvailabilityLayout => {
                 f.write_str("height context has an invalid data-availability layout")
             }
+            Self::InvalidNexusAmxContextHash => {
+                f.write_str("height context has an invalid Nexus/AMX context hash")
+            }
+            Self::InvalidExecutionPolicyHash => {
+                f.write_str("height context has an invalid execution-policy hash")
+            }
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
             Self::TooManySigners => f.write_str("signer count exceeds the wire range"),
             Self::SignersNotStrictlySorted => {
@@ -3864,6 +4009,9 @@ impl fmt::Display for ValidationError {
             Self::MissingSignature => f.write_str("signed message has an empty signature"),
             Self::InvalidExecutionCommitment => {
                 f.write_str("execution commitment top-up count/root presence is inconsistent")
+            }
+            Self::InvalidExecutedBlockWireLength => {
+                f.write_str("execution commitment block wire length must be non-zero")
             }
             Self::TooManyKagemushaTopupAnchors => {
                 f.write_str("execution commitment exceeds the Kagemusha top-up anchor limit")
@@ -3876,6 +4024,9 @@ impl fmt::Display for ValidationError {
             }
             Self::InvalidNativeAmxApplicationManifestCommitment => {
                 f.write_str("Native AMX application manifest count/root is not canonical")
+            }
+            Self::InvalidMergeCarrierCommitmentVersion => {
+                f.write_str("merge-carrier execution commitment version is unsupported")
             }
             Self::TooManyNativeAmxApplicationManifestLeaves => {
                 f.write_str("Native AMX application manifest exceeds the route-leaf limit")
@@ -4147,8 +4298,9 @@ mod tests {
         let topup = Hash::new(b"topup tree");
         let executed = Hash::new(b"executed block wire");
         let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
-        let canonical = ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2, executed)
-            .expect("canonical top-up commitment");
+        let canonical =
+            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2, 1, executed)
+                .expect("canonical top-up commitment");
         assert_eq!(canonical.validate(), Ok(()));
         assert_eq!(canonical.executed_block_wire_hash, executed);
 
@@ -4166,12 +4318,13 @@ mod tests {
                 ordinary,
                 Some(topup),
                 2,
+                1,
                 executed,
             ),
             Err(ValidationError::ExecutionCommitmentPostRootMismatch)
         );
         assert_eq!(
-            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0, executed),
+            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0, 1, executed),
             Err(ValidationError::InvalidExecutionCommitment)
         );
         assert_eq!(
@@ -4181,6 +4334,7 @@ mod tests {
                 ordinary,
                 Some(topup),
                 MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                1,
                 executed,
             ),
             Err(ValidationError::TooManyKagemushaTopupAnchors)
@@ -4199,18 +4353,51 @@ mod tests {
             executed_block_wire_hash: Hash,
         }
 
+        #[derive(Encode)]
+        struct PreMergeCarrierExecutionCommitment {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            topup_anchor_root: Option<Hash>,
+            topup_anchor_count: u32,
+            native_amx_application_manifest_version: u16,
+            native_amx_application_manifest_root: Hash,
+            native_amx_application_manifest_count: u32,
+            executed_block_wire_hash: Hash,
+        }
+
+        #[derive(Encode)]
+        struct PreWireLengthExecutionCommitment {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            topup_anchor_root: Option<Hash>,
+            topup_anchor_count: u32,
+            native_amx_application_manifest_version: u16,
+            native_amx_application_manifest_root: Hash,
+            native_amx_application_manifest_count: u32,
+            merge_carrier: Option<MergeCarrierCommitmentV1>,
+            executed_block_wire_hash: Hash,
+        }
+
         let parent = Hash::new(b"native manifest parent");
         let post = Hash::new(b"native manifest post");
         let ordinary = Hash::new(b"native manifest ordinary");
         let executed = Hash::new(b"native manifest executed wire");
         let root = Hash::new(b"native manifest non-empty root");
-        let empty = ExecutionCommitment::without_topups(parent, post, ordinary, executed);
+        let empty = ExecutionCommitment::without_topups(parent, post, ordinary, 1, executed);
         assert_eq!(
             empty.native_amx_application_manifest_root,
             native_amx_application_manifest_empty_root()
         );
         assert_eq!(empty.native_amx_application_manifest_count, 0);
         assert_eq!(empty.validate(), Ok(()));
+        let mut zero_wire_len = empty;
+        zero_wire_len.executed_block_wire_len = 0;
+        assert_eq!(
+            zero_wire_len.validate(),
+            Err(ValidationError::InvalidExecutedBlockWireLength)
+        );
         let legacy = LegacyExecutionCommitment {
             parent_state_root: parent,
             post_state_root: post,
@@ -4225,6 +4412,41 @@ mod tests {
             ExecutionCommitment::decode_all(&mut legacy_cursor).is_err(),
             "the pre-manifest execution commitment must not decode implicitly"
         );
+        let pre_merge = PreMergeCarrierExecutionCommitment {
+            parent_state_root: parent,
+            post_state_root: post,
+            ordinary_writes_root: ordinary,
+            topup_anchor_root: None,
+            topup_anchor_count: 0,
+            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
+            native_amx_application_manifest_count: 0,
+            executed_block_wire_hash: executed,
+        }
+        .encode();
+        let mut pre_merge_cursor = pre_merge.as_slice();
+        assert!(
+            ExecutionCommitment::decode_all(&mut pre_merge_cursor).is_err(),
+            "the pre-v4 execution commitment must not decode as implicitly carrier-free"
+        );
+        let pre_wire_length = PreWireLengthExecutionCommitment {
+            parent_state_root: parent,
+            post_state_root: post,
+            ordinary_writes_root: ordinary,
+            topup_anchor_root: None,
+            topup_anchor_count: 0,
+            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
+            native_amx_application_manifest_count: 0,
+            merge_carrier: None,
+            executed_block_wire_hash: executed,
+        }
+        .encode();
+        let mut pre_wire_length_cursor = pre_wire_length.as_slice();
+        assert!(
+            ExecutionCommitment::decode_all(&mut pre_wire_length_cursor).is_err(),
+            "the pre-wire-length execution commitment must not decode implicitly"
+        );
         let canonical = ExecutionCommitment::new_with_native_amx_application_manifest(
             parent,
             post,
@@ -4234,10 +4456,44 @@ mod tests {
             NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             root,
             1,
+            1,
             executed,
         )
         .expect("canonical Native AMX manifest commitment");
         assert_eq!(canonical.validate(), Ok(()));
+
+        let entry_hash = HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+            b"merge carrier commitment fixture",
+        ));
+        let with_merge =
+            ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
+                parent,
+                post,
+                ordinary,
+                None,
+                0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                native_amx_application_manifest_empty_root(),
+                0,
+                Some(MergeCarrierCommitmentV1::new(entry_hash)),
+                1,
+                executed,
+            )
+            .expect("canonical merge-carrier execution commitment");
+        assert_eq!(
+            with_merge.merge_carrier.map(|carrier| carrier.entry_hash),
+            Some(entry_hash)
+        );
+        let mut wrong_merge_version = with_merge;
+        wrong_merge_version
+            .merge_carrier
+            .as_mut()
+            .expect("fixture has a merge carrier")
+            .version = MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1);
+        assert_eq!(
+            wrong_merge_version.validate(),
+            Err(ValidationError::InvalidMergeCarrierCommitmentVersion)
+        );
 
         assert_eq!(
             ExecutionCommitment::new_with_native_amx_application_manifest(
@@ -4249,6 +4505,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 0,
+                1,
                 executed,
             ),
             Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
@@ -4263,6 +4520,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                1,
                 executed,
             ),
             Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
@@ -4276,6 +4534,7 @@ mod tests {
                 0,
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 root,
+                1,
                 1,
                 executed,
             ),
@@ -4347,16 +4606,26 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn genesis_context_json_uses_nexus_amx_context_name_only() {
+    fn genesis_context_json_uses_explicit_policy_hash_names_only() {
         let parameters = SumeragiV2GenesisContextParameters::recommended();
         let json = norito::json::to_json(&parameters).expect("serialize v2 genesis context");
         assert!(json.contains("\"nexus_amx_context_hash\""));
+        assert!(json.contains("\"execution_policy_hash\""));
         assert!(!json.contains("active_nexus_lane_hash"));
 
         let obsolete = json.replace("nexus_amx_context_hash", "active_nexus_lane_hash");
         assert!(
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&obsolete).is_err(),
             "the unreleased misleading field name must not remain an accepted live schema"
+        );
+        let missing_execution_policy = json.replace(
+            "\"execution_policy_hash\"",
+            "\"obsolete_execution_policy_hash\"",
+        );
+        assert!(
+            norito::json::from_str::<SumeragiV2GenesisContextParameters>(&missing_execution_policy)
+                .is_err(),
+            "signed v2 genesis context must require the execution-policy commitment"
         );
 
         let unknown = json.replacen('{', "{\"unknown\":1,", 1);
@@ -4399,6 +4668,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 4,
@@ -4434,6 +4704,7 @@ mod tests {
             Hash::new([seed, 5]),
             None,
             0,
+            1,
             Hash::new([seed, 6]),
         )
         .expect("canonical fixture execution commitment")
@@ -4613,6 +4884,17 @@ mod tests {
     }
 
     #[test]
+    fn height_context_rejects_zero_execution_policy_hash() {
+        let mut invalid = context(&[1, 1, 1, 1]);
+        invalid.execution_policy_hash = Hash::prehashed([0; Hash::LENGTH]);
+
+        assert_eq!(
+            invalid.validate(),
+            Err(ValidationError::InvalidExecutionPolicyHash)
+        );
+    }
+
+    #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
@@ -4660,6 +4942,8 @@ mod tests {
                 native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
                 native_amx_application_manifest_count: 0,
+                merge_carrier: None,
+                executed_block_wire_len: 1,
                 executed_block_wire_hash: Hash::new(b"executed block wire"),
             },
             signers: vec![0, 1, 2],
@@ -4725,9 +5009,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0xfd, 0x17, 0xf1, 0x0c, 0xb0, 0x48, 0x08, 0x31, 0x71, 0xfe, 0xd6, 0xf0, 0x7c, 0x41,
-                0x42, 0x7b, 0x32, 0xaf, 0x85, 0xac, 0xbb, 0xa6, 0x0a, 0x7a, 0x57, 0x25, 0x01, 0xa1,
-                0x58, 0xd0, 0xcb, 0x6b,
+                0x13, 0x00, 0xcf, 0x26, 0xd2, 0x40, 0x58, 0x12, 0x45, 0x68, 0xee, 0x55, 0xde, 0xa8,
+                0xee, 0xce, 0x18, 0xda, 0xf5, 0xed, 0x0d, 0xaf, 0x9b, 0xf0, 0x45, 0x63, 0x70, 0xac,
+                0x50, 0xfa, 0x41, 0x4d,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -4751,9 +5035,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x31, 0x7a, 0x74, 0xcd, 0x4a, 0x34, 0xdd, 0xb2, 0x2f, 0xe5, 0xcc, 0x7f, 0xc2, 0xf2,
-                0x0e, 0x2c, 0xbd, 0x11, 0x0b, 0xa7, 0x69, 0x79, 0x62, 0xc3, 0xde, 0xad, 0xbc, 0xd7,
-                0x87, 0x92, 0xc6, 0x93,
+                0x2d, 0xcb, 0xf6, 0x22, 0xa5, 0x46, 0x47, 0x3b, 0xf2, 0x5c, 0xf7, 0x88, 0x06, 0x22,
+                0xe2, 0x6e, 0x69, 0x28, 0xd5, 0x2b, 0x52, 0x1b, 0x6c, 0x3a, 0x47, 0xf4, 0xba, 0xe8,
+                0xf8, 0xb9, 0xb8, 0xa5,
             ],
             "intentional transition-identity changes require updating this golden"
         );

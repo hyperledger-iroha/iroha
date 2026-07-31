@@ -346,6 +346,11 @@
             .expect("store merge carrier parent");
         kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge_entry)
             .expect("store committed merge carrier");
+        let _ = persist_v2_finality_chain_through(
+            &kura,
+            NonZeroUsize::new(usize::try_from(carrier_height).expect("carrier height fits usize"))
+                .expect("carrier height is non-zero"),
+        );
         kura.persist_merge_lane_block_application_receipts(
             &merge_entry,
             carrier_height,
@@ -369,8 +374,10 @@
             .expect("merge receipt must publish its terminal frontier");
         assert_eq!(frontier.lane_block_height, descriptor.lane_block_height);
         assert!(
-            kura.lane_merge_application_frontier_expected_receipt(&frontier)
-                .is_some(),
+            kura.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                &frontier,
+            )
+            .is_some(),
             "the compact cursor must revalidate against the exact merge entry and carrier"
         );
         kura.first_release_lane_retirement_admissible_for_test(

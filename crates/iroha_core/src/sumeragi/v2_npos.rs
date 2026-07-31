@@ -1411,6 +1411,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"v2-npos-test-nexus"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -1453,6 +1454,7 @@ mod tests {
                 Hash::new(b"parent-state"),
                 Hash::new(b"parent-post-state"),
                 Hash::new(b"parent-ordinary-writes"),
+                1,
                 Hash::new(b"parent-executed-block-wire"),
             ),
             signers: vec![0, 1, 2],

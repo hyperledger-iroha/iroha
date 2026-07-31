@@ -992,12 +992,16 @@ pub mod network {
     /// Capacity for post-queue tasks (per topic).
     pub const P2P_POST_QUEUE_CAP: NonZeroUsize = nonzero!(2048_usize);
     /// Maximum high-priority stream wire bytes (prefix plus AEAD body) retained per peer and
-    /// ordinary-high actor subcap. The actor adds one maximum control-frame safety charge and one
-    /// maximum route-qualified semantic-progress frame charge as disjoint reserves; each
-    /// authenticated peer separately gets one such progress charge bounded by the connection cap.
+    /// ordinary-high actor subcap. The inbound transport mirrors this as both its process-wide
+    /// ordinary source-byte pool and its process-wide alignment-scratch pool; authenticated
+    /// decryption itself reuses the source allocation. The actor adds one maximum control-frame
+    /// safety charge and one maximum route-qualified semantic-progress frame charge as disjoint
+    /// reserves; each authenticated peer separately gets one such progress charge bounded by the
+    /// connection cap.
     pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES: NonZeroUsize =
         nonzero!(128 * 1024 * 1024_usize);
-    /// Maximum low-priority stream wire bytes retained per peer, including frame prefixes.
+    /// Maximum low-priority stream wire bytes retained per peer, including frame prefixes; the
+    /// inbound transport mirrors this as separate process-wide source and alignment-scratch pools.
     pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES: NonZeroUsize =
         nonzero!(64 * 1024 * 1024_usize);
     /// Maximum encrypted high-priority outbound frames retained per peer.
@@ -1111,7 +1115,10 @@ pub mod snapshot {
     pub const CREATE_EVERY: Duration = Duration::from_secs(10 * 60);
     /// Chunk size used for snapshot Merkle metadata (default: 1 MiB).
     pub const MERKLE_CHUNK_SIZE_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
-    /// Maximum untrusted snapshot payload read during startup (default: 1 GiB).
+    /// Maximum snapshot payload buffered during startup (default: 1 GiB).
+    ///
+    /// JSON restoration uses additional transient memory; operators should size this below
+    /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
 }
 
@@ -2380,9 +2387,9 @@ pub mod torii {
         pub const ENABLED: bool = false;
         /// Require mTLS at the ingress tier before allowing operator endpoints.
         pub const REQUIRE_MTLS: bool = false;
-        /// Trusted proxy CIDRs that may assert the forwarded client certificate header.
+        /// Explicit trusted proxy hosts that may assert the forwarded client certificate header.
         pub fn mtls_trusted_proxy_cidrs() -> Vec<String> {
-            vec!["127.0.0.0/8".to_owned(), "::1/128".to_owned()]
+            vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
         }
         /// Token fallback mode (`disabled`, `bootstrap`, `always`).
         pub const TOKEN_FALLBACK: &str = "bootstrap";
@@ -2774,7 +2781,8 @@ pub mod torii {
 
     /// Transport-specific defaults (Norito-RPC, future streaming surfaces, etc.).
     pub mod transport {
-        /// Trusted proxy CIDRs allowed to assert the canonical remote IP header.
+        /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain
+        /// is used to derive the canonical remote IP.
         pub fn trusted_proxy_cidrs() -> Vec<String> {
             Vec::new()
         }
@@ -2785,9 +2793,9 @@ pub mod torii {
             pub const ENABLED: bool = true;
             /// Require the forwarded client certificate header from a trusted ingress proxy.
             pub const REQUIRE_MTLS: bool = false;
-            /// Trusted proxy CIDRs that may assert the forwarded client certificate header.
+            /// Explicit trusted proxy hosts that may assert the forwarded client certificate header.
             pub fn mtls_trusted_proxy_cidrs() -> Vec<String> {
-                vec!["127.0.0.0/8".to_owned(), "::1/128".to_owned()]
+                vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
             }
             /// Default rollout stage label for Norito-RPC.
             pub const STAGE: &str = "disabled";
@@ -2873,6 +2881,8 @@ pub mod torii {
     pub const DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS: u64 = 30;
     /// ISO 20022 bridge disabled by default.
     pub const ISO_BRIDGE_ENABLED: bool = false;
+    /// Maximum request body accepted by an ISO 20022 submission endpoint.
+    pub const ISO_BRIDGE_MAX_BODY_BYTES: Bytes<u64> = Bytes(1024 * 1024);
     /// ISO 20022 dedupe TTL (seconds).
     pub const ISO_BRIDGE_DEDUPE_TTL_SECS: u64 = 5 * 60; // 5 minutes
     /// ISO 20022 default rail profile.
@@ -2885,6 +2895,11 @@ pub mod torii {
     pub const ISO_BRIDGE_STORE_RETENTION_SECS: u64 = 0;
     /// ISO 20022 durable store maximum record count; zero keeps all records by count.
     pub const ISO_BRIDGE_STORE_MAX_RECORDS: u64 = 0;
+    /// Return the default ISO 20022 submission body limit.
+    #[must_use]
+    pub const fn iso_bridge_max_body_bytes() -> Bytes<u64> {
+        ISO_BRIDGE_MAX_BODY_BYTES
+    }
     /// Return the default ISO 20022 bridge rail profile identifier.
     #[must_use]
     pub fn iso_bridge_default_profile() -> String {
@@ -3362,7 +3377,7 @@ pub mod nexus {
         pub const ENABLED: bool = false;
         /// Optional relayer account override; by default the node account signs worker transactions.
         pub const AUTHORITY_ACCOUNT_ID: Option<&str> = None;
-        /// Maximum relays retained in the in-memory retry set.
+        /// Hard per-kind cap for durable relay/allocation work and relay announcement history.
         pub const MAX_PENDING_RELAYS: usize = 1024;
         /// Worker retry cadence in milliseconds.
         pub const RETRY_BACKOFF_MS: u64 = 5_000;
@@ -3603,8 +3618,6 @@ pub mod pipeline {
     pub const QUARANTINE_MAX_TXS_PER_BLOCK: usize = 0;
     /// Per-transaction cycle cap enforced for the quarantine lane (0 = unlimited).
     pub const QUARANTINE_TX_MAX_CYCLES: u64 = 0;
-    /// Per-transaction wall-clock budget (milliseconds) for the quarantine lane (0 = unlimited).
-    pub const QUARANTINE_TX_MAX_MILLIS: u64 = 0;
     /// Minimum gas units required before stored cursor mode can be used (0 = disabled).
     pub const QUERY_STORED_MIN_GAS_UNITS: u64 = 0;
     /// AMX per-dataspace execution budget in milliseconds.
@@ -3900,7 +3913,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 3;
+    pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.

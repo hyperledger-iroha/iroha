@@ -66,6 +66,7 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
             Hash::new(b"parent-state"),
             Hash::new(b"post-state"),
             Hash::new(b"writes"),
+            1,
             Hash::new(b"executed-block-wire"),
         ),
     };

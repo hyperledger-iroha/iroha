@@ -63,7 +63,7 @@ use iroha_data_model::{
     account::{AccountController, AccountId},
     block::BlockHeader,
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofBackendV1,
+        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofBackendV1,
         BridgeSccpDestinationProofV1, SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SccpBn254G1PointV1,
         SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpGovernedRouteV1,
         SccpGroth16Bn254VerifyingKeyV1, SccpOutboundProofPolicyV1, SccpSemanticProofProfileV1,
@@ -5384,7 +5384,7 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
     let Ok(block_header_bytes) = to_bytes(&proof.block_header) else {
         return false;
     };
-    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1
+    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2
         || artifact.height_context.chain_id.as_str() != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
         || block_header_bytes.len() > SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1
         || !preflight_uncompressed_norito_frame(
@@ -7604,7 +7604,7 @@ mod tests {
         assert!(verify_taira_bridge_finality_proof_cryptographic(&proof));
 
         assert_finality_structure_rejected(&proof, |attack| {
-            attack.version = BRIDGE_FINALITY_PROOF_VERSION_V1.saturating_add(1);
+            attack.version = BRIDGE_FINALITY_PROOF_VERSION_V2.saturating_add(1);
         });
         assert_finality_structure_rejected(&proof, |attack| {
             attack.finality_artifact.protocol_version = PROTOCOL_VERSION.saturating_add(1);

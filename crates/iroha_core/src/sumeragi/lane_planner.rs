@@ -2806,7 +2806,7 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
             .lane_relay_snapshot()
             .into_iter()
             .filter(|relay| {
-                relay.is_merge_admissible()
+                relay.has_merge_admission_material()
                     && relay.lane_block_descriptor_hash.is_some()
                     && state.lane_incarnation_at_height(relay.lane_id, proposal_height)
                         == Some(relay.lane_incarnation)
@@ -3821,6 +3821,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("valid frozen quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"autonomous reservation nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,

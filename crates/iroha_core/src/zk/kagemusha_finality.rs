@@ -948,6 +948,7 @@ mod tests {
                     Hash::new(b"parent parent state"),
                     Hash::new(b"parent post state"),
                     Hash::new(b"parent ordinary writes"),
+                    1,
                     Hash::new(b"parent executed block wire"),
                 ),
                 signers: vec![0, 1, 2],
@@ -956,6 +957,7 @@ mod tests {
             roster: validator_set.clone(),
             quorum: DualQuorum::from_roster(&validator_set).expect("quorum"),
             nexus_amx_context_hash: Hash::new(b"nexus"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -981,6 +983,7 @@ mod tests {
             commitment.ordinary_writes_root,
             Some(commitment.topup_anchor_root),
             2,
+            1,
             Hash::new(b"finalized executed block wire"),
         )
         .expect("execution commitment");
@@ -1037,6 +1040,7 @@ mod tests {
             parent_commit_qc: context.parent_commit_qc.clone(),
             snapshot_bootstrap: context.snapshot_bootstrap,
             nexus_amx_context_hash: context.nexus_amx_context_hash,
+            execution_policy_hash: context.execution_policy_hash,
             da_layout: context.da_layout,
             leader_seed: context.leader_seed,
         };
@@ -1158,6 +1162,7 @@ mod tests {
             parent_commit_qc: context.parent_commit_qc.clone(),
             snapshot_bootstrap: context.snapshot_bootstrap,
             nexus_amx_context_hash: context.nexus_amx_context_hash,
+            execution_policy_hash: context.execution_policy_hash,
             da_layout: context.da_layout,
             leader_seed: context.leader_seed,
         };
@@ -1566,6 +1571,13 @@ mod tests {
         let mut nexus = fixture.proof.clone();
         nexus.commit_qc.height_context.nexus_amx_context_hash = Hash::new(b"other nexus");
         mutations.push(("nexus", nexus));
+
+        let mut execution_policy = fixture.proof.clone();
+        execution_policy
+            .commit_qc
+            .height_context
+            .execution_policy_hash = Hash::new(b"other execution policy");
+        mutations.push(("execution policy", execution_policy));
 
         let mut da = fixture.proof.clone();
         da.commit_qc.height_context.da_layout.chunk_size_bytes *= 2;

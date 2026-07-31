@@ -32,22 +32,22 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "fc3c131df1f3511f80ce47720ab87043106239d332936f240348d3244550835e"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "44a625963e2290fdfdf261aee070ecafbdfa7dae99bbaca4f22ff03484614615"
+        "2b6c2f9e6ef9b3979ce9f3fd5b5869adf92e2832ee5b9d1c8a9e45876f5a750d"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "d7a187088a3bf4846d185c32702fa8668065b22fffe086a99108729d6d748691"
+        "30ec760fa27f2d7ee59c716570f2af457aa005a8377ee13ea8c17634b35699b8"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
-        "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
+        "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "0503ef2a64e9616d6d898c979885603592f1b8dee0a276dd65d70b527dc26814"
+        "18e8ae9a15a2da81a0db130abd1d9a662035881a6f27931f8ed11187346db4a3"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "9841a26f9d0cbe07deec39a506cb1d6bac3135711c9146aab8b3c72cb3cdd13e"
+        "eba5129f19c0dc9e5196f6e888172b7ac52dc59a767370c526d244c198a10542"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "e489155296fcb8ead84fce53280e54296342604ccd2a17376cbbc47f5ef9726f"
+        "0d802c3c32b2bb13cf6369832dd65a4d79360dbc8035b5dd2ad26a86ca78fd88"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "6d492a52dd530130150a22eabec78375929d9431200ed06999d50490053a92a4"
@@ -110,6 +110,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/v2_apply.rs": (
         "tests/v2_apply_unsealed_00.rs",
         "tests/v2_apply_unsealed_01.rs",
+        "tests/v2_apply_unsealed_02.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
         "tests/v2_core_reducer_primitive_projection.rs",
@@ -491,10 +492,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 302
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 303
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 305
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 306
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "94552d20b46e0ca5bec00934d18792e902ddc05a106ae67d0a417ab4fdf13bce"
+    "def60f4a4c04b995a11d8e75fd6ef920d7fb1b8c4ce397f883a35412087f9bd6"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -554,7 +555,7 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "79c2caea8dfd6f17885ff3d72253a41cb34db7a99d7976b52d5fdab45c0e9a89"
     ),
     "successor_context_requires_the_durable_cryptographic_parent": (
-        "43ac1f9d461eaebc54570a59b0846abadaa9e8791a8bfc89e02a234e99276555"
+        "07aa14d187145445218084edfccf2c0675cb97b10969f58065b75c9567779cd6"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
         "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
@@ -1464,7 +1465,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "de691044aee8685ad220d02975d2f829e4b7796d18a73aadf1106a169b76217e",
+    "run_inner": "3d8911e69d491268dabae08f5c6b996ede417dd8afbda670e80dfc1070ed2271",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1655,7 +1656,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "de691044aee8685ad220d02975d2f829e4b7796d18a73aadf1106a169b76217e",
+    "run_inner": "3d8911e69d491268dabae08f5c6b996ede417dd8afbda670e80dfc1070ed2271",
     "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -1980,10 +1981,10 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "de691044aee8685ad220d02975d2f829e4b7796d18a73aadf1106a169b76217e"
+        "3d8911e69d491268dabae08f5c6b996ede417dd8afbda670e80dfc1070ed2271"
     ),
     "drain_v2_ingress": (
-        "3a5c93989a854e1ba6612ba4fc2e7962691644e460180bc5d26e8bae22f13158"
+        "ec5d2c9208f78350ab96b0fea82460a6d8225cd220d1d99901bbf866dfb7ad2b"
     ),
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"

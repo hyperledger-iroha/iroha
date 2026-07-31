@@ -20,13 +20,15 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** Canonical compact-length bare-Norito models for the Sumeragi v2 wire protocol. */
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
-  public static final int PROTOCOL_VERSION = 3;
+  public static final int PROTOCOL_VERSION = 4;
   /** Maximum number of real Kagemusha top-up leaves committed by one block. */
   public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
   private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
       "iroha:kagemusha:v2:post-state-root".getBytes(StandardCharsets.UTF_8);
   /** Canonical Native AMX application-manifest wire version. */
   public static final int NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
+  /** Exact first-release merge-carrier projection version. */
+  public static final int MERGE_CARRIER_COMMITMENT_VERSION = 1;
   /** Maximum participant route/incarnation leaves committed by one global block. */
   public static final long MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES = 1_024;
   private static final byte[] NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN =
@@ -244,6 +246,35 @@ public final class SumeragiV2Wire {
     }
   }
 
+  /** Exact merge-ledger entry identity authenticated by global finality. */
+  public static final class MergeCarrierCommitment extends WireValue {
+    public final int version;
+    public final Hash32 entryHash;
+
+    public MergeCarrierCommitment(int version, Hash32 entryHash) {
+      require(
+          version == MERGE_CARRIER_COMMITMENT_VERSION,
+          "unsupported merge-carrier commitment version");
+      this.version = version;
+      this.entryHash = nonNull(entryHash, "entryHash");
+    }
+
+    @Override
+    public byte[] encode() {
+      return struct(u16(version), entryHash.bytes());
+    }
+
+    static MergeCarrierCommitment decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      MergeCarrierCommitment value =
+          new MergeCarrierCommitment(
+              reader.field("merge carrier version", SumeragiV2Wire::decodeU16),
+              new Hash32(reader.field("merge carrier entry hash", SumeragiV2Wire::decodeHash)));
+      reader.finish("merge carrier commitment");
+      return value;
+    }
+  }
+
   /** Deterministic state-transition result authenticated by votes and certificates. */
   public static final class ExecutionCommitment extends WireValue {
     public final Hash32 parentStateRoot;
@@ -254,6 +285,8 @@ public final class SumeragiV2Wire {
     public final int nativeAmxApplicationManifestVersion;
     public final Hash32 nativeAmxApplicationManifestRoot;
     public final long nativeAmxApplicationManifestCount;
+    public final MergeCarrierCommitment mergeCarrier;
+    public final long executedBlockWireLen;
     public final Hash32 executedBlockWireHash;
 
     public ExecutionCommitment(
@@ -265,6 +298,33 @@ public final class SumeragiV2Wire {
         int nativeAmxApplicationManifestVersion,
         Hash32 nativeAmxApplicationManifestRoot,
         long nativeAmxApplicationManifestCount,
+        long executedBlockWireLen,
+        Hash32 executedBlockWireHash) {
+      this(
+          parentStateRoot,
+          postStateRoot,
+          ordinaryWritesRoot,
+          topupAnchorRoot,
+          topupAnchorCount,
+          nativeAmxApplicationManifestVersion,
+          nativeAmxApplicationManifestRoot,
+          nativeAmxApplicationManifestCount,
+          null,
+          executedBlockWireLen,
+          executedBlockWireHash);
+    }
+
+    public ExecutionCommitment(
+        Hash32 parentStateRoot,
+        Hash32 postStateRoot,
+        Hash32 ordinaryWritesRoot,
+        Hash32 topupAnchorRoot,
+        long topupAnchorCount,
+        int nativeAmxApplicationManifestVersion,
+        Hash32 nativeAmxApplicationManifestRoot,
+        long nativeAmxApplicationManifestCount,
+        MergeCarrierCommitment mergeCarrier,
+        long executedBlockWireLen,
         Hash32 executedBlockWireHash) {
       this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
       this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
@@ -277,6 +337,9 @@ public final class SumeragiV2Wire {
           nonNull(nativeAmxApplicationManifestRoot, "nativeAmxApplicationManifestRoot");
       requireU32(nativeAmxApplicationManifestCount, "nativeAmxApplicationManifestCount");
       this.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount;
+      this.mergeCarrier = mergeCarrier;
+      require(executedBlockWireLen != 0, "executed block wire length must be non-zero");
+      this.executedBlockWireLen = executedBlockWireLen;
       this.executedBlockWireHash = nonNull(executedBlockWireHash, "executedBlockWireHash");
       if (topupAnchorCount == 0) {
         require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
@@ -308,6 +371,7 @@ public final class SumeragiV2Wire {
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
+        long executedBlockWireLen,
         Hash32 executedBlockWireHash) {
       return new ExecutionCommitment(
           parentStateRoot,
@@ -318,6 +382,7 @@ public final class SumeragiV2Wire {
           NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
           nativeAmxApplicationManifestEmptyRoot(),
           0,
+          executedBlockWireLen,
           executedBlockWireHash);
     }
 
@@ -355,32 +420,60 @@ public final class SumeragiV2Wire {
           u16(nativeAmxApplicationManifestVersion),
           nativeAmxApplicationManifestRoot.bytes(),
           u32(nativeAmxApplicationManifestCount),
+          option(mergeCarrier == null ? null : mergeCarrier.encode()),
+          u64(executedBlockWireLen),
           executedBlockWireHash.bytes());
     }
 
     static ExecutionCommitment decode(byte[] bytes) {
       Reader reader = new Reader(bytes);
+      Hash32 parentStateRoot =
+          new Hash32(reader.field("execution parent state", SumeragiV2Wire::decodeHash));
+      Hash32 postStateRoot =
+          new Hash32(reader.field("execution post state", SumeragiV2Wire::decodeHash));
+      Hash32 ordinaryWritesRoot =
+          new Hash32(reader.field("execution ordinary writes", SumeragiV2Wire::decodeHash));
+      Hash32 topupAnchorRoot =
+          reader.field(
+              "execution top-up root",
+              payload -> decodeOption(payload, data -> new Hash32(decodeHash(data))));
+      long topupAnchorCount =
+          reader.field("execution top-up count", SumeragiV2Wire::decodeU32);
+      int manifestVersion =
+          reader.field(
+              "execution Native AMX application manifest version",
+              SumeragiV2Wire::decodeU16);
+      Hash32 manifestRoot =
+          new Hash32(
+              reader.field(
+                  "execution Native AMX application manifest root",
+                  SumeragiV2Wire::decodeHash));
+      long manifestCount =
+          reader.field(
+              "execution Native AMX application manifest count",
+              SumeragiV2Wire::decodeU32);
+      MergeCarrierCommitment mergeCarrier =
+          reader.field(
+              "execution merge carrier",
+              payload -> decodeOption(payload, MergeCarrierCommitment::decode));
+      long executedBlockWireLen =
+          reader.field("execution executed block wire length", SumeragiV2Wire::decodeU64);
+      Hash32 executedBlockWireHash =
+          new Hash32(
+              reader.field("execution executed block wire hash", SumeragiV2Wire::decodeHash));
       ExecutionCommitment value =
           new ExecutionCommitment(
-              new Hash32(reader.field("execution parent state", SumeragiV2Wire::decodeHash)),
-              new Hash32(reader.field("execution post state", SumeragiV2Wire::decodeHash)),
-              new Hash32(reader.field("execution ordinary writes", SumeragiV2Wire::decodeHash)),
-              reader.field(
-                  "execution top-up root",
-                  payload -> decodeOption(payload, data -> new Hash32(decodeHash(data)))),
-              reader.field("execution top-up count", SumeragiV2Wire::decodeU32),
-              reader.field(
-                  "execution Native AMX application manifest version",
-                  SumeragiV2Wire::decodeU16),
-              new Hash32(
-                  reader.field(
-                      "execution Native AMX application manifest root",
-                      SumeragiV2Wire::decodeHash)),
-              reader.field(
-                  "execution Native AMX application manifest count",
-                  SumeragiV2Wire::decodeU32),
-              new Hash32(
-                  reader.field("execution executed block wire hash", SumeragiV2Wire::decodeHash)));
+              parentStateRoot,
+              postStateRoot,
+              ordinaryWritesRoot,
+              topupAnchorRoot,
+              topupAnchorCount,
+              manifestVersion,
+              manifestRoot,
+              manifestCount,
+              mergeCarrier,
+              executedBlockWireLen,
+              executedBlockWireHash);
       reader.finish("execution commitment");
       return value;
     }

@@ -26,6 +26,7 @@ public final class TransactionPayloadFixturesTests {
     payload.put("chain", "00000002");
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 1_735_000_000_000L);
+    payload.put("time_to_live_ms", 100_000L);
     payload.put("executable", executable);
     payload.put("metadata", new LinkedHashMap<>());
 
@@ -34,6 +35,7 @@ public final class TransactionPayloadFixturesTests {
     fixture.put("chain", "00000002");
     fixture.put("authority", SAMPLE_AUTHORITY);
     fixture.put("creation_time_ms", 1_735_000_000_000L);
+    fixture.put("time_to_live_ms", 100_000L);
     fixture.put("payload", payload);
 
     final TransactionPayloadFixtures.Fixture parsed =

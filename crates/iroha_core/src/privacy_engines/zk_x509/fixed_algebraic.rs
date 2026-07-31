@@ -1882,6 +1882,89 @@ pub(crate) struct ZkX509FixedAlgebraicOpeningsV1 {
 }
 
 impl ZkX509FixedAlgebraicOpeningsV1 {
+    /// Concatenate independently capped child schedules in fixed column order.
+    ///
+    /// Every child must have been evaluated at the identical canonical query
+    /// set. The caller supplies the typed composite digest that binds child
+    /// identity and order; this helper only performs the checked row-major
+    /// concatenation and cannot reorder or omit a child.
+    pub(crate) fn concatenate_v1(
+        schedule_digest: [u8; 32],
+        parts: &[Self],
+    ) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
+        if parts.len() < 2 {
+            return Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery);
+        }
+        let first = parts
+            .first()
+            .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?;
+        if first.query_indices.is_empty()
+            || first.query_indices.len() > ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1
+            || first
+                .query_indices
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery);
+        }
+        for part in parts {
+            if part.query_indices != first.query_indices {
+                return Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery);
+            }
+            validate_width_v1(part.width)?;
+            let expected_fields = part
+                .query_indices
+                .len()
+                .checked_mul(usize::from(part.width))
+                .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
+            if part.fields.len() != expected_fields {
+                return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+            }
+            if part
+                .fields
+                .iter()
+                .copied()
+                .any(|value| !canonical_field_v1(value))
+            {
+                return Err(ZkX509FixedAlgebraicErrorV1::NonCanonicalField);
+            }
+        }
+        let width = parts.iter().try_fold(0_usize, |width, part| {
+            width
+                .checked_add(usize::from(part.width))
+                .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
+        })?;
+        let width =
+            u16::try_from(width).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
+        validate_width_v1(width)?;
+        let field_count = first
+            .query_indices
+            .len()
+            .checked_mul(usize::from(width))
+            .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
+        if field_count > ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1 {
+            return Err(ZkX509FixedAlgebraicErrorV1::LimitExceeded);
+        }
+        let mut fields = Vec::new();
+        fields
+            .try_reserve_exact(field_count)
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
+        for row in 0..first.query_indices.len() {
+            for part in parts {
+                fields.extend_from_slice(part.row_v1(row)?);
+            }
+        }
+        if fields.len() != field_count {
+            return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+        }
+        Ok(Self {
+            schedule_digest,
+            query_indices: first.query_indices.clone(),
+            width,
+            fields,
+        })
+    }
+
     /// Schedule binding shared by every returned row.
     pub(crate) const fn schedule_digest_v1(&self) -> [u8; 32] {
         self.schedule_digest
@@ -2705,6 +2788,117 @@ mod tests {
         assert_eq!(
             openings.row_v1(3),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
+        );
+    }
+
+    #[test]
+    fn composite_opening_concatenation_is_row_major_and_fail_closed_v1() {
+        let left = ZkX509FixedAlgebraicOpeningsV1 {
+            schedule_digest: [1_u8; 32],
+            query_indices: vec![2, 9],
+            width: 2,
+            fields: vec![F(11), F(12), F(21), F(22)],
+        };
+        let right = ZkX509FixedAlgebraicOpeningsV1 {
+            schedule_digest: [2_u8; 32],
+            query_indices: vec![2, 9],
+            width: 1,
+            fields: vec![F(13), F(23)],
+        };
+        let composite_digest = [9_u8; 32];
+        let combined = ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+            composite_digest,
+            &[left.clone(), right.clone()],
+        )
+        .expect("canonical child openings");
+        assert_eq!(combined.schedule_digest_v1(), composite_digest);
+        assert_eq!(combined.query_indices_v1(), &[2, 9]);
+        assert_eq!(combined.width_v1(), 3);
+        assert_eq!(combined.row_v1(0), Ok(&[F(11), F(12), F(13)][..]));
+        assert_eq!(combined.row_v1(1), Ok(&[F(21), F(22), F(23)][..]));
+
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &[]),
+            Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
+        );
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                core::slice::from_ref(&left),
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
+        );
+
+        let mut mismatched_queries = right.clone();
+        mismatched_queries.query_indices[1] = 10;
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                &[left.clone(), mismatched_queries],
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
+        );
+        let mut unordered_left = left.clone();
+        unordered_left.query_indices.swap(0, 1);
+        let mut unordered_right = right.clone();
+        unordered_right.query_indices.swap(0, 1);
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                &[unordered_left, unordered_right],
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
+        );
+
+        let mut malformed_fields = right.clone();
+        malformed_fields.fields.pop();
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                &[left.clone(), malformed_fields],
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant)
+        );
+        let mut noncanonical_fields = right.clone();
+        noncanonical_fields.fields[0] = F(GOLDILOCKS_MODULUS_V1);
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                &[left.clone(), noncanonical_fields],
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::NonCanonicalField)
+        );
+        let over_profile_width = [
+            ZkX509FixedAlgebraicOpeningsV1 {
+                schedule_digest: [3_u8; 32],
+                query_indices: vec![0],
+                width: 300,
+                fields: vec![F::ZERO; 300],
+            },
+            ZkX509FixedAlgebraicOpeningsV1 {
+                schedule_digest: [4_u8; 32],
+                query_indices: vec![0],
+                width: 173,
+                fields: vec![F::ZERO; 173],
+            },
+        ];
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &over_profile_width,),
+            Err(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
+        );
+
+        let maximum_width_part = ZkX509FixedAlgebraicOpeningsV1 {
+            schedule_digest: [5_u8; 32],
+            query_indices: vec![0],
+            width: ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1,
+            fields: vec![F::ZERO; usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1)],
+        };
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                &vec![maximum_width_part; 140],
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
         );
     }
 

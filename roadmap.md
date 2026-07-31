@@ -5,6 +5,16 @@ Last updated: 2026-07-31
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## First-release security remediation validation
+
+The source and cross-SDK remediation described in `status.md` is complete.
+Release evidence still requires the serialized build lane to become available,
+then regeneration of the canonical DA reconstruction fixture and unsigned
+OpenAPI development provenance from the final source state, focused Rust
+crate/test validation, and a broad locked offline workspace compile attempt.
+Do not promote the private audit ledger to complete until those source-bound
+commands and the final reconciliation pass are recorded.
+
 ## Repository structure follow-ups
 
 - Continue extracting cohesive production modules from the exact source-budget
@@ -1344,9 +1354,9 @@ testnet remains an implemented SCCP V1 runtime and SDK profile outside this
 production evidence corridor. TON, generic proof backends, arbitrary assets,
 Nexus settlement, and compatibility manifests are not part of SCCP V1.
 
-The live node admits only Sumeragi-v2 wire revision 3 and dispatches the worker
+The live node admits only Sumeragi-v2 wire revision 4 and dispatches the worker
 to the serialized v2 height runner; the legacy actor is never selected under a
-revision-3 handshake. The runner replays its context and safety WAL before opening
+revision-4 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
 reported as an ordered typed partial-success outcome only for explicitly
@@ -25529,7 +25539,7 @@ validation path.
 **Status:** active first-release verification and release validation.
 
 The release target is the single serialized Sumeragi v2 reducer and wire
-revision 3. Permissioned and NPoS contexts use the same Prepare/Commit state
+revision 4. Permissioned and NPoS contexts use the same Prepare/Commit state
 machine, dual count-and-power quorums, durable grouped timeout certificates,
 mandatory DA, exact receipt-backed height transitions, and one frozen
 height-context identity. Mixed-version operation, rolling protocol upgrades,

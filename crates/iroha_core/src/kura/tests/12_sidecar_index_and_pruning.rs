@@ -1374,6 +1374,10 @@
             .write_da_block_bytes(3, &block3_wire)
             .expect("seed prune fixture DA sidecar");
         assert!(kura.block_store.lock().da_block_path(3).exists());
+        // The retained carrier at height two is public evidence and therefore
+        // requires current-version finality. Height four deliberately remains
+        // the sole prepublication tip so prune exercises exact suffix removal.
+        let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
         drop(kura);
         (config, blocks, merge_entries)
     }

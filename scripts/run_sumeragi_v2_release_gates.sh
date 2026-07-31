@@ -2265,7 +2265,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=302
+readonly expected_multilane_focus_test_count=305
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2436,7 +2436,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 302-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 305-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2544,8 +2544,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 303 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 302 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 306 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 305 focused tests" >&2
     exit 1
   fi
 fi
@@ -2600,7 +2600,7 @@ done
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
-readonly expected_multilane_formal_mutation_count=37
+readonly expected_multilane_formal_mutation_count=52
 observed_multilane_formal_mutation_count="$(
   grep -Ec '^run_mutant [a-z0-9-]+ ' \
     scripts/formal/run_sumeragi_v2_multilane_mutations.sh
@@ -2611,9 +2611,9 @@ if ((observed_multilane_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] all 37 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
+  'echo "[tlc] all 52 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
   scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
-  echo "multilane mutation runner lacks the exact 37-mutation completion contract" >&2
+  echo "multilane mutation runner lacks the exact 52-mutation completion contract" >&2
   exit 1
 fi
 
@@ -3733,4 +3733,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 302/302 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 305/305 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

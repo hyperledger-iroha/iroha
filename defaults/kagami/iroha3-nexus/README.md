@@ -13,6 +13,7 @@
 Files:
 - genesis.json — sample topology fixture; deployable public Nexus genesis must be regenerated with `kagami genesis generate --profile iroha3-nexus --xor-asset-definition-id <BASE58>` so `xor#universal` binds to the operator-supplied canonical XOR asset definition
 - `sumeragi_v2.nexus_amx_context_hash` is the config-only template projection; the production signer replaces it with the exact staged roster commitment only after the operator supplies that XOR identity
+- `sumeragi_v2.execution_policy_hash` is likewise a template value; the production signer replaces it with the exact staged V1 execution-policy commitment before refreshing the fingerprint and signing
 - verify.txt — policy note; profile verification requires a regenerated genesis with the operator-supplied canonical XOR id
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337)
 - docker-compose.yml — single-node snippet mounting the config/genesis

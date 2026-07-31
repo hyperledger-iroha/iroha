@@ -278,9 +278,8 @@ fn fastpq_binding_shape_is_concrete(binding: &AxtFastpqBinding) -> bool {
         && !binding.target_dsids.is_empty()
         && binding
             .target_dsids
-            .iter()
-            .enumerate()
-            .all(|(idx, value)| !binding.target_dsids[..idx].contains(value))
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
 }
 
 fn binding_string_is_present(value: &str) -> bool {
@@ -369,7 +368,7 @@ pub struct AxtFastpqBinding {
     /// Verifier version.
     #[norito(default)]
     pub verifier_version: String,
-    /// Target dataspace ids committed by the proof.
+    /// Non-empty, strictly increasing target dataspace ids committed by the proof.
     #[norito(default)]
     pub target_dsids: Vec<u64>,
     /// Business-effect bindings that maintained contracts compare on-ledger.
@@ -1692,6 +1691,22 @@ mod tests {
             expiry_slot: Some(5),
         };
         assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
+    }
+
+    #[test]
+    fn fastpq_binding_shape_requires_strictly_increasing_target_dsids() {
+        let mut binding = sample_fastpq_binding(DataSpaceId::new(17));
+        binding.target_dsids = vec![1, 2, 3];
+        assert!(fastpq_binding_shape_is_concrete(&binding));
+
+        binding.target_dsids = vec![1, 1, 2];
+        assert!(!fastpq_binding_shape_is_concrete(&binding));
+
+        binding.target_dsids = vec![3, 1, 2];
+        assert!(
+            !fastpq_binding_shape_is_concrete(&binding),
+            "unique but non-canonical target order must fail closed"
+        );
     }
 
     #[test]

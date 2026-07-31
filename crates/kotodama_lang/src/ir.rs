@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
+use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
 
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
@@ -293,7 +293,7 @@ pub enum Instr {
         value: Temp,
         kind: WideNumericKind,
     },
-    /// Numeric arithmetic using NoritoBytes payloads.
+    /// Numeric arithmetic using typed numeric pointer payloads.
     NumericBinary {
         dest: Temp,
         op: BinaryOp,
@@ -320,7 +320,7 @@ pub enum Instr {
         mode: Option<Temp>,
         op: DecimalToIntOp,
     },
-    /// Numeric comparison using NoritoBytes payloads (result is 0/1).
+    /// Numeric comparison using typed numeric pointer payloads (result is 0/1).
     NumericCompare {
         dest: Temp,
         op: BinaryOp,
@@ -1057,21 +1057,22 @@ pub enum Instr {
     SubscriptionBill,
     /// Subscription usage recorder using trigger args.
     SubscriptionRecordUsage,
-    /// Durable state get: r10 = &Name path; returns r10 = &NoritoBytes into dest.
+    /// Durable state get: r10 = &NoritoBytes(StatePath); returns r10 = &NoritoBytes into dest.
     StateGet {
         dest: Temp,
         path: Temp,
     },
-    /// Durable state set: r10 = &Name path; r11 = &NoritoBytes value
+    /// Durable state set: r10 = &NoritoBytes(StatePath); r11 = &NoritoBytes value.
     StateSet {
         path: Temp,
         value: Temp,
     },
-    /// Durable state delete: r10 = &Name path
+    /// Durable state delete: r10 = &NoritoBytes(StatePath).
     StateDel {
         path: Temp,
     },
-    /// Durable state key enumeration: r10 = &Name prefix; r11 = offset; r12 = limit.
+    /// Durable state key enumeration: r10 = &NoritoBytes(StatePath prefix);
+    /// r11 = offset; r12 = limit.
     StateKeys {
         dest: Temp,
         prefix: Temp,
@@ -1084,7 +1085,8 @@ pub enum Instr {
         /// manifest hint.
         dynamic_access_hint: Option<DynamicAccessHint>,
     },
-    /// Decode a canonical map key from a page returned by `STATE_KEYS`.
+    /// Decode a canonical map key from a `Vec<StatePath>` page returned by
+    /// `STATE_KEYS`. The declared map base remains a `Name`.
     StateMapKeyAt {
         dest: Temp,
         page: Temp,
@@ -1097,17 +1099,17 @@ pub enum Instr {
         schema: Temp,
         words: Vec<Temp>,
     },
-    /// Durable state key presence: r10 = &Name path; returns present flag in dest.
+    /// Durable state key presence: r10 = &NoritoBytes(StatePath); returns present flag in dest.
     StateHas {
         dest: Temp,
         path: Temp,
     },
-    /// Durable state value payload length: r10 = &Name path; returns length in dest.
+    /// Durable state value payload length: r10 = &NoritoBytes(StatePath); returns length in dest.
     StateLen {
         dest: Temp,
         path: Temp,
     },
-    /// Durable state key count for prefix: r10 = &Name prefix; returns total in dest.
+    /// Durable state key count for prefix: r10 = &NoritoBytes(StatePath); returns total in dest.
     StateCount {
         dest: Temp,
         prefix: Temp,
@@ -1117,7 +1119,13 @@ pub enum Instr {
         dest: Temp,
         blob: Temp,
     },
-    /// Build a schema-bound Name path from canonical pointer-envelope key bytes.
+    /// Convert a declared/runtime `Name` root into framed `StatePath` bytes.
+    StatePathFromName {
+        dest: Temp,
+        name: Temp,
+    },
+    /// Build framed, schema-bound `StatePath` bytes from a declared `Name` base
+    /// and canonical pointer-envelope key bytes.
     PathMapKeyNorito {
         dest: Temp,
         base: Temp,
@@ -3248,7 +3256,7 @@ fn lower_state_map_get_value(
     value_ty: &Type,
 ) -> Option<Temp> {
     let key_codec = key_codec_for_type(key_ty)?;
-    let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
+    let path = build_state_map_path(ctx, base_name, key_tmp, &key_codec);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     decode_state_map_value_blob(ctx, blob, value_ty)
@@ -3274,7 +3282,7 @@ fn lower_state_map_set_value(
     let Some(key_codec) = key_codec_for_type(key_ty) else {
         return false;
     };
-    let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
+    let path = build_state_map_path(ctx, base_name, key_tmp, &key_codec);
     if !is_canonical_state_value_type(&resolved) {
         return false;
     }
@@ -3717,12 +3725,7 @@ fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
         return payload;
     }
 
-    let override_path = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest: override_path,
-        kind: DataRefKind::Name,
-        value: TEST_TRIGGER_EVENT_OVERRIDE_KEY.to_string(),
-    });
+    let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
     let override_payload = ctx.new_temp();
     ctx.current_instr(Instr::StateGet {
         dest: override_payload,
@@ -3784,12 +3787,7 @@ fn lower_invoke_entrypoint_call(
     result_ty: &semantic::Type,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
-    let override_path = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest: override_path,
-        kind: DataRefKind::Name,
-        value: TEST_TRIGGER_EVENT_OVERRIDE_KEY.to_string(),
-    });
+    let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
     let previous_payload = ctx.new_temp();
     ctx.current_instr(Instr::StateGet {
         dest: previous_payload,
@@ -5023,7 +5021,8 @@ fn lower_state_foreach_page(
     vars: &mut HashMap<String, Temp>,
     live_after: &BTreeSet<String>,
 ) {
-    let prefix = build_state_base(ctx, base_name);
+    let prefix = build_state_root_path(ctx, base_name);
+    let base = build_state_base_name(ctx, base_name);
     let page = ctx.new_temp();
     ctx.current_instr(Instr::StateKeys {
         dest: page,
@@ -5079,7 +5078,7 @@ fn lower_state_foreach_page(
     ctx.current_instr(Instr::StateMapKeyAt {
         dest: key_blob,
         page,
-        base: prefix,
+        base,
         index,
     });
     let zero = ctx.new_temp();
@@ -7086,7 +7085,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -7126,7 +7125,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -7221,7 +7220,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -7316,7 +7315,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -8639,7 +8638,7 @@ fn lower_state_map_get_option(
         ctx.record_error("StateMap.get key type is not lowerable".into());
         return lower_absent_option(ctx, &spec.value);
     };
-    let path = build_state_path(ctx, &base, key, &key_codec);
+    let path = build_state_map_path(ctx, &base, key, &key_codec);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     let zero = ctx.new_temp();
@@ -8683,7 +8682,7 @@ fn lower_state_map_remove_option(
         ctx.record_error("StateMap.remove key type is not lowerable".into());
         return lower_absent_option(ctx, &spec.value);
     };
-    let path = build_state_path(ctx, &base, key, &key_codec);
+    let path = build_state_map_path(ctx, &base, key, &key_codec);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     let zero = ctx.new_temp();
@@ -8736,7 +8735,7 @@ fn lower_state_binding_value(ctx: &mut LowerCtx, name: &str, ty: &Type) -> Optio
 }
 
 fn state_get_blob_for_name(ctx: &mut LowerCtx, name: &str) -> Temp {
-    let path = build_state_base(ctx, name);
+    let path = build_state_root_path(ctx, name);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     blob
@@ -8904,7 +8903,7 @@ fn build_state_name_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
     t_base
 }
 
-fn build_state_base(ctx: &mut LowerCtx, name: &str) -> Temp {
+fn build_state_base_name(ctx: &mut LowerCtx, name: &str) -> Temp {
     if let Some(temp) = ctx.state_runtime_roots.get(name).copied() {
         temp
     } else {
@@ -8912,8 +8911,49 @@ fn build_state_base(ctx: &mut LowerCtx, name: &str) -> Temp {
     }
 }
 
-fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCodec) -> Temp {
-    let t_base = build_state_base(ctx, name);
+fn build_state_path_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
+    let literal = ctx
+        .state_name_literals
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| name.to_string());
+    let encoded = StatePath::try_from(literal.clone())
+        .map_err(|error| format!("invalid durable StatePath `{literal}`: {error}"))
+        .and_then(|path| {
+            ivm_abi::codec::encode_canonical_norito(&path)
+                .map_err(|error| format!("failed to encode durable StatePath `{literal}`: {error}"))
+        });
+    let value = match encoded {
+        Ok(bytes) => format!("0x{}", hex::encode(bytes)),
+        Err(error) => {
+            ctx.record_error(error);
+            "0x".to_owned()
+        }
+    };
+    let path = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest: path,
+        kind: DataRefKind::NoritoBytes,
+        value,
+    });
+    path
+}
+
+fn build_state_root_path(ctx: &mut LowerCtx, name: &str) -> Temp {
+    if let Some(root) = ctx.state_runtime_roots.get(name).copied() {
+        let path = ctx.new_temp();
+        ctx.current_instr(Instr::StatePathFromName {
+            dest: path,
+            name: root,
+        });
+        path
+    } else {
+        build_state_path_literal(ctx, name)
+    }
+}
+
+fn build_state_map_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCodec) -> Temp {
+    let t_base = build_state_base_name(ctx, name);
     match key_codec {
         KeyCodec::Int => {
             let key_blob = ctx.new_temp();
@@ -9020,7 +9060,7 @@ fn lower_state_handle_arg(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     if let Some(base_name) = lowerable_state_handle_name(ctx, expr) {
-        build_state_base(ctx, &base_name)
+        build_state_base_name(ctx, &base_name)
     } else {
         ctx.record_error("state parameter arguments must reference a durable state handle".into());
         let t = ctx.new_temp();
@@ -9044,7 +9084,7 @@ fn lower_state_handle_args(
     collect_state_handle_specs(&base_name, param_ty, &mut handles);
     handles
         .into_iter()
-        .map(|(name, _)| build_state_base(ctx, &name))
+        .map(|(name, _)| build_state_base_name(ctx, &name))
         .collect()
 }
 
@@ -9054,7 +9094,7 @@ fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
         ctx.record_error("durable state value is not encodable".into());
         return;
     };
-    let path = build_state_base(ctx, name);
+    let path = build_state_root_path(ctx, name);
     ctx.current_instr(Instr::StateSet {
         path,
         value: encoded,
@@ -9379,10 +9419,19 @@ mod tests {
             for instr in &block.instrs {
                 match instr {
                     Instr::DataRef {
-                        kind: DataRefKind::Name,
+                        kind: DataRefKind::NoritoBytes,
                         value,
                         ..
-                    } if value == TEST_TRIGGER_EVENT_OVERRIDE_KEY => saw_override_key = true,
+                    } => {
+                        if let Some(encoded) = value
+                            .strip_prefix("0x")
+                            .and_then(|raw| hex::decode(raw).ok())
+                            && let Ok(decoded) =
+                                ivm_abi::codec::decode_canonical_norito::<StatePath>(&encoded)
+                        {
+                            saw_override_key |= decoded.as_ref() == TEST_TRIGGER_EVENT_OVERRIDE_KEY;
+                        }
+                    }
                     Instr::StateGet { .. } => saw_state_get = true,
                     Instr::GetTriggerEvent { .. } => saw_get_trigger = true,
                     _ => {}
@@ -10368,6 +10417,64 @@ mod tests {
                 .all(|instruction| !matches!(instruction, Instr::EncodeInt { .. })),
             "source int keys must not use the retired scalar/ASCII key codec"
         );
+    }
+
+    #[test]
+    fn scalar_state_paths_lower_to_framed_state_path_bytes() {
+        let source = r#"
+            seiyaku ScalarState {
+                state int counter;
+                hajimari() { counter = 0; }
+                fn read() -> int { return counter; }
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse scalar durable state"))
+                .expect("analyze scalar durable state"),
+        )
+        .expect("lower scalar durable state");
+        let instructions = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "read")
+            .expect("read function")
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let path = instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instr::StateGet { path, .. } => Some(*path),
+                _ => None,
+            })
+            .expect("scalar read must emit STATE_GET");
+        let raw = instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::NoritoBytes,
+                    value,
+                } if *dest == path => Some(value),
+                _ => None,
+            })
+            .expect("STATE_GET path must originate from NoritoBytes");
+        let encoded = hex::decode(raw.strip_prefix("0x").expect("hex StatePath literal"))
+            .expect("decode StatePath literal");
+        let decoded: StatePath =
+            ivm_abi::codec::decode_canonical_norito(&encoded).expect("decode StatePath");
+        assert_eq!(decoded.as_ref(), "counter");
+        assert!(instructions.iter().all(|instruction| {
+            !matches!(
+                instruction,
+                Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Name,
+                    ..
+                } if *dest == path
+            )
+        }));
     }
 
     #[test]
@@ -12372,25 +12479,42 @@ seiyaku RangeOffsetBits {{
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
 
         let mut saw_tuple_pack = false;
-        let mut saw_root_path = false;
+        let mut root_paths = Vec::new();
+        let mut saw_legacy_name_root = false;
         let mut saw_aggregate_decode = false;
-        let mut state_gets = 0;
+        let mut state_get_paths = Vec::new();
 
         for bb in &main_fn.blocks {
             for instr in &bb.instrs {
                 match instr {
                     Instr::TuplePack { .. } => saw_tuple_pack = true,
                     Instr::DataRef {
+                        dest,
+                        kind: DataRefKind::NoritoBytes,
+                        value,
+                        ..
+                    } => {
+                        if let Some(encoded) = value
+                            .strip_prefix("0x")
+                            .and_then(|raw| hex::decode(raw).ok())
+                            && let Ok(path) =
+                                ivm_abi::codec::decode_canonical_norito::<StatePath>(&encoded)
+                            && path.as_ref() == "ledger"
+                        {
+                            root_paths.push(*dest);
+                        }
+                    }
+                    Instr::DataRef {
                         kind: DataRefKind::Name,
                         value,
                         ..
-                    } if value == "ledger" => saw_root_path = true,
+                    } if value == "ledger" => saw_legacy_name_root = true,
                     Instr::DirectHelperSyscall { syscall, .. }
                         if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE =>
                     {
                         saw_aggregate_decode = true;
                     }
-                    Instr::StateGet { .. } => state_gets += 1,
+                    Instr::StateGet { path, .. } => state_get_paths.push(*path),
                     _ => {}
                 }
             }
@@ -12400,9 +12524,25 @@ seiyaku RangeOffsetBits {{
             saw_tuple_pack,
             "expected TuplePack when reconstructing struct state"
         );
-        assert!(saw_root_path, "missing durable read for ledger root");
+        assert!(
+            !saw_legacy_name_root,
+            "durable ledger root must not use the retired Name transport"
+        );
+        assert_eq!(
+            root_paths.len(),
+            1,
+            "durable ledger root must have one canonical NoritoBytes(StatePath) literal"
+        );
+        assert_eq!(
+            state_get_paths, root_paths,
+            "the one durable read must consume the canonical ledger StatePath"
+        );
         assert!(saw_aggregate_decode, "missing aggregate state decoder");
-        assert_eq!(state_gets, 1, "aggregate state must be read exactly once");
+        assert_eq!(
+            state_get_paths.len(),
+            1,
+            "aggregate state must be read exactly once"
+        );
     }
 
     #[test]
@@ -12513,8 +12653,9 @@ seiyaku RangeOffsetBits {{
         let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
 
-        let mut saw_root_path = false;
-        let mut state_sets = 0;
+        let mut root_paths = Vec::new();
+        let mut saw_legacy_name_root = false;
+        let mut state_set_paths = Vec::new();
         let mut tuple_gets = 0;
         let mut aggregate_encodes = 0;
 
@@ -12522,11 +12663,27 @@ seiyaku RangeOffsetBits {{
             for instr in &bb.instrs {
                 match instr {
                     Instr::DataRef {
+                        dest,
+                        kind: DataRefKind::NoritoBytes,
+                        value,
+                        ..
+                    } => {
+                        if let Some(encoded) = value
+                            .strip_prefix("0x")
+                            .and_then(|raw| hex::decode(raw).ok())
+                            && let Ok(path) =
+                                ivm_abi::codec::decode_canonical_norito::<StatePath>(&encoded)
+                            && path.as_ref() == "ledger"
+                        {
+                            root_paths.push(*dest);
+                        }
+                    }
+                    Instr::DataRef {
                         kind: DataRefKind::Name,
                         value,
                         ..
-                    } if value == "ledger" => saw_root_path = true,
-                    Instr::StateSet { .. } => state_sets += 1,
+                    } if value == "ledger" => saw_legacy_name_root = true,
+                    Instr::StateSet { path, .. } => state_set_paths.push(*path),
                     Instr::TupleGet { .. } => tuple_gets += 1,
                     Instr::StateValueEncode { .. } => aggregate_encodes += 1,
                     _ => {}
@@ -12534,9 +12691,22 @@ seiyaku RangeOffsetBits {{
             }
         }
 
-        assert!(saw_root_path, "missing durable write for ledger root");
         assert_eq!(
-            state_sets, 1,
+            root_paths.len(),
+            1,
+            "durable ledger root must have one canonical NoritoBytes(StatePath) literal"
+        );
+        assert!(
+            !saw_legacy_name_root,
+            "durable ledger root must not use the retired Name transport"
+        );
+        assert_eq!(
+            state_set_paths, root_paths,
+            "the one durable write must consume the canonical ledger StatePath"
+        );
+        assert_eq!(
+            state_set_paths.len(),
+            1,
             "aggregate state must be written exactly once"
         );
         assert_eq!(aggregate_encodes, 1, "aggregate state must be encoded once");

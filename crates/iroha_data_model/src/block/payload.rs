@@ -353,13 +353,10 @@ impl SignedBlock {
 
     /// Set or clear the DA commitment bundle and update the header hash accordingly.
     pub fn set_da_commitments(&mut self, commitments: Option<DaCommitmentBundle>) {
-        let hash = commitments.as_ref().and_then(|bundle| {
-            if bundle.is_empty() {
-                None
-            } else {
-                Some(bundle.canonical_hash())
-            }
-        });
+        let commitments = commitments.filter(|bundle| !bundle.is_empty());
+        let hash = commitments
+            .as_ref()
+            .and_then(DaCommitmentBundle::merkle_commitment);
         self.payload.da_commitments = commitments;
         self.payload.header.set_da_commitments_hash(hash);
     }
@@ -379,9 +376,10 @@ impl SignedBlock {
 
     /// Set or clear the DA pin intent bundle and update the header hash accordingly.
     pub fn set_da_pin_intents(&mut self, intents: Option<DaPinIntentBundle>) {
+        let intents = intents.filter(|bundle| !bundle.is_empty());
         let hash = intents
             .as_ref()
-            .and_then(|bundle| bundle.merkle_root().map(HashOf::from_untyped_unchecked));
+            .and_then(DaPinIntentBundle::merkle_commitment);
         self.payload.da_pin_intents = intents;
         self.payload.header.set_da_pin_intents_hash(hash);
     }

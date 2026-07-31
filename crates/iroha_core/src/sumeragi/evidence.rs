@@ -1634,6 +1634,7 @@ mod tests {
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
                     encoding: wire_v2::PayloadEncoding::Plain,
                     chunk_size_bytes: 32,
@@ -1689,6 +1690,7 @@ mod tests {
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
+                1,
                 Hash::new(b"v2 evidence executed block wire"),
             )
         }
@@ -1821,6 +1823,8 @@ mod tests {
             Hash::new(b"v2 evidence finality parent state"),
             Hash::new(b"v2 evidence finality post state"),
             Hash::new(b"v2 evidence finality ordinary writes"),
+            u64::try_from(block.encode_wire().expect("v2 evidence block wire").len())
+                .expect("v2 evidence block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("canonical executed block wire"),

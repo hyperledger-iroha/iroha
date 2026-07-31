@@ -698,7 +698,7 @@ final class SccpV1Tests: XCTestCase {
             publicSignalSchemaHash()
         )
         let finalityAnchor = outboundProofPolicy.soraFinalityAnchor
-        XCTAssertEqual(finalityAnchor.protocolVersion, 3)
+        XCTAssertEqual(finalityAnchor.protocolVersion, 4)
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
         XCTAssertEqual(
@@ -708,7 +708,7 @@ final class SccpV1Tests: XCTestCase {
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
-            { $0["protocol_version"] = "3" },
+            { $0["protocol_version"] = "4" },
             { $0["protocol_version"] = true },
             { $0["validator_set_epoch"] = 2 },
             { $0["checkpoint_context_id"] = String(repeating: "0", count: 64) },
@@ -726,8 +726,8 @@ final class SccpV1Tests: XCTestCase {
         let canonicalJSON = String(data: valid, encoding: .utf8)!
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
             canonicalJSON.replacingOccurrences(
-                of: "\"protocol_version\":3",
-                with: "\"protocol_version\":3.0"
+                of: "\"protocol_version\":4",
+                with: "\"protocol_version\":4.0"
             ).utf8
         )))
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
@@ -1718,7 +1718,7 @@ final class SccpV1Tests: XCTestCase {
         return ([
             "version": 1,
             "source_network": network("sora-taira"),
-            "protocol_version": 3,
+            "protocol_version": 4,
             "chain_id_hash": chainHash.hexEncodedString().uppercased(),
             "checkpoint_height": 7,
             "checkpoint_block_hash": checkpoint.hexEncodedString().uppercased(),

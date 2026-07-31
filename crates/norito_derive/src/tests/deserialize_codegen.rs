@@ -104,8 +104,12 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         "ordinary framed struct fields must use the shared canonical helper"
     );
     assert!(
-        enum_expansion.contains("decode_context_field_flexible::<Opaque>"),
-        "tuple-enum compatibility decoding must use the shared flexible helper"
+        enum_expansion.contains("decode_context_field_canonical_or_archived::<Opaque>"),
+        "framed tuple-enum fields must remain bounded by their declared length"
+    );
+    assert!(
+        !enum_expansion.contains("decode_context_field_flexible"),
+        "enum fields must not consume bytes beyond their declared frame"
     );
     assert!(
         enum_expansion.contains("decode_context_field_prefix::<Vec<u32>>"),
@@ -118,8 +122,9 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         );
     }
     assert!(
-        struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len)"),
-        "packed-struct bitsets must use the bounded payload helper"
+        struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len,)"),
+        "packed-struct bitsets must use the bounded payload helper; expansion: \
+         {struct_expansion}"
     );
     for expansion in [&struct_expansion, &tuple_expansion] {
         assert!(
@@ -147,4 +152,16 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
         "enum tags must use the bounded payload helper"
     );
+    for struct_only_token in [
+        "decode_packed_offsets_slice",
+        "__sizes",
+        "__bitset",
+        "__packed_data_len",
+    ] {
+        assert!(
+            !enum_expansion.contains(struct_only_token),
+            "enum codegen must not inherit packed-struct offset/size loops: \
+             {struct_only_token}"
+        );
+    }
 }

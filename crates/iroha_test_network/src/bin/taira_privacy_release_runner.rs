@@ -21,7 +21,7 @@ use std::{
         process::{CommandExt, ExitStatusExt},
     },
     path::{Component, Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -45,9 +45,9 @@ use iroha_core::privacy_release_evidence::{
     PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1, PRIVACY_RELEASE_MAX_PROOF_ARTIFACTS_V1,
     PRIVACY_RELEASE_MAX_TOTAL_PROOF_ARTIFACT_BYTES_V1, PRIVACY_RELEASE_PROOF_ARTIFACT_COUNT_V1,
     PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1, PRIVACY_RELEASE_STAGE_COORDINATES_V1,
-    PRIVACY_RELEASE_STAGE_COUNT_V1, PrivacyReleaseCaseKindV1, PrivacyReleaseFailureClassV1,
-    PrivacyReleaseProofArtifactEvidenceV1, PrivacyReleaseResourceFactsV1,
-    PrivacyReleaseStageCoordinateV1, PrivacyReleaseStageEvidenceV1,
+    PRIVACY_RELEASE_STAGE_COUNT_V1, PRIVACY_RELEASE_STAGE_STACK_BYTES_V1, PrivacyReleaseCaseKindV1,
+    PrivacyReleaseFailureClassV1, PrivacyReleaseProofArtifactEvidenceV1,
+    PrivacyReleaseResourceFactsV1, PrivacyReleaseStageCoordinateV1, PrivacyReleaseStageEvidenceV1,
     initialize_privacy_release_rayon_pool_v1, privacy_exact12_matrix_bytes_v1,
     privacy_exact12_typed_envelope_rows_v1, privacy_release_process_profile_v1,
     privacy_release_proof_artifact_ceiling_v1, privacy_release_proof_artifact_count_v1,
@@ -57,17 +57,45 @@ use iroha_core::privacy_release_evidence::{
 };
 use iroha_crypto::{sha256, sha256_reader_bounded};
 use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
+#[cfg(all(
+    test,
+    target_os = "linux",
+    target_endian = "little",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use nix::sys::resource::getrlimit;
 use nix::{
     libc,
-    sys::{
-        resource::{Resource, rlim_t, setrlimit},
-        signal::{Signal, kill},
-    },
+    sys::resource::{Resource, rlim_t, setrlimit},
     unistd::Pid,
 };
 use norito::{
     DecodeLimits,
     derive::{JsonDeserialize, JsonSerialize},
+};
+
+#[path = "taira_privacy_release_runner/expectation_pins.rs"]
+mod expectation_pins;
+#[path = "taira_privacy_release_runner/process_resources.rs"]
+mod process_resources;
+#[path = "taira_privacy_release_runner/resource_certificate.rs"]
+mod resource_certificate;
+use expectation_pins::empty_expected_evidence;
+#[cfg(all(
+    target_os = "linux",
+    target_endian = "little",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use process_resources::install_pre_exec_stage_stack_limit_v1;
+#[cfg(test)]
+use process_resources::{
+    SampledProcessMemoryV1, parse_process_status_memory_v1, rusage_peak_rss_bytes, wait4_exact_pid,
+};
+use process_resources::{
+    StageChildGuardV1, StageProcessCeilingsV1, WaitedStageChildV1,
+    canonical_stage_process_ceilings_v1, checked_stage_cpu_limit_seconds_v1, current_process_id_v1,
+    elapsed_millis_ceil, install_hidden_stage_resource_limits, kill_stage_process_group,
+    sample_process_memory_v1, validate_process_ceilings, validate_stage_process_ceilings_v1,
 };
 
 const ARTIFACT_SCHEMA_VERSION_V1: u16 = 1;
@@ -217,6 +245,9 @@ struct PrivacyReleaseExpectationsV1 {
 #[norito(deny_unknown_fields)]
 struct PrivacyReleaseIsolationPolicyV1 {
     stage_rayon_threads: u16,
+    main_thread_stack_bytes: u64,
+    rayon_worker_stack_bytes: u64,
+    watchdog_thread_stack_bytes: u64,
     max_stage_tasks: u64,
     max_stage_open_files: u64,
     max_stage_result_file_bytes: u64,
@@ -248,6 +279,8 @@ struct PrivacyReleaseCommandManifestV1 {
     exact12_matrix_sha256: [u8; 32],
     expectations_norito_sha256: [u8; 32],
     expectations_json_sha256: [u8; 32],
+    x509_resource_norito_sha256: [u8; 32],
+    x509_resource_json_sha256: [u8; 32],
     cargo_lock_sha256: [u8; 32],
     validator_binary_sha256: [u8; 32],
     runner_binary_sha256: [u8; 32],
@@ -271,6 +304,7 @@ struct PrivacyReleaseMeasuredStageV1 {
     evidence: PrivacyReleaseStageEvidenceV1,
     elapsed_millis: u64,
     peak_rss_bytes: u64,
+    peak_address_space_bytes: u64,
 }
 
 #[derive(
@@ -323,6 +357,7 @@ struct PrivacyReleaseReceiptV1 {
     source_sha256: [u8; 32],
     exact12_matrix_sha256: [u8; 32],
     expectations: PrivacyReleaseArtifactPairDigestV1,
+    x509_resource: PrivacyReleaseArtifactPairDigestV1,
     cargo_lock_sha256: [u8; 32],
     validator_binary_sha256: [u8; 32],
     runner_binary_sha256: [u8; 32],
@@ -424,6 +459,7 @@ struct CommonInputsV1 {
     exact12_path: PathBuf,
     expectations_norito_path: PathBuf,
     expectations_json_path: PathBuf,
+    x509_resource_paths: resource_certificate::ResourceInputPathsV1,
     cargo_lock_path: PathBuf,
     validator_binary_path: PathBuf,
 }
@@ -434,6 +470,7 @@ struct LoadedInputsV1 {
     expectations: PrivacyReleaseExpectationsV1,
     expectations_norito_bytes: Vec<u8>,
     expectations_json_bytes: Vec<u8>,
+    x509_resource: resource_certificate::LoadedResourceCertificateV1,
     cargo_lock_sha256: [u8; 32],
     validator_binary_sha256: [u8; 32],
     runner_binary_sha256: [u8; 32],
@@ -465,6 +502,7 @@ struct CaptureOptionsV1 {
     exact12_path: PathBuf,
     expectations_norito_out: PathBuf,
     expectations_json_out: PathBuf,
+    x509_resource: resource_certificate::CaptureResourceOptionsV1,
     max_elapsed_millis: u64,
     max_peak_rss_bytes: u64,
     max_address_space_bytes: u64,
@@ -475,13 +513,7 @@ struct MeasuredStageV1 {
     evidence: PrivacyReleaseStageEvidenceV1,
     elapsed_millis: u64,
     peak_rss_bytes: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct StageProcessCeilingsV1 {
-    elapsed_millis: u64,
-    peak_rss_bytes: u64,
-    address_space_bytes: u64,
+    peak_address_space_bytes: u64,
 }
 
 fn main() {
@@ -528,11 +560,12 @@ fn real_main() -> Result<(), DynError> {
             verify(common, artifacts)
         }
         "capture-expectations" => {
-            let options = parse_options(&rest, &capture_option_names())?;
+            let options = parse_options(&rest, &resource_certificate::capture_option_names())?;
             let capture = CaptureOptionsV1 {
                 exact12_path: path_option(&options, "exact12-matrix")?,
                 expectations_norito_out: path_option(&options, "expectations-norito-out")?,
                 expectations_json_out: path_option(&options, "expectations-json-out")?,
+                x509_resource: resource_certificate::CaptureResourceOptionsV1::parse(&options)?,
                 max_elapsed_millis: canonical_u64_option(&options, "elapsed-ceiling-ms")?,
                 max_peak_rss_bytes: canonical_u64_option(&options, "peak-rss-ceiling-bytes")?,
                 max_address_space_bytes: canonical_u64_option(
@@ -543,7 +576,7 @@ fn real_main() -> Result<(), DynError> {
             capture_expectations(capture)
         }
         "__stage" => {
-            let options = parse_options(&rest, &stage_option_names())?;
+            let options = parse_options(&rest, &process_resources::stage_option_names())?;
             run_hidden_stage(&options)
         }
         _ => Err(format!("unknown mode `{mode}`").into()),
@@ -557,6 +590,8 @@ fn common_option_names() -> Vec<&'static str> {
         "exact12-matrix",
         "expectations-norito",
         "expectations-json",
+        "x509-resource-norito",
+        "x509-resource-json",
         "cargo-lock",
         "validator-binary",
     ]
@@ -586,28 +621,6 @@ fn verify_option_names() -> Vec<&'static str> {
         "receipt-json",
     ]);
     names
-}
-
-fn capture_option_names() -> Vec<&'static str> {
-    vec![
-        "exact12-matrix",
-        "expectations-norito-out",
-        "expectations-json-out",
-        "elapsed-ceiling-ms",
-        "peak-rss-ceiling-bytes",
-        "address-space-ceiling-bytes",
-    ]
-}
-
-fn stage_option_names() -> Vec<&'static str> {
-    vec![
-        "protocol",
-        "case",
-        "out-fd",
-        "elapsed-ceiling-ms",
-        "peak-rss-ceiling-bytes",
-        "address-space-ceiling-bytes",
-    ]
 }
 
 fn parse_options(
@@ -674,6 +687,7 @@ fn parse_common_inputs(options: &BTreeMap<String, String>) -> Result<CommonInput
         exact12_path: path_option(options, "exact12-matrix")?,
         expectations_norito_path: path_option(options, "expectations-norito")?,
         expectations_json_path: path_option(options, "expectations-json")?,
+        x509_resource_paths: resource_certificate::ResourceInputPathsV1::parse(options)?,
         cargo_lock_path: path_option(options, "cargo-lock")?,
         validator_binary_path: path_option(options, "validator-binary")?,
     })
@@ -745,6 +759,7 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
                 evidence: stage.evidence,
                 elapsed_millis: stage.elapsed_millis,
                 peak_rss_bytes: stage.peak_rss_bytes,
+                peak_address_space_bytes: stage.peak_address_space_bytes,
             })
             .collect(),
     };
@@ -783,6 +798,10 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
         expectations: PrivacyReleaseArtifactPairDigestV1 {
             norito_sha256: sha256_bytes(&loaded.expectations_norito_bytes),
             json_sha256: sha256_bytes(&loaded.expectations_json_bytes),
+        },
+        x509_resource: PrivacyReleaseArtifactPairDigestV1 {
+            norito_sha256: sha256_bytes(&loaded.x509_resource.norito_bytes),
+            json_sha256: sha256_bytes(&loaded.x509_resource.json_bytes),
         },
         cargo_lock_sha256: loaded.cargo_lock_sha256,
         validator_binary_sha256: loaded.validator_binary_sha256,
@@ -905,21 +924,29 @@ fn verify(common: CommonInputsV1, artifacts: VerifyArtifactsV1) -> Result<(), Dy
 
 fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
     ensure_taira_release_platform()?;
+    expectation_pins::require_capture_open_v1()?;
     validate_process_ceilings(
         options.max_elapsed_millis,
         options.max_peak_rss_bytes,
         options.max_address_space_bytes,
     )?;
-    preflight_output_paths(&[
+    let mut capture_outputs = vec![
         options.expectations_norito_out.clone(),
         options.expectations_json_out.clone(),
-    ])?;
+    ];
+    capture_outputs.extend(options.x509_resource.output_paths());
+    preflight_output_paths(&capture_outputs)?;
     let exact12 = secure_read(&options.exact12_path, MAX_EXACT12_BYTES, "exact12 matrix")?;
     validate_exact12_matrix(&exact12.bytes)?;
     let runner = prepare_immutable_runner()?;
     if exact12.identity == runner.source_identity {
         return Err("exact12 matrix aliases the release runner executable".into());
     }
+    let x509_environment = resource_certificate::load_capture_environment_v1(
+        &options.x509_resource,
+        &exact12,
+        &runner,
+    )?;
 
     let provisional_stages = canonical_stage_coordinates()?
         .iter()
@@ -951,6 +978,7 @@ fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
         stages: provisional_stages,
     };
     let measured = run_all_stages(&provisional, &runner)?;
+    let x509_measurements = resource_certificate::capture_measurements_v1(&measured)?;
     let expectations = PrivacyReleaseExpectationsV1 {
         schema_version: ARTIFACT_SCHEMA_VERSION_V1,
         stage_count: u16::try_from(PRIVACY_RELEASE_STAGE_COUNT_V1)
@@ -975,62 +1003,29 @@ fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
         "expectations Norito",
     )?;
     enforce_encoded_size(json.len(), MAX_EXPECTATIONS_JSON_BYTES, "expectations JSON")?;
+    let x509_resource = resource_certificate::build_capture_artifacts_v1(
+        x509_measurements,
+        &norito,
+        &json,
+        x509_environment,
+    )?;
     write_artifact_set_create_new(&[
         (&options.expectations_norito_out, norito.as_slice()),
         (&options.expectations_json_out, json.as_slice()),
+        (
+            &options.x509_resource.norito_out,
+            x509_resource.norito.as_slice(),
+        ),
+        (
+            &options.x509_resource.json_out,
+            x509_resource.json.as_slice(),
+        ),
     ])?;
     println!(
         "captured {} native stages; review and freeze both expectation projections",
         PRIVACY_RELEASE_STAGE_COUNT_V1
     );
     Ok(())
-}
-
-fn empty_expected_evidence(
-    protocol_id: PrivacyProtocolIdV1,
-    case_kind: PrivacyReleaseCaseKindV1,
-) -> PrivacyReleaseStageEvidenceV1 {
-    let resources =
-        privacy_release_resource_facts_v1(protocol_id, case_kind).unwrap_or_else(|| {
-            debug_assert_eq!(protocol_id, PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
-            // Internal pre-execution sentinel only. The unavailable zk-X509 stage
-            // fails before capture can persist this value.
-            PrivacyReleaseResourceFactsV1 {
-                primary_units: 0,
-                primary_ceiling: 0,
-                secondary_units: 0,
-                secondary_ceiling: 0,
-                relation_depth: 0,
-                relation_depth_ceiling: 0,
-            }
-        });
-    let proof_artifacts = (0..privacy_release_proof_artifact_count_v1(protocol_id, case_kind))
-        .map(|artifact_ordinal| {
-            let canonical_proof_bytes = vec![artifact_ordinal.saturating_add(1)];
-            PrivacyReleaseProofArtifactEvidenceV1 {
-                artifact_ordinal,
-                proof_sha256: sha256_bytes(&canonical_proof_bytes),
-                canonical_proof_bytes,
-                proof_bytes_ceiling: privacy_release_proof_artifact_ceiling_v1(
-                    protocol_id,
-                    case_kind,
-                    artifact_ordinal,
-                )
-                .expect("closed stage artifact has one canonical ceiling"),
-            }
-        })
-        .collect();
-    PrivacyReleaseStageEvidenceV1 {
-        schema_version: PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1,
-        stage_ordinal: privacy_release_stage_ordinal_v1(protocol_id, case_kind),
-        protocol_id,
-        case_kind,
-        protocol_descriptor: privacy_release_protocol_descriptor_v1(protocol_id).to_owned(),
-        public_statement_sha256: [0; 32],
-        proof_artifacts,
-        failure_class: PrivacyReleaseFailureClassV1::NotApplicable,
-        resources,
-    }
 }
 
 fn load_common_inputs(
@@ -1043,6 +1038,8 @@ fn load_common_inputs(
             common.exact12_path.clone(),
             common.expectations_norito_path.clone(),
             common.expectations_json_path.clone(),
+            common.x509_resource_paths.norito.clone(),
+            common.x509_resource_paths.json.clone(),
             common.cargo_lock_path.clone(),
             common.validator_binary_path.clone(),
             runner.source_path.clone(),
@@ -1055,27 +1052,20 @@ fn load_common_inputs(
 
     let exact12 = secure_read(&common.exact12_path, MAX_EXACT12_BYTES, "exact12 matrix")?;
     validate_exact12_matrix(&exact12.bytes)?;
-    let expectations_norito = secure_read(
-        &common.expectations_norito_path,
-        MAX_EXPECTATIONS_NORITO_BYTES,
-        "expectations Norito",
+    let (expectations, expectations_norito, expectations_json) =
+        expectation_pins::load_pinned_pair_v1(
+            &common.expectations_norito_path,
+            &common.expectations_json_path,
+        )?;
+    let x509_resource = resource_certificate::load_pinned_pair_v1(
+        &common.x509_resource_paths.norito,
+        &common.x509_resource_paths.json,
     )?;
-    let expectations_json = secure_read(
-        &common.expectations_json_path,
-        MAX_EXPECTATIONS_JSON_BYTES,
-        "expectations JSON",
-    )?;
-    let expectations: PrivacyReleaseExpectationsV1 = decode_canonical_norito(
-        &expectations_norito.bytes,
-        MAX_EXPECTATIONS_NORITO_BYTES,
-        "expectations Norito",
-    )?;
-    let json_expectations: PrivacyReleaseExpectationsV1 =
-        decode_canonical_json(&expectations_json.bytes, "expectations JSON")?;
-    if expectations != json_expectations {
-        return Err("expectations JSON is not typed-equal to authoritative Norito".into());
+    if x509_resource.certificate.expectations_norito_sha256 != expectations_norito.sha256
+        || x509_resource.certificate.expectations_json_sha256 != expectations_json.sha256
+    {
+        return Err("X.509 resource certificate binds a different expectation pair".into());
     }
-    validate_expectations(&expectations)?;
 
     let cargo_lock = secure_hash(&common.cargo_lock_path, MAX_CARGO_LOCK_BYTES, "Cargo.lock")?;
     let validator = secure_hash(
@@ -1091,6 +1081,8 @@ fn load_common_inputs(
         exact12.identity,
         expectations_norito.identity,
         expectations_json.identity,
+        x509_resource.norito_identity,
+        x509_resource.json_identity,
         cargo_lock.identity,
         validator.identity,
         runner.source_identity,
@@ -1105,6 +1097,7 @@ fn load_common_inputs(
         expectations,
         expectations_norito_bytes: expectations_norito.bytes,
         expectations_json_bytes: expectations_json.bytes,
+        x509_resource,
         cargo_lock_sha256: cargo_lock.sha256,
         validator_binary_sha256: validator.sha256,
         runner_binary_sha256: runner.sha256,
@@ -1120,6 +1113,8 @@ fn build_command_manifest(loaded: &LoadedInputsV1) -> PrivacyReleaseCommandManif
         exact12_matrix_sha256: loaded.exact12_sha256,
         expectations_norito_sha256: sha256_bytes(&loaded.expectations_norito_bytes),
         expectations_json_sha256: sha256_bytes(&loaded.expectations_json_bytes),
+        x509_resource_norito_sha256: sha256_bytes(&loaded.x509_resource.norito_bytes),
+        x509_resource_json_sha256: sha256_bytes(&loaded.x509_resource.json_bytes),
         cargo_lock_sha256: loaded.cargo_lock_sha256,
         validator_binary_sha256: loaded.validator_binary_sha256,
         runner_binary_sha256: loaded.runner_binary_sha256,
@@ -1135,6 +1130,10 @@ fn build_command_manifest(loaded: &LoadedInputsV1) -> PrivacyReleaseCommandManif
             "--expectations-norito".to_owned(),
             "<sha256-bound-relocatable-input>".to_owned(),
             "--expectations-json".to_owned(),
+            "<sha256-bound-relocatable-input>".to_owned(),
+            "--x509-resource-norito".to_owned(),
+            "<sha256-bound-relocatable-input>".to_owned(),
+            "--x509-resource-json".to_owned(),
             "<sha256-bound-relocatable-input>".to_owned(),
             "--cargo-lock".to_owned(),
             "<sha256-bound-relocatable-input>".to_owned(),
@@ -1164,8 +1163,13 @@ fn build_command_manifest(loaded: &LoadedInputsV1) -> PrivacyReleaseCommandManif
 }
 
 fn canonical_isolation_policy_v1() -> PrivacyReleaseIsolationPolicyV1 {
+    let stage_stack_bytes = u64::try_from(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1)
+        .expect("frozen 8 MiB release stack size fits u64");
     PrivacyReleaseIsolationPolicyV1 {
         stage_rayon_threads: STAGE_RAYON_THREAD_COUNT_V1,
+        main_thread_stack_bytes: stage_stack_bytes,
+        rayon_worker_stack_bytes: stage_stack_bytes,
+        watchdog_thread_stack_bytes: stage_stack_bytes,
         max_stage_tasks: MAX_STAGE_TASKS_V1,
         max_stage_open_files: MAX_STAGE_OPEN_FILES_V1,
         max_stage_result_file_bytes: MAX_CHILD_RESULT_BYTES,
@@ -1295,10 +1299,14 @@ fn run_stage_child(
     let pid_raw = child.pid_raw();
     let pid = Pid::from_raw(pid_raw);
     let mut sampled_peak_rss = 0_u64;
+    let mut sampled_peak_address_space = 0_u64;
     let mut killed_for: Option<&'static str> = None;
     let waited: WaitedStageChildV1;
     loop {
-        sampled_peak_rss = sampled_peak_rss.max(sample_process_peak_rss_bytes(pid_raw)?);
+        let sampled_memory = sample_process_memory_v1(pid_raw)?;
+        sampled_peak_rss = sampled_peak_rss.max(sampled_memory.peak_rss_bytes);
+        sampled_peak_address_space =
+            sampled_peak_address_space.max(sampled_memory.peak_address_space_bytes);
         let elapsed_millis = elapsed_millis_ceil(start.elapsed())?;
         let diagnostic_bytes = anonymous_file_len(&stdout_file, "child stdout")?
             .checked_add(anonymous_file_len(&stderr_file, "child stderr")?)
@@ -1309,6 +1317,10 @@ fn run_stage_child(
         }
         if sampled_peak_rss > peak_rss_ceiling_bytes && killed_for.is_none() {
             killed_for = Some("resident-memory ceiling");
+            let _ = kill_stage_process_group(pid_raw, pid);
+        }
+        if sampled_peak_address_space > address_space_ceiling_bytes && killed_for.is_none() {
+            killed_for = Some("address-space ceiling");
             let _ = kill_stage_process_group(pid_raw, pid);
         }
         if elapsed_millis > elapsed_ceiling_millis && killed_for.is_none() {
@@ -1323,10 +1335,11 @@ fn run_stage_child(
     }
     let elapsed_millis = elapsed_millis_ceil(start.elapsed())?;
     let peak_rss_bytes = sampled_peak_rss.max(waited.peak_rss_bytes);
+    let peak_address_space_bytes = sampled_peak_address_space;
 
     if let Some(reason) = killed_for {
         return Err(format!(
-            "stage {}/{} exceeded its {reason} (elapsed={elapsed_millis}ms, peak_rss={peak_rss_bytes} bytes)",
+            "stage {}/{} exceeded its {reason} (elapsed={elapsed_millis}ms, peak_rss={peak_rss_bytes} bytes, peak_address_space={peak_address_space_bytes} bytes)",
             protocol_id.canonical_label(),
             case_kind.canonical_label()
         )
@@ -1375,6 +1388,17 @@ fn run_stage_child(
         )
         .into());
     }
+    if peak_address_space_bytes == 0 {
+        return Err("exact-PID /proc peak-address-space accounting was unavailable".into());
+    }
+    if peak_address_space_bytes > address_space_ceiling_bytes {
+        return Err(format!(
+            "stage {}/{} exceeded peak address-space ceiling: {peak_address_space_bytes} > {address_space_ceiling_bytes} bytes",
+            protocol_id.canonical_label(),
+            case_kind.canonical_label()
+        )
+        .into());
+    }
     let stdout =
         read_bounded_anonymous_file(&mut stdout_file, MAX_CHILD_DIAGNOSTIC_BYTES, "child stdout")?;
     if !stdout.is_empty() {
@@ -1395,6 +1419,7 @@ fn run_stage_child(
         evidence,
         elapsed_millis,
         peak_rss_bytes,
+        peak_address_space_bytes,
     })
 }
 
@@ -1427,14 +1452,7 @@ fn run_hidden_stage(options: &BTreeMap<String, String>) -> Result<(), DynError> 
     let out_fd = canonical_stage_result_fd_option(options)?;
     let ceilings = hidden_stage_process_ceilings_v1(protocol_id, options)?;
     let environment = env::vars_os().collect::<Vec<_>>();
-    if environment
-        != [(
-            OsString::from("RAYON_NUM_THREADS"),
-            OsString::from(STAGE_RAYON_THREADS_V1),
-        )]
-    {
-        return Err("hidden stage environment is not the exact frozen Rayon policy".into());
-    }
+    validate_hidden_stage_environment_v1(&environment)?;
     install_hidden_stage_resource_limits(ceilings.elapsed_millis, ceilings.address_space_bytes)?;
     close_post_exec_descriptors_v1(out_fd)?;
     drop_stage_privileges_and_rearm_parent_death_v1()?;
@@ -1472,127 +1490,18 @@ fn run_hidden_stage(options: &BTreeMap<String, String>) -> Result<(), DynError> 
     Ok(())
 }
 
-fn kill_stage_process_group(pid_raw: i32, pid: Pid) -> bool {
-    let process_group = Pid::from_raw(pid_raw.saturating_neg());
-    kill(process_group, Signal::SIGKILL)
-        .or_else(|_| kill(pid, Signal::SIGKILL))
-        .is_ok()
-}
-
-struct WaitedStageChildV1 {
-    status: ExitStatus,
-    peak_rss_bytes: u64,
-}
-
-struct StageChildGuardV1 {
-    _child: Child,
-    pid_raw: i32,
-    reaped: bool,
-}
-
-impl StageChildGuardV1 {
-    fn new(mut child: Child) -> Result<Self, DynError> {
-        let pid_raw = match i32::try_from(child.id()) {
-            Ok(pid) if pid > 0 => pid,
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("child PID is outside the positive i32 process-id domain".into());
-            }
-        };
-        Ok(Self {
-            _child: child,
-            pid_raw,
-            reaped: false,
-        })
-    }
-
-    const fn pid_raw(&self) -> i32 {
-        self.pid_raw
-    }
-
-    fn try_wait4(&mut self) -> Result<Option<WaitedStageChildV1>, DynError> {
-        let Some((status, usage)) = wait4_exact_pid(self.pid_raw, libc::WNOHANG)
-            .map_err(|error| format!("wait4 failed for isolated stage: {error}"))?
-        else {
-            return Ok(None);
-        };
-        self.reaped = true;
-        Ok(Some(WaitedStageChildV1 {
-            status: ExitStatus::from_raw(status),
-            peak_rss_bytes: rusage_peak_rss_bytes(&usage)?,
-        }))
-    }
-}
-
-impl Drop for StageChildGuardV1 {
-    fn drop(&mut self) {
-        if self.reaped {
-            return;
-        }
-        let pid = Pid::from_raw(self.pid_raw);
-        let _ = kill_stage_process_group(self.pid_raw, pid);
-        // A blocking exact-PID wait after SIGKILL guarantees that no `?`
-        // return path can leak a zombie or a running direct child.
-        let _ = wait4_exact_pid(self.pid_raw, 0);
-        self.reaped = true;
-    }
-}
-
-fn wait4_exact_pid(
-    pid_raw: i32,
-    options: libc::c_int,
-) -> std::io::Result<Option<(libc::c_int, libc::rusage)>> {
-    loop {
-        let mut status = 0;
-        let mut usage = MaybeUninit::<libc::rusage>::uninit();
-        // SAFETY: `status` and `usage` point to valid writable storage, the
-        // positive PID selects exactly one owned child, and `wait4` initializes
-        // `usage` whenever it returns that PID.
-        let observed = unsafe { libc::wait4(pid_raw, &mut status, options, usage.as_mut_ptr()) };
-        if observed == 0 {
-            return Ok(None);
-        }
-        if observed == pid_raw {
-            // SAFETY: a positive exact-PID `wait4` result initializes rusage.
-            return Ok(Some((status, unsafe { usage.assume_init() })));
-        }
-        if observed < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
-        }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("wait4 returned unexpected PID {observed} for child {pid_raw}"),
-        ));
-    }
-}
-
-fn rusage_peak_rss_bytes(usage: &libc::rusage) -> Result<u64, DynError> {
-    let raw = usage.ru_maxrss;
-    let unsigned = u64::try_from(raw).map_err(|_| "kernel returned negative wait4 ru_maxrss")?;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+fn validate_hidden_stage_environment_v1(
+    environment: &[(OsString, OsString)],
+) -> Result<(), DynError> {
+    if environment
+        != [(
+            OsString::from("RAYON_NUM_THREADS"),
+            OsString::from(STAGE_RAYON_THREADS_V1),
+        )]
     {
-        Ok(unsigned)
+        return Err("hidden stage environment is not the exact frozen Rayon policy".into());
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        unsigned
-            .checked_mul(1024)
-            .ok_or_else(|| "kernel wait4 ru_maxrss byte conversion overflowed".into())
-    }
-}
-
-fn current_process_id_v1() -> Result<i32, DynError> {
-    // SAFETY: `getpid` has no preconditions and cannot fail on Unix.
-    let pid = unsafe { libc::getpid() };
-    if pid <= 1 {
-        return Err("release runner PID is outside the governed process domain".into());
-    }
-    Ok(pid)
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -2222,6 +2131,7 @@ impl StageParentDeathWatchdogV1 {
         let thread_stop = Arc::clone(&stop);
         let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
         let thread = thread::Builder::new()
+            .stack_size(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1)
             .spawn(move || {
                 // Every Linux thread starts with its own cleared parent-death
                 // signal. This dedicated thread installs SIGKILL and remains
@@ -2426,6 +2336,7 @@ fn install_pre_exec_stage_controls(
     if expected_parent_pid <= 1 || result_fd < 3 {
         return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
     }
+    install_pre_exec_stage_stack_limit_v1()?;
 
     let allocation_limit: libc::rlim_t = address_space_ceiling_bytes
         .try_into()
@@ -3304,191 +3215,6 @@ fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
     Err("anonymous sealed runner preparation requires Linux memfd seals".into())
 }
 
-fn install_hidden_stage_resource_limits(
-    elapsed_ceiling_millis: u64,
-    address_space_ceiling_bytes: u64,
-) -> Result<(), DynError> {
-    // The sealed Taira runner is Linux-only. RLIMIT_AS is a separately frozen
-    // virtual-address-space containment bound; it must not be conflated with
-    // the measured resident-memory ceiling.
-    let allocation_limit: rlim_t = address_space_ceiling_bytes
-        .try_into()
-        .map_err(|_| "stage address-space ceiling exceeds rlim_t")?;
-    let cpu_seconds = checked_stage_cpu_limit_seconds_v1(elapsed_ceiling_millis)
-        .ok_or("stage CPU ceiling overflowed")?;
-    let cpu_limit: rlim_t = cpu_seconds
-        .try_into()
-        .map_err(|_| "stage CPU ceiling exceeds rlim_t")?;
-    let file_size_limit: rlim_t = MAX_CHILD_RESULT_BYTES
-        .try_into()
-        .map_err(|_| "stage output ceiling exceeds rlim_t")?;
-
-    setrlimit(Resource::RLIMIT_CORE, 0, 0)
-        .map_err(|error| format!("cannot disable hidden-stage core dumps: {error}"))?;
-    setrlimit(Resource::RLIMIT_FSIZE, file_size_limit, file_size_limit)
-        .map_err(|error| format!("cannot install hidden-stage file-size limit: {error}"))?;
-    setrlimit(Resource::RLIMIT_AS, allocation_limit, allocation_limit)
-        .map_err(|error| format!("cannot install hidden-stage address-space limit: {error}"))?;
-    setrlimit(Resource::RLIMIT_CPU, cpu_limit, cpu_limit)
-        .map_err(|error| format!("cannot install hidden-stage CPU limit: {error}"))?;
-    let open_file_limit: rlim_t = MAX_STAGE_SETUP_OPEN_FILES_V1
-        .try_into()
-        .map_err(|_| "stage open-file ceiling exceeds rlim_t")?;
-    setrlimit(Resource::RLIMIT_NOFILE, open_file_limit, open_file_limit)
-        .map_err(|error| format!("cannot install hidden-stage open-file limit: {error}"))?;
-    Ok(())
-}
-
-fn checked_stage_cpu_limit_seconds_v1(elapsed_ceiling_millis: u64) -> Option<u64> {
-    if elapsed_ceiling_millis == 0 || elapsed_ceiling_millis > MAX_STAGE_ELAPSED_MILLIS {
-        return None;
-    }
-    // RLIMIT_CPU accounts aggregate process CPU time across every thread.
-    // Scale the wall-clock allowance by the exact task ceiling so four busy
-    // Rayon workers cannot exhaust the fallback CPU guard before the parent
-    // reaches the authoritative wall-clock deadline.
-    elapsed_ceiling_millis
-        .div_ceil(1_000)
-        .checked_mul(MAX_STAGE_TASKS_V1)?
-        .checked_add(1)
-}
-
-fn validate_process_ceilings(
-    elapsed_ceiling_millis: u64,
-    peak_rss_ceiling_bytes: u64,
-    address_space_ceiling_bytes: u64,
-) -> Result<(), DynError> {
-    if elapsed_ceiling_millis == 0 || elapsed_ceiling_millis > MAX_STAGE_ELAPSED_MILLIS {
-        return Err(
-            format!("stage elapsed ceiling must be within 1..={MAX_STAGE_ELAPSED_MILLIS}").into(),
-        );
-    }
-    if !(MIN_STAGE_PEAK_RSS_BYTES..=MAX_STAGE_PEAK_RSS_BYTES).contains(&peak_rss_ceiling_bytes) {
-        return Err(format!(
-            "stage peak RSS ceiling must be within {MIN_STAGE_PEAK_RSS_BYTES}..={MAX_STAGE_PEAK_RSS_BYTES}"
-        )
-        .into());
-    }
-    if !(MIN_STAGE_ADDRESS_SPACE_BYTES..=MAX_STAGE_ADDRESS_SPACE_BYTES)
-        .contains(&address_space_ceiling_bytes)
-    {
-        return Err(format!(
-            "stage address-space ceiling must be within {MIN_STAGE_ADDRESS_SPACE_BYTES}..={MAX_STAGE_ADDRESS_SPACE_BYTES}"
-        )
-        .into());
-    }
-    if address_space_ceiling_bytes < peak_rss_ceiling_bytes {
-        return Err(
-            "stage address-space ceiling must not be smaller than its peak RSS ceiling".into(),
-        );
-    }
-    Ok(())
-}
-
-fn canonical_stage_process_ceilings_v1(
-    protocol_id: PrivacyProtocolIdV1,
-    elapsed_ceiling_millis: u64,
-    peak_rss_ceiling_bytes: u64,
-    address_space_ceiling_bytes: u64,
-) -> Result<StageProcessCeilingsV1, DynError> {
-    // Protocol profiles govern wall time and measured resident high-water
-    // exactly. Virtual address space remains a separately supplied containment
-    // limit so it can include mappings, thread stacks, and allocator reserves
-    // that are not resident memory.
-    let (elapsed_millis, peak_rss_bytes) = match privacy_release_process_profile_v1(protocol_id) {
-        Some(profile) => {
-            if profile.protocol_id != protocol_id {
-                return Err("core returned a mismatched privacy release process profile".into());
-            }
-            (
-                profile.elapsed_ceiling_millis,
-                profile.peak_rss_ceiling_bytes,
-            )
-        }
-        None => (elapsed_ceiling_millis, peak_rss_ceiling_bytes),
-    };
-    validate_process_ceilings(elapsed_millis, peak_rss_bytes, address_space_ceiling_bytes)?;
-    Ok(StageProcessCeilingsV1 {
-        elapsed_millis,
-        peak_rss_bytes,
-        address_space_bytes: address_space_ceiling_bytes,
-    })
-}
-
-fn validate_stage_process_ceilings_v1(
-    protocol_id: PrivacyProtocolIdV1,
-    elapsed_ceiling_millis: u64,
-    peak_rss_ceiling_bytes: u64,
-    address_space_ceiling_bytes: u64,
-) -> Result<(), DynError> {
-    let supplied = StageProcessCeilingsV1 {
-        elapsed_millis: elapsed_ceiling_millis,
-        peak_rss_bytes: peak_rss_ceiling_bytes,
-        address_space_bytes: address_space_ceiling_bytes,
-    };
-    let canonical = canonical_stage_process_ceilings_v1(
-        protocol_id,
-        elapsed_ceiling_millis,
-        peak_rss_ceiling_bytes,
-        address_space_ceiling_bytes,
-    )?;
-    if supplied != canonical {
-        return Err(format!(
-            "stage {} does not match its canonical protocol-specific process profile",
-            protocol_id.canonical_label()
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn sample_process_peak_rss_bytes(pid: i32) -> Result<u64, DynError> {
-    #[cfg(target_os = "linux")]
-    {
-        let status_path = PathBuf::from(format!("/proc/{pid}/status"));
-        let bytes = match fs::read(&status_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(error) => {
-                return Err(format!("failed to sample child resident memory: {error}").into());
-            }
-        };
-        if bytes.len() > 1024 * 1024 {
-            return Err("child /proc status unexpectedly exceeds 1 MiB".into());
-        }
-        let text = std::str::from_utf8(&bytes).map_err(|_| "child /proc status is not UTF-8")?;
-        for line in text.lines() {
-            if let Some(value) = line.strip_prefix("VmHWM:") {
-                let fields = value.split_ascii_whitespace().collect::<Vec<_>>();
-                if fields.len() != 2 || fields[1] != "kB" {
-                    return Err("child VmHWM has an unexpected kernel format".into());
-                }
-                let kib = fields[0]
-                    .parse::<u64>()
-                    .map_err(|_| "child VmHWM is outside u64")?;
-                return kib
-                    .checked_mul(1024)
-                    .ok_or_else(|| "child VmHWM byte conversion overflowed".into());
-            }
-        }
-        Ok(0)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = pid;
-        Ok(0)
-    }
-}
-
-fn elapsed_millis_ceil(duration: Duration) -> Result<u64, DynError> {
-    let nanos = duration.as_nanos();
-    let millis = nanos
-        .checked_add(999_999)
-        .ok_or("elapsed duration overflow")?
-        / 1_000_000;
-    u64::try_from(millis).map_err(|_| "elapsed milliseconds exceed u64".into())
-}
-
 fn exit_status_description(status: ExitStatus) -> String {
     if let Some(code) = status.code() {
         format!("with code {code}")
@@ -3725,22 +3451,13 @@ fn validate_resource_facts(
     if resources.primary_ceiling == 0 {
         return Err(format!("stage {index} has an invalid frozen resource ceiling").into());
     }
-    match privacy_release_resource_facts_v1(protocol_id, case_kind) {
-        Some(expected) if resources != &expected => {
-            return Err(format!(
-                "stage {index} substituted a frozen resource fact or its governed ceiling"
-            )
-            .into());
-        }
-        Some(_) => {}
-        None if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
-            // No values are guessed here. The native stage remains explicitly
-            // unavailable, so capture cannot produce release expectations
-            // until core publishes measured canonical facts.
-        }
-        None => {
-            return Err(format!("stage {index} has no canonical resource-fact declaration").into());
-        }
+    let expected = privacy_release_resource_facts_v1(protocol_id, case_kind)
+        .ok_or_else(|| format!("stage {index} has no canonical resource-fact declaration"))?;
+    if resources != &expected {
+        return Err(format!(
+            "stage {index} substituted a frozen resource fact or its governed ceiling"
+        )
+        .into());
     }
     Ok(())
 }
@@ -3785,6 +3502,15 @@ fn validate_measured_against_expectations(
             return Err(format!(
                 "stage {index} peak RSS {} exceeds frozen ceiling {}",
                 actual.peak_rss_bytes, expected.max_peak_rss_bytes
+            )
+            .into());
+        }
+        if actual.peak_address_space_bytes == 0
+            || actual.peak_address_space_bytes > expected.max_address_space_bytes
+        {
+            return Err(format!(
+                "stage {index} peak address space {} is zero or exceeds frozen ceiling {}",
+                actual.peak_address_space_bytes, expected.max_address_space_bytes
             )
             .into());
         }
@@ -3833,6 +3559,8 @@ fn validate_stage_artifacts(
             || stored.elapsed_millis > expected.max_elapsed_millis
             || stored.peak_rss_bytes == 0
             || stored.peak_rss_bytes > expected.max_peak_rss_bytes
+            || stored.peak_address_space_bytes == 0
+            || stored.peak_address_space_bytes > expected.max_address_space_bytes
         {
             return Err(
                 format!("stored stage {index} violates its process resource ceiling").into(),
@@ -3858,6 +3586,10 @@ fn validate_receipt(
         expectations: PrivacyReleaseArtifactPairDigestV1 {
             norito_sha256: sha256_bytes(&loaded.expectations_norito_bytes),
             json_sha256: sha256_bytes(&loaded.expectations_json_bytes),
+        },
+        x509_resource: PrivacyReleaseArtifactPairDigestV1 {
+            norito_sha256: sha256_bytes(&loaded.x509_resource.norito_bytes),
+            json_sha256: sha256_bytes(&loaded.x509_resource.json_bytes),
         },
         cargo_lock_sha256: loaded.cargo_lock_sha256,
         validator_binary_sha256: loaded.validator_binary_sha256,
@@ -5350,6 +5082,13 @@ mod tests {
 
     use super::*;
 
+    #[cfg(all(
+        target_os = "linux",
+        target_endian = "little",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    const STACK_LIMIT_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_STACK_LIMIT_CHILD_MODE_V1";
+
     fn exact12_bytes() -> Vec<u8> {
         privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix")
     }
@@ -5422,7 +5161,7 @@ mod tests {
                             (
                                 profile.elapsed_ceiling_millis,
                                 profile.peak_rss_ceiling_bytes,
-                                MAX_STAGE_ADDRESS_SPACE_BYTES,
+                                profile.address_space_ceiling_bytes,
                             )
                         },
                     );
@@ -5438,22 +5177,7 @@ mod tests {
                         proof_artifacts,
                         failure_class: expected_failure,
                         resources: privacy_release_resource_facts_v1(protocol_id, case_kind)
-                            .unwrap_or_else(|| {
-                                assert_eq!(
-                                    protocol_id,
-                                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
-                                );
-                                // Synthetic runner-validation fixture only;
-                                // production capture fails the pending stage.
-                                PrivacyReleaseResourceFactsV1 {
-                                    primary_units: 1,
-                                    primary_ceiling: 1,
-                                    secondary_units: 1,
-                                    secondary_ceiling: 1,
-                                    relation_depth: 1,
-                                    relation_depth_ceiling: 1,
-                                }
-                            }),
+                            .expect("every exact-12 release stage has canonical resource facts"),
                     },
                     max_elapsed_millis,
                     max_peak_rss_bytes,
@@ -5482,8 +5206,113 @@ mod tests {
                 evidence: stage.evidence.clone(),
                 elapsed_millis: 1,
                 peak_rss_bytes: MIN_STAGE_PEAK_RSS_BYTES,
+                peak_address_space_bytes: MIN_STAGE_ADDRESS_SPACE_BYTES,
             })
             .collect()
+    }
+
+    #[test]
+    fn proc_status_memory_parser_accepts_only_exact_complete_peak_fields() {
+        let sampled = parse_process_status_memory_v1(
+            b"Name:\tstage\nVmPeak:\t65536 kB\nVmHWM:\t1024 kB\nThreads:\t1\n",
+        )
+        .expect("parse canonical Linux status memory fields");
+        assert_eq!(
+            sampled,
+            SampledProcessMemoryV1 {
+                peak_rss_bytes: 1024 * 1024,
+                peak_address_space_bytes: 65536 * 1024,
+            }
+        );
+
+        let malformed = [
+            b"VmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmHWM:\t1025 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmPeak:\t65536 kB\nVmPeak:\t65537 kB\n".as_slice(),
+            b"VmHWM:\t1024 KB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmPeak:\t65536 bytes\n".as_slice(),
+            b"VmHWM:\t1024 kB extra\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t-1 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t+1 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t01 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t18446744073709551616 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t18446744073709551615 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmPeak:\t18446744073709551616 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmPeak:\t18446744073709551615 kB\n".as_slice(),
+            b"VmHWM 1024 kB\nVmPeak:\t65536 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmPeak 65536 kB\n".as_slice(),
+            b"VmHWM:\t1024 kB\nVmPeak:\t65536 kB\n\xff".as_slice(),
+        ];
+        for status in malformed {
+            assert!(
+                parse_process_status_memory_v1(status).is_err(),
+                "malformed status unexpectedly parsed: {status:?}"
+            );
+        }
+        assert!(
+            parse_process_status_memory_v1(&vec![b'x'; 1024 * 1024 + 1]).is_err(),
+            "oversized /proc status must fail closed"
+        );
+    }
+
+    #[test]
+    fn measured_and_persisted_peak_address_space_is_nonzero_and_bounded() {
+        let expectations = canonical_expectations_v1();
+        let measured = measured_from_expectations(&expectations);
+        validate_measured_against_expectations(&measured, &expectations)
+            .expect("canonical process peaks validate");
+
+        for value in [
+            0,
+            expectations.stages[0]
+                .max_address_space_bytes
+                .checked_add(1)
+                .unwrap(),
+        ] {
+            let mut malformed = measured.clone();
+            malformed[0].peak_address_space_bytes = value;
+            assert!(validate_measured_against_expectations(&malformed, &expectations).is_err());
+        }
+
+        let artifacts = PrivacyReleaseStageArtifactsV1 {
+            schema_version: ARTIFACT_SCHEMA_VERSION_V1,
+            stage_count: u16::try_from(PRIVACY_RELEASE_STAGE_COUNT_V1).unwrap(),
+            stages: measured
+                .iter()
+                .map(|stage| PrivacyReleaseMeasuredStageV1 {
+                    evidence: stage.evidence.clone(),
+                    elapsed_millis: stage.elapsed_millis,
+                    peak_rss_bytes: stage.peak_rss_bytes,
+                    peak_address_space_bytes: stage.peak_address_space_bytes,
+                })
+                .collect(),
+        };
+        validate_stage_artifacts(&artifacts, &expectations)
+            .expect("canonical persisted process peaks validate");
+        let encoded = canonical_norito_bytes(&artifacts, "measured-stage VmPeak fixture").unwrap();
+        let decoded: PrivacyReleaseStageArtifactsV1 = decode_canonical_norito(
+            &encoded,
+            u64::try_from(encoded.len()).unwrap(),
+            "measured-stage VmPeak fixture",
+        )
+        .unwrap();
+        assert_eq!(decoded, artifacts);
+        assert_eq!(
+            decoded.stages[0].peak_address_space_bytes,
+            MIN_STAGE_ADDRESS_SPACE_BYTES
+        );
+        for value in [
+            0,
+            expectations.stages[0]
+                .max_address_space_bytes
+                .checked_add(1)
+                .unwrap(),
+        ] {
+            let mut malformed = artifacts.clone();
+            malformed.stages[0].peak_address_space_bytes = value;
+            assert!(validate_stage_artifacts(&malformed, &expectations).is_err());
+        }
     }
 
     #[test]
@@ -5593,36 +5422,20 @@ mod tests {
     }
 
     #[test]
-    fn capture_uses_frozen_resources_and_keeps_x509_as_an_unpersistable_pending_sentinel() {
+    fn capture_uses_total_frozen_resources_for_every_exact12_stage() {
         for coordinate in PRIVACY_RELEASE_STAGE_COORDINATES_V1 {
             let provisional = empty_expected_evidence(coordinate.protocol_id, coordinate.case_kind);
-            match privacy_release_resource_facts_v1(coordinate.protocol_id, coordinate.case_kind) {
-                Some(expected) => assert_eq!(provisional.resources, expected),
-                None => {
-                    assert_eq!(
-                        coordinate.protocol_id,
-                        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
-                    );
-                    assert_eq!(
-                        provisional.resources,
-                        PrivacyReleaseResourceFactsV1 {
-                            primary_units: 0,
-                            primary_ceiling: 0,
-                            secondary_units: 0,
-                            secondary_ceiling: 0,
-                            relation_depth: 0,
-                            relation_depth_ceiling: 0,
-                        }
-                    );
-                    let error =
-                        run_privacy_release_stage_v1(coordinate.protocol_id, coordinate.case_kind)
-                            .expect_err("pending zk-X509 stage must fail before capture");
-                    assert_eq!(
-                        error.class,
-                        iroha_core::privacy_release_evidence::PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
-                    );
-                }
-            }
+            let expected =
+                privacy_release_resource_facts_v1(coordinate.protocol_id, coordinate.case_kind)
+                    .expect("every exact-12 release stage has canonical resource facts");
+            assert_eq!(provisional.resources, expected);
+            validate_resource_facts(
+                &provisional.resources,
+                coordinate.protocol_id,
+                coordinate.case_kind,
+                usize::from(provisional.stage_ordinal),
+            )
+            .expect("canonical stage resource facts validate");
         }
     }
 
@@ -6068,27 +5881,38 @@ mod tests {
             .expect("zk-X509 has one canonical process profile");
         assert_eq!(profile.elapsed_ceiling_millis, 300_000);
         assert_eq!(profile.peak_rss_ceiling_bytes, 12_884_901_888);
+        assert_eq!(profile.address_space_ceiling_bytes, 34_359_738_368);
 
-        for (generic_elapsed, generic_rss) in [
-            (MAX_STAGE_ELAPSED_MILLIS, MAX_STAGE_PEAK_RSS_BYTES),
+        for (generic_elapsed, generic_rss, generic_address_space) in [
+            (
+                MAX_STAGE_ELAPSED_MILLIS,
+                MAX_STAGE_PEAK_RSS_BYTES,
+                MAX_STAGE_ADDRESS_SPACE_BYTES,
+            ),
             (
                 profile.elapsed_ceiling_millis - 1,
                 profile.peak_rss_ceiling_bytes - 1,
+                profile.address_space_ceiling_bytes - 1,
+            ),
+            (
+                profile.elapsed_ceiling_millis + 1,
+                profile.peak_rss_ceiling_bytes + 1,
+                profile.address_space_ceiling_bytes + 1,
             ),
         ] {
             let canonical = canonical_stage_process_ceilings_v1(
                 protocol_id,
                 generic_elapsed,
                 generic_rss,
-                MAX_STAGE_ADDRESS_SPACE_BYTES,
+                generic_address_space,
             )
-            .expect("capture replaces generic values with the exact zk-X509 profile");
+            .expect("capture replaces all generic values with the exact zk-X509 profile");
             assert_eq!(
                 canonical,
                 StageProcessCeilingsV1 {
                     elapsed_millis: profile.elapsed_ceiling_millis,
                     peak_rss_bytes: profile.peak_rss_ceiling_bytes,
-                    address_space_bytes: MAX_STAGE_ADDRESS_SPACE_BYTES,
+                    address_space_bytes: profile.address_space_ceiling_bytes,
                 }
             );
         }
@@ -6097,7 +5921,7 @@ mod tests {
             protocol_id,
             profile.elapsed_ceiling_millis,
             profile.peak_rss_ceiling_bytes,
-            MAX_STAGE_ADDRESS_SPACE_BYTES,
+            profile.address_space_ceiling_bytes,
         )
         .expect("exact zk-X509 process profile");
         for elapsed in [
@@ -6109,7 +5933,7 @@ mod tests {
                     protocol_id,
                     elapsed,
                     profile.peak_rss_ceiling_bytes,
-                    MAX_STAGE_ADDRESS_SPACE_BYTES,
+                    profile.address_space_ceiling_bytes,
                 )
                 .is_err()
             );
@@ -6123,29 +5947,27 @@ mod tests {
                     protocol_id,
                     profile.elapsed_ceiling_millis,
                     peak_rss,
-                    MAX_STAGE_ADDRESS_SPACE_BYTES,
+                    profile.address_space_ceiling_bytes,
+                )
+                .is_err()
+            );
+        }
+        for address_space in [
+            profile.address_space_ceiling_bytes - 1,
+            profile.address_space_ceiling_bytes + 1,
+        ] {
+            assert!(
+                validate_stage_process_ceilings_v1(
+                    protocol_id,
+                    profile.elapsed_ceiling_millis,
+                    profile.peak_rss_ceiling_bytes,
+                    address_space,
                 )
                 .is_err()
             );
         }
         assert!(
-            validate_stage_process_ceilings_v1(
-                protocol_id,
-                u64::MAX,
-                u64::MAX,
-                MAX_STAGE_ADDRESS_SPACE_BYTES,
-            )
-            .is_err()
-        );
-        assert!(
-            canonical_stage_process_ceilings_v1(
-                protocol_id,
-                profile.elapsed_ceiling_millis,
-                profile.peak_rss_ceiling_bytes,
-                profile.peak_rss_ceiling_bytes - 1,
-            )
-            .is_err(),
-            "the independent address-space containment limit cannot be below canonical peak RSS"
+            validate_stage_process_ceilings_v1(protocol_id, u64::MAX, u64::MAX, u64::MAX,).is_err()
         );
 
         let other_protocol = canonical_stage_process_ceilings_v1(
@@ -6157,6 +5979,10 @@ mod tests {
         .expect("generic limits remain available to other protocols");
         assert_eq!(other_protocol.elapsed_millis, MAX_STAGE_ELAPSED_MILLIS);
         assert_eq!(other_protocol.peak_rss_bytes, MAX_STAGE_PEAK_RSS_BYTES);
+        assert_eq!(
+            other_protocol.address_space_bytes,
+            MAX_STAGE_ADDRESS_SPACE_BYTES
+        );
     }
 
     #[test]
@@ -6175,7 +6001,7 @@ mod tests {
             ),
             (
                 "address-space-ceiling-bytes".to_owned(),
-                MAX_STAGE_ADDRESS_SPACE_BYTES.to_string(),
+                profile.address_space_ceiling_bytes.to_string(),
             ),
         ]);
         assert_eq!(
@@ -6184,7 +6010,7 @@ mod tests {
             StageProcessCeilingsV1 {
                 elapsed_millis: profile.elapsed_ceiling_millis,
                 peak_rss_bytes: profile.peak_rss_ceiling_bytes,
-                address_space_bytes: MAX_STAGE_ADDRESS_SPACE_BYTES,
+                address_space_bytes: profile.address_space_ceiling_bytes,
             }
         );
 
@@ -6204,6 +6030,17 @@ mod tests {
             mutated.insert("peak-rss-ceiling-bytes".to_owned(), peak_rss.to_string());
             assert!(hidden_stage_process_ceilings_v1(protocol_id, &mutated).is_err());
         }
+        for address_space in [
+            profile.address_space_ceiling_bytes - 1,
+            profile.address_space_ceiling_bytes + 1,
+        ] {
+            let mut mutated = exact.clone();
+            mutated.insert(
+                "address-space-ceiling-bytes".to_owned(),
+                address_space.to_string(),
+            );
+            assert!(hidden_stage_process_ceilings_v1(protocol_id, &mutated).is_err());
+        }
     }
 
     #[test]
@@ -6220,22 +6057,36 @@ mod tests {
             },
             sha256: [0; 32],
         };
-        for (elapsed, peak_rss) in [
+        for (elapsed, peak_rss, address_space) in [
             (
                 profile.elapsed_ceiling_millis - 1,
                 profile.peak_rss_ceiling_bytes,
+                profile.address_space_ceiling_bytes,
             ),
             (
                 profile.elapsed_ceiling_millis + 1,
                 profile.peak_rss_ceiling_bytes,
+                profile.address_space_ceiling_bytes,
             ),
             (
                 profile.elapsed_ceiling_millis,
                 profile.peak_rss_ceiling_bytes - 1,
+                profile.address_space_ceiling_bytes,
             ),
             (
                 profile.elapsed_ceiling_millis,
                 profile.peak_rss_ceiling_bytes + 1,
+                profile.address_space_ceiling_bytes,
+            ),
+            (
+                profile.elapsed_ceiling_millis,
+                profile.peak_rss_ceiling_bytes,
+                profile.address_space_ceiling_bytes - 1,
+            ),
+            (
+                profile.elapsed_ceiling_millis,
+                profile.peak_rss_ceiling_bytes,
+                profile.address_space_ceiling_bytes + 1,
             ),
         ] {
             let error = run_stage_child(
@@ -6244,7 +6095,7 @@ mod tests {
                 PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
                 elapsed,
                 peak_rss,
-                MAX_STAGE_ADDRESS_SPACE_BYTES,
+                address_space,
             )
             .expect_err("parent must reject a noncanonical profile before spawning");
             assert!(
@@ -6274,6 +6125,10 @@ mod tests {
                 exact.stages[index].max_peak_rss_bytes,
                 profile.peak_rss_ceiling_bytes
             );
+            assert_eq!(
+                exact.stages[index].max_address_space_bytes,
+                profile.address_space_ceiling_bytes
+            );
         }
         validate_expectations(&exact).expect("all four exact zk-X509 process caps");
 
@@ -6298,6 +6153,14 @@ mod tests {
                 mutation.stages[index].max_peak_rss_bytes = peak_rss;
                 assert!(validate_expectations(&mutation).is_err());
             }
+            for address_space in [
+                profile.address_space_ceiling_bytes - 1,
+                profile.address_space_ceiling_bytes + 1,
+            ] {
+                let mut mutation = exact.clone();
+                mutation.stages[index].max_address_space_bytes = address_space;
+                assert!(validate_expectations(&mutation).is_err());
+            }
         }
 
         let other_index = usize::from(privacy_release_stage_ordinal_v1(
@@ -6320,6 +6183,10 @@ mod tests {
             policy.stage_rayon_threads.to_string(),
             STAGE_RAYON_THREADS_V1
         );
+        let stage_stack_bytes = u64::try_from(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1).unwrap();
+        assert_eq!(policy.main_thread_stack_bytes, stage_stack_bytes);
+        assert_eq!(policy.rayon_worker_stack_bytes, stage_stack_bytes);
+        assert_eq!(policy.watchdog_thread_stack_bytes, stage_stack_bytes);
         assert_eq!(policy.max_stage_tasks, MAX_STAGE_TASKS_V1);
         assert_eq!(
             MAX_STAGE_TASKS_V1,
@@ -6342,6 +6209,79 @@ mod tests {
         assert!(policy.anonymous_result_descriptor_only);
         assert!(policy.exact_environment_only);
         assert!(policy.seccomp_tsync);
+    }
+
+    #[test]
+    fn hidden_stage_environment_rejects_rust_stack_override() {
+        let canonical = vec![(
+            OsString::from("RAYON_NUM_THREADS"),
+            OsString::from(STAGE_RAYON_THREADS_V1),
+        )];
+        validate_hidden_stage_environment_v1(&canonical)
+            .expect("canonical hidden-stage environment");
+
+        let mut injected = canonical;
+        injected.push((OsString::from("RUST_MIN_STACK"), OsString::from("1048576")));
+        assert!(
+            validate_hidden_stage_environment_v1(&injected).is_err(),
+            "a stack-policy environment override must fail closed"
+        );
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_endian = "little",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn pre_exec_stack_limit_fixture_child_v1() {
+        let Some(mode) = env::var_os(STACK_LIMIT_CHILD_MARKER_V1) else {
+            return;
+        };
+        if mode == "low-hard-limit" {
+            let low = libc::rlimit {
+                rlim_cur: 1024 * 1024,
+                rlim_max: 1024 * 1024,
+            };
+            // SAFETY: `low` is fully initialized and this disposable child is
+            // intentionally reducing only its own stack hard limit.
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_STACK, &low) }, 0);
+            assert!(
+                install_pre_exec_stage_stack_limit_v1().is_err(),
+                "a low inherited hard limit must fail closed"
+            );
+            return;
+        }
+        assert_eq!(mode, "success");
+        install_pre_exec_stage_stack_limit_v1().expect("install exact pre-exec stack limit");
+        let (soft, hard) = getrlimit(Resource::RLIMIT_STACK).unwrap();
+        let expected = rlim_t::try_from(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1).unwrap();
+        assert_eq!((soft, hard), (expected, expected));
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_endian = "little",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn pre_exec_stack_limit_is_exact_and_fails_under_low_hard_limit() {
+        let executable = env::current_exe().expect("resolve runner test executable");
+        for mode in ["success", "low-hard-limit"] {
+            let output = Command::new(&executable)
+                .arg("tests::pre_exec_stack_limit_fixture_child_v1")
+                .arg("--exact")
+                .arg("--nocapture")
+                .env(STACK_LIMIT_CHILD_MARKER_V1, mode)
+                .output()
+                .expect("execute isolated stack-limit fixture");
+            assert!(
+                output.status.success(),
+                "stack-limit fixture {mode} failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[cfg(all(
@@ -6740,6 +6680,7 @@ mod tests {
                     evidence,
                     elapsed_millis: 1,
                     peak_rss_bytes: MIN_STAGE_PEAK_RSS_BYTES,
+                    peak_address_space_bytes: MIN_STAGE_ADDRESS_SPACE_BYTES,
                 }
             })
             .collect::<Vec<_>>();
@@ -6792,6 +6733,7 @@ mod tests {
             source_sha256: [3; 32],
             exact12_matrix_sha256: [4; 32],
             expectations: pair.clone(),
+            x509_resource: pair.clone(),
             cargo_lock_sha256: [5; 32],
             validator_binary_sha256: [6; 32],
             runner_binary_sha256: [7; 32],
@@ -7004,6 +6946,40 @@ mod tests {
             "hash-refreshed bytes are structurally self-consistent"
         );
         assert!(validate_measured_against_expectations(&measured, &expectations).is_err());
+    }
+
+    #[test]
+    fn expectations_require_the_exact_x5s1_artifact_ceiling_below_the_outer_action_cap() {
+        let exact = canonical_expectations_v1();
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+        const EXACT_X5S1_BYTES: u64 = 8_212_538;
+        assert_eq!(
+            privacy_release_proof_artifact_ceiling_v1(
+                protocol_id,
+                PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
+                0,
+            ),
+            Some(EXACT_X5S1_BYTES)
+        );
+        assert!(EXACT_X5S1_BYTES < PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+
+        for case_kind in PrivacyReleaseCaseKindV1::ALL {
+            let stage_index = usize::from(privacy_release_stage_ordinal_v1(protocol_id, case_kind));
+            assert_eq!(
+                exact.stages[stage_index].evidence.proof_artifacts[0].proof_bytes_ceiling,
+                EXACT_X5S1_BYTES
+            );
+            for substituted_ceiling in [
+                EXACT_X5S1_BYTES - 1,
+                EXACT_X5S1_BYTES + 1,
+                PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1,
+            ] {
+                let mut mutation = exact.clone();
+                mutation.stages[stage_index].evidence.proof_artifacts[0].proof_bytes_ceiling =
+                    substituted_ceiling;
+                assert!(validate_expectations(&mutation).is_err());
+            }
+        }
     }
 
     #[test]
