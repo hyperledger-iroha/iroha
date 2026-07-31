@@ -613,18 +613,17 @@ test("successful Cargo execution records provenance for the exact profile output
         cleaned += 1;
       },
       runCargo(args, options) {
-        assert.deepEqual(args.slice(0, 10), [
+        assert.deepEqual(args.slice(0, 7), [
           "build",
           "--locked",
           "--offline",
           "--jobs",
           "1",
-          "-Z",
-          "unstable-options",
-          "--lockfile-path",
-          path.join(snapshots.snapshot.snapshotRoot, "Cargo.lock"),
           "--manifest-path",
+          path.join(snapshots.snapshot.snapshotRoot, "Cargo.toml"),
         ]);
+        assert.equal(args.includes("-Z"), false);
+        assert.equal(args.includes("--lockfile-path"), false);
         assert.deepEqual(args.slice(-2), ["--profile", "deploy"]);
         assert.equal(
           args[args.indexOf("--package") + 1],

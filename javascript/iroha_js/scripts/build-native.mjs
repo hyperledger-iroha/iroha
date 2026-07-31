@@ -3336,17 +3336,12 @@ export function runNativeBuild({
       );
     }
     const cargoManifest = join(snapshot.snapshotRoot, "Cargo.toml");
-    const cargoLock = join(snapshot.snapshotRoot, "Cargo.lock");
     const buildArgs = [
       "build",
       "--locked",
       "--offline",
       "--jobs",
       "1",
-      "-Z",
-      "unstable-options",
-      "--lockfile-path",
-      cargoLock,
       "--manifest-path",
       cargoManifest,
       "--package",
