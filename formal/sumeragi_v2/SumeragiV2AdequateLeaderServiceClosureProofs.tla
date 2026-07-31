@@ -4455,8 +4455,9 @@ the zero lifecycle prefix; its finite, coalesced physical episode is bounded
 by `AsyncProoflessChunkEpisodeDebtSet`.
 
 The packet component reuses the snapshot-scoped target-neutral fixed-clock
-rank.  The same certificate records the frozen past scheduler cut and the
-proofless/exact-occurrence causal producer rank for the packet recipient.
+rank.  The same certificate records the frozen past scheduler and physical
+cuts and the proofless/exact-occurrence causal producer rank for the packet
+recipient.
 Atomic Admit removes the exact due packet in the same transition that installs
 the Ingress owner, so the ordinary transport component strictly descends.
 Every fair owner remains individually quantified.
@@ -4525,6 +4526,7 @@ LeaderWirePhysicalDependencyCertificate(snapshot, packet) ==
       ingressRank |-> LeaderWirePhysicalIngressDependencyRank(item),
       predecessors |-> snapshot.predecessors,
       schedulerCuts |-> snapshot.schedulerCuts,
+      physicalCuts |-> snapshot.physicalCuts,
       causalProducerRank |->
         LeaderWirePhysicalCausalProducerRank(snapshot, item),
       causalProducerCarrier |->
@@ -4549,6 +4551,7 @@ LeaderWirePhysicalFrozenCertificateFrontier(snapshot, packet) ==
         \/ LeaderWireProductiveTransportIdentity(packet.item)
      /\ certificate.predecessors = snapshot.predecessors
      /\ certificate.schedulerCuts = snapshot.schedulerCuts
+     /\ certificate.physicalCuts = snapshot.physicalCuts
      /\ certificate.packetRank =
           LeaderWirePhysicalPacketDependencyRank(snapshot, packet)
      /\ certificate.causalProducerRank =
@@ -4708,6 +4711,7 @@ BY ExactDecisionTargetNeutralSnapshotIsFinite,
        ExactDecisionTargetNeutralSnapshotActive,
        ExactDecisionTargetNeutralCurrentPastSchedulerCut,
        ExactDecisionTargetNeutralCurrentPastSchedulerCuts,
+       ExactDecisionTargetNeutralCurrentPhysicalCuts,
        ExactDecisionTargetNeutralSchedulerCutToken,
        ExactDecisionTargetNeutralSchedulerCutTokens,
        ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot,
@@ -4726,8 +4730,12 @@ THEOREM LeaderWirePhysicalFrozenCertificateRetainsPastCut ==
          /\ \A node \in Responsive:
               snapshot.schedulerCuts[node]
                 < AsyncNextCandidateLifecycleOrdinal(node)'
+         /\ \A node \in Responsive:
+              snapshot.physicalCuts[node]
+                <= AsyncNextIngressPhysicalOrdinal(node)'
 BY ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant,
    ExactDecisionTargetNeutralFrozenPastCutsRemainPast,
+   ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent,
    Isa
    DEF LeaderWirePhysicalFrozenCertificateFrontier,
        ExactDecisionTargetNeutralSnapshotActive,
@@ -4810,12 +4818,15 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
    ExactDecisionAsyncSpecAlwaysCandidateTombstones,
    ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded,
+   ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock,
+   ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
    ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame,
    ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame,
-   ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish,
    ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded,
    ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
    ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal,

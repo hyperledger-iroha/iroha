@@ -333,15 +333,17 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence",
     ): (
         "ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded",
+        "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
         "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
-        "ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor",
+        "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+        "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
         "ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank",
         "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
         "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame",
-        "ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
         "ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded",
         "ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank",
-        "ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal",
         "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
         "LeaderWirePhysicalPacketDependencyRankIsSnapshotScoped",
         "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
@@ -349,6 +351,14 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AsyncHeldChunkReceiptTombstonesExactProducerEpisode",
         "LeaderWirePacketAdmissionPreservesExactResolution",
         "AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
+    ): (
+        "ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant",
+        "ExactDecisionTargetNeutralFrozenPastCutsRemainPast",
+        "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -455,12 +465,28 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded",
         "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
-        "ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor",
-        "ExactDecisionTargetNeutralNonDescentConsumesOrdinal",
+        "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
+        "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+        "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+        "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
+        "ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank",
+        "ExactDecisionTargetNeutralEpisodeRankIsInCarrier",
+        "ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded",
         "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
+        "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
+        "ExternalCandidateProducerContinuationSelectionIsReady",
+        "LocalContinuationReadyEnablesFairResolution",
+        "ConditionalTransportContinuationReadyEnablesFairService",
+        "VolatileBodyContinuationReadyEnablesFairService",
+        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends",
+        "AsyncTickEnabledHasConcreteSuccessor",
         "ExactDecisionRequestIngressRankOrderingIsWellFounded",
         "TimeoutPhysicalControlLifecycleStageOrderingIsWellFounded",
+        "TimeoutPhysicalControlSnapshotPinsPastPhysicalCut",
+        "TimeoutPhysicalControlPacketSnapshotCapturesPhysicalCut",
         "TimeoutPhysicalControlPacketRankUsesFrozenExactOccurrence",
+        "TimeoutPhysicalControlProducerEpisodeRankUsesFrozenPastCut",
         "TimeoutPhysicalControlIngressRankUsesExactAdmissionOrdinal",
         "TimeoutPhysicalControlRetainedClockHasNaturalRankOrIsDue",
         "TimeoutPhysicalControlTickLowersRetainedClockRank",
@@ -3485,13 +3511,13 @@ EXACT_TARGET_NEUTRAL_FORBIDDEN_TOKENS = (
 # duplicating thousands of lines of normalized TLA+ text in this component.
 # Critical rank/fairness/dependency seams are additionally checked
 # structurally by ``check_exact_target_neutral_contract``.
-EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 106
+EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 116
 EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_SHA256 = (
-    "8efcab64f3ddde5e109d8bc0cc4f6ceb979ecd20b9721b51316e50c8c2871067"
+    "c1f339fe65db1ea0dd9cb3bd771bc04f05987084ef7235743c7838be2d074c4f"
 )
-EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 48
+EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 59
 EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_SHA256 = (
-    "72743c037968dee0cd1ab65bc94f3d3bb3540836f12001481bd1697c6e24f23f"
+    "dc113a6bd8ae4f4ad8c6a631ebd6cec0b54dd36486e38c3147bf064775b4b0c6"
 )
 
 EXACT_TARGET_NEUTRAL_RETIRED_SYMBOLS = (
@@ -3523,6 +3549,44 @@ EXACT_TARGET_NEUTRAL_RETIRED_SYMBOLS = (
 )
 
 EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
+    "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier": (
+        "ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier",
+        "StrongTypeHasFiniteHistoricalDiscoveryCohorts",
+        "HistoricalDiscoveryFixedClockRankShapeInCarrier",
+        "HistoricalDiscoveryIngressCounterRankInCarrier",
+    ),
+    "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock": (
+        "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
+        "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
+        "ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant",
+        "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+        "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
+        "AsyncServeTombstonedIdentityCannotRequeueAtGst",
+    ),
+    "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock": (
+        "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+        "ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant",
+        "ExactDecisionTargetNeutralFrozenPastCutsRemainPast",
+        "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
+    ),
+    "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame": (
+        "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+        "ExactDecisionTargetNeutralEpisodeRankIsInCarrier",
+        "ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank",
+        "ExactDecisionTargetNeutralExactRetransmissionIsProducerStutter",
+        "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
+        "AsyncNextProjectsMonotoneProducerJournal",
+    ),
+    "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish": (
+        "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+        "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+        "ExactDecisionTargetNeutralEpisodeRankIsInCarrier",
+        "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
+        "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
+        "AsyncNextProjectsMonotoneProducerJournal",
+    ),
     "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame": (
         "ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish",
         "ExactDecisionTargetNeutralFrozenPastCutServeCannotReplenish",

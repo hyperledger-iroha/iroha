@@ -241,7 +241,7 @@ BY Isa
 THEOREM HistoricalRecoveryResolutionStrictlyDecreasesLocalWork ==
   \A node \in AsyncCurrentResponsiveVoters
                  \cup asyncHistoricalRecoveryTargets:
-    /\ AsyncTypeInvariant
+    /\ AsyncStrongTypeInvariant
     /\ AsyncControlServiceSlotTransition
     /\ gst
     /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
@@ -270,6 +270,7 @@ BY CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
        AsyncCandidateProducerContinuationSelectedResolutionRecord,
        AsyncCandidateProducerContinuations,
        AsyncCandidateProducerContinuationRecordSet,
+       AsyncStrongTypeInvariant,
        PostGstRunNode, RunNode,
        PostGstRunHistoricalRecoveryNode, RunHistoricalRecoveryNode,
        RunNodeWork, ResolveRunNodeCandidateProducerContinuation,
@@ -599,63 +600,65 @@ BY EmptyIngressAdmitsTypedPacket, SMT
 
 THEOREM NonemptyUndrainableHistoricalIngressHasIoWork ==
   \A node \in ValidatorIds:
-    /\ AsyncTypeInvariant
+    /\ AsyncStrongTypeInvariant
     /\ IngressDepth(node) > 0
     /\ HistoricalDrainableIngressIndices(node) = {}
     => AsyncIoQueueDepth(node) > 0
-PROOF
-  <1>1. ASSUME NEW node \in ValidatorIds,
-                AsyncTypeInvariant,
-                IngressDepth(node) > 0,
-                HistoricalDrainableIngressIndices(node) = {}
-         PROVE AsyncIoQueueDepth(node) > 0
-    <2>1. /\ AsyncConfiguration
-           /\ AsyncIngressTopologyTypeInvariant
-           /\ AsyncIngressContentTypeInvariant
-           /\ AsyncIngressCapacity \in Nat \ {0}
-      BY <1>1
-         DEF AsyncTypeInvariant, TypeInvariant,
-             AsyncSchedulerTypeInvariant, AsyncIngressTypeInvariant,
-             AsyncConfiguration
-    <2>2. AsyncIngressPairIndicesFor(asyncIngressLanes, node) # {}
-      BY <1>1, FS_EmptySet, SMT
-         DEF IngressDepth, AsyncIngressDepthFor
-    <2>3. PICK pair \in
-                   AsyncIngressPairIndicesFor(asyncIngressLanes, node): TRUE
-      BY <2>2
-    <2>4. /\ pair[1] \in AsyncIngressSources
-           /\ IngressLaneDepth(node, pair[1]) > 0
-           /\ pair[1] \in SequenceSet(asyncIngressReady[node])
-      BY <1>1, <2>1, <2>3, SMT
-         DEF AsyncIngressPairIndicesFor,
-             AsyncIngressTopologyTypeInvariant
-    <2>5. PICK readyIndex \in 1..Len(asyncIngressReady[node]):
-             asyncIngressReady[node][readyIndex] = pair[1]
-      BY <2>1, <2>4 DEF SequenceSet
-    <2>6. HistoricalDrainableIngressLaneIndices(node, pair[1]) = {}
-      <3>1. ASSUME
-               HistoricalDrainableIngressLaneIndices(node, pair[1]) # {}
-             PROVE FALSE
-        <4>1. HistoricalIngressSourceCanDrain(node, pair[1])
-          BY <3>1 DEF HistoricalIngressSourceCanDrain
-        <4>2. readyIndex \in HistoricalDrainableIngressIndices(node)
-          BY <2>5, <4>1 DEF HistoricalDrainableIngressIndices
-        <4> QED BY <1>1, <4>2
-      <3> QED BY <3>1
-    <2>7. 1 \in 1..Len(IngressLane(node, pair[1]))
-      BY <2>4, SMT DEF IngressLaneDepth
-    <2>8. ~HistoricalIngressItemCanDrain(
-             node, IngressLane(node, pair[1])[1])
-      BY <2>6, <2>7 DEF HistoricalDrainableIngressLaneIndices
-    <2>9. ~CanEnqueueIoClass(node, "Serve")
-      BY <2>8, SMT DEF HistoricalIngressItemCanDrain
-    <2>10. /\ AsyncIoAuxCapacity \in Nat \ {0}
-            /\ AsyncIoQueueDepth(node) >= AsyncIoAuxCapacity
-      BY <1>1, <2>9, SMT
-         DEF AsyncTypeInvariant, TypeInvariant, AsyncConfiguration,
-             CanEnqueueIoClass, AsyncIoAdmissionLimit
-    <2> QED BY <2>10, SMT
-  <1> QED BY <1>1
+BY FS_CardinalityType, FS_EmptySet, FS_Subset, IsaT(3600)
+   DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
+       AsyncSchedulerTypeInvariant, AsyncIngressTypeInvariant,
+       AsyncIngressTopologyTypeInvariant, AsyncIngressContentTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncServeLifecycleTypeInvariant,
+       AsyncServeIngressAdmissionInvariant,
+       AsyncServeLifecyclePartitionInvariant,
+       AsyncServeReservationOwnershipInvariant,
+       AsyncLeaderWireIngressCarrierOwnershipInvariant,
+       AsyncLeaderWireIngressCarrierCoordinates,
+       AsyncOrdinaryIngressCarrierOwnershipInvariant,
+       AsyncOrdinaryIngressCarrierCoordinates,
+       AsyncIngressSchedulerBarrierActive,
+       AsyncServeIngressOwnsSharedPhysicalTurn,
+       AsyncLeaderWireIngressOwnsSharedPhysicalTurn,
+       AsyncOrdinaryIngressOwnsSharedPhysicalTurn,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionIdentities,
+       AsyncServeEarliestIngressLifecycleOwnerIdentity,
+       AsyncServeEarliestIngressSchedulerOwnerIdentity,
+       AsyncServeIngressAdmissionRecords,
+       AsyncServeIngressAdmissionOwned,
+       AsyncServeIngressAdmissionRecord,
+       AsyncServeIngressAdmissionOrdinal,
+       AsyncServeIngressAdmissionPredecessorCounts,
+       AsyncServeIngressReservationIdentities,
+       AsyncLeaderWireIngressProtectedRecordsAt,
+       AsyncLeaderWireEarliestPhysicalIngressRecord,
+       AsyncLeaderWireLifecycleIngressProtected,
+       AsyncLeaderWireAdmissionMatchesRecord,
+       AsyncOrdinaryIngressProtectedRecordsAt,
+       AsyncOrdinaryIngressEarliestPhysicalRecord,
+       AsyncServeIngressIndexMayPrecedeAdmittedTarget,
+       AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget,
+       AsyncOrdinaryIngressIndexMayPrecedeAdmittedTarget,
+       HistoricalDrainableIngressIndices,
+       HistoricalIngressSourceCanDrain,
+       HistoricalDrainableIngressLaneIndices,
+       HistoricalIngressItemCanDrain,
+       AsyncServeLifecycleDrainRequired,
+       AsyncServeLifecycleAdmissionRequired,
+       ExactServeIngressCanAdvance,
+       AsyncServeLifecycleOwned,
+       AsyncServeLifecycleTombstone,
+       AsyncServeJobQueued,
+       CanResumeExactServeCapacity,
+       AsyncServeLiveReservationOwned,
+       AsyncServeReservationRecords,
+       AsyncServeOffQueueReservations,
+       CanEnqueueIoClass, AsyncIoEffectiveQueueDepth,
+       AsyncIoAdmissionLimit, AsyncIoQueueDepth,
+       IngressDepth, AsyncIngressDepthFor,
+       AsyncIngressPairIndicesFor, IngressLaneDepth,
+       IngressLane, SequenceSet, AsyncConfiguration
 
 THEOREM OverdueResponsivePacketUsesFairIngressPair ==
   \A initialContext \in ContextRecords,
@@ -1343,7 +1346,7 @@ THEOREM HistoricalRecoveryLocalPhaseAdvanceBaseEnabled ==
   \A node \in ValidatorIds:
     /\ HistoricalRecoveryRunnerCurrentGuard(node)
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ ~LocalAdmissionCanAdvance(node)
     => ENABLED HistoricalRecoveryLocalPhaseAdvanceBaseWitness(node)
 BY AutoUSE, ExpandENABLED, Isa
@@ -1358,14 +1361,14 @@ THEOREM HistoricalRecoveryLocalPhaseAdvanceEnabled ==
   \A node \in ValidatorIds:
     /\ HistoricalRecoveryRunnerCurrentGuard(node)
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ ~LocalAdmissionCanAdvance(node)
     => ENABLED RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 HistoricalRecoveryRunnerCurrentGuard(node),
                 asyncRunnerPhase[node] = "Local",
-                AsyncServeIngressLifecycleOwnerIdentities(node) = {},
+                ~AsyncIngressSchedulerBarrierActive(node),
                 ~LocalAdmissionCanAdvance(node)
          PROVE ENABLED
                  RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
@@ -1432,7 +1435,7 @@ authority, rank, subject, or work owner.
 
 DirectLocalProducerAdmissionStep(node) ==
   /\ asyncRunnerPhase[node] = "Local"
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  /\ ~AsyncIngressSchedulerBarrierActive(node)
   /\ UNCHANGED AsyncDeferredVars
   /\ LocalAdmissionCanAdvance(node)
   /\ SelectedLocalSource(node) = "Producer"
@@ -1607,7 +1610,7 @@ PROOF
 DirectLocalCausalDuplicateAdmissionStep(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN /\ asyncRunnerPhase[node] = "Local"
-     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+     /\ ~AsyncIngressSchedulerBarrierActive(node)
      /\ UNCHANGED AsyncDeferredVars
      /\ LocalAdmissionCanAdvance(node)
      /\ SelectedLocalSource(node) = "Causal"
@@ -1803,7 +1806,7 @@ PROOF
 DirectLocalCausalCompletionAdmissionStep(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN /\ asyncRunnerPhase[node] = "Local"
-     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+     /\ ~AsyncIngressSchedulerBarrierActive(node)
      /\ UNCHANGED AsyncDeferredVars
      /\ LocalAdmissionCanAdvance(node)
      /\ SelectedLocalSource(node) = "Causal"
@@ -2009,7 +2012,7 @@ PROOF
 DirectLocalCausalCommandAdmissionStep(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN /\ asyncRunnerPhase[node] = "Local"
-     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+     /\ ~AsyncIngressSchedulerBarrierActive(node)
      /\ UNCHANGED AsyncDeferredVars
      /\ LocalAdmissionCanAdvance(node)
      /\ SelectedLocalSource(node) = "Causal"
@@ -2212,14 +2215,14 @@ THEOREM DirectHistoricalRecoveryNoTicketLocalRunnerCaller ==
   \A node \in ValidatorIds:
     /\ HistoricalRecoveryRunnerCurrentGuard(node)
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ ENABLED LocalAdmissionStep(node)
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 HistoricalRecoveryRunnerCurrentGuard(node),
                 asyncRunnerPhase[node] = "Local",
-                AsyncServeIngressLifecycleOwnerIdentities(node) = {},
+                ~AsyncIngressSchedulerBarrierActive(node),
                 ENABLED LocalAdmissionStep(node)
          PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
     <2>1. /\ gst
@@ -2378,12 +2381,12 @@ PROOF
       <3>1. HistoricalRecoveryRunnerCurrentGuard(node)
         BY <1>1, <2>1c, <2>1d
            DEF HistoricalRecoveryRunnerCurrentGuard
-      <3>2. CASE AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+      <3>2. CASE ~AsyncIngressSchedulerBarrierActive(node)
         <4>1. ENABLED LocalAdmissionStep(node)
           BY <2>1b, <2>2, <3>2, LocalAdmissionStepIsEnabled
         <4> QED BY <2>1b, <2>2, <3>1, <3>2, <4>1,
              DirectHistoricalRecoveryNoTicketLocalRunnerCaller
-      <3>3. CASE AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+      <3>3. CASE AsyncIngressSchedulerBarrierActive(node)
         <4>1. ENABLED AsyncServeIngressTargetOnlyTurn(node)
           BY <2>1b, <2>2, <3>3,
              ServeIngressTargetOnlyTurnIsEnabled
@@ -2680,6 +2683,7 @@ BY AsyncTickStrictlyDecreasesResponsiveServiceDebt,
 THEOREM PostGstPacketRecipientRunnerIsConcreteTransportProgress ==
   \A initialContext \in ContextRecords,
      recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncStrongTypeInvariant
     /\ AsyncTypeInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ recipient \in AsyncCurrentResponsiveVoters
@@ -2694,6 +2698,7 @@ PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
                 NEW recipient \in ValidatorIds,
                 NEW source \in AsyncIngressSources,
+                AsyncStrongTypeInvariant,
                 AsyncTypeInvariant,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
@@ -3364,7 +3369,7 @@ PROOF
                AppliedDrainableRecipientEnablesConcreteIngressProgress
           <5>2. CASE HistoricalDrainableIngressIndices(Recipient) = {}
             <6>1. AsyncIoQueueDepth(Recipient) > 0
-              BY <2>1, <2>3, <4>3, <5>2,
+              BY <1>1, <2>3, <4>3, <5>2,
                  NonemptyUndrainableHistoricalIngressHasIoWork
             <6> QED BY <1>1, <2>3, <6>1,
                  DueIoServiceEnablesConcreteLocalProgress
