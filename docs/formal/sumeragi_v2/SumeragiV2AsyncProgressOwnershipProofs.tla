@@ -5289,7 +5289,8 @@ PROOF
                 AsyncCandidateProducerContinuationExactRuntimeReplayStep(
                   node)
          PROVE AsyncProgressOwnershipInvariant'
-    <2>1. AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+    <2>1. /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+           /\ AsyncPersistDecisionCommandsForNodeThisStep(node) = {}
       BY <1>1, IsaT(300)
          DEF ReplayRunNodeCandidateProducerContinuation,
              AsyncCandidateProducerContinuationExactRuntimeReplayStep,
@@ -5304,6 +5305,9 @@ PROOF
              AsyncPersistInstallCommandsForNodeThisStep,
              AsyncPersistInstallCommandsThisStep,
              AsyncPersistInstallCommandThisStep,
+             AsyncPersistDecisionCommandsForNodeThisStep,
+             AsyncPersistDecisionCommandsThisStep,
+             AsyncPersistDecisionCommandThisStep,
              FifoRuntimeStep, DeferredDrainStep,
              DeferredWorkOwnsRuntimeTurn, NextNodeCommand,
              NextDeferredCommand,

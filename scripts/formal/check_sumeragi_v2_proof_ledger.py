@@ -213,7 +213,7 @@ ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
 # limit for every release shard.
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
     "SumeragiV2AsyncInstallRunnerProofs": 5_775,
-    "SumeragiV2AsyncProgressOwnershipProofs": 5_658,
+    "SumeragiV2AsyncProgressOwnershipProofs": 5_662,
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
     "SumeragiV2AsyncInstallRunnerProofs": 156,
@@ -236,34 +236,55 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncNextNodeCommandOwnsOldestLifecycleOrdinal",
     "CommandSuccessorsRetainCausalOrigin",
     "AsyncCandidateProducerSemanticHandoffUsesInheritedLifecycle",
+    "AsyncCandidateProducerContinuationSelectedLocalReplayHasReservedCapacity",
     "CandidateProducerContinuationResolutionSplitsReviewedSourceClass",
+    "ValidQcIntersectsResponsiveSignerSet",
+    "RemoteResponsiveQcSignerIsInFrozenArchiveFanout",
     "PacketForItemExactRetryRetainsRouteIdentity",
+    "PersistDecisionConvertsIncompatibleResponseBeforeRetryOrdinal",
+    "PersistDecisionPreservesPreFenceResponseUntilCheckedDrain",
     "SignProposalAtomicallyHandsProducerToSourceFanout",
     "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
     "AsyncDeferredHandoffRetainsExactSelectedLifecycle",
     "AsyncLeaderWireLifecycleSlotUniverseIsFinite",
     "AsyncLeaderWireLifecycleSlotUniverseIsRosterBounded",
     "DormantLeaderWireOwnsNoIngressSchedulerBarrier",
+    "AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal",
     "AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut",
     "AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal",
     "AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix",
     "AdmitDormantLeaderWirePreservesLogicalPotentialPredecessors",
     "AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier",
+    "DormantLeaderWirePhysicalOrdinalExhaustionPublishesNothing",
     "AsyncLeaderWireActionInertDormantHasNoExactAdmissionPacket",
     "AsyncLiveServeIngressDuplicateRetainsSchedulerOrdinal",
     "AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle",
     "AsyncUnboundChunkExactRetryCoalescesWithoutEpisodeGrowth",
     "AsyncHeldChunkReceiptTombstonesExactProducerEpisode",
+    "ExactNegativeRetryConsumesNoServeOrPhysicalOrdinal",
+    "NonAdvancingServeFamilyRetryConsumesNoFreshOrdinal",
+    "SupersededResponseRetryConvertsBeforeFreshOrdinal",
     "CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner",
     "AtomicLeaderWireAdmissionFreezesPrefixBeforeAppend",
     "DirectCommitQcCandidateHasExactImportLineage",
     "CommitCertificateResponseCandidateHasExactImportLineage",
     "CommitImportCausalSuccessorRetainsExactLineage",
+    "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationRunnerSelectionRespectsIngressCut",
+    "AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum",
+    "DormantLeaderWireOwnsNoPhysicalIngressPredecessor",
+    "AdmitDormantLeaderWireAppendsAfterExistingServeCarrier",
+    "InterruptedTipServeCarrierTerminalizesBeforePhysicalRemoval",
+    "InterruptedTipLeaderWireCarrierPublishesTypedRetirement",
     "LeaderWireIngressDrainNeverInventsRuntimeOwner",
+    "ServeWorkerDecisionSupersessionClosesWithoutStaleResponse",
     "DeferredRetransmitConsumesDriveProgramCounter",
     "AsyncServeIngressTicketExcludesLaterLocalWork",
     "AsyncLeaderWireIngressTicketExcludesLaterLocalWork",
     "AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler",
+    "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
+    "AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady",
+    "AsyncCandidateProducerContinuationReplayDispatchesOnlyExactIdentity",
     "AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake",
     "AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake",
     "LocalAdmissionAdvanceSelectsAtomicWork",
@@ -277,14 +298,22 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode",
     "AsyncLaterServeTicketInterleavesOlderLocalEpisode",
     "SameHeightRestartPreservesServeHighWatermarks",
+    "SameHeightRestartRetainsOrConvertsUnreplacedServeTombstone",
+    "SameHeightRestartDischargesTerminalReplayWaiter",
+    "SameHeightRestartDischargesEveryLocalServeLifecycle",
+    "SameHeightRestartTerminalOutcomeIsIndependentlyReconstructed",
+    "SameHeightRestartCanonicalDischargeKeysAreLifecycleStable",
+    "ExactNegativeServeRetryIsRejectedBeforeFreshOrdinal",
+    "StrictHigherViewMayReplaceNegativeServeFamily",
     "SameHeightRestartReopensActiveLeaderWireWithoutTerminalizing",
     "SameHeightRestartReopensVolatileLeaderWireTerminal",
     "SameHeightRestartRetainsDormantLeaderWireWithoutBarrier",
     "SameHeightRestartPreservesRestartStableLeaderWireTerminal",
     "SameHeightRestartReopensDurableCertifiedResponseFamily",
+    "PendingServeReceiverClosePublishesTypedTerminalWithoutDebt",
+    "MaterializedServeReceiverClosePublishesTypedTerminalWithoutDebt",
     "RuntimeLeaderWireCannotRetireMerelyFromIngressPop",
     "RetireLeaderWireLifecycleRetainsTerminalTombstone",
-    "AsyncDormantExactReplyRequestPacketIsRetained",
     "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     "AsyncRetainedCommitQcRetransmissionCreatesExactPacket",
     "AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner",
@@ -302,6 +331,10 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateDeferredHandoffRetainsSameOwner",
     "AsyncCandidateDiscardIsNotSemanticService",
     "ImportedCertificateTailCannotRetireOnLocalIncarnationChange",
+    "AsyncCandidateProducerContinuationRunnerResolutionRequiresReadyEvidence",
+    "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
+    "AsyncCandidateProducerContinuationRunnerResolutionConsumesExactStage",
+    "AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix",
     "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
     "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
     "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
@@ -311,14 +344,23 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateProducerContinuationKindPartition",
     "AsyncCandidateProducerContinuationRemovedReplayClassification",
     "LeaderWireDeliveryCandidateInheritsAdmissionSchedulerOrdinal",
-    "AsyncDormantLeaderWireReactivationConsumesNoFreshHighWatermark",
+    "AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal",
     "AsyncTargetNeutralLifecycleOwnerCarrierIsFinite",
     "AsyncTargetNeutralLifecycleEpisodeBudgetIsFiniteAndCoalesced",
     "AsyncTargetNeutralLifecycleDiscoveryStrictlyConsumesBudget",
     "AsyncTargetNeutralLifecycleBudgetOrderingIsWellFounded",
     "AsyncCandidateLifecycleReviewedTokenOwnsOneOrigin",
+    "OrdinaryIngressCarrierRetirementCompactionDoesNotIncreaseEvidence",
+    "OrdinaryIngressCarrierAdmissionPreservesConfiguredEvidenceBound",
+    "AdmitOrdinaryIngressCarrierReservesImmutableActorGlobalOrdinal",
+    "ExactOrdinaryIngressDuplicateCoalescesWithoutCarrierAllocation",
+    "OrdinaryIngressCarrierIdentityMismatchPublishesNoAdmission",
+    "LaterAcceptedOrdinaryCarrierCannotOvertakeFrozenCarrier",
+    "BusyDeferredOlderAggregateRebasesToMinimumCompatibleCarrier",
+    "BusyDeferredAggregateIdentityMutationCannotRebaseOwner",
     "AsyncControlServiceTransitionConsumesFreshLeaderWireSchedulerOrdinal",
     "AsyncControlServiceTransitionPreservesSemanticHandoffCoverage",
+    "AsyncControlServiceTransitionPreservesCandidateProducerContinuationLifecycleCoverage",
     "AsyncCandidateLifecycleReviewedBucketsPartitionRecords",
     "AsyncCandidateLifecycleDormantBucketsSeparateReplayAndService",
     "AsyncCandidateLifecycleActiveRecordsInjectIntoPhysicalOwners",
@@ -343,6 +385,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateLifecycleCarrierInjectionProvidesFreshReservations",
     "AsyncCandidateLifecycleDistinctNewRootsReceiveDistinctOwnership",
     "AsyncCandidateLifecycleHighWatermarkAdvancesByFullFreshSet",
+    "AsyncOrdinaryIngressSharedHighWatermarkAdvancesAtAcceptance",
     "AsyncServeIngressSharedHighWatermarkAdvancesByFreshTickets",
     "AsyncLeaderWireIngressHighWatermarkAdvancesByFreshAdmissions",
     "AsyncLeaderWireSharedHighWatermarkAdvancesByFreshAdmissions",
@@ -396,7 +439,10 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncControlServiceTombstoneCannotReactivate",
     "AsyncControlServiceSameHeightRecoveryRetiresVolatileOwners",
     "CertifiedResponseClaimAdmissionAllocatesExactOrdinal",
+    "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier",
+    "CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources",
     "CertifiedResponseExactRetryKeepsOneClaimOrdinal",
+    "CertifiedResponseLiveClaimCannotBeReplacedAtGst",
     "CertifiedResponseCompetingResponderCannotDoubleChargeFamily",
     "CertifiedResponseConsumedFamilyCannotRetainClaim",
     "CertifiedResponseSameHeightRecoveryReopensDurableFamily",
@@ -407,12 +453,16 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "LeaderWireLastConsumerRefinesLifecycleTransition",
     "LeaderWireTerminalRetirementRefinesLifecycleTransition",
     "LeaderWireRestartReopenRefinesLifecycleTransition",
+    "AsyncIngressPhysicalHighWatermarkIsMonotone",
+    "AsyncServeAdmissionHighWatermarkIsMonotone",
+    "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
     "AsyncFixedCorridorDeadlineActionErasureIsExact",
     "AsyncOriginalStepHasFixedCorridorDeadlineReceiptExtension",
     "AsyncServiceActivationActionsRefineAsyncNext",
     "AsyncTimeoutLifecycleDueTransitionMintsBeforeLaterAdmissions",
     "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
     "AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint",
+    "AsyncTimeoutLifecycleNewOwnershipUsesRecordedOrFreshOrdinal",
     "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
     "AsyncServeQueuedIdentityDepartureInstallsTombstone",
     "AsyncServeRetiredIdentityCannotRequeueAtGst",
@@ -438,15 +488,24 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncLeaderWireLifecycleRolloverInstanceStartsEmpty",
     "AsyncCertifiedResponseClaimRolloverInstanceStartsEmpty",
     "AsyncCandidateServiceRolloverInstanceStartsEmpty",
+    "AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision",
     "AsyncCandidateLifecycleRolloverStartsWithRootOwners",
+    "AsyncInitEstablishesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncResponsiveRestartPreservesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncCandidateDeparturePreservesProducerContinuationLocalReplayCapacity",
+    "AsyncNextPreservesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncBracketNextPreservesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
     "AsyncLiveSpecUsesRepresentativePeerCount",
     "AsyncFiniteLiveSpecUsesRepresentativePeerCount",
     "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
     "AsyncServeIngressSchedulerOrdinalIsTyped",
     "AsyncServeIngressSharedSchedulerInitIsEmptyAndInjected",
     "AsyncRetransmitProgramCounterIsBounded",
+    "CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling",
     "CertifiedResponseClaimsShareOutstandingRequestCharge",
     "CertifiedResponseFamilyLocalClaimsRemainPhysicallySerialized",
+    "DormantLeaderWireReactivationPublishesOneFreshPhysicalCarrier",
     "AsyncLeaderWirePotentialPredecessorUniverseIsFinite",
     "AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced",
 )
@@ -581,6 +640,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
     "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
+    "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla",
+    "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
     "exact_ingress_ticket_priority_fixed.cfg",
     "exact_ingress_ticket_runtime_first_bug.cfg",
     "exact_serve_restart_tombstone_fixed.cfg",
@@ -673,10 +734,199 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "fixed_corridor_receipt_acquisition_fixed.cfg",
     "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg",
     "fixed_corridor_receipt_acquisition_global_retire_bug.cfg",
+    "ordinary_ingress_carrier_rebase_fixed.cfg",
+    "ordinary_ingress_carrier_rebase_identity_bug.cfg",
+    "ordinary_ingress_carrier_rebase_minimum_bug.cfg",
+    "serve_restart_terminal_discharge_fixed.cfg",
+    "serve_restart_terminal_discharge_body_fail_open_bug.cfg",
+    "serve_restart_terminal_discharge_crash_resume_incomplete_union_bug.cfg",
+    "serve_restart_terminal_discharge_crash_resume_order_bug.cfg",
+    "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg",
+    "serve_restart_terminal_discharge_family_coexistence_bug.cfg",
+    "serve_restart_terminal_discharge_incomplete_union_bug.cfg",
+    "serve_restart_terminal_discharge_live_decision_conversion_bug.cfg",
+    "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg",
+    "serve_restart_terminal_discharge_negative_terminal_sign_bug.cfg",
+    "serve_restart_terminal_discharge_negative_retry_ordinal_bug.cfg",
+    "serve_restart_terminal_discharge_negative_waiter_bug.cfg",
+    "serve_restart_terminal_discharge_order_bug.cfg",
+    "serve_restart_terminal_discharge_orphan_waiter_bug.cfg",
+    "serve_restart_terminal_discharge_owner_request_mismatch_bug.cfg",
+    "serve_restart_terminal_discharge_persistence_bug.cfg",
+    "serve_restart_terminal_discharge_prefence_decision_rewrite_bug.cfg",
+    "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg",
+    "serve_restart_terminal_discharge_producer_exposure_bug.cfg",
+    "serve_restart_terminal_discharge_raw_context_gate_bug.cfg",
+    "serve_restart_terminal_discharge_receiver_close_bug.cfg",
+    "serve_restart_terminal_discharge_restart_decision_conversion_bug.cfg",
+    "serve_restart_terminal_discharge_resurrection_bug.cfg",
+    "serve_restart_terminal_discharge_roster_fanout_bug.cfg",
+    "serve_restart_terminal_discharge_signer_authority_bug.cfg",
+    "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg",
 )
 LIVENESS_OWNERSHIP_MUTATION_RUNNER = (
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh"
 )
+# The V5 restart-discharge kernel has one reviewed mutant per Boolean control.
+# Keep the fixed theorem surface and every one-bit failure target explicit so
+# a resealed config cannot silently change mode, property, or deadlock status.
+SERVE_RESTART_TERMINAL_DISCHARGE_BITS = (
+    "DischargeCompleteUnion",
+    "UseCanonicalStartupOrder",
+    "ResumeCompleteUnionAfterCrash",
+    "ResumeCanonicalOrderAfterCrash",
+    "PersistTerminalBeforeAdvance",
+    "BlockProducerWhileStartupPending",
+    "RequireExactReplayBinding",
+    "RejectOrphanTerminalWaiter",
+    "RejectNegativeTerminalWaiter",
+    "RejectOwnerRequestMismatchWaiter",
+    "RejectAdmissionTerminalDuplicate",
+    "ConvertRestartResponseOnDecision",
+    "ConvertLiveResponseBeforeOrdinal",
+    "PreservePreFenceResponseUntilCheckedDrain",
+    "RejectNegativeRetryBeforeOrdinal",
+    "BlockTerminalResurrection",
+    "RequireCanonicalBodyAtStartup",
+    "PrunePredecessorFamily",
+    "TerminalizeReceiverClose",
+    "UseFullFrozenRosterFanout",
+    "RequireQcSignerResponseAuthority",
+    "EnforceRawContextGate",
+    "AvoidTerminalReplayResigning",
+    "SignOnlyResponseStartupTerminals",
+    "CompletePreparedCarrierDecisionDrain",
+)
+SERVE_RESTART_TERMINAL_DISCHARGE_FIXED_INVARIANTS = (
+    "TypeInvariant",
+    "RestartUnionDischargesEveryAdmission",
+    "RestartUnionUsesCanonicalOrder",
+    "InterruptedDischargePersistsBeforeAdvance",
+    "InterruptedRestartResumesWithoutReopening",
+    "CrashResumeDischargesEveryRemainingAdmission",
+    "CrashResumeUsesCanonicalRemainingOrder",
+    "ProducerHiddenUntilStartupDischarged",
+    "TerminalReplayIsExactAndOrdinalStable",
+    "RestartDecisionSupersessionConvertsResponseAtomically",
+    "LiveDecisionSupersessionConvertsResponseBeforeOrdinal",
+    "PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain",
+    "PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable",
+    "CorruptTerminalWaiterFailStops",
+    "OwnerRequestMismatchWaiterFailStops",
+    "DuplicateAdmissionTerminalFailsStartupAndPreservesState",
+    "NegativeRetryConsumesNoFreshOrdinal",
+    "TerminalResponseRetryUsesFreshCarrierWithoutLifecycleResurrection",
+    "MissingOrCorruptBodyFailStopsAndPreservesState",
+    "SuccessorTerminalPrunesPredecessorFamily",
+    "ReceiverClosePublishesTypedTerminalWithoutDebt",
+    "CertifiedRequestFansOutToFullFrozenRoster",
+    "OnlyFrozenQcSignersCanRespond",
+    "RawContextGateSeparatesLifecycleAuthority",
+    "TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal",
+    "UnsealedRestartResponsesSignExactlyOnce",
+)
+SERVE_RESTART_TERMINAL_DISCHARGE_MUTATIONS = {
+    "serve_restart_terminal_discharge_body_fail_open_bug.cfg": (
+        "RequireCanonicalBodyAtStartup",
+        "MissingOrCorruptBodyFailStopsAndPreservesState",
+    ),
+    "serve_restart_terminal_discharge_crash_resume_incomplete_union_bug.cfg": (
+        "ResumeCompleteUnionAfterCrash",
+        "CrashResumeDischargesEveryRemainingAdmission",
+    ),
+    "serve_restart_terminal_discharge_crash_resume_order_bug.cfg": (
+        "ResumeCanonicalOrderAfterCrash",
+        "CrashResumeUsesCanonicalRemainingOrder",
+    ),
+    "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg": (
+        "RejectAdmissionTerminalDuplicate",
+        "DuplicateAdmissionTerminalFailsStartupAndPreservesState",
+    ),
+    "serve_restart_terminal_discharge_family_coexistence_bug.cfg": (
+        "PrunePredecessorFamily",
+        "SuccessorTerminalPrunesPredecessorFamily",
+    ),
+    "serve_restart_terminal_discharge_incomplete_union_bug.cfg": (
+        "DischargeCompleteUnion",
+        "RestartUnionDischargesEveryAdmission",
+    ),
+    "serve_restart_terminal_discharge_live_decision_conversion_bug.cfg": (
+        "ConvertLiveResponseBeforeOrdinal",
+        "LiveDecisionSupersessionConvertsResponseBeforeOrdinal",
+    ),
+    "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg": (
+        "RequireExactReplayBinding",
+        "CorruptTerminalWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_negative_terminal_sign_bug.cfg": (
+        "SignOnlyResponseStartupTerminals",
+        "UnsealedRestartResponsesSignExactlyOnce",
+    ),
+    "serve_restart_terminal_discharge_negative_retry_ordinal_bug.cfg": (
+        "RejectNegativeRetryBeforeOrdinal",
+        "NegativeRetryConsumesNoFreshOrdinal",
+    ),
+    "serve_restart_terminal_discharge_negative_waiter_bug.cfg": (
+        "RejectNegativeTerminalWaiter",
+        "CorruptTerminalWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_order_bug.cfg": (
+        "UseCanonicalStartupOrder",
+        "RestartUnionUsesCanonicalOrder",
+    ),
+    "serve_restart_terminal_discharge_orphan_waiter_bug.cfg": (
+        "RejectOrphanTerminalWaiter",
+        "CorruptTerminalWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_owner_request_mismatch_bug.cfg": (
+        "RejectOwnerRequestMismatchWaiter",
+        "OwnerRequestMismatchWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_persistence_bug.cfg": (
+        "PersistTerminalBeforeAdvance",
+        "InterruptedDischargePersistsBeforeAdvance",
+    ),
+    "serve_restart_terminal_discharge_prefence_decision_rewrite_bug.cfg": (
+        "PreservePreFenceResponseUntilCheckedDrain",
+        "PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain",
+    ),
+    "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg": (
+        "CompletePreparedCarrierDecisionDrain",
+        "PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable",
+    ),
+    "serve_restart_terminal_discharge_producer_exposure_bug.cfg": (
+        "BlockProducerWhileStartupPending",
+        "ProducerHiddenUntilStartupDischarged",
+    ),
+    "serve_restart_terminal_discharge_raw_context_gate_bug.cfg": (
+        "EnforceRawContextGate",
+        "RawContextGateSeparatesLifecycleAuthority",
+    ),
+    "serve_restart_terminal_discharge_receiver_close_bug.cfg": (
+        "TerminalizeReceiverClose",
+        "ReceiverClosePublishesTypedTerminalWithoutDebt",
+    ),
+    "serve_restart_terminal_discharge_restart_decision_conversion_bug.cfg": (
+        "ConvertRestartResponseOnDecision",
+        "RestartDecisionSupersessionConvertsResponseAtomically",
+    ),
+    "serve_restart_terminal_discharge_resurrection_bug.cfg": (
+        "BlockTerminalResurrection",
+        "TerminalResponseRetryUsesFreshCarrierWithoutLifecycleResurrection",
+    ),
+    "serve_restart_terminal_discharge_roster_fanout_bug.cfg": (
+        "UseFullFrozenRosterFanout",
+        "CertifiedRequestFansOutToFullFrozenRoster",
+    ),
+    "serve_restart_terminal_discharge_signer_authority_bug.cfg": (
+        "RequireQcSignerResponseAuthority",
+        "OnlyFrozenQcSignersCanRespond",
+    ),
+    "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg": (
+        "AvoidTerminalReplayResigning",
+        "TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal",
+    ),
+}
 SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2ServeSchedulerOrdinalMutation.tla",
     "serve_scheduler_shared_ordinal_fixed.cfg",
@@ -736,33 +986,27 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
         "965b2f2b71534f09b8b2bcbc701729b44549edcd51f5d0d7ce3fe89da6c93584"
     ),
     SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER: (
-        "556a595942ccc943ffc0acc896ca967c70f9c363fda24b55bfa235f17e85ad10"
+        "878b9b930f1b348d4122a9323dce4d0a08b8899418d3e3f41e8bd451f2ae1274"
     ),
 }
 SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
     (
         "preflight and SANY execution",
         "if (($#)); then",
-        "assert_nonzero_state_space() {",
+        "run_tlc() {",
         "cd4e26166d5fefa8422eb53db4bbe68a6304f75b73d9b1c32be9bf7a94525d39",
     ),
     (
-        "nonzero state-space checker",
-        "assert_nonzero_state_space() {",
-        "run_tlc() {",
-        "37270a8ab03ab36ace3d8582867a16bdc00b93072b2be85f01f0c7f89a1ae6fe",
-    ),
-    (
-        "TLC status and terminal-marker checker",
+        "TLC status and shared-result-contract checker",
         "run_tlc() {",
         'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
-        "2aadc6b5c6b1a8949af6540d9d0cd9c59bc4d4c1b565439a375f71b22ca8e943",
+        "9c825d3ac384408982f9130f7f7418723e727c6e0f69650d769bbe2a491d0380",
     ),
     (
         "six-repaired then six-mutant execution tail",
         'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
         None,
-        "32263ec888f11ba49a9ae953043ec71ec06da855f2524fa1e271ae79c896d15c",
+        "2e086ef27315e606c56df8247b9fdf3ee1199d19acd73d403a636ce58a31f35e",
     ),
 )
 SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
@@ -771,7 +1015,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "4486937d3ffe88832a4d5f113ac87875cffc1970227c1579714f77864b4229fd"
+        "f22bf9ffaef42bae5c2c2ec8a68056c21c478d7334b83de13fe63090290e28fb"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_ARTIFACTS = (
@@ -811,10 +1055,10 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "313fb65887b91ae0e9b340c8cab7130ad1ea016727845d78d6c5fb28b4709bea"
+        "f22bf9ffaef42bae5c2c2ec8a68056c21c478d7334b83de13fe63090290e28fb"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-        "f9a5d50bef36931cb48591f6adc2b624c14872338ccba861574d7010bd567621"
+        "7bbc3620ad8bb0dc7bc3e3288e01c254563d54fce7b271bd05e393d938b924c0"
     ),
 }
 _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
@@ -886,7 +1130,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "b9b428904d383c42d1a7777ac33ec7fd0922ea5bca17f046883b8ab47b280f8d"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh": (
-        "8f527b34e8e0bfc805aa308eafc1f0c76a07e87e77f73d5e4071bb436f471e1b"
+        "a25105080a1b21342e6c9d07467e65d858b953236b990872543451e1cdac8d12"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh": (
         "c0194e00332dd0b9dfcee1298a04dc45821b192913e1156a24f4938f4690b120"
@@ -922,7 +1166,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "320f160009a54db1529e8e03290486931076ab778cfecb01431912fe3ca7c1d6"
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        "7d7c3e43d9ac792c3cb648ead7fef3a602cfa4df9818239987834d1227f846fe"
+        "bd8579e81f674b62ec19e2052ae2a2643d2a39d0e4672a774a77fe5227ce2d4f"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
         "3c6c0a192bcba0ec20519f913df82c1287d621d0a40ef2066dc8434ed62bd660"
@@ -1611,8 +1855,101 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "fixed_corridor_receipt_acquisition_global_retire_bug.cfg": (
         "a94a946e62230d7a656c0945737b744945e73051f812c7ece7d6c35f107a7e2a"
     ),
+    "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla": (
+        "ceb29032619c062b17357c4a963de60e1119bcdc038981689afe43e079a5f653"
+    ),
+    "ordinary_ingress_carrier_rebase_fixed.cfg": (
+        "58e1ebceef08ce1e5d8f1dc5bb34777bfd158d68e3891ba67af7bf49b5049d98"
+    ),
+    "ordinary_ingress_carrier_rebase_identity_bug.cfg": (
+        "2db01fb1de0ffce2d91b0bc1fdc737ea9b837925d298b8ea13470b6344e53e00"
+    ),
+    "ordinary_ingress_carrier_rebase_minimum_bug.cfg": (
+        "14f5911140e645af8371cc282006fea6b879968845839389b550c057e8df0cda"
+    ),
+    "SumeragiV2ServeRestartTerminalDischargeMutation.tla": (
+        "3590b571b657ede6a4b3d4cefd5098525431960ef03e1215ad06cf0e8f439fbd"
+    ),
+    "serve_restart_terminal_discharge_body_fail_open_bug.cfg": (
+        "c4ed94aa1890354d4f262da0ec9b6ea51cbb606d8527f9419c266e7ee2c21691"
+    ),
+    "serve_restart_terminal_discharge_crash_resume_incomplete_union_bug.cfg": (
+        "3058fd7a71710a7e0e3824ade7b7a6314129f231296f173a37b1a6d80621d9ac"
+    ),
+    "serve_restart_terminal_discharge_crash_resume_order_bug.cfg": (
+        "3645cd2d4083a963d56ca751d64cd0e0b1c1291d0ac005590645aa39eee2576f"
+    ),
+    "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg": (
+        "b37ff1837d8d6913d68b29089f3a9264d552b9b7b7344d45d1ca1ea693c773d8"
+    ),
+    "serve_restart_terminal_discharge_family_coexistence_bug.cfg": (
+        "79f2ca284cec0a61048694783dd570a5721fc330bb1f82e381316301e3440641"
+    ),
+    "serve_restart_terminal_discharge_fixed.cfg": (
+        "0dd46a7a6ed21d470ee4160c353f8c026a6cb09a183374f56c10aee84062b030"
+    ),
+    "serve_restart_terminal_discharge_incomplete_union_bug.cfg": (
+        "f199296d65c2e14ea80837ec67aafed00ef612e6f2aa31b16cdf4e17da8d431f"
+    ),
+    "serve_restart_terminal_discharge_live_decision_conversion_bug.cfg": (
+        "7d7a6f76ee67e9edf4792f0f1d334eb6a524ca6f01840afa6f7cf484698541db"
+    ),
+    "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg": (
+        "72ff08dddf37d2b196e5ba8e2b2585296f5314b0254d6104fa785f38b7cc41b6"
+    ),
+    "serve_restart_terminal_discharge_negative_retry_ordinal_bug.cfg": (
+        "16290fed1624e8ae9b76997aca7d6f52b94f96cc924ae0b8aee6d41c590a7d5d"
+    ),
+    "serve_restart_terminal_discharge_negative_terminal_sign_bug.cfg": (
+        "29a0950516f2e1bcf9df95003d239c99f17b2f9103f437d519e7553d3f924aab"
+    ),
+    "serve_restart_terminal_discharge_negative_waiter_bug.cfg": (
+        "02ad40ef2a311cba8f1cccbdc1c1ea8076c59bb2f4d0bea0f7fc060f1cff36d2"
+    ),
+    "serve_restart_terminal_discharge_order_bug.cfg": (
+        "4f6362c1ed3bc68b89b53c476a7c0796bbed078da1a0248ab2529e370e6d9368"
+    ),
+    "serve_restart_terminal_discharge_orphan_waiter_bug.cfg": (
+        "a7252a436b270213768e11a0563c4919bb9e7555a4c6ecd1fb8f44207aa71135"
+    ),
+    "serve_restart_terminal_discharge_owner_request_mismatch_bug.cfg": (
+        "e69e5926363f37ba97adbf1ed9c6d05ef3882ef2e21111acd029da7af225305c"
+    ),
+    "serve_restart_terminal_discharge_persistence_bug.cfg": (
+        "020980fdfd362c88529f2744cbeeb2f4eb59d9240b41a002ebc424b28f7b602e"
+    ),
+    "serve_restart_terminal_discharge_prefence_decision_rewrite_bug.cfg": (
+        "779e319ce87de871670bc190167582577d399f47ae617e8f351e0b8d0dd763dd"
+    ),
+    "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg": (
+        "67dcf0855c151034d87349e2fd06edbd7ee345cadd74cbf6ccacef19d72cc572"
+    ),
+    "serve_restart_terminal_discharge_producer_exposure_bug.cfg": (
+        "25290e7420eae0fd379869070bbd04a1ae6cae3380d37fbd38ed0c5106001d16"
+    ),
+    "serve_restart_terminal_discharge_raw_context_gate_bug.cfg": (
+        "52cbdb9148f195f757e58cfb659c636dbf242fc2fde75b6d340ebc752b54cb06"
+    ),
+    "serve_restart_terminal_discharge_receiver_close_bug.cfg": (
+        "9e8e9e2a4c351656da12695356a1a84843742849f0de78041f8f42930f0d7763"
+    ),
+    "serve_restart_terminal_discharge_restart_decision_conversion_bug.cfg": (
+        "f34bbfd72a45155f92189da2a0942bb92433a2e30915ba9094408a3d28046da7"
+    ),
+    "serve_restart_terminal_discharge_resurrection_bug.cfg": (
+        "9f4f926c0d184219842ffae3842c26e2b536d08ec1ed0de39d35cabb52bfc059"
+    ),
+    "serve_restart_terminal_discharge_roster_fanout_bug.cfg": (
+        "81c968a71c55a6cce65bf41439eae47509bf557a419ca1afc4fa254ae84cc40c"
+    ),
+    "serve_restart_terminal_discharge_signer_authority_bug.cfg": (
+        "2bdf01fd1ce3884f64802217a9b1b5cf3c86b2c1831964056373629bfd3875f2"
+    ),
+    "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg": (
+        "d842c8552094eff841e3c9c159399d680a50edbd63ff2c1b96ad6a3330a8f644"
+    ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "7d7c3e43d9ac792c3cb648ead7fef3a602cfa4df9818239987834d1227f846fe"
+        "bd8579e81f674b62ec19e2052ae2a2643d2a39d0e4672a774a77fe5227ce2d4f"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -1644,6 +1981,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2AdequateLeaderDeadlineAuthorityMutation*.tla",
     "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation*.tla",
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation*.tla",
+    "SumeragiV2OrdinaryIngressCarrierRebaseMutation*.tla",
+    "SumeragiV2ServeRestartTerminalDischargeMutation*.tla",
     "exact_ingress_ticket_*.cfg",
     "exact_serve_restart_tombstone_*.cfg",
     "exact_response_claim_*.cfg",
@@ -1672,6 +2011,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "adequate_leader_deadline_authority_*.cfg",
     "adequate_leader_selected_lifecycle_episode_*.cfg",
     "fixed_corridor_receipt_acquisition_*.cfg",
+    "ordinary_ingress_carrier_rebase_*.cfg",
+    "serve_restart_terminal_discharge_*.cfg",
 )
 
 # Exact source seal for the indexed successor service-activation mutation
@@ -1736,7 +2077,7 @@ HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_SHA256 = {
         "bdd9613583893b49e8f5762ea3342a50f5cc289689b225ef8b55c2aac0e8c49d"
     ),
     HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_RUNNER: (
-        "82075c8d6b565dfa18f0f7582aa3a3c4da1fae3b0cf8ef95c7f91ab214190f2b"
+        "46cc895ff6a6cbd410ab557dd887c264831fd65d5162df107d9736e71f2b9bc3"
     ),
 }
 HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_FORMAL_GLOBS = (
@@ -1891,7 +2232,7 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
         "15cded2fae4c33a3276314718793e9a46b1f59571c8f2501f49eae114cc67524"
     ),
     EFFECT_CAPACITY_MUTATION_RUNNER: (
-        "e627a84ab35e719670c67a31396c09735886d771b63279c204211255aaba7072"
+        "0c521f2d552215a2112254990d614b0e205fd134ddf2c78ce7525e1146efc137"
     ),
 }
 EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
@@ -2004,7 +2345,7 @@ CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
         "bd71a1ba2684f95127d4244eb9b45ab63f1c982374c4b258318368f8611df0fe"
     ),
     CERTIFIED_RESPONSE_REGISTRATION_RUNNER: (
-        "acc87e8f9a6939cc7ea1effbc5ea5560d6399abf811a03d8c67fa4974a6f0b05"
+        "c0194e00332dd0b9dfcee1298a04dc45821b192913e1156a24f4938f4690b120"
     ),
 }
 
@@ -2058,7 +2399,7 @@ DECISION_RECOVERY_LIFECYCLE_SHA256 = {
         "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2"
     ),
     DECISION_RECOVERY_LIFECYCLE_RUNNER: (
-        "e44def67d2442401d806d21213cf5974dbec85a80b7151b18f368fd18b15e4c0"
+        "afec183a6cc8c5d1ff118e5e1676eb10877c0b43d6580fdfdd8574fa3b2a7932"
     ),
 }
 
@@ -3440,7 +3781,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step",
                         item_token_sha256=(
-                            "5851f7e8fa8223c1de6ca54101426bca28c00c4e1d32c78762bd84c3b6e1767c"
+                            "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -3451,7 +3792,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
-                            "f3a91673b74b2b256c52ba84d82881bb2404b2726966b91049c11bc450965c5d"
+                            "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -7560,29 +7901,31 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
     ): (
-        "AdequateLeaderTargetOccurrenceOwnerSelected",
-        "AdequateLeaderTargetLiveCandidateOwnerIdentitySet",
-        "AdequateLeaderFrozenSubjectSwitchOwnerUniverse",
-        "retired",
-        "AdequateLeaderTargetStrictOccurrenceDescentGoal",
+        "AdequateLeaderTargetCarriedOwnerEpisodeAtBudget",
+        "AsyncProposalSubject",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetOffSubjectRetirementAndReentryGoal",
     ): (
+        "NodeHasDecision",
+        "AdequateLeaderTargetOccurrenceCorridorExitHandoff",
         "owner",
         "retired",
-        "AdequateLeaderTargetOccurrenceOwnerRetirementClosed",
-        "AdequateLeaderTargetProductiveSubjectReentryGoal",
+        "AdequateLeaderFrozenSubjectSwitchOwnerUniverse",
+        "SetLessThan",
+        "AdequateLeaderTargetSubjectSwitchRemainingBudget",
+        "AdequateLeaderTargetProductiveOwnerEpisodeAtBudget",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetSubjectSwitchEpisodeAdvanceGoal",
     ): (
         "AdequateLeaderTargetSubjectSwitchDiscoveredOwnerSet",
-        "AdequateLeaderTargetOccurrenceOwnerRetirementClosed",
+        "AdequateLeaderFrozenSubjectSwitchOwnerUniverse",
         "AdequateLeaderTargetSubjectSwitchRemainingBudget",
         "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
+        "owner",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -7599,8 +7942,9 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
     ): (
         "AdequateLeaderTargetOccurrenceRankServiceProperty",
         "AdequateLeaderTargetOffSubjectControlNoReentryProperty",
-        "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
-        "AdequateLeaderTargetSubjectSwitchBudgetDescentGoal",
+        "AdequateLeaderTargetInternalBodyAvailableNoReentryProperty",
+        "AdequateLeaderTargetDurableRetirementCarryProperty",
+        "AdequateLeaderTargetSubjectSwitchCarryStepProperty",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -7685,8 +8029,10 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKEN_SEQUENCES = {
         "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
     ): (
         (
-            "owner \\in AdequateLeaderFrozenSubjectSwitchOwnerUniverse( "
-            "target, leaderContext, leader, leaderView) \\ retired"
+            "/\\ AdequateLeaderTargetCarriedOwnerEpisodeAtBudget( "
+            "target, leaderContext, leader, leaderView, subject, "
+            "occurrenceRank, owner, retired, budget) "
+            "/\\ subject # AsyncProposalSubject(leader)"
         ),
     ),
     (
@@ -7697,12 +8043,8 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKEN_SEQUENCES = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetSubjectSwitchEpisodeAdvanceGoal",
     ): (
-        (
-            "AdequateLeaderTargetOccurrenceOwnerRetirementClosed( target, "
-            "leaderContext, leader, leaderView, subject, occurrenceRank, "
-            "owner)"
-        ),
-        "retired2 = retired \\cup discovered",
+        "retired \\cup discovered \\subseteq retired2",
+        "owner \\in retired2",
         "budget2 < budget",
     ),
 }
@@ -9124,7 +9466,7 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
-    "52c16f1480b36642488245abda45a68edd6e3682169f0d4aa79b212418515588"
+    "b3cbbcf89f2706b63aca2b5ea78ed118107b881b46f7ca293858ffb8d7f98ed2"
 )
 
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS: tuple[str, ...] = ()
@@ -19186,14 +19528,6 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2AsyncNetwork",
-        "AsyncDormantExactReplyRequestPacketIsRetained",
-    ): (
-        "\\A packet: "
-        "AsyncDormantExactReplyRequestPacket(packet) "
-        "=> packet \\in asyncTransport"
-    ),
-    (
-        "SumeragiV2AsyncNetwork",
         "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     ): (
         "\\A packet: "
@@ -21277,10 +21611,6 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "PersistDecisionRecoverySuccessor",
         "AsyncCandidateWithIdentityAndOrigin",
     ),
-    (
-        "SumeragiV2AsyncNetwork",
-        "AsyncDormantExactReplyRequestPacketIsRetained",
-    ): ("AsyncDormantExactReplyRequestPacket",),
     (
         "SumeragiV2AsyncNetwork",
         "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
@@ -24025,13 +24355,13 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
     "runtime_step": (
-        "5851f7e8fa8223c1de6ca54101426bca28c00c4e1d32c78762bd84c3b6e1767c"
+        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
     ),
     "runtime_step_recovery": (
-        "f3a91673b74b2b256c52ba84d82881bb2404b2726966b91049c11bc450965c5d"
+        "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
     ),
     "dispatch_one_adapter_deferred": (
-        "846b96585974bcb291e314e9ae144c2bda24d1f4f7291eb376252dad2ab4713e"
+        "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -24061,7 +24391,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "638d44eae201d3477a987e857d3c9318c7a525347cddb9d5bbce704d9bbc7985"
     ),
     "runtime_ingress_validate_exact": (
-        "f6b5867d05815113ca449e0bf4c29fbca5b4f706a71788e5584c00a1b4b89f9e"
+        "5076de66c0c2a3b01f31c65ff4ea3af8177e4bd372861d6e14585087fb6714d3"
     ),
     "runtime_ingress_matches_authenticated": (
         "e9d5c8bfa0cbdc71f42f9858ee00e73f663c2bed53f573c3e06a9144feaad5f8"
@@ -24070,31 +24400,46 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "0a9b6424c76b8d53a6e630431e3e9153d20e25d755abbe38384c5f59e9064553"
     ),
     "runtime_ingress_merge_downstream": (
-        "67f103ccdbc31a5d7527545b1ce023569c199de002ef9697d4ae525702cf8690"
+        "55f59286a356c0cd1c47b572db72660dcdedcc40f3946c2e3b62c7eb5c805e92"
     ),
     "runtime_driver_dispatch": (
-        "77f833ff3dbd893008febf65d5e9626f04d9b55b0260294b3d4a027382ca9cf3"
+        "a20f3f9675cacba345a174bba5fa8370f0f76225f8e3e040971c2d7f15800990"
     ),
     "runtime_driver_dispatch_deferred": (
-        "64777f8713b464364612f8662b48bcb494c1870a8776e4d10a18dcc70976ff60"
+        "f80c271a6766106b620e6b0dcbd7fb3a37db63fece634c09818ddb74498202d9"
     ),
     "reconcile_deferred_ingress_ownership": (
-        "0356614757c038665d820bcaa92474b6ec3d30ad0ee8e2c6652e0a88662ecbb6"
+        "fb8ac9defb961830528e67b3c05e92e7a72368c4c592f5594285f937cfb81f01"
     ),
     "accept_driver_dispatch": (
-        "2d2fe4b456bce5c808588e4c54cc637466de9f674dcb3f30df700a11f00c30b2"
+        "2862df8110e056352a64680616e131393c4eab44be5f9e091f43ccc23d6fab65"
     ),
     "enqueue_network_with_ingress_ownership": (
-        "708305b7037a4fae5e8d796ee08a80f46065ec2fe73ecc498a5e806c7efe33bc"
+        "db05791e686e2c8b4a84e09707c83b767f3bc7eef1da189060801cf86dfc5927"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "20fdb8057db53f88bced2eef196421432d2db968f475af444ec08c65bb5c3f11"
+        "24903fdc43ff249788662132bdf1c260917a8243b260e67ba5e8224a013d361d"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
     ),
     "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
         "29cc0769d5f9224ea11e10410b05b97a4e33fb75b9327ee4a18f19e12babbfe9"
+    ),
+}
+
+_PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
+        "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
+    ),
+    "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it": (
+        "b69ec152b545fb4e705335eeaecaa5785b1736349fa1494b383f18c257aa8d18"
+    ),
+    "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum": (
+        "dc5f365edfc9bbd31d0f8f595c34673a779e85aac7dfe517316792bd2c70a235"
+    ),
+    "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
+        "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
     ),
 }
 
@@ -43279,7 +43624,10 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
             "AsyncBaseInitAt(initialContext) /\\ ViewDomain = FiniteViews"
         ),
         "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
-        "AsyncAllVars": "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+        "AsyncAllVars": (
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
+            "asyncFixedCorridorDeadlines>>"
+        ),
         "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
         "AsyncSpecAt": (
             "AsyncInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
@@ -44727,9 +45075,18 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "/\\ RunNodeWork(node) => "
                 "AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}"
             ),
-            "ResetNodeSchedulerForRestartClearsServeIngressOwners": (
+            "ResetNodeSchedulerForRestartDischargesServeIngressDebt": (
                 "\\A node, replay: ResetNodeSchedulerForRestart(node, replay) "
-                "=> AsyncServeIngressLifecycleOwnerIdentities(node)' = {}"
+                "=> /\\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {} "
+                "/\\ AsyncServeOffQueueReservations(node)' = {} "
+                "/\\ \\A admission \\in asyncServeAdmissions: "
+                "admission.node = node => \\E terminal \\in "
+                "asyncServeTombstones': "
+                "/\\ terminal.node = admission.node "
+                "/\\ terminal.identity = admission.identity "
+                "/\\ terminal.family = admission.family "
+                "/\\ terminal.view = admission.view "
+                "/\\ terminal.ordinal = admission.ordinal"
             ),
             "ReplayingOrdinaryStepPreservesEmptyServeIngressOwners": (
                 "/\\ AsyncRecoveryExecutionInvariant "
@@ -45185,7 +45542,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "ReplayingRecoveryHeadIsFresh",
             ),
             "PreGstResponsiveReplayEstablishesRecoveryExecutionInvariant": (
-                "ResetNodeSchedulerForRestartClearsServeIngressOwners",
+                "ResetNodeSchedulerForRestartDischargesServeIngressDebt",
                 "RestartSignatureTailIsFreshAgainstRestartReplay",
             ),
             "AsyncNextPreservesRecoveryExecutionInvariant": (
@@ -45264,7 +45621,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         "HiddenIngressAdmissionPreservesOtherNodeOwners",
         "ReplayingNetworkStepPreservesEmptyRecoveryIngressOwners",
         "RunNodeWorkPreservesEmptyServeIngressOwners",
-        "ResetNodeSchedulerForRestartClearsServeIngressOwners",
+        "ResetNodeSchedulerForRestartDischargesServeIngressDebt",
         "ReplayingOrdinaryStepPreservesEmptyServeIngressOwners",
     }
     for symbol, exact_statement in expected.items():
@@ -50405,6 +50762,9 @@ def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
             r'-config adequate_leader_global_blocker_exact_cell\.cfg '
             r'SumeragiV2AdequateLeaderGlobalBlockerCellMutation\.tla\n'
             r'\) >"\$run_dir/global-blocker-exact-cell\.log" 2>&1\n'
+            r'sumeragi_v2_tlc_assert_fixed_success '
+            r'"global-blocker-exact-cell" '
+            r'"\$run_dir/global-blocker-exact-cell\.log" 0\n'
             r'grep -Fq "Model checking completed\. No error has been found\." '
             r'"\$run_dir/global-blocker-exact-cell\.log" \|\| \{'
         ),
@@ -53352,9 +53712,14 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "SumeragiV2TypedRolloverHandoffLivenessMutation \\ "
             "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation \\ "
             "SumeragiV2TypedRolloverHandoffProofs; do",
-            "readonly TLC_FINISHED_PATTERN=",
-            'assert_nonzero_state_space "$label" "$log"',
-            'grep -Ec "$TLC_FINISHED_PATTERN" "$log"',
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            'sumeragi_v2_tlc_assert_fixed_success "$label" "$log" '
+            '"$actual_status"',
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            '"$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN"',
+            '[[ "$primary_diagnostic_count" -eq 1 ]] || {',
             'run_case typed-rollover-fixed \\ "$FIXED_MODEL" '
             'typed_rollover_handoff_fixed.cfg 0 \\ '
             '"Model checking completed. No error has been found."',
@@ -53371,7 +53736,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "readonly EXPECTED_MUTATION_COUNT=45",
             'readonly INVARIANT_MARKER="Error: Invariant '
             'TypedRolloverSafetyInvariant is violated."',
-            'readonly TEMPORAL_MARKER="Temporal properties were violated."',
+            'readonly TEMPORAL_MARKER="Error: Temporal properties were violated."',
             'actual_configs=("${FORMAL_DIR}"/'
             "typed_rollover_handoff_*_bug.cfg)",
             'if [[ "$actual_config" == "$REPEATED_HANDOFF_MUTATION_CONFIG" '
@@ -63338,7 +63703,7 @@ def _liveness_ownership_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
-    """Seal exact-ingress, timeout-authority, and leader TLC pairs."""
+    """Seal exact-ingress, restart-discharge, and leader TLC pairs."""
 
     errors: list[str] = []
     network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
@@ -63348,6 +63713,14 @@ def _liveness_ownership_mutation_source_fidelity_errors(
         )
     else:
         network_source = network_path.read_text(encoding="utf-8")
+        network_tokens_with_strings = tuple(
+            _TLA_TOKEN_RE.findall(
+                strip_tla_comments(
+                    network_source,
+                    preserve_string_contents=True,
+                )
+            )
+        )
         for expected, description in (
             (
                 """
@@ -63363,10 +63736,24 @@ AsyncControlServiceAdmissionStartsOrReplaces(item) ==
             (
                 """
 CanAdmitIngressItem(item) ==
+  /\\ ~IngressPacketPolicyRejected(item)
   /\\ ~AsyncControlServiceAdmissionCoalesced(item)
   /\\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)
+  /\\ ~AsyncCandidateServicePacketRetired(item)
+  /\\ ~AsyncCandidateStageRetired(item)
+  /\\ AsyncLeaderWireAtomicAdmissionAllows(item)
+  /\\ AsyncServeTransportAdmissionGateAllows(
+       item.envelope.recipient, item)
+  /\\ AsyncOrdinaryIngressCarrierAdmissionCapacityAvailable(item)
+  /\\ AsyncOrdinaryIngressCarrierOwnerCompatibleAtAdmission(item)
+  /\\ IngressDepth(item.envelope.recipient)
+       < IngressUsableCapacityAfterAdmission(item)
+  /\\ AsyncTimeoutVoteByteGateAllows(item)
+  /\\ AsyncTransportCompletionOwnerGateAllows(item)
+  /\\ CertifiedResponseFreshClaimGateAllows(item)
+  /\\ AsyncUntrustedGenericCompletionGateAllows(item)
 """,
-                "live predecessor closes fresh ingress admission without coalescing",
+                "full live-predecessor and ordinary-carrier ingress admission gate",
             ),
             (
                 """
@@ -63539,10 +63926,73 @@ RetireDeferredTimeoutLifecyclesAfterFifoDispatch(node, command) ==
             ),
             (
                 r"""
+AsyncPersistDecisionCommandThisStep(command) ==
+  /\ command.kind = "PersistDecision"
+  /\ \E request \in pendingDecision:
+       /\ CommandMatches(
+            command, request.node, request.qc.view, request.qc.subject)
+       /\ PersistDecision(request)
+""",
+                "PersistDecision exact current-step classifier",
+            ),
+            (
+                r"""
+AsyncPersistDecisionCommandsThisStep ==
+  {command \in AsyncCandidateSet:
+     AsyncPersistDecisionCommandThisStep(command)}
+""",
+                "PersistDecision current-step command set",
+            ),
+            (
+                r"""
+AsyncPersistDecisionCommandsForNodeThisStep(node) ==
+  {command \in AsyncPersistDecisionCommandsThisStep:
+     command.node = node}
+""",
+                "PersistDecision node-local current-step command set",
+            ),
+            (
+                r"""
+AsyncServePersistedDecisionHasCheckedDrainOwner(tombstone) ==
+  AsyncServeIngressAdmissionOwned(
+    tombstone.node, tombstone.identity)
+""",
+                "PersistDecision checked-drain owner classifier",
+            ),
+            (
+                r"""
+AsyncServeTombstoneAfterPersistedDecision(
+    tombstone, node, decidedSubject) ==
+  IF /\ tombstone.node = node
+        /\ tombstone.outcome = AsyncServeResponseOutcome
+        /\ ~AsyncServePersistedDecisionHasCheckedDrainOwner(tombstone)
+        /\ LET request ==
+                 AsyncServeRequestForIdentity(
+                   tombstone.node, tombstone.identity)
+           IN /\ request.kind = "CertifiedRequest"
+              /\ request.envelope.subject # decidedSubject
+  THEN AsyncServeTombstone(
+         tombstone.node, tombstone.identity,
+         tombstone.family, tombstone.view, tombstone.ordinal,
+         AsyncServeSupersededByDurableDecisionOutcome(decidedSubject), {})
+  ELSE tombstone
+""",
+                "PersistDecision exact Response conversion gate",
+            ),
+            (
+                r"""
+AsyncServeTombstonesAfterPersistedDecision(node, decidedSubject) ==
+  {AsyncServeTombstoneAfterPersistedDecision(
+     tombstone, node, decidedSubject):
+     tombstone \in asyncServeTombstones}
+""",
+                "PersistDecision atomic Serve tombstone projection",
+            ),
+            (
+                r"""
 AsyncIoTimeoutLifecycleRetirementTransition(node) ==
-  IF AsyncPersistInstallCommandsForNodeThisStep(node) = {}
-  THEN UNCHANGED AsyncIoVars
-  ELSE LET command ==
+  IF AsyncPersistInstallCommandsForNodeThisStep(node) # {}
+  THEN LET command ==
              CHOOSE installed \in
                AsyncPersistInstallCommandsForNodeThisStep(node): TRUE
        IN /\ asyncIoQueues' =
@@ -63564,8 +64014,99 @@ AsyncIoTimeoutLifecycleRetirementTransition(node) ==
           /\ asyncServeReservations' =
                AsyncServeReservationsAfterTimeoutLifecycleInstall(
                  node, command.view)
+          /\ UNCHANGED <<asyncNextServeAdmissionOrdinal,
+                         AsyncServeIngressAdmissionVars,
+                         asyncServeAdmissions, asyncServeTombstones,
+                         asyncNextCompletionSource,
+                         asyncIoControlAvailable>>
+  ELSE IF AsyncPersistDecisionCommandsForNodeThisStep(node) # {}
+       THEN LET command ==
+                  CHOOSE persisted \in
+                    AsyncPersistDecisionCommandsForNodeThisStep(node): TRUE
+            IN /\ asyncServeTombstones' =
+                    AsyncServeTombstonesAfterPersistedDecision(
+                      node, command.subject)
+               /\ UNCHANGED
+                    <<asyncIoQueues, asyncNextServeAdmissionOrdinal,
+                      AsyncServeIngressAdmissionVars,
+                      asyncServeAdmissions, asyncServeReservations,
+                      asyncOutstandingWork, asyncIoReadyCompletions,
+                      asyncLocalReadyCompletions,
+                      asyncNextCompletionSource,
+                      asyncIoControlAvailable>>
+       ELSE UNCHANGED AsyncIoVars
 """,
-                "atomic executor and Serve-predecessor timeout-root retirement",
+                "atomic install retirement and PersistDecision Serve conversion",
+            ),
+            (
+                r"""
+THEOREM PersistDecisionConvertsIncompatibleResponseBeforeRetryOrdinal ==
+  \A node \in ValidatorIds,
+     command \in AsyncPersistDecisionCommandsForNodeThisStep(node),
+     tombstone \in asyncServeTombstones:
+    LET request ==
+          AsyncServeRequestForIdentity(
+            tombstone.node, tombstone.identity)
+    IN /\ tombstone.node = node
+       /\ tombstone.outcome = AsyncServeResponseOutcome
+       /\ request.kind = "CertifiedRequest"
+       /\ request.envelope.subject # command.subject
+       /\ ~AsyncServePersistedDecisionHasCheckedDrainOwner(tombstone)
+       /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+       /\ AsyncIoTimeoutLifecycleRetirementTransition(node)
+       => /\ asyncNextServeAdmissionOrdinal'
+                = asyncNextServeAdmissionOrdinal
+          /\ asyncNextServeIngressOrdinal'
+                = asyncNextServeIngressOrdinal
+          /\ \E terminal \in asyncServeTombstones':
+               /\ terminal.node = node
+               /\ terminal.identity = tombstone.identity
+               /\ terminal.outcome
+                    = AsyncServeSupersededByDurableDecisionOutcome(
+                        command.subject)
+               /\ terminal.outputs = {}
+BY Isa
+   DEF AsyncIoTimeoutLifecycleRetirementTransition,
+       AsyncServeTombstonesAfterPersistedDecision,
+       AsyncServeTombstoneAfterPersistedDecision,
+       AsyncServePersistedDecisionHasCheckedDrainOwner
+""",
+                "PersistDecision pre-retry conversion theorem",
+            ),
+            (
+                r"""
+THEOREM PersistDecisionPreservesPreFenceResponseUntilCheckedDrain ==
+  \A node \in ValidatorIds,
+     command \in AsyncPersistDecisionCommandsForNodeThisStep(node),
+     tombstone \in asyncServeTombstones:
+    LET request ==
+          AsyncServeRequestForIdentity(
+            tombstone.node, tombstone.identity)
+    IN /\ tombstone.node = node
+       /\ tombstone.outcome = AsyncServeResponseOutcome
+       /\ request.kind = "CertifiedRequest"
+       /\ request.envelope.subject # command.subject
+       /\ AsyncServeIngressAdmissionOwned(
+            tombstone.node, tombstone.identity)
+       /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+       /\ AsyncIoTimeoutLifecycleRetirementTransition(node)
+       => /\ tombstone \in asyncServeTombstones'
+          /\ AsyncServeIngressAdmissionRecords(
+               tombstone.node, tombstone.identity)'
+               = AsyncServeIngressAdmissionRecords(
+                   tombstone.node, tombstone.identity)
+          /\ asyncNextServeAdmissionOrdinal'
+               = asyncNextServeAdmissionOrdinal
+          /\ asyncNextServeIngressOrdinal'
+               = asyncNextServeIngressOrdinal
+BY Isa
+   DEF AsyncIoTimeoutLifecycleRetirementTransition,
+       AsyncServeTombstonesAfterPersistedDecision,
+       AsyncServeTombstoneAfterPersistedDecision,
+       AsyncServePersistedDecisionHasCheckedDrainOwner,
+       AsyncServeIngressAdmissionRecords
+""",
+                "PersistDecision pre-fence checked-drain preservation theorem",
             ),
             (
                 r"""
@@ -63643,13 +64184,97 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             ),
         ):
             observed = _token_sequence_count(
-                tla_code_tokens(network_source), tla_code_tokens(expected)
+                network_tokens_with_strings,
+                tuple(
+                    _TLA_TOKEN_RE.findall(
+                        strip_tla_comments(
+                            expected,
+                            preserve_string_contents=True,
+                        )
+                    )
+                ),
             )
             if observed != 1:
                 errors.append(
                     f"{network_path}: {description} must occur exactly once in "
                     f"executable TLA+ source; found {observed}"
                 )
+    progress_ownership_path = (
+        formal_dir / "SumeragiV2AsyncProgressOwnershipProofs.tla"
+    )
+    if (
+        not progress_ownership_path.is_file()
+        or progress_ownership_path.is_symlink()
+    ):
+        errors.append(
+            f"{progress_ownership_path}: progress-ownership dependency source "
+            "must be a regular file"
+        )
+    else:
+        progress_ownership_source = progress_ownership_path.read_text(
+            encoding="utf-8"
+        )
+        progress_theorem = (
+            "ExactRuntimeContinuationReplayPreservesProgressOwnership"
+        )
+        stripped_progress_ownership = strip_tla_comments(
+            progress_ownership_source,
+            preserve_string_contents=True,
+        )
+        progress_theorem_declarations = re.findall(
+            rf"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+            rf"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
+            rf"(?:[ \t]+|[ \t]*\n[ \t]*)"
+            rf"{re.escape(progress_theorem)}"
+            rf"\s*(?:\([^)=]*\))?\s*==",
+            stripped_progress_ownership,
+        )
+        extracted_progress_theorem = _top_level_theorem_body(
+            progress_ownership_source,
+            progress_theorem,
+            preserve_string_contents=True,
+        )
+        if (
+            len(progress_theorem_declarations) != 1
+            or extracted_progress_theorem is None
+        ):
+            errors.append(
+                f"{progress_ownership_path}: exact Runtime continuation replay "
+                "progress-ownership theorem must occur exactly once"
+            )
+        else:
+            theorem_source = extracted_progress_theorem[0]
+            for expected, description in (
+                (
+                    r"""
+<2>1. /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+       /\ AsyncPersistDecisionCommandsForNodeThisStep(node) = {}
+  BY <1>1, IsaT(300)
+""",
+                    "paired PersistInstall/PersistDecision stutter premise",
+                ),
+                (
+                    r"""
+AsyncPersistInstallCommandsForNodeThisStep,
+AsyncPersistInstallCommandsThisStep,
+AsyncPersistInstallCommandThisStep,
+AsyncPersistDecisionCommandsForNodeThisStep,
+AsyncPersistDecisionCommandsThisStep,
+AsyncPersistDecisionCommandThisStep,
+""",
+                    "paired PersistInstall/PersistDecision DEF dependency",
+                ),
+            ):
+                observed = _token_sequence_count(
+                    tla_code_tokens(theorem_source),
+                    tla_code_tokens(expected),
+                )
+                if observed != 1:
+                    errors.append(
+                        f"{progress_ownership_path}: exact Runtime continuation "
+                        f"replay theorem must retain one {description}; found "
+                        f"{observed}"
+                    )
     expected_formal = set(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS)
     expected_all = expected_formal | {LIVENESS_OWNERSHIP_MUTATION_RUNNER}
     digest_names = set(LIVENESS_OWNERSHIP_MUTATION_SHA256)
@@ -63658,16 +64283,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     fixed_count = sum(name.endswith("_fixed.cfg") for name in expected_formal)
     mutation_count = sum(name.endswith("_bug.cfg") for name in expected_formal)
     if (
-        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 120
-        or model_count != 28
-        or config_count != 92
-        or fixed_count != 28
-        or mutation_count != 64
+        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 151
+        or model_count != 30
+        or config_count != 121
+        or fixed_count != 30
+        or mutation_count != 91
     ):
         errors.append(
             "liveness-ownership mutation source seal must name exactly "
-            "twenty-eight models, twenty-eight repaired configurations, and "
-            "sixty-four failing configurations; found "
+            "thirty models, thirty repaired configurations, and "
+            "ninety-one failing configurations; found "
             f"models={model_count}, repaired={fixed_count}, "
             f"failing={mutation_count}, configurations={config_count}, "
             f"total={len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS)}"
@@ -63675,7 +64300,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     if digest_names != expected_all:
         errors.append(
             "liveness-ownership mutation digest inventory must equal the "
-            f"exact 121-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact 152-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -64530,6 +65155,960 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 f"{observed_config!r}"
             )
 
+    ordinary_rebase_path = (
+        formal_dir / "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla"
+    )
+    if ordinary_rebase_path.is_file() and not ordinary_rebase_path.is_symlink():
+        ordinary_rebase_source = ordinary_rebase_path.read_text(
+            encoding="utf-8"
+        )
+        exact_ordinary_rebase_operators = {
+            "NoOwner": '[kind |-> "None"]',
+            "Carrier": (
+                "[name |-> name, ordinal |-> ordinal, "
+                "ownerIdentity |-> ownerIdentity, status |-> status]"
+            ),
+            "Owner": (
+                '[kind |-> "BusyOwner", ordinal |-> ordinal, '
+                "ownerIdentity |-> ownerIdentity]"
+            ),
+            "vars": "<<phase, nextOrdinal, carriers, owner>>",
+            "CarrierNamed": (
+                "CHOOSE carrier \\in carriers: carrier.name = name"
+            ),
+            "CarrierOrdinals": (
+                "{carrier.ordinal: carrier \\in carriers}"
+            ),
+            "MinimumCarrierOrdinal": (
+                "CHOOSE ordinal \\in CarrierOrdinals: "
+                "\\A other \\in CarrierOrdinals: ordinal <= other"
+            ),
+            "ReplaceCarrierStatus": (
+                "{IF carrier.name = name "
+                "THEN [carrier EXCEPT !.status = status] "
+                "ELSE carrier: carrier \\in carriers}"
+            ),
+            "Init": (
+                '/\\ phase = "AcceptOlder" /\\ nextOrdinal = 1 '
+                "/\\ carriers = {} /\\ owner = NoOwner"
+            ),
+            "AcceptOlder": (
+                '/\\ phase = "AcceptOlder" '
+                "/\\ carriers' = "
+                '{Carrier("Older", nextOrdinal, "StableOwner", "Ingress")} '
+                "/\\ nextOrdinal' = nextOrdinal + 1 "
+                '/\\ phase\' = "AcceptNewer" /\\ UNCHANGED owner'
+            ),
+            "AcceptNewer": (
+                '/\\ phase = "AcceptNewer" '
+                "/\\ carriers' = carriers "
+                '\\cup {Carrier( "Newer", nextOrdinal, "StableOwner", '
+                '"Ingress")} '
+                "/\\ nextOrdinal' = nextOrdinal + 1 "
+                '/\\ phase\' = "DrainNewer" /\\ UNCHANGED owner'
+            ),
+            "DrainNewer": (
+                '/\\ phase = "DrainNewer" '
+                '/\\ carriers\' = ReplaceCarrierStatus("Newer", "Deferred") '
+                "/\\ owner' = "
+                'Owner((CarrierNamed("Newer")).ordinal, "StableOwner") '
+                '/\\ phase\' = "DrainOlder" /\\ UNCHANGED nextOrdinal'
+            ),
+            "DrainOlderCompatible": (
+                '/\\ phase = "DrainOlder" '
+                '/\\ carriers\' = ReplaceCarrierStatus("Older", "Deferred") '
+                "/\\ owner' = IF RebaseToMinimum "
+                'THEN Owner((CarrierNamed("Older")).ordinal, "StableOwner") '
+                "ELSE owner "
+                '/\\ phase\' = "Rebased" /\\ UNCHANGED nextOrdinal'
+            ),
+            "DrainOlderWithIdentityMutation": (
+                '/\\ phase = "DrainOlder" '
+                "/\\ IF RejectIdentityMutation "
+                "THEN /\\ UNCHANGED <<carriers, owner>> "
+                '/\\ phase\' = "RejectedMutation" '
+                "ELSE /\\ carriers' = "
+                'ReplaceCarrierStatus("Older", "Deferred") '
+                "/\\ owner' = "
+                'Owner((CarrierNamed("Older")).ordinal, "MutatedOwner") '
+                '/\\ phase\' = "MutationCommitted" '
+                "/\\ UNCHANGED nextOrdinal"
+            ),
+            "Next": (
+                "\\/ AcceptOlder \\/ AcceptNewer \\/ DrainNewer "
+                "\\/ DrainOlderCompatible "
+                "\\/ DrainOlderWithIdentityMutation"
+            ),
+            "Spec": "Init /\\ [][Next]_vars",
+            "AcceptedCarrierOrdinalsAreImmutableAndUnique": (
+                "/\\ Cardinality(CarrierOrdinals) = Cardinality(carriers) "
+                "/\\ \\A carrier \\in carriers: "
+                "/\\ carrier.ordinal \\in 1..(nextOrdinal - 1) "
+                "/\\ carrier.ownerIdentity "
+                '\\in {"StableOwner", "MutatedOwner"}'
+            ),
+            "LaterAcceptedCarrierCannotOvertake": (
+                '/\\ (phase \\notin {"AcceptOlder", "AcceptNewer"} '
+                '=> (CarrierNamed("Older")).ordinal '
+                '< (CarrierNamed("Newer")).ordinal) '
+                "/\\ nextOrdinal \\in Nat \\ {0}"
+            ),
+            "BusyDeferredOwnerUsesMinimumCompatibleCarrier": (
+                'phase = "Rebased" '
+                '=> /\\ owner.ownerIdentity = "StableOwner" '
+                "/\\ owner.ordinal = MinimumCarrierOrdinal"
+            ),
+            "IdentityMutationCannotCommit": (
+                'phase # "MutationCommitted"'
+            ),
+            "RejectedIdentityMutationPreservesCompleteOwnershipState": (
+                'phase = "RejectedMutation" '
+                "=> /\\ carriers = "
+                '{Carrier("Older", 1, "StableOwner", "Ingress"), '
+                'Carrier("Newer", 2, "StableOwner", "Deferred")} '
+                '/\\ owner = Owner(2, "StableOwner") '
+                "/\\ nextOrdinal = 3"
+            ),
+        }
+        for symbol, expected_body in exact_ordinary_rebase_operators.items():
+            extracted = _top_level_operator_body(
+                ordinary_rebase_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{ordinary_rebase_path}: missing reviewed ordinary "
+                    f"ingress carrier-rebase operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            observed_body = " ".join(body.split())
+            if symbol == "Owner":
+                observed_body = observed_body.removesuffix(
+                    " VARIABLES phase, nextOrdinal, carriers, owner"
+                )
+            if observed_body != expected_body:
+                errors.append(
+                    f"{ordinary_rebase_path}:{line}: ordinary ingress "
+                    f"carrier-rebase operator {symbol} must equal only "
+                    f"{expected_body!r}; found {observed_body!r}"
+                )
+
+    exact_ordinary_rebase_configs = {
+        "ordinary_ingress_carrier_rebase_fixed.cfg": (
+            "CONSTANTS RebaseToMinimum = TRUE "
+            "RejectIdentityMutation = TRUE "
+            "SPECIFICATION Spec CHECK_DEADLOCK FALSE "
+            "INVARIANT AcceptedCarrierOrdinalsAreImmutableAndUnique "
+            "INVARIANT LaterAcceptedCarrierCannotOvertake "
+            "INVARIANT BusyDeferredOwnerUsesMinimumCompatibleCarrier "
+            "INVARIANT IdentityMutationCannotCommit "
+            "INVARIANT RejectedIdentityMutationPreservesCompleteOwnershipState"
+        ),
+        "ordinary_ingress_carrier_rebase_identity_bug.cfg": (
+            "CONSTANTS RebaseToMinimum = TRUE "
+            "RejectIdentityMutation = FALSE "
+            "SPECIFICATION Spec CHECK_DEADLOCK FALSE "
+            "INVARIANT IdentityMutationCannotCommit"
+        ),
+        "ordinary_ingress_carrier_rebase_minimum_bug.cfg": (
+            "CONSTANTS RebaseToMinimum = FALSE "
+            "RejectIdentityMutation = TRUE "
+            "SPECIFICATION Spec CHECK_DEADLOCK FALSE "
+            "INVARIANT BusyDeferredOwnerUsesMinimumCompatibleCarrier"
+        ),
+    }
+    for name, expected_config in exact_ordinary_rebase_configs.items():
+        config_path = formal_dir / name
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        config_source = strip_tla_comments(
+            config_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        observed_config = " ".join(config_source.split())
+        if observed_config != expected_config:
+            errors.append(
+                f"{config_path}: ordinary ingress carrier-rebase mutation "
+                f"config must equal only {expected_config!r}; found "
+                f"{observed_config!r}"
+            )
+
+    terminal_discharge_path = (
+        formal_dir / "SumeragiV2ServeRestartTerminalDischargeMutation.tla"
+    )
+    if (
+        terminal_discharge_path.is_file()
+        and not terminal_discharge_path.is_symlink()
+    ):
+        terminal_discharge_source = terminal_discharge_path.read_text(
+            encoding="utf-8"
+        )
+        exact_terminal_discharge_signatures = {
+            "Outcome": "Outcome(kind, decidedSubject) ==",
+            "DecisionOutcome": "DecisionOutcome(subject) ==",
+            "Admission": (
+                "Admission(identity, family, view, lifecycleOrdinal, "
+                "schedulerOrdinal, certificateValid, localSigner, "
+                "bodyState) =="
+            ),
+            "OwnedWaiter": (
+                "OwnedWaiter(identity, ownerIdentity, lifecycleOrdinal, "
+                "schedulerOrdinal, physicalOrdinal) =="
+            ),
+            "Waiter": (
+                "Waiter(identity, lifecycleOrdinal, schedulerOrdinal, "
+                "physicalOrdinal) =="
+            ),
+            "Tombstone": (
+                "Tombstone(identity, family, view, lifecycleOrdinal, "
+                "outcome, outputs) =="
+            ),
+            "ExactOutputs": "ExactOutputs(identity) ==",
+            "ReconstructedOutcome": (
+                "ReconstructedOutcome(admission) =="
+            ),
+            "TerminalForAdmission": (
+                "TerminalForAdmission(admission) =="
+            ),
+            "StartupTerminalSignatureCost": (
+                "StartupTerminalSignatureCost(terminal) =="
+            ),
+            "RemoveIdentity": "RemoveIdentity(records, identity) ==",
+            "AdmissionPrecedesOrEquals": (
+                "AdmissionPrecedesOrEquals(left, right) =="
+            ),
+            "CanonicalAdmission": "CanonicalAdmission(records) ==",
+            "SelectedAdmission": (
+                "SelectedAdmission(records, useCanonical) =="
+            ),
+            "BeginStateAtCuts": (
+                "BeginStateAtCuts(nextScenario, nextAdmissions, "
+                "nextWaiters, nextTombstones, nextResponseSource, "
+                "nextSchedulerCut, nextPhysicalCut) =="
+            ),
+            "BeginState": (
+                "BeginState(nextScenario, nextAdmissions, nextWaiters, "
+                "nextTombstones, nextResponseSource) =="
+            ),
+            "DischargeSelectedStartupOwner": (
+                "DischargeSelectedStartupOwner("
+                "selected, nextPhase, dropSuffix) =="
+            ),
+            "WaiterHasTerminal": "WaiterHasTerminal(waiter) ==",
+            "TerminalForWaiter": "TerminalForWaiter(waiter) ==",
+            "ExactReplayBinding": (
+                "ExactReplayBinding(waiter, terminal) =="
+            ),
+        }
+        terminal_discharge_without_comments = strip_tla_comments(
+            terminal_discharge_source,
+            preserve_string_contents=True,
+        )
+        for (
+            symbol,
+            expected_signature,
+        ) in exact_terminal_discharge_signatures.items():
+            declaration = re.compile(
+                rf"(?m)^{re.escape(symbol)}\s*"
+                rf"(?:\([^)=]*\))?\s*=="
+            ).search(terminal_discharge_without_comments)
+            normalized_expected_signature = "".join(
+                expected_signature.split()
+            )
+            if declaration is None:
+                errors.append(
+                    f"{terminal_discharge_path}: missing reviewed Serve "
+                    f"restart terminal-discharge operator signature {symbol}"
+                )
+                continue
+            observed_signature = "".join(
+                declaration.group(0).split()
+            )
+            if observed_signature != normalized_expected_signature:
+                line = (
+                    terminal_discharge_without_comments.count(
+                        "\n", 0, declaration.start()
+                    )
+                    + 1
+                )
+                errors.append(
+                    f"{terminal_discharge_path}:{line}: Serve restart "
+                    f"terminal-discharge operator signature {symbol} must "
+                    f"equal only {normalized_expected_signature!r}; found "
+                    f"{observed_signature!r}"
+                )
+        exact_terminal_discharge_operators = {
+            "BooleanConstants": r"""
+{DischargeCompleteUnion,
+ UseCanonicalStartupOrder,
+ ResumeCompleteUnionAfterCrash,
+ ResumeCanonicalOrderAfterCrash,
+ PersistTerminalBeforeAdvance,
+ BlockProducerWhileStartupPending,
+ RequireExactReplayBinding,
+ RejectOrphanTerminalWaiter,
+ RejectNegativeTerminalWaiter,
+ RejectOwnerRequestMismatchWaiter,
+ RejectAdmissionTerminalDuplicate,
+ ConvertRestartResponseOnDecision,
+ ConvertLiveResponseBeforeOrdinal,
+ PreservePreFenceResponseUntilCheckedDrain,
+ RejectNegativeRetryBeforeOrdinal,
+ BlockTerminalResurrection,
+ RequireCanonicalBodyAtStartup,
+ PrunePredecessorFamily,
+ TerminalizeReceiverClose,
+ UseFullFrozenRosterFanout,
+ RequireQcSignerResponseAuthority,
+ EnforceRawContextGate,
+ AvoidTerminalReplayResigning,
+ SignOnlyResponseStartupTerminals,
+ CompletePreparedCarrierDecisionDrain}
+ASSUME BooleanConstants \subseteq BOOLEAN
+""",
+            "Outcome": r"""
+[kind |-> kind, decidedSubject |-> decidedSubject]
+""",
+            "DecisionOutcome": r"""
+Outcome("SupersededByDurableDecision", subject)
+""",
+            "Admission": r"""
+[kind |-> "Admission",
+ identity |-> identity,
+ family |-> family,
+ view |-> view,
+ lifecycleOrdinal |-> lifecycleOrdinal,
+ schedulerOrdinal |-> schedulerOrdinal,
+ certificateValid |-> certificateValid,
+ localSigner |-> localSigner,
+ bodyState |-> bodyState]
+""",
+            "OwnedWaiter": r"""
+[kind |-> "Waiter",
+ identity |-> identity,
+ ownerIdentity |-> ownerIdentity,
+ lifecycleOrdinal |-> lifecycleOrdinal,
+ schedulerOrdinal |-> schedulerOrdinal,
+ physicalOrdinal |-> physicalOrdinal]
+""",
+            "Waiter": r"""
+OwnedWaiter(
+  identity, identity, lifecycleOrdinal, schedulerOrdinal,
+  physicalOrdinal)
+""",
+            "Tombstone": r"""
+[kind |-> "Tombstone",
+ identity |-> identity,
+ family |-> family,
+ view |-> view,
+ lifecycleOrdinal |-> lifecycleOrdinal,
+ outcome |-> outcome,
+ outputs |-> outputs]
+""",
+            "ExactOutputs": r"""
+CASE identity = "A" -> {"wire-A"}
+  [] identity = "B" -> {"wire-B"}
+  [] identity = "C" -> {"wire-C"}
+  [] identity = "R" -> {"wire-R"}
+  [] identity = "N" -> {"wire-N"}
+  [] identity = "Body" -> {"wire-Body"}
+  [] identity = "Old" -> {"wire-Old"}
+  [] identity = "New" -> {"wire-New"}
+  [] OTHER -> {"wire-Close"}
+""",
+            "ReconstructedOutcome": r"""
+IF ~admission.certificateValid
+THEN InvalidCertificateOutcome
+ELSE IF ~admission.localSigner
+     THEN LocalAuthorityAbsentOutcome
+     ELSE ResponseOutcome
+""",
+            "TerminalForAdmission": r"""
+LET outcome == ReconstructedOutcome(admission)
+IN Tombstone(
+     admission.identity, admission.family, admission.view,
+     admission.lifecycleOrdinal, outcome,
+     IF outcome = ResponseOutcome
+     THEN ExactOutputs(admission.identity)
+     ELSE {})
+""",
+            "StartupTerminalSignatureCost": r"""
+IF terminal.outcome = ResponseOutcome
+THEN 1
+ELSE IF SignOnlyResponseStartupTerminals THEN 0 ELSE 1
+""",
+            "RemoveIdentity": r"""
+{record \in records: record.identity # identity}
+""",
+            "AdmissionPrecedesOrEquals": r"""
+\/ left.schedulerOrdinal < right.schedulerOrdinal
+\/ /\ left.schedulerOrdinal = right.schedulerOrdinal
+   /\ left.lifecycleOrdinal <= right.lifecycleOrdinal
+""",
+            "CanonicalAdmission": r"""
+CHOOSE candidate \in records:
+  \A other \in records: AdmissionPrecedesOrEquals(candidate, other)
+""",
+            "SelectedAdmission": r"""
+IF useCanonical \/ Cardinality(records) = 1
+THEN CanonicalAdmission(records)
+ELSE CHOOSE candidate \in records:
+       candidate # CanonicalAdmission(records)
+""",
+            "UnionTerminals": r"""
+{TerminalForAdmission(admission): admission \in UnionAdmissions}
+""",
+            "CanonicalUnionOrder": r"""
+LET first == CanonicalAdmission(UnionAdmissions)
+    afterFirst == RemoveIdentity(UnionAdmissions, first.identity)
+    second == CanonicalAdmission(afterFirst)
+    afterSecond == RemoveIdentity(afterFirst, second.identity)
+    third == CanonicalAdmission(afterSecond)
+IN <<first.identity, second.identity, third.identity>>
+""",
+            "DecisionTombstoneR": r"""
+Tombstone(
+  "R", "family-R", 4, 4, DecisionOutcome("Decision-B"), {})
+""",
+            "LiveDecisionRetryWaiter": r"""
+Waiter("R", 4, 10, 10)
+""",
+            "PreFencePreparedAdmissionR": r"""
+Admission(
+  "R", "family-R", 4, 4, 10, TRUE, TRUE, "Valid")
+""",
+            "Scenarios": r"""
+{"Union", "InterruptedUnion",
+ "TerminalReplay", "TerminalDecision",
+ "LiveDecisionRetry", "LiveDecisionPreFenceCarrier",
+ "LiveDecisionPreFencePreparedCarrier",
+ "TerminalMismatchCorrupt", "TerminalOrphanCorrupt",
+ "TerminalNegativeCorrupt", "TerminalOwnerMismatchCorrupt",
+ "AdmissionTerminalDuplicateCorrupt", "NegativeRetry",
+ "TerminalResurrection", "MissingBody", "CorruptBody",
+ "FamilyAdvance", "ReceiverClose",
+ "SignerResponse", "NonSignerResponse",
+ "RawActive", "RawHistorical", "RawFuture", "RawForeignSameHeight"}
+""",
+            "Phases": r"""
+{"ChooseScenario", "Pending", "InterruptedAfterFirst",
+ "InterruptedCrashed", "ResumedAfterSecond",
+ "ResumedAfterSecondCrashed", "DecisionPersisted",
+ "Complete", "StartupRejected",
+ "PolicyRejected", "NegativeReadmitted",
+ "TerminalReplayComplete", "Resurrected"}
+VARIABLES
+phase,
+scenario,
+admissions,
+waiters,
+tombstones,
+dischargeOrder,
+producerRuns,
+nextLifecycleOrdinal,
+nextSchedulerOrdinal,
+nextPhysicalOrdinal,
+signatureCount,
+emittedOutputs,
+fanout,
+responseSource,
+responseOutcome,
+transportPassed,
+lifecycleAdmitted
+""",
+            "vars": r"""
+<<phase, scenario, admissions, waiters, tombstones, dischargeOrder,
+  producerRuns, nextLifecycleOrdinal, nextSchedulerOrdinal,
+  nextPhysicalOrdinal, signatureCount, emittedOutputs, fanout,
+  responseSource, responseOutcome, transportPassed, lifecycleAdmitted>>
+""",
+            "Init": r"""
+/\ phase = "ChooseScenario"
+/\ scenario = "None"
+/\ admissions = {}
+/\ waiters = {}
+/\ tombstones = {}
+/\ dischargeOrder = <<>>
+/\ producerRuns = 0
+/\ nextLifecycleOrdinal = 10
+/\ nextSchedulerOrdinal = 10
+/\ nextPhysicalOrdinal = 10
+/\ signatureCount = 0
+/\ emittedOutputs = {}
+/\ fanout = {}
+/\ responseSource = NoSource
+/\ responseOutcome = NoOutcome
+/\ ~transportPassed
+/\ ~lifecycleAdmitted
+""",
+            "BeginStateAtCuts": r"""
+/\ phase = "ChooseScenario"
+/\ phase' = "Pending"
+/\ scenario' = nextScenario
+/\ admissions' = nextAdmissions
+/\ waiters' = nextWaiters
+/\ tombstones' = nextTombstones
+/\ dischargeOrder' = <<>>
+/\ producerRuns' = 0
+/\ nextLifecycleOrdinal' = 10
+/\ nextSchedulerOrdinal' = nextSchedulerCut
+/\ nextPhysicalOrdinal' = nextPhysicalCut
+/\ signatureCount' = 0
+/\ emittedOutputs' = {}
+/\ fanout' = {}
+/\ responseSource' = nextResponseSource
+/\ responseOutcome' = NoOutcome
+/\ ~transportPassed'
+/\ ~lifecycleAdmitted'
+""",
+            "BeginState": r"""
+BeginStateAtCuts(
+  nextScenario, nextAdmissions, nextWaiters, nextTombstones,
+  nextResponseSource, 10, 10)
+""",
+            "DischargeSelectedStartupOwner": r"""
+LET terminal == TerminalForAdmission(selected)
+    remainingAdmissions ==
+      RemoveIdentity(admissions, selected.identity)
+    remainingWaiters ==
+      RemoveIdentity(waiters, selected.identity)
+IN
+/\ selected \in admissions
+/\ phase' = nextPhase
+/\ admissions' = IF dropSuffix THEN {} ELSE remainingAdmissions
+/\ waiters' = IF dropSuffix THEN {} ELSE remainingWaiters
+/\ tombstones' =
+     IF PersistTerminalBeforeAdvance
+     THEN tombstones \cup {terminal}
+     ELSE tombstones
+/\ dischargeOrder' = Append(dischargeOrder, selected.identity)
+/\ emittedOutputs' =
+     IF PersistTerminalBeforeAdvance
+     THEN emittedOutputs \cup terminal.outputs
+     ELSE emittedOutputs
+/\ signatureCount' =
+     IF PersistTerminalBeforeAdvance
+     THEN signatureCount + StartupTerminalSignatureCost(terminal)
+     ELSE signatureCount
+/\ UNCHANGED
+     <<scenario, producerRuns,
+       nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "BeginLiveDecisionPreFencePreparedCarrier": r"""
+BeginStateAtCuts(
+  "LiveDecisionPreFencePreparedCarrier",
+  {PreFencePreparedAdmissionR},
+  {LiveDecisionRetryWaiter}, {}, NoSource, 11, 11)
+""",
+            "DischargeNextUnionOwner": r"""
+/\ scenario = "Union"
+/\ phase = "Pending"
+/\ admissions # {}
+/\ LET selected ==
+         SelectedAdmission(admissions, UseCanonicalStartupOrder)
+       remaining ==
+         RemoveIdentity(admissions, selected.identity)
+       dropSuffix == ~DischargeCompleteUnion
+       nextPhase ==
+         IF dropSuffix \/ remaining = {}
+         THEN "Complete"
+         ELSE "Pending"
+   IN DischargeSelectedStartupOwner(selected, nextPhase, dropSuffix)
+""",
+            "DischargeFirstInterruptedEntry": r"""
+/\ scenario = "InterruptedUnion"
+/\ phase = "Pending"
+/\ admissions # {}
+/\ LET selected ==
+         SelectedAdmission(admissions, UseCanonicalStartupOrder)
+   IN DischargeSelectedStartupOwner(
+        selected, "InterruptedAfterFirst", FALSE)
+""",
+            "CrashDuringInterruptedDischarge": r"""
+/\ scenario = "InterruptedUnion"
+/\ \/ /\ phase = "InterruptedAfterFirst"
+      /\ phase' = "InterruptedCrashed"
+   \/ /\ phase = "ResumedAfterSecond"
+      /\ phase' = "ResumedAfterSecondCrashed"
+/\ UNCHANGED
+     <<scenario, admissions, waiters, tombstones, dischargeOrder,
+       producerRuns, nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, signatureCount, emittedOutputs, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "ResumeSecondInterruptedEntry": r"""
+/\ scenario = "InterruptedUnion"
+/\ phase = "InterruptedCrashed"
+/\ admissions # {}
+/\ LET selected ==
+         SelectedAdmission(admissions, ResumeCanonicalOrderAfterCrash)
+       dropSuffix == ~ResumeCompleteUnionAfterCrash
+       nextPhase ==
+         IF dropSuffix
+         THEN "Complete"
+         ELSE "ResumedAfterSecond"
+   IN DischargeSelectedStartupOwner(selected, nextPhase, dropSuffix)
+""",
+            "DischargeFinalInterruptedEntry": r"""
+/\ scenario = "InterruptedUnion"
+/\ phase \in {"ResumedAfterSecond", "ResumedAfterSecondCrashed"}
+/\ Cardinality(admissions) = 1
+/\ LET selected == CanonicalAdmission(admissions)
+   IN DischargeSelectedStartupOwner(selected, "Complete", FALSE)
+""",
+            "WaiterHasTerminal": r"""
+\E terminal \in tombstones:
+  /\ terminal.identity = waiter.identity
+  /\ terminal.lifecycleOrdinal = waiter.lifecycleOrdinal
+""",
+            "TerminalForWaiter": r"""
+CHOOSE terminal \in tombstones:
+  /\ terminal.identity = waiter.identity
+  /\ terminal.lifecycleOrdinal = waiter.lifecycleOrdinal
+""",
+            "ExactReplayBinding": r"""
+/\ terminal.identity = waiter.identity
+/\ terminal.lifecycleOrdinal = waiter.lifecycleOrdinal
+/\ \/ terminal.outcome # ResponseOutcome
+   \/ terminal.outputs = ExactOutputs(waiter.identity)
+""",
+            "TerminalWaiterAccepted": r"""
+/\ Cardinality(waiters) = 1
+/\ LET waiter == CHOOSE candidate \in waiters: TRUE
+       hasTerminal == WaiterHasTerminal(waiter)
+   IN
+   /\ \/ hasTerminal
+      \/ ~RejectOrphanTerminalWaiter
+   /\ \/ waiter.ownerIdentity = waiter.identity
+      \/ ~RejectOwnerRequestMismatchWaiter
+   /\ IF hasTerminal
+      THEN LET terminal == TerminalForWaiter(waiter)
+           IN /\ \/ terminal.outcome = ResponseOutcome
+                    \/ ~RejectNegativeTerminalWaiter
+              /\ \/ ExactReplayBinding(waiter, terminal)
+                 \/ ~RequireExactReplayBinding
+      ELSE TRUE
+""",
+            "TombstonesAfterTerminalWaiter": r"""
+IF scenario = "TerminalDecision"
+THEN IF ConvertRestartResponseOnDecision
+     THEN {DecisionTombstoneR}
+     ELSE {ResponseTombstoneR}
+ELSE tombstones
+""",
+            "OutputsAfterTerminalWaiter": r"""
+IF scenario = "TerminalReplay"
+THEN ExactOutputs("R")
+ELSE {}
+""",
+            "HandleTerminalWaiter": r"""
+/\ scenario \in
+     {"TerminalReplay", "TerminalDecision",
+      "TerminalMismatchCorrupt", "TerminalOrphanCorrupt",
+      "TerminalNegativeCorrupt", "TerminalOwnerMismatchCorrupt"}
+/\ phase = "Pending"
+/\ phase' =
+     IF TerminalWaiterAccepted
+     THEN "Complete"
+     ELSE "StartupRejected"
+/\ IF TerminalWaiterAccepted
+   THEN /\ waiters' = {}
+        /\ tombstones' = TombstonesAfterTerminalWaiter
+        /\ emittedOutputs' = OutputsAfterTerminalWaiter
+   ELSE /\ UNCHANGED <<waiters, tombstones, emittedOutputs>>
+/\ signatureCount' =
+     IF /\ TerminalWaiterAccepted
+        /\ scenario \in {"TerminalReplay", "TerminalDecision"}
+        /\ ~AvoidTerminalReplayResigning
+     THEN signatureCount + 1
+     ELSE signatureCount
+/\ UNCHANGED
+     <<scenario, admissions, dischargeOrder, producerRuns,
+       nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "HandleLiveDecisionRetry": r"""
+/\ scenario = "LiveDecisionRetry"
+/\ phase = "Pending"
+/\ phase' = "Complete"
+/\ IF ConvertLiveResponseBeforeOrdinal
+   THEN /\ tombstones' = {DecisionTombstoneR}
+        /\ waiters' = {}
+        /\ UNCHANGED
+             <<nextSchedulerOrdinal, nextPhysicalOrdinal>>
+   ELSE /\ tombstones' = {ResponseTombstoneR}
+        /\ waiters' = {LiveDecisionRetryWaiter}
+        /\ nextSchedulerOrdinal' = nextSchedulerOrdinal + 1
+        /\ nextPhysicalOrdinal' = nextPhysicalOrdinal + 1
+/\ emittedOutputs' = {}
+/\ signatureCount' =
+     IF AvoidTerminalReplayResigning
+     THEN signatureCount
+     ELSE signatureCount + 1
+/\ UNCHANGED
+     <<scenario, admissions, dischargeOrder, producerRuns,
+       nextLifecycleOrdinal, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "PublishDecisionWithPreFenceCarrier": r"""
+/\ scenario = "LiveDecisionPreFenceCarrier"
+/\ phase = "Pending"
+/\ phase' = "DecisionPersisted"
+/\ waiters' = {LiveDecisionRetryWaiter}
+/\ tombstones' =
+     IF PreservePreFenceResponseUntilCheckedDrain
+     THEN {ResponseTombstoneR}
+     ELSE {DecisionTombstoneR}
+/\ emittedOutputs' = {}
+/\ signatureCount' =
+     IF AvoidTerminalReplayResigning
+     THEN signatureCount
+     ELSE signatureCount + 1
+/\ UNCHANGED
+     <<scenario, admissions, dischargeOrder, producerRuns,
+       nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "DrainPreFenceCarrierAfterDecision": r"""
+/\ scenario = "LiveDecisionPreFenceCarrier"
+/\ phase = "DecisionPersisted"
+/\ ResponseTombstoneR \in tombstones
+/\ phase' = "Complete"
+/\ waiters' = {}
+/\ tombstones' = {DecisionTombstoneR}
+/\ emittedOutputs' = {}
+/\ UNCHANGED
+     <<scenario, admissions, dischargeOrder, producerRuns,
+       nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, signatureCount, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "PublishDecisionWithPreparedCarrier": r"""
+/\ scenario = "LiveDecisionPreFencePreparedCarrier"
+/\ phase = "Pending"
+/\ phase' = "DecisionPersisted"
+/\ emittedOutputs' = {}
+/\ UNCHANGED
+     <<scenario, admissions, waiters, tombstones, dischargeOrder,
+       producerRuns, nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, signatureCount, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "DrainPreparedCarrierAfterDecision": r"""
+/\ scenario = "LiveDecisionPreFencePreparedCarrier"
+/\ phase = "DecisionPersisted"
+/\ IF CompletePreparedCarrierDecisionDrain
+   THEN /\ phase' = "Complete"
+        /\ admissions' = {}
+        /\ waiters' = {}
+        /\ tombstones' = {DecisionTombstoneR}
+   ELSE /\ phase' = "PolicyRejected"
+        /\ UNCHANGED <<admissions, waiters, tombstones>>
+/\ emittedOutputs' = {}
+/\ UNCHANGED
+     <<scenario, dischargeOrder, producerRuns,
+       nextLifecycleOrdinal, nextSchedulerOrdinal,
+       nextPhysicalOrdinal, signatureCount, fanout,
+       responseSource, responseOutcome,
+       transportPassed, lifecycleAdmitted>>
+""",
+            "Next": r"""
+\/ BeginUnion
+\/ BeginInterruptedUnion
+\/ BeginTerminalReplay
+\/ BeginTerminalDecision
+\/ BeginLiveDecisionRetry
+\/ BeginLiveDecisionPreFenceCarrier
+\/ BeginLiveDecisionPreFencePreparedCarrier
+\/ BeginTerminalMismatchCorrupt
+\/ BeginTerminalOrphanCorrupt
+\/ BeginTerminalNegativeCorrupt
+\/ BeginTerminalOwnerMismatchCorrupt
+\/ BeginAdmissionTerminalDuplicateCorrupt
+\/ BeginNegativeRetry
+\/ BeginTerminalResurrection
+\/ BeginMissingBody
+\/ BeginCorruptBody
+\/ BeginFamilyAdvance
+\/ BeginReceiverClose
+\/ BeginSignerResponse
+\/ BeginNonSignerResponse
+\/ BeginRawActive
+\/ BeginRawHistorical
+\/ BeginRawFuture
+\/ BeginRawForeignSameHeight
+\/ DischargeNextUnionOwner
+\/ DischargeFirstInterruptedEntry
+\/ CrashDuringInterruptedDischarge
+\/ ResumeSecondInterruptedEntry
+\/ DischargeFinalInterruptedEntry
+\/ ProducerDuringStartupDischarge
+\/ HandleTerminalWaiter
+\/ HandleLiveDecisionRetry
+\/ PublishDecisionWithPreFenceCarrier
+\/ DrainPreFenceCarrierAfterDecision
+\/ PublishDecisionWithPreparedCarrier
+\/ DrainPreparedCarrierAfterDecision
+\/ HandleAdmissionTerminalDuplicate
+\/ TryNegativeRetry
+\/ TryTerminalRetry
+\/ RestartWithUnavailableCanonicalBody
+\/ RestartFamilyAdvance
+\/ CloseServeReceiver
+\/ ClassifyCertifiedResponseAuthority
+\/ ApplyCertifiedRawContextGate
+""",
+            "Spec": r"""
+Init /\ [][Next]_vars
+""",
+            "PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable": r"""
+/\ scenario = "LiveDecisionPreFencePreparedCarrier"
+/\ phase \in {"DecisionPersisted", "Complete", "PolicyRejected"}
+  => /\ phase # "PolicyRejected"
+     /\ IF phase = "DecisionPersisted"
+        THEN /\ admissions = {PreFencePreparedAdmissionR}
+             /\ waiters = {LiveDecisionRetryWaiter}
+             /\ tombstones = {}
+        ELSE /\ admissions = {}
+             /\ waiters = {}
+             /\ tombstones = {DecisionTombstoneR}
+     /\ emittedOutputs = {}
+     /\ nextLifecycleOrdinal = 10
+     /\ nextSchedulerOrdinal = 11
+     /\ nextPhysicalOrdinal = 11
+     /\ signatureCount = 0
+""",
+            "TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal": r"""
+/\ scenario \in
+     {"TerminalReplay", "TerminalDecision",
+      "LiveDecisionRetry", "LiveDecisionPreFenceCarrier",
+      "LiveDecisionPreFencePreparedCarrier"}
+/\ phase # "ChooseScenario"
+  => /\ nextLifecycleOrdinal = 10
+     /\ nextSchedulerOrdinal =
+          IF scenario \in
+               {"LiveDecisionPreFenceCarrier",
+                "LiveDecisionPreFencePreparedCarrier"}
+          THEN 11
+          ELSE 10
+     /\ nextPhysicalOrdinal =
+          IF scenario \in
+               {"LiveDecisionPreFenceCarrier",
+                "LiveDecisionPreFencePreparedCarrier"}
+          THEN 11
+          ELSE 10
+     /\ signatureCount = 0
+""",
+            "UnsealedRestartResponsesSignExactlyOnce": r"""
+/\ scenario \in
+     {"Union", "InterruptedUnion", "FamilyAdvance", "ReceiverClose"}
+/\ phase = "Complete"
+  => CASE scenario = "Union" -> signatureCount = 1
+       [] scenario = "InterruptedUnion" -> signatureCount = 1
+       [] scenario = "FamilyAdvance" -> signatureCount = 1
+       [] OTHER -> signatureCount = 1
+""",
+        }
+        for symbol, expected_body in exact_terminal_discharge_operators.items():
+            extracted = _top_level_operator_body(
+                terminal_discharge_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{terminal_discharge_path}: missing reviewed Serve "
+                    f"restart terminal-discharge operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            observed_body = " ".join(body.split())
+            normalized_expected_body = " ".join(expected_body.split())
+            if observed_body != normalized_expected_body:
+                errors.append(
+                    f"{terminal_discharge_path}:{line}: Serve restart "
+                    f"terminal-discharge operator {symbol} must equal only "
+                    f"{normalized_expected_body!r}; found {observed_body!r}"
+                )
+
+    terminal_discharge_bits = SERVE_RESTART_TERMINAL_DISCHARGE_BITS
+    terminal_discharge_mutations = (
+        SERVE_RESTART_TERMINAL_DISCHARGE_MUTATIONS
+    )
+    if (
+        len(terminal_discharge_bits) != 25
+        or len(set(terminal_discharge_bits)) != 25
+        or len(terminal_discharge_mutations) != 25
+        or {
+            false_bit
+            for false_bit, _invariant in terminal_discharge_mutations.values()
+        }
+        != set(terminal_discharge_bits)
+    ):
+        errors.append(
+            "Serve restart terminal-discharge mutation contract must retain "
+            "exactly twenty-five unique one-bit mutants covering every "
+            "reviewed Boolean control"
+        )
+
+    exact_terminal_discharge_configs: dict[str, tuple[str | None, tuple[str, ...]]] = {
+        "serve_restart_terminal_discharge_fixed.cfg": (
+            None,
+            SERVE_RESTART_TERMINAL_DISCHARGE_FIXED_INVARIANTS,
+        ),
+    }
+    exact_terminal_discharge_configs.update(
+        {
+            name: (false_bit, ("TypeInvariant", invariant))
+            for name, (
+                false_bit,
+                invariant,
+            ) in terminal_discharge_mutations.items()
+        }
+    )
+    for name, (
+        false_bit,
+        invariants,
+    ) in exact_terminal_discharge_configs.items():
+        config_path = formal_dir / name
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        expected_parts = ["CONSTANTS"]
+        expected_parts.extend(
+            f"{bit} = "
+            f"{'FALSE' if bit == false_bit else 'TRUE'}"
+            for bit in terminal_discharge_bits
+        )
+        expected_parts.extend(("SPECIFICATION Spec", "CHECK_DEADLOCK FALSE"))
+        expected_parts.extend(
+            f"INVARIANT {invariant}" for invariant in invariants
+        )
+        expected_config = " ".join(expected_parts)
+        config_source = strip_tla_comments(
+            config_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        observed_config = " ".join(config_source.split())
+        if observed_config != expected_config:
+            errors.append(
+                f"{config_path}: Serve restart terminal-discharge mutation "
+                f"config must equal only {expected_config!r}; found "
+                f"{observed_config!r}"
+            )
+
     runner_path = repo_root / LIVENESS_OWNERSHIP_MUTATION_RUNNER
     if not runner_path.is_file() or runner_path.is_symlink():
         return errors
@@ -64674,6 +66253,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "fixed-corridor-receipt-acquisition",
             "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
             "fixed_corridor_receipt_acquisition_fixed.cfg",
+        ),
+        (
+            "ordinary-ingress-carrier-rebase",
+            "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla",
+            "ordinary_ingress_carrier_rebase_fixed.cfg",
+        ),
+        (
+            "serve-restart-terminal-discharge",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_fixed.cfg",
         ),
     }
     expected_mutation_cases = {
@@ -65058,6 +66647,195 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "fixed_corridor_receipt_acquisition_global_retire_bug.cfg",
             "ReceiptAcquisitionAndRetention",
         ),
+        (
+            "ordinary-ingress-carrier-minimum-rebase",
+            "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla",
+            "ordinary_ingress_carrier_rebase_minimum_bug.cfg",
+            "BusyDeferredOwnerUsesMinimumCompatibleCarrier",
+        ),
+        (
+            "ordinary-ingress-carrier-identity-mutation",
+            "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla",
+            "ordinary_ingress_carrier_rebase_identity_bug.cfg",
+            "IdentityMutationCannotCommit",
+        ),
+        (
+            "serve-restart-incomplete-local-discharge",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_incomplete_union_bug.cfg",
+            "RestartUnionDischargesEveryAdmission",
+        ),
+        (
+            "serve-restart-noncanonical-union-order",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_order_bug.cfg",
+            "RestartUnionUsesCanonicalOrder",
+        ),
+        (
+            "serve-restart-crash-resume-incomplete-union",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "crash_resume_incomplete_union_bug.cfg"
+            ),
+            "CrashResumeDischargesEveryRemainingAdmission",
+        ),
+        (
+            "serve-restart-crash-resume-noncanonical-order",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_crash_resume_order_bug.cfg",
+            "CrashResumeUsesCanonicalRemainingOrder",
+        ),
+        (
+            "serve-restart-advance-before-terminal-persist",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_persistence_bug.cfg",
+            "InterruptedDischargePersistsBeforeAdvance",
+        ),
+        (
+            "serve-restart-producer-exposure",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_producer_exposure_bug.cfg",
+            "ProducerHiddenUntilStartupDischarged",
+        ),
+        (
+            "serve-restart-mismatched-response-waiter",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg",
+            "CorruptTerminalWaiterFailStops",
+        ),
+        (
+            "serve-restart-orphan-terminal-waiter",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_orphan_waiter_bug.cfg",
+            "CorruptTerminalWaiterFailStops",
+        ),
+        (
+            "serve-restart-negative-terminal-waiter",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_negative_waiter_bug.cfg",
+            "CorruptTerminalWaiterFailStops",
+        ),
+        (
+            "serve-restart-owner-request-mismatch",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "owner_request_mismatch_bug.cfg"
+            ),
+            "OwnerRequestMismatchWaiterFailStops",
+        ),
+        (
+            "serve-restart-duplicate-admission-terminal-outcome",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg",
+            "DuplicateAdmissionTerminalFailsStartupAndPreservesState",
+        ),
+        (
+            "serve-restart-response-decision-conversion",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "restart_decision_conversion_bug.cfg"
+            ),
+            "RestartDecisionSupersessionConvertsResponseAtomically",
+        ),
+        (
+            "serve-live-response-decision-conversion",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "live_decision_conversion_bug.cfg"
+            ),
+            "LiveDecisionSupersessionConvertsResponseBeforeOrdinal",
+        ),
+        (
+            "serve-live-prefence-decision-rewrite",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "prefence_decision_rewrite_bug.cfg"
+            ),
+            "PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain",
+        ),
+        (
+            "serve-live-prefence-prepared-decision-drain",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "prepared_decision_drain_bug.cfg"
+            ),
+            "PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable",
+        ),
+        (
+            "serve-restart-negative-retry-ordinal",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "negative_retry_ordinal_bug.cfg"
+            ),
+            "NegativeRetryConsumesNoFreshOrdinal",
+        ),
+        (
+            "serve-restart-terminal-resurrection",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_resurrection_bug.cfg",
+            "TerminalResponseRetryUsesFreshCarrierWithoutLifecycleResurrection",
+        ),
+        (
+            "serve-restart-body-fail-open",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_body_fail_open_bug.cfg",
+            "MissingOrCorruptBodyFailStopsAndPreservesState",
+        ),
+        (
+            "serve-restart-family-coexistence",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_family_coexistence_bug.cfg",
+            "SuccessorTerminalPrunesPredecessorFamily",
+        ),
+        (
+            "serve-receiver-close-requester-debt",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_receiver_close_bug.cfg",
+            "ReceiverClosePublishesTypedTerminalWithoutDebt",
+        ),
+        (
+            "serve-certified-request-partial-roster-fanout",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_roster_fanout_bug.cfg",
+            "CertifiedRequestFansOutToFullFrozenRoster",
+        ),
+        (
+            "serve-certified-response-nonsigner-authority",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_signer_authority_bug.cfg",
+            "OnlyFrozenQcSignersCanRespond",
+        ),
+        (
+            "serve-certified-request-raw-context-gate",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            "serve_restart_terminal_discharge_raw_context_gate_bug.cfg",
+            "RawContextGateSeparatesLifecycleAuthority",
+        ),
+        (
+            "serve-restart-terminal-replay-resign",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "terminal_replay_resign_bug.cfg"
+            ),
+            "TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal",
+        ),
+        (
+            "serve-restart-negative-terminal-sign",
+            "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
+            (
+                "serve_restart_terminal_discharge_"
+                "negative_terminal_sign_bug.cfg"
+            ),
+            "UnsealedRestartResponsesSignExactlyOnce",
+        ),
     }
     expected_temporal_mutation_cases = {
         (
@@ -65066,6 +66844,53 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "producer_replay_capacity_replenishment_lasso_bug.cfg",
         ),
     }
+    expected_runner_models = {
+        model for _label, model, _config in expected_fixed_cases
+    }
+    expected_runner_fixed_configs = {
+        config for _label, _model, config in expected_fixed_cases
+    }
+    expected_runner_invariant_configs = {
+        config
+        for _label, _model, config, _invariant in expected_mutation_cases
+    }
+    expected_runner_temporal_configs = {
+        config
+        for _label, _model, config in expected_temporal_mutation_cases
+    }
+    artifact_models = {
+        name for name in expected_formal if name.endswith(".tla")
+    }
+    artifact_fixed_configs = {
+        name for name in expected_formal if name.endswith("_fixed.cfg")
+    }
+    artifact_mutation_configs = {
+        name for name in expected_formal if name.endswith("_bug.cfg")
+    }
+    if expected_runner_models != artifact_models:
+        errors.append(
+            "liveness-ownership runner model matrix must cover every exact "
+            "source-sealed mutation model once through its repaired case; "
+            f"missing={sorted(artifact_models - expected_runner_models)}, "
+            f"extra={sorted(expected_runner_models - artifact_models)}"
+        )
+    if expected_runner_fixed_configs != artifact_fixed_configs:
+        errors.append(
+            "liveness-ownership runner repaired matrix must cover every exact "
+            "source-sealed fixed config; "
+            f"missing={sorted(artifact_fixed_configs - expected_runner_fixed_configs)}, "
+            f"extra={sorted(expected_runner_fixed_configs - artifact_fixed_configs)}"
+        )
+    expected_runner_bug_configs = (
+        expected_runner_invariant_configs | expected_runner_temporal_configs
+    )
+    if expected_runner_bug_configs != artifact_mutation_configs:
+        errors.append(
+            "liveness-ownership runner mutation matrices must cover every "
+            "exact source-sealed failing config; "
+            f"missing={sorted(artifact_mutation_configs - expected_runner_bug_configs)}, "
+            f"extra={sorted(expected_runner_bug_configs - artifact_mutation_configs)}"
+        )
     fixed_pattern = re.compile(
         r'^\s*"([^"|]+)\|([^"|]+\.tla)\|([^"|]+_fixed\.cfg)"\s*$',
         re.MULTILINE,
@@ -65080,21 +66905,49 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
         r'(producer_replay_capacity_replenishment_lasso_bug\.cfg)"\s*$',
         re.MULTILINE,
     )
-    observed_fixed_cases = set(fixed_pattern.findall(runner_source))
-    observed_mutation_cases = set(mutation_pattern.findall(runner_source))
-    observed_temporal_mutation_cases = set(
+    observed_fixed_case_rows = fixed_pattern.findall(runner_source)
+    observed_mutation_case_rows = mutation_pattern.findall(runner_source)
+    observed_temporal_mutation_case_rows = (
         temporal_mutation_pattern.findall(runner_source)
     )
+    observed_fixed_cases = set(observed_fixed_case_rows)
+    observed_mutation_cases = set(observed_mutation_case_rows)
+    observed_temporal_mutation_cases = set(
+        observed_temporal_mutation_case_rows
+    )
+    if (
+        len(expected_fixed_cases) != 30
+        or len(expected_mutation_cases) != 90
+        or len(expected_temporal_mutation_cases) != 1
+    ):
+        errors.append(
+            "liveness-ownership runner review contract must retain exactly "
+            "thirty repaired, ninety invariant-mutation, and one "
+            "temporal-mutation case"
+        )
+    if (
+        len(observed_fixed_case_rows) != 30
+        or len(observed_mutation_case_rows) != 90
+        or len(observed_temporal_mutation_case_rows) != 1
+    ):
+        errors.append(
+            f"{runner_path}: liveness-ownership runner census must equal "
+            "exactly 30 repaired / 90 invariant-mutation / 1 temporal-"
+            "mutation cases; found "
+            f"{len(observed_fixed_case_rows)} / "
+            f"{len(observed_mutation_case_rows)} / "
+            f"{len(observed_temporal_mutation_case_rows)}"
+        )
     if observed_fixed_cases != expected_fixed_cases:
         errors.append(
             f"{runner_path}: repaired case matrix must equal the exact reviewed "
-            f"twenty-eight cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
+            f"thirty cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
             f"extra={sorted(observed_fixed_cases - expected_fixed_cases)}"
         )
     if observed_mutation_cases != expected_mutation_cases:
         errors.append(
             f"{runner_path}: failing case matrix must equal the exact reviewed "
-            "sixty-three config/invariant pairs; "
+            "ninety config/invariant pairs; "
             f"missing={sorted(expected_mutation_cases - observed_mutation_cases)}, "
             f"extra={sorted(observed_mutation_cases - expected_mutation_cases)}"
         )
@@ -65105,66 +66958,90 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             f"missing={sorted(expected_temporal_mutation_cases - observed_temporal_mutation_cases)}, "
             f"extra={sorted(observed_temporal_mutation_cases - expected_temporal_mutation_cases)}"
         )
-    state_helper_header = "assert_nonzero_state_space() {"
+    mutation_helper_header = "assert_mutation_failure_contract() {"
     run_case_header = "run_case() {"
     fixed_cases_header = "fixed_cases=("
-    state_helper_offset = runner_source.find(state_helper_header)
+    mutation_helper_offset = runner_source.find(mutation_helper_header)
     run_case_offset = runner_source.find(run_case_header)
     fixed_cases_offset = runner_source.find(fixed_cases_header)
     runner_sections_are_exact = (
-        runner_source.count(state_helper_header) == 1
+        runner_source.count(mutation_helper_header) == 1
         and runner_source.count(run_case_header) == 1
         and runner_source.count(fixed_cases_header) == 1
-        and state_helper_offset >= 0
-        and state_helper_offset < run_case_offset
+        and mutation_helper_offset >= 0
+        and mutation_helper_offset < run_case_offset
         and run_case_offset < fixed_cases_offset
     )
     if not runner_sections_are_exact:
         errors.append(
             f"{runner_path}: liveness-ownership runner must retain one exact "
-            "nonzero state-space helper before run_case and the case matrices"
+            "mutation-failure helper before run_case and the case matrices"
         )
     else:
-        state_helper_source = runner_source[
-            state_helper_offset:run_case_offset
+        mutation_helper_source = runner_source[
+            mutation_helper_offset:run_case_offset
         ]
         run_case_source = runner_source[run_case_offset:fixed_cases_offset]
-        state_summary_parser = (
-            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-            "|| true)\""
+        mutation_helper_contracts = (
+            (
+                '[[ "$expected_primary" =~ ^Error:\\ Invariant\\ '
+                '.+\\ is\\ violated\\.$ ]]',
+                "status-12 named-invariant diagnostic classifier",
+            ),
+            (
+                '[[ "$expected_primary" == "Error: Temporal properties '
+                'were violated." ]]',
+                "status-13 temporal diagnostic classifier",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_exact_line \\\n'
+                '    "$label" "$log" "$expected_primary"',
+                "exact primary-diagnostic assertion",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_exact_line \\\n'
+                '    "$label" "$log" "Error: The behavior up to this point is:"',
+                "exact behavior-diagnostic assertion",
+            ),
         )
-        positive_state_rejection = (
-            "  if ((generated <= 0 || distinct <= 0)); then"
+        for token, description in mutation_helper_contracts:
+            if (
+                mutation_helper_source.count(token) != 1
+                or runner_source.count(token) != 1
+            ):
+                errors.append(
+                    f"{runner_path}: liveness-ownership mutation-failure "
+                    f"helper must retain exactly one {description}"
+                )
+        run_case_contracts = (
+            (
+                'sumeragi_v2_tlc_assert_fixed_success '
+                '"$label" "$log" "$actual_status"',
+                "shared fixed-success assertion",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+                "shared nonzero state-space assertion",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+                "shared terminal-marker assertion",
+            ),
+            (
+                'assert_mutation_failure_contract \\\n'
+                '      "$label" "$log" "$expected_status" "$1"',
+                "exact mutation-failure assertion",
+            ),
         )
-        state_helper_invocation = (
-            '  assert_nonzero_state_space "$label" "$log"'
-        )
-        if (
-            state_helper_source.count(state_summary_parser) != 1
-            or runner_source.count(state_summary_parser) != 1
-        ):
-            errors.append(
-                f"{runner_path}: liveness-ownership nonzero state-space "
-                "helper must retain exactly one exact TLC state-summary parser"
-            )
-        if (
-            state_helper_source.count(positive_state_rejection) != 1
-            or runner_source.count(positive_state_rejection) != 1
-        ):
-            errors.append(
-                f"{runner_path}: liveness-ownership nonzero state-space "
-                "helper must reject generated or distinct TLC state counts "
-                "less than or equal to zero"
-            )
-        if (
-            run_case_source.count(state_helper_invocation) != 1
-            or runner_source.count(state_helper_invocation) != 1
-        ):
-            errors.append(
-                f"{runner_path}: liveness-ownership run_case must invoke the "
-                "nonzero state-space helper exactly once per TLC case"
-            )
+        for token, description in run_case_contracts:
+            if (
+                run_case_source.count(token) != 1
+                or runner_source.count(token) != 1
+            ):
+                errors.append(
+                    f"{runner_path}: liveness-ownership run_case must retain "
+                    f"exactly one {description}"
+                )
     runner_contracts = (
         (
             'readonly TLA2TOOLS_VERSION="1.7.4"',
@@ -65179,15 +67056,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "pinned Java version",
         ),
         (
-            "readonly TLC_FINISHED_PATTERN='^Finished in "
-            "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-            "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-            "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-            "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-            "exact TLC terminal-marker pattern",
+            'readonly TLC_RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            "shared TLC result contract path",
         ),
         (
-            'run_case "$label" "$model" "$config" 0 \\',
+            'source "$TLC_RESULT_CONTRACT"',
+            "shared TLC result contract import",
+        ),
+        (
+            'run_case "$label" "$model" "$config" 0',
             "zero-status repaired-model check",
         ),
         (
@@ -65203,8 +67081,33 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "exact named invariant marker",
         ),
         (
-            "all 63 invariant and 1 temporal liveness-ownership mutations "
-            "produced their exact named counterexamples; repaired models passed",
+            """for case_spec in "${fixed_cases[@]}"; do
+  IFS='|' read -r label model config <<<"$case_spec"
+  run_case "$label" "$model" "$config" 0
+done""",
+            "exact repaired-case execution loop",
+        ),
+        (
+            """for case_spec in "${mutation_cases[@]}"; do
+  IFS='|' read -r label model config invariant <<<"$case_spec"
+  run_case "$label" "$model" "$config" 12 \\
+    "Error: Invariant ${invariant} is violated."
+done""",
+            "exact invariant-mutation execution loop",
+        ),
+        (
+            """for case_spec in "${temporal_mutation_cases[@]}"; do
+  IFS='|' read -r label model config <<<"$case_spec"
+  run_case "$label" "$model" "$config" 13 \\
+    "Error: Temporal properties were violated."
+done""",
+            "exact temporal-mutation execution loop",
+        ),
+        (
+            'echo "[tlc] all ${#mutation_cases[@]} invariant and '
+            "${#temporal_mutation_cases[@]} temporal liveness-ownership "
+            "mutations produced their exact named counterexamples; all "
+            '${#fixed_cases[@]} repaired models passed"',
             "exact mutation completion marker",
         ),
     )
@@ -65215,11 +67118,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 f"one {description}"
             )
     safe_terminal_count = (
-        'grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true'
+        "grep -Ec \\\n"
+        "      '^[[:space:]]*(Error:|Deadlock reached([.]|$)|"
+        "Temporal properties were violated[.]$)' \\\n"
+        '      "$log" || true'
     )
     safe_state_summary = (
-        "grep -E '^[0-9][0-9,]* states generated, "
-        "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 || true"
+        "grep -Ec \\\n"
+        "      '^[[:space:]]+(Error:|Deadlock reached([.]|$)|"
+        "Temporal properties were violated[.]$)' \\\n"
+        '      "$log" || true'
     )
     if (
         runner_source.count("|| true") != 2
@@ -65228,8 +67136,8 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     ):
         errors.append(
             f"{runner_path}: liveness-ownership runner may suppress only the "
-            "state-summary and terminal-marker grep statuses captured by its "
-            "exact nonzero/count assertions"
+            "two exact mutation-diagnostic grep statuses captured by its "
+            "strict count assertions"
         )
 
     ci_path = repo_root / "ci" / "check_sumeragi_formal.sh"
@@ -65297,8 +67205,7 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
         )
     expected_runner_sections = (
         "preflight and SANY execution",
-        "nonzero state-space checker",
-        "TLC status and terminal-marker checker",
+        "TLC status and shared-result-contract checker",
         "six-repaired then six-mutant execution tail",
     )
     observed_runner_sections = tuple(
@@ -65307,7 +67214,7 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
         if isinstance(section, tuple) and len(section) == 4
     )
     if (
-        len(SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256) != 4
+        len(SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256) != 3
         or observed_runner_sections != expected_runner_sections
     ):
         errors.append(
@@ -65806,8 +67713,9 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
         release_operators = {
             "AsyncServeIngressAdmission": (
                 "[node |-> node, identity |-> identity, ordinal |-> ordinal, "
-                "schedulerOrdinal |-> schedulerOrdinal, ingressPredecessors "
-                "|-> ingressPredecessors]"
+                "schedulerOrdinal |-> schedulerOrdinal, lifecycleOrdinal "
+                "|-> lifecycleOrdinal, ingressPredecessors |-> "
+                "ingressPredecessors]"
             ),
             "AsyncServeIngressAdmissionSchedulerOrdinal": (
                 "AsyncServeIngressAdmissionRecord(node, "
@@ -65816,12 +67724,14 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             "AsyncServeIngressAdmissionTyped": (
                 "/\\ DOMAIN admission = {\"node\", \"identity\", "
                 "\"ordinal\", \"schedulerOrdinal\", "
-                "\"ingressPredecessors\"} /\\ admission.node \\in "
+                "\"lifecycleOrdinal\", \"ingressPredecessors\"} /\\ "
+                "admission.node \\in "
                 "ValidatorIds /\\ admission.identity \\in "
                 "AsyncServeLogicalRequestIdentities /\\ "
                 "admission.identity.owner = admission.node /\\ "
                 "admission.ordinal \\in Nat \\ {0} /\\ "
                 "admission.schedulerOrdinal \\in Nat \\ {0} /\\ "
+                "admission.lifecycleOrdinal \\in Nat \\ {0} /\\ "
                 "admission.ingressPredecessors \\in [AsyncIngressSources "
                 "-> 0..AsyncIngressCapacity]"
             ),
@@ -65838,24 +67748,40 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "AsyncServeIngressAdmissionSchedulerOrdinal( node, "
                 "AsyncServeEarliestIngressSchedulerOwnerIdentity(node))"
             ),
-            "AsyncOlderRuntimeLifecyclePrecedesServeIngress": (
-                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
-                "/\\ \\/ "
-                "AsyncOlderRunnableCandidateLifecyclePrecedesServeIngress(node) "
-                "\\/ AsyncOlderFrozenTimeoutLifecyclePrecedesServeIngress(node)"
+            "AsyncIngressSchedulerBarrierActive": (
+                "\\/ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
+                "\\/ AsyncLeaderWireIngressProtectedRecordsAt(node) # {}"
+            ),
+            "AsyncEarliestIngressSchedulerOrdinal": (
+                "IF AsyncServeIngressLifecycleOwnerIdentities(node) = {} "
+                "THEN AsyncLeaderWireEarliestPhysicalIngressRecord( "
+                "node).schedulerOrdinal ELSE IF "
+                "AsyncLeaderWireIngressProtectedRecordsAt(node) = {} THEN "
+                "AsyncServeEarliestIngressSchedulerOrdinal(node) ELSE IF "
+                "AsyncServeIngressOwnsSharedPhysicalTurn(node) THEN "
+                "AsyncServeEarliestIngressSchedulerOrdinal(node) ELSE "
+                "AsyncLeaderWireEarliestPhysicalIngressRecord( "
+                "node).schedulerOrdinal"
+            ),
+            "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler": (
+                "/\\ AsyncIngressSchedulerBarrierActive(node) /\\ "
+                "AsyncSelectedRuntimeHasLifecycle(node) /\\ "
+                "AsyncSelectedRuntimeLifecycleOrdinal(node) < "
+                "AsyncEarliestIngressSchedulerOrdinal(node)"
             ),
             "AsyncOlderLocalLifecyclePrecedesServeIngress": (
-                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
+                "/\\ AsyncIngressSchedulerBarrierActive(node) "
                 "/\\ LocalAdmissionCanAdvance(node) /\\ "
                 "LocalSourceLifecycleOrdinal(node, SelectedLocalSource(node)) "
-                "< AsyncServeEarliestIngressSchedulerOrdinal(node)"
+                "< AsyncEarliestIngressSchedulerOrdinal(node)"
             ),
             "SerializedRuntimePrecedesServeIngressStep": (
                 "/\\ asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
-                "AsyncOlderRuntimeLifecyclePrecedesServeIngress(node) /\\ "
-                "UNCHANGED AsyncIoVars /\\ UNCHANGED AsyncLocalAdmissionVars "
-                "/\\ RuntimeStep(node) /\\ asyncRunnerPhase' = "
+                "AsyncIngressSchedulerBarrierActive(node) /\\ "
+                "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node) /\\ "
+                "AsyncIoTimeoutLifecycleRetirementTransition(node) /\\ "
+                "UNCHANGED AsyncLocalAdmissionVars /\\ RuntimeStep(node) /\\ "
+                "asyncRunnerPhase' = "
                 "[asyncRunnerPhase EXCEPT ![node] = \"Local\"] /\\ "
                 "asyncRunnerBudget' = [asyncRunnerBudget EXCEPT ![node] = "
                 "AsyncQueueCapacity]"
@@ -65865,10 +67791,10 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "/\\ SelectedLocalAdmissionAdvance(node)"
             ),
             "AsyncServeIngressTargetOnlyTurn": (
-                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
+                "/\\ AsyncIngressSchedulerBarrierActive(node) "
                 "/\\ asyncRunnerPhase[node] \\in {\"Runtime\", \"Local\"} "
                 "/\\ ~( /\\ asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)) /\\ "
+                "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)) /\\ "
                 "~( /\\ asyncRunnerPhase[node] = \"Local\" /\\ "
                 "AsyncOlderLocalLifecyclePrecedesServeIngress(node)) /\\ "
                 "UNCHANGED <<vars, asyncCommandQueues, "
@@ -65913,11 +67839,25 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "asyncServeIngressAdmissions: "
                 "AsyncTimeoutLifecycleOwned(admission.node) => "
                 "admission.schedulerOrdinal # "
-                "AsyncTimeoutLifecycleOrdinal(admission.node)"
+                "AsyncTimeoutLifecycleOrdinal(admission.node) /\\ \\A "
+                "carrier \\in asyncControlServiceState."
+                "ordinaryIngressCarrierEvidence, admission \\in "
+                "asyncServeIngressAdmissions: carrier.node = admission.node "
+                "=> carrier.schedulerOrdinal # admission.schedulerOrdinal "
+                "/\\ \\A carrier \\in asyncControlServiceState."
+                "ordinaryIngressCarrierEvidence, record \\in "
+                "AsyncCandidateLifecycleAdmissions: /\\ carrier.node = "
+                "record.node /\\ carrier.origin # record.origin => "
+                "carrier.schedulerOrdinal # record.ordinal /\\ \\A carrier "
+                "\\in asyncControlServiceState.ordinaryIngressCarrierEvidence: "
+                "AsyncTimeoutLifecycleOwned(carrier.node) => "
+                "carrier.schedulerOrdinal # "
+                "AsyncTimeoutLifecycleOrdinal(carrier.node)"
             ),
             "AsyncServeOrdinalInvariant": (
                 "/\\ asyncNextServeIngressOrdinal \\in [ValidatorIds -> "
-                "Nat \\ {0}] /\\ asyncNextServeAdmissionOrdinal \\in "
+                "1..(AsyncIngressPhysicalOrdinalMaximum + 1)] /\\ "
+                "asyncNextServeAdmissionOrdinal \\in "
                 "[ValidatorIds -> Nat \\ {0}] /\\ \\A admission \\in "
                 "asyncServeIngressAdmissions: admission.ordinal < "
                 "asyncNextServeIngressOrdinal[admission.node] /\\ \\A "
@@ -65935,15 +67875,20 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             "RunNodeWork": (
                 "/\\ node \\in AsyncActiveServiceNodes /\\ node \\in up /\\ "
                 "~NodeHasApplication(node) /\\ IF "
+                "AsyncCandidateProducerContinuationRunnerResolutionRequired("
+                "node) THEN IF "
+                "AsyncCandidateProducerContinuationRunnerResolutionReady(node) "
+                "THEN ResolveRunNodeCandidateProducerContinuation(node) ELSE "
+                "ReplayRunNodeCandidateProducerContinuation(node) ELSE IF "
                 "ResponsiveReplayQuarantined(node) THEN /\\ "
                 "ResponsiveReplayDraining(node) /\\ ~NodeIdle(node) /\\ "
                 "asyncIngressReady[node] = <<>> /\\ \\/ "
                 "LocalAdmissionStep(node) \\/ IngressDrainStep(node) \\/ "
                 "SerializedRuntimeStep(node) ELSE IF /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
+                "AsyncIngressSchedulerBarrierActive(node) /\\ "
                 "asyncRunnerPhase[node] \\in {\"Runtime\", \"Local\"} THEN "
                 "IF /\\ asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "AsyncOlderRuntimeLifecyclePrecedesServeIngress(node) THEN "
+                "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node) THEN "
                 "SerializedRuntimePrecedesServeIngressStep(node) ELSE IF /\\ "
                 "asyncRunnerPhase[node] = \"Local\" /\\ "
                 "AsyncOlderLocalLifecyclePrecedesServeIngress(node) THEN "
@@ -65983,7 +67928,7 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "asyncRunnerBudget'[node] = asyncRunnerBudget[node] - 1 /\\ "
                 "LocalSourceLifecycleOrdinal( node, "
                 "SelectedLocalSource(node)) < "
-                "AsyncServeEarliestIngressSchedulerOrdinal(node) /\\ "
+                "AsyncEarliestIngressSchedulerOrdinal(node) /\\ "
                 "asyncNextServeAdmissionOrdinal' = "
                 "asyncNextServeAdmissionOrdinal /\\ "
                 "asyncNextServeIngressOrdinal' = "
@@ -65992,7 +67937,7 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "asyncServeIngressAdmissions /\\ "
                 "AsyncServeIngressLifecycleOwnerIdentities(node)' = "
                 "AsyncServeIngressLifecycleOwnerIdentities(node) /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node)' # {} /\\ "
+                "AsyncIngressSchedulerBarrierActive(node) /\\ "
                 "asyncServeAdmissions' = asyncServeAdmissions /\\ "
                 "asyncServeReservations' = asyncServeReservations /\\ "
                 "asyncServeTombstones' = asyncServeTombstones BY Isa DEF "
@@ -66000,13 +67945,14 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "SelectedLocalAdmissionAdvance, "
                 "AsyncOlderLocalLifecyclePrecedesServeIngress, "
                 "AdmitProducerCompletion, AdmitCausalHead, EnqueueCandidate, "
-                "AsyncServeEarliestIngressSchedulerOrdinal, "
+                "AsyncEarliestIngressSchedulerOrdinal, "
+                "AsyncIngressSchedulerBarrierActive, "
                 "AsyncServeIngressLifecycleOwnerIdentities, AsyncIoVars, "
                 "AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars"
             ),
             "AsyncServeIngressTargetOnlyCannotOvertakeOlderLocalLifecycle": (
                 "\\A node \\in ValidatorIds: /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
+                "AsyncIngressSchedulerBarrierActive(node) /\\ "
                 "asyncRunnerPhase[node] = \"Local\" /\\ "
                 "AsyncOlderLocalLifecyclePrecedesServeIngress(node) => "
                 "~AsyncServeIngressTargetOnlyTurn(node) BY DEF "
@@ -66014,26 +67960,31 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             ),
             "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode": (
                 "\\A node \\in ValidatorIds: /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
+                "AsyncIngressSchedulerBarrierActive(node) /\\ "
                 "AsyncTimeoutLifecycleOwned(node) /\\ "
                 "AsyncTimeoutLifecycleOrdinal(node) < "
-                "AsyncServeEarliestIngressSchedulerOrdinal(node) /\\ "
+                "AsyncEarliestIngressSchedulerOrdinal(node) /\\ "
                 "asyncRunnerPhase[node] = \"Runtime\" /\\ "
+                "~AsyncCandidateProducerContinuationRunnerResolutionRequired("
+                "node) /\\ "
                 "RunNodeWork(node) => "
                 "SerializedRuntimePrecedesServeIngressStep(node) BY Isa DEF "
-                "RunNodeWork, AsyncOlderRuntimeLifecyclePrecedesServeIngress, "
-                "AsyncOlderFrozenTimeoutLifecyclePrecedesServeIngress, "
+                "RunNodeWork, AsyncOlderRuntimeLifecyclePrecedesIngressScheduler, "
+                "AsyncSelectedRuntimeHasLifecycle, "
+                "AsyncSelectedRuntimeLifecycleOrdinal, "
                 "SerializedRuntimePrecedesServeIngressStep, "
                 "AsyncServeIngressTargetOnlyTurn"
             ),
             "AsyncLaterServeTicketInterleavesOlderLocalEpisode": (
                 "\\A node \\in ValidatorIds: /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
+                "AsyncIngressSchedulerBarrierActive(node) /\\ "
                 "LocalAdmissionCanAdvance(node) /\\ "
                 "LocalSourceLifecycleOrdinal(node, "
                 "SelectedLocalSource(node)) < "
-                "AsyncServeEarliestIngressSchedulerOrdinal(node) /\\ "
-                "asyncRunnerPhase[node] = \"Local\" /\\ RunNodeWork(node) "
+                "AsyncEarliestIngressSchedulerOrdinal(node) /\\ "
+                "asyncRunnerPhase[node] = \"Local\" /\\ "
+                "~AsyncCandidateProducerContinuationRunnerResolutionRequired("
+                "node) /\\ RunNodeWork(node) "
                 "=> SerializedLocalPrecedesServeIngressStep(node) BY Isa DEF "
                 "RunNodeWork, AsyncOlderLocalLifecyclePrecedesServeIngress, "
                 "SerializedLocalPrecedesServeIngressStep, "
@@ -66053,6 +68004,8 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "AsyncCandidateLifecycleStateAfterServeIngressAdmission, "
                 "AsyncCandidateLifecycleStateAfterAdmission, "
                 "AsyncCandidateLifecycleStateAfterTimeoutOwnership, "
+                "AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission, "
+                "AsyncOrdinaryIngressCarrierStateAfterTransition, "
                 "AsyncControlServiceStateAfterReset, "
                 "AsyncControlServiceStateAfterAdmission, "
                 "AsyncControlServiceStateAfterService, "
@@ -66113,9 +68066,9 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             release_source, preserve_string_contents=True
         )
         release_token_counts = {
-            "schedulerOrdinal == AsyncNextCandidateLifecycleOrdinal(node)": 3,
-            "node, identity, ingressOrdinal, schedulerOrdinal,": 3,
-            "admission.schedulerOrdinal,": 1,
+            "schedulerOrdinal == AsyncNextCandidateLifecycleOrdinal(node)": 2,
+            "node, identity, ingressOrdinal, schedulerOrdinal,": 2,
+            "admission.schedulerOrdinal,": 2,
         }
         for token, expected_count in release_token_counts.items():
             observed_count = stripped_release.count(token)
@@ -66378,12 +68331,9 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "pinned Java version",
             ),
             (
-                "readonly TLC_FINISHED_PATTERN='^Finished in "
-                "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-                "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-                "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-                "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-                "exact TLC terminal-marker pattern",
+                'source "${REPO_ROOT}/scripts/formal/'
+                'sumeragi_v2_tlc_result_contract.sh"',
+                "shared TLC result-contract import",
             ),
             (
                 'readonly MODEL="SumeragiV2ServeSchedulerOrdinalMutation.tla"',
@@ -66510,22 +68460,23 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "exact six-case mutant completion set",
             ),
             (
-                '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-                "single TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_fixed_success "$label" "$log" '
+                '"$actual_status"',
+                "shared fixed-success assertion",
             ),
             (
-                'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-                "final TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+                "shared nonzero-state assertion",
             ),
             (
-                "state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-                "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-                "|| true)\"",
-                "exact nonzero state-space summary parser",
+                'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+                "shared terminal-footer assertion",
             ),
             (
-                "if ((generated <= 0 || distinct <= 0)); then",
-                "zero-state rejection",
+                'sumeragi_v2_tlc_assert_exact_line \\\n'
+                '    "Serve scheduler lasso" "$log" \\\n'
+                '    "Error: Temporal properties were violated."',
+                "exact temporal primary-diagnostic assertion",
             ),
             (
                 'if [[ "$actual_status" -ne "$expected_status" ]]; then',
@@ -66536,8 +68487,16 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "exact repaired completion marker",
             ),
             (
-                'for marker in "Temporal properties were violated." "Stuttering"; do',
-                "exact temporal lasso markers",
+                'grep -Fq "Stuttering" "$log" || {',
+                "stuttering lasso marker",
+            ),
+            (
+                '"$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN"',
+                "shared primary-diagnostic classifier",
+            ),
+            (
+                "Serve scheduler mutant emitted an ambiguous primary diagnostic",
+                "unique primary-diagnostic rejection",
             ),
             (
                 'if grep -Fq "Error: Invariant " "$log"; then',
@@ -66923,12 +68882,35 @@ def _commit_import_provenance_mutation_source_fidelity_errors(
                 "exact successor invariant marker",
             ),
             (
-                '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-                "single TLC terminal-marker check",
+                'source "${REPO_ROOT}/scripts/formal/'
+                'sumeragi_v2_tlc_result_contract.sh"',
+                "shared TLC result-contract import",
             ),
             (
-                'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-                "final TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_fixed_success "$label" "$log" '
+                '"$actual_status"',
+                "shared fixed-success assertion",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+                "shared nonzero-state assertion",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+                "shared terminal-footer assertion",
+            ),
+            (
+                "assert_exact_invariant_counterexample() {",
+                "exact invariant-counterexample helper",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_exact_line "$label" "$log" '
+                '"$invariant_marker"',
+                "exact invariant marker assertion",
+            ),
+            (
+                '[[ "$primary_diagnostic_count" -eq 1 ]] || {',
+                "unique primary-diagnostic rejection",
             ),
             (
                 "missing execution guard and successor-origin replacement "
@@ -67357,8 +69339,42 @@ def _indexed_service_activation_mutation_source_fidelity_errors(
             "status-12 invariant counterexample",
         ),
         (
-            'for marker in "Temporal properties were violated." "Stuttering"; do',
-            "exact liveness markers",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            "shared TLC result-contract import",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_fixed_success "$label" "$log" '
+            '"$actual_status"',
+            "shared fixed-success assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "shared nonzero-state assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "shared terminal-footer assertion",
+        ),
+        (
+            "assert_unique_primary_diagnostic() {",
+            "unique primary-diagnostic helper",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$marker"',
+            "exact primary-diagnostic assertion",
+        ),
+        (
+            '[[ "$primary_diagnostic_count" -eq 1 ]] || {',
+            "unique primary-diagnostic rejection",
+        ),
+        (
+            '"Error: Temporal properties were violated."',
+            "exact temporal primary diagnostic",
+        ),
+        (
+            'grep -Fq "Stuttering" "$unjoined_clock_log" || {',
+            "stuttering lasso marker",
         ),
         (
             'readonly REENTRY_INVARIANT_MARKER="Error: Invariant ActivationMembershipCoherence is violated."',
@@ -67373,12 +69389,10 @@ def _indexed_service_activation_mutation_source_fidelity_errors(
             "invariant/liveness non-interchangeability check",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            "single TLC terminal-marker check",
-        ),
-        (
-            'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-            "final TLC terminal-marker check",
+            'sumeragi_v2_tlc_assert_exact_line \\\n'
+            '  "restriction-reentry" "$reentry_log" \\\n'
+            '  "Error: The behavior up to this point is:"',
+            "exact invariant-trace marker assertion",
         ),
         (
             "unjoined clock ownership produced exact liveness status 13; "
@@ -67654,12 +69668,30 @@ def _historical_discovery_occurrence_rank_mutation_source_fidelity_errors(
             "single SANY marker check",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            "single TLC terminal-marker check",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            "shared TLC result-contract import",
         ),
         (
-            'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-            "final TLC terminal-marker check",
+            'sumeragi_v2_tlc_assert_fixed_success "$label" "$log" '
+            '"$actual_status"',
+            "shared fixed-success assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "shared nonzero-state assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "shared terminal-footer assertion",
+        ),
+        (
+            '"$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN"',
+            "shared primary-diagnostic classifier",
+        ),
+        (
+            '[[ "$mutant_primary_diagnostic_count" -eq 1 ]] || {',
+            "unique primary-diagnostic rejection",
         ),
         (
             "[[ \"$(grep -Ec '^(Error:|Deadlock reached[.])' "
@@ -69130,6 +71162,32 @@ assert!(status.liveness.outbound_intents.iter().all(|intent| {
     else:
         runtime_source = runtime_path.read_text(encoding="utf-8")
         runtime_tokens = rust_code_tokens(runtime_source)
+
+        def require_runtime_item_order(
+            item: RustItem | None,
+            sequences: tuple[str, ...],
+            description: str,
+        ) -> None:
+            if item is None:
+                return
+            item_tokens = rust_code_tokens(item.body)
+            positions = [
+                _token_sequence_positions(
+                    item_tokens,
+                    rust_code_tokens(sequence),
+                )
+                for sequence in sequences
+            ]
+            if any(len(found) != 1 for found in positions) or any(
+                left[0] >= right[0]
+                for left, right in zip(positions, positions[1:])
+                if left and right
+            ):
+                errors.append(
+                    f"{runtime_path}:{item.line}: {description} must retain "
+                    "the exact reviewed order"
+                )
+
         production_deferred_trait_contract = rust_code_tokens(
             """
 fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource;
@@ -69145,7 +71203,14 @@ fn synthetic_deferred_lifecycle_owner(
 fn dispatch_deferred(
     &mut self,
     eligible: &BTreeSet<u128>,
-) -> Result<Option<(Vec<Self::Effect>, DeferredServiceEvidence)>, Self::Error>;
+) -> Result<
+    Option<(
+        Vec<Self::Effect>,
+        DeferredServiceEvidence,
+        Option<ProducerContinuationHandoffToken>,
+    )>,
+    Self::Error,
+>;
 fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
 """
         )
@@ -69163,6 +71228,7 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
         production_driver_context = (
             ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
         )
+        observed_production_driver_items: dict[str, RustItem | None] = {}
         for item_name, digest_name, description in (
             (
                 "dispatch",
@@ -69185,8 +71251,10 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                     f"{runtime_path}: require exactly one {description}; found "
                     f"{len(matching)}"
                 )
+                observed_production_driver_items[item_name] = None
                 continue
             item = matching[0]
+            observed_production_driver_items[item_name] = item
             _require_rust_item_context(
                 runtime_path,
                 item,
@@ -69201,8 +71269,52 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 description,
                 errors,
             )
+        require_runtime_item_order(
+            observed_production_driver_items.get("dispatch"),
+            (
+                """
+let lifecycle_ordinal = tagged
+    .lifecycle_ordinal
+    .ok_or(AdapterError::RuntimeIngressOwnershipViolation)?;
+if !tagged.causal_origin.validate_exact()
+    || tagged.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
+""",
+                """
+self.bind_selected_producer_lifecycle(
+    tagged.causal_origin.lifecycle_key.clone(),
+    lifecycle_ordinal,
+)?;
+""",
+                "let outcome = (|| {",
+                "self.clear_selected_producer_lifecycle();",
+                "let outcome = outcome?;",
+                "let producer_handoff = outcome.producer_handoff();",
+                """
+RuntimeDriverDispatch {
+    effects: outcome.into_effects(),
+    deferred_ingress,
+    deferred_ordinal,
+    retry_unadmitted,
+    producer_handoff,
+}
+""",
+            ),
+            "authenticated dispatch must bind, clear, and transfer one exact "
+            "producer lifecycle",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_production_driver_items.get("dispatch_deferred"),
+            """
+SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
+""",
+            "deferred dispatch must retain the selected occurrence and optional "
+            "producer handoff",
+            errors,
+        )
 
         runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
+        observed_runtime_ingress_items: dict[str, RustItem | None] = {}
         for item_name, digest_name, description in (
             (
                 "from_fair_ingress",
@@ -69240,8 +71352,10 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                     f"{runtime_path}: require exactly one {description}; found "
                     f"{len(matching)}"
                 )
+                observed_runtime_ingress_items[item_name] = None
                 continue
             item = matching[0]
+            observed_runtime_ingress_items[item_name] = item
             _require_rust_item_context(
                 runtime_path,
                 item,
@@ -69256,6 +71370,47 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 description,
                 errors,
             )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_ingress_items.get("validate_exact"),
+            """
+let lifecycle_ordinal_is_exact = self.earliest_lifecycle_ordinal().is_ok();
+let leader_wire_runtime_receipt_is_exact = matches!(
+    (self.leader_wire_token(), self.leader_wire_runtime_receipt()),
+    (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)))
+);
+""",
+            "canonical ownership validation must bind one lifecycle-ordinal "
+            "domain and a matching leader-wire runtime receipt",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_ingress_items.get("validate_exact"),
+            """
+&& leader_wire_token_is_exact
+&& lifecycle_ordinal_is_exact
+&& leader_wire_runtime_receipt_is_exact
+&& self.projection_hash == runtime_ingress_ownership_projection_hash(self)
+""",
+            "canonical ownership validation must include lifecycle and runtime "
+            "receipt exactness in its final predicate",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_ingress_items.get("merge_downstream"),
+            """
+let retained_lifecycle = self.earliest_lifecycle_ordinal()?;
+let candidate_lifecycle = candidate.earliest_lifecycle_ordinal()?;
+if retained_lifecycle.is_some() != candidate_lifecycle.is_some() {
+    return Err(RuntimeIngressMergeError::Conflict);
+}
+""",
+            "per-source merge must preserve the tagged-versus-untagged "
+            "lifecycle domain before combining carriers",
+            errors,
+        )
 
         concrete_runtime_context = (
             (
@@ -69297,6 +71452,30 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
         enqueue_with_ownership = observed_concrete_runtime_items.get(
             "enqueue_network_with_ingress_ownership"
         )
+        _require_rust_token_sequence(
+            runtime_path,
+            enqueue_with_ownership,
+            """
+match ingress_ownership.earliest_lifecycle_ordinal() {
+    Ok(Some(ordinal))
+        if self
+            .ingress
+            .lifecycle_ordinals
+            .recognizes_minted(ordinal)
+            .unwrap_or(false) => {}
+    Ok(None) => {}
+    Ok(Some(_)) | Err(_) => {
+        self.latch_fail_closed(
+            "network ingress carried an unminted actor-global lifecycle ordinal",
+        );
+        return Err(NetworkIngressError::FailClosed);
+    }
+}
+""",
+            "authenticated admission must reject an unminted or inconsistent "
+            "actor-global lifecycle before authentication",
+            errors,
+        )
         for expected_source, description in (
             (
                 "let deferred_owner = "
@@ -69319,6 +71498,48 @@ let authenticated_deferred_owner = self
                 description,
                 errors,
             )
+        require_runtime_item_order(
+            enqueue_with_ownership,
+            (
+                "match ingress_ownership.earliest_lifecycle_ordinal()",
+                """
+self.ingress
+    .check_authenticated_wire_capacity_with_ownership(
+""",
+                "let authenticated = match self.driver.authenticate(message)",
+                """
+let authenticated_deferred_owner = self
+    .driver
+    .deferred_authenticated_message_owner(authenticated.wire_envelope());
+""",
+                """
+self.reconcile_deferred_ingress_ownership(Some((
+    admission_ordinal,
+    ingress_ownership
+)))
+""",
+                """
+if self
+    .register_leader_wire_runtime_receipt(&leader_wire_registration)
+    .is_err()
+{
+    self.latch_fail_closed(
+        "deferred certificate admission changed its leader-wire runtime receipt",
+    );
+    return Err(NetworkIngressError::FailClosed);
+}
+return Ok(owner_tag);
+""",
+                "let preflight = self.command_admission_preflight",
+                "let preflight = self.reject_authenticated_preflight_coalescence(preflight)?;",
+                """
+.enqueue_authenticated_with_ingress_ownership_and_owner(
+""",
+            ),
+            "authenticated admission must validate the actor-global lifecycle, "
+            "authenticate, merge an exact deferred owner, and preflight before "
+            "physical enqueue",
+        )
         can_admit_with_ownership = observed_concrete_runtime_items.get(
             "can_admit_network_message_with_ingress_ownership"
         )
@@ -69345,6 +71566,26 @@ wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
             "ownership-aware capacity preflight to semantic deferred-owner call path",
             errors,
         )
+        _require_rust_token_sequence(
+            runtime_path,
+            can_admit_with_ownership,
+            """
+if matches!(
+    ownership.earliest_lifecycle_ordinal(),
+    Ok(Some(ordinal))
+        if !self
+            .ingress
+            .lifecycle_ordinals
+            .recognizes_minted(ordinal)
+            .unwrap_or(false)
+) {
+    return true;
+}
+""",
+            "capacity preflight must drain an unminted lifecycle into the "
+            "mutating fail-closed seam",
+            errors,
+        )
 
         busy_regression_name = (
             "commit_certificate_response_coalesces_with_exact_busy_deferred_qc"
@@ -69367,6 +71608,105 @@ wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
                 busy_regression_name
             ],
             "Busy-deferred authenticated response coalescing regression",
+            errors,
+        )
+        causal_runtime_regressions: dict[str, RustItem | None] = {}
+        runtime_test_context = (
+            ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+        )
+        for name, expected_sha256 in (
+            _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256.items()
+        ):
+            item = _require_rust_item(
+                runtime_path,
+                runtime_source,
+                name,
+                errors,
+            )
+            causal_runtime_regressions[name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                runtime_test_context,
+                f"production causal-FIFO regression {name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                expected_sha256,
+                f"production causal-FIFO regression {name}",
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            causal_runtime_regressions.get(
+                "later_same_semantic_fair_retry_retains_runtime_lifecycle_root"
+            ),
+            """
+assert_eq!(queued.lifecycle_ordinal, Some(retained_ordinal));
+assert_eq!(
+    queued.causal_origin.root_lifecycle_ordinal,
+    Some(retained_ordinal)
+);
+""",
+            "same-semantic retry must preserve its first immutable runtime "
+            "lifecycle root",
+            errors,
+        )
+        require_runtime_item_order(
+            causal_runtime_regressions.get(
+                "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it"
+            ),
+            (
+                """
+assert!(
+    runtime.older_lifecycle_predates_exact_serve(now, serve_ordinal)
+""",
+                "runtime.ingress.pop_next_with_ownership()",
+                "assert_eq!(consumed.lifecycle_ordinal, fair_ordinal);",
+                """
+assert!(
+    !runtime.older_lifecycle_predates_exact_serve(now, serve_ordinal)
+""",
+            ),
+            "ordinary Fair ownership must precede Serve exactly until runtime "
+            "consumes it",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            causal_runtime_regressions.get(
+                "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum"
+            ),
+            """
+assert_eq!(queued.lifecycle_ordinal, Some(older_ordinal));
+assert_eq!(
+    queued.causal_origin.root_lifecycle_ordinal,
+    Some(older_ordinal)
+);
+""",
+            "an older aggregate carrier must become the queued runtime minimum",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            causal_runtime_regressions.get(
+                "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals"
+            ),
+            """
+assert!(matches!(
+    unminted_runtime.enqueue_network_with_ingress_ownership(
+        first_message,
+        first_ownership
+    ),
+    Err(NetworkIngressError::FailClosed)
+));
+assert!(unminted_runtime.fail_closed);
+assert_eq!(unminted_runtime.queued_commands(), 0);
+""",
+            "unminted fair ownership must fail closed without a physical queue "
+            "position",
             errors,
         )
 
@@ -69422,6 +71762,7 @@ wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        observed_runtime_ownership_items: dict[str, RustItem | None] = {}
         for item_name, description in (
             (
                 "reconcile_deferred_ingress_ownership",
@@ -69437,6 +71778,7 @@ wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
             ),
         ):
             item = _require_rust_item(runtime_path, runtime_source, item_name, errors)
+            observed_runtime_ownership_items[item_name] = item
             _require_rust_item_context(
                 runtime_path,
                 item,
@@ -69451,6 +71793,151 @@ wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
                 description,
                 errors,
             )
+        reconcile_deferred = observed_runtime_ownership_items.get(
+            "reconcile_deferred_ingress_ownership"
+        )
+        require_runtime_item_order(
+            reconcile_deferred,
+            (
+                "let previous_lifecycle = existing.earliest_lifecycle_ordinal()?;",
+                "existing.merge_downstream(candidate)?;",
+                "let merged_lifecycle = existing.earliest_lifecycle_ordinal()?;",
+                """
+if self
+    .active_lifecycle_uses_ordinal(merged_lifecycle)
+    .map_err(|_| RuntimeIngressMergeError::Conflict)?
+""",
+                """
+let owner = lifecycle_ownership
+    .get(&ordinal)
+    .ok_or(RuntimeIngressMergeError::Conflict)?
+    .rebase_deferred_ingress(merged_lifecycle, ingress_identity)?;
+lifecycle_ownership.insert(ordinal, owner);
+""",
+                "self.deferred_ingress_ownership = retained;",
+                "self.deferred_lifecycle_ownership = lifecycle_ownership;",
+            ),
+            "an earlier aggregate carrier must rebase its exact deferred owner "
+            "before either ownership map is committed",
+        )
+        accept_dispatch = observed_runtime_ownership_items.get(
+            "accept_driver_dispatch"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            accept_dispatch,
+            """
+if retry_unadmitted
+    && (deferred_ingress.is_some()
+        || deferred_ordinal.is_some()
+        || !effects.is_empty()
+        || producer_handoff.is_some())
+""",
+            "retryable dispatch must not expose effects, deferred ownership, or "
+            "a producer handoff",
+            errors,
+        )
+        require_runtime_item_order(
+            accept_dispatch,
+            (
+                "self.reconcile_deferred_ingress_ownership(deferred_ingress)",
+                "let active = self.driver.all_deferred_admission_ordinals();",
+                "self.deferred_lifecycle_ownership = retained;",
+                """
+Ok((
+    effects,
+    retry_unadmitted,
+    producer_handoff,
+    retained_deferred_ingress,
+))
+""",
+            ),
+            "driver acceptance must reconcile carrier ownership before "
+            "transferring its handoff and retention status",
+        )
+        dormant_constructor = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "with_driver_and_lifecycle_ordinals",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            dormant_constructor,
+            runtime_context,
+            "restart-dormant Local FIFO ownership installation",
+            errors,
+        )
+        require_runtime_item_order(
+            dormant_constructor,
+            (
+                "driver.dormant_local_fifo_reservations()",
+                "BoundedIngress::with_lifecycle_ordinals(queue_config, lifecycle_ordinals)",
+                """
+ingress.install_dormant_local_fifo_reservations(
+    dormant_local_fifo_reservations
+)
+""",
+                """
+runtime.retain_effect_ownership(
+    RuntimeEffectSource::Startup,
+    None,
+    startup_effects.as_slice(),
+)
+""",
+            ),
+            "restart must install dormant Local FIFO reservations before "
+            "retaining any startup successor",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("step"),
+            (
+                "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
+                "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
+                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+                "self.driver.acknowledge_producer_handoff(token, evidence)",
+                """
+self.complete_leader_wire_runtime_owner(
+    &effect_parent,
+    completed_producer_handoff
+)
+""",
+                "self.observe_effects(now, &effects)",
+            ),
+            "live dispatch must retain successors, acknowledge the exact "
+            "producer, and publish its terminal before observing effects",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("step_recovery"),
+            (
+                "self.retain_effect_ownership(RuntimeEffectSource::Fifo, Some(&owner), &effects)",
+                "token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
+                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+                "self.driver.acknowledge_producer_handoff(token, evidence)",
+                "self.complete_leader_wire_runtime_owner(&owner, completed_producer_handoff)",
+                "self.observe_effects(now, &effects)",
+            ),
+            "recovery dispatch must retain successors, acknowledge the exact "
+            "producer, and publish its terminal before observing effects",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("dispatch_one_adapter_deferred"),
+            (
+                "self.retain_effect_ownership",
+                "token.identity().admission_ordinal() != lifecycle_owner.lifecycle_ordinal()",
+                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+                "self.driver.acknowledge_producer_handoff",
+                """
+self.complete_leader_wire_runtime_owner(
+    &lifecycle_owner,
+    completed_producer_handoff
+)
+""",
+                "self.observe_effects(now, &effects)",
+            ),
+            "deferred dispatch must retain successors, acknowledge the exact "
+            "producer, and publish its terminal before observing effects",
+        )
         for item_name, later_contract in (
             ("step", "let selected_round_tag = self.round_tag"),
             (
@@ -70793,6 +73280,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "/\\ AsyncControlServiceSlotTransition "
         "/\\ AsyncFixedCorridorDeadlineTransition "
         "/\\ AsyncLeaderWireLifecycleTransition "
+        "/\\ AsyncIngressPhysicalOrdinalTransition "
         "/\\ AsyncServiceActivationTransition "
         "/\\ UNCHANGED <<height, context>> "
         "/\\ [Next]_vars"
@@ -70981,6 +73469,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "DrainFairIngressSelectedRefinesCoreBracketNext",
             "IngressDrainStepRefinesCoreBracketNext",
             "SerializedRuntimeStepRefinesCoreBracketNext",
+            "SerializedLocalPredecessorRefinesCoreBracketNext",
+            "ReplayRunNodeContinuationRefinesCoreBracketNext",
             "RunNodeWorkRefinesCoreBracketNext",
             "RunNodeRefinesCoreBracketNext",
             "RunHistoricalRecoveryNodeRefinesCoreBracketNext",
@@ -71711,7 +74201,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             '{"RestartRequired", "ReplayRequired", "Replaying"} '
             "=> generation[asyncRecoveryNode] = asyncRecoveryGeneration"
         ),
-        "AsyncAllVars": "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+        "AsyncAllVars": (
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
+            "asyncFixedCorridorDeadlines>>"
+        ),
         "RetainedControlEmissionItems": (
             "SendableItems(node) \\cup RetainedProposalChunks(node)"
         ),
@@ -73880,6 +76373,108 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         }
     )
 
+    # These reviewed operators now carry the combined ordinary-ingress,
+    # producer-continuation, fixed-deadline, and terminal-discharge state.
+    # Several bodies are deliberately large; pinning their normalized body
+    # digests keeps mutations fail-closed without duplicating thousands of
+    # fragile string-literal characters in this checker.
+    reviewed_normalized_operator_sha256 = {
+        "ExecuteCoreDeliveryReady": (
+            "d7296497b1c1bf06fcfbb16d5fb88bc5336297cdba27c421fc63077da553b35f"
+        ),
+        "AsyncCandidateLifecycleReviewedSemanticOwnerTokensIn": (
+            "a32c1df9305fc5e9ef6c40af48bdd0f93c43d357c3acf17340af06cb62b56845"
+        ),
+        "AsyncCandidateLifecycleReviewedActiveOwnerTokensForNodeAfter": (
+            "e4da2ec3793940990dbc327e27fe4057d67d7ea777b242475ac3e8308422ac1f"
+        ),
+        "AsyncCoreOuterFrame": (
+            "c44275bd7d1c36c007426cc5bb2d4da09effc017aecdeada81b0e828a9f41000"
+        ),
+        "AsyncEnterIndexedServiceActivation": (
+            "281f60cabb65f0c65089fde352c1350335c5d817fd9edf14e8df87a5937e33b4"
+        ),
+        "AsyncActivateServiceNode": (
+            "719961293fc8b6ca063020df8d820b2d6714203b48c896b1eb30b96f9df6436e"
+        ),
+        "CertifiedServeCanRespond": (
+            "0d691be03f02bfd35124b3f192906e2fbf5af5208bcdc3da47528c76b29119cd"
+        ),
+        "AsyncControlServiceIdentityServicedOrAdvancedIn": (
+            "8e5fe148b229c92f05813e873a62bc86f7e26f711d0f2717205c422d74d45811"
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            "1ea5d41635259a5e94cbce63fbf37657a32efac56dfb40ae98dde5bcddc177c5"
+        ),
+        "CandidateAdmissionCoalesced": (
+            "d26ec50a7b57b1909bfda5ea26363fa276d14f16fbbbbbc20cb2b57193497f5a"
+        ),
+        "AsyncCandidateConsumerEpisodeObsoleteAfter": (
+            "69439257f9f4f577fcbf48cc9af8fde54f25e1b3b8004efc72e409bdf6348936"
+        ),
+        "AsyncCandidateInstallTcStageCoveredAfter": (
+            "816b78a2a6f0b18058e7511c0ed86b77cc166ced51979a53547f11ae499ae71f"
+        ),
+        "AsyncCandidateServiceStateAfterReclamation": (
+            "7e445a0184837e21e47d51238cc746510e6884659b82421cc87917040255367c"
+        ),
+        "AsyncCandidateLifecycleAdmissionOrdinalFor": (
+            "fedb84e3a6451546d2a2b887627ea76d3c94c3628832a20333eded5a69a6dfb4"
+        ),
+        "AsyncCandidateServiceLifecycleInvariant": (
+            "df5ef215d6f0c379fa505563c4ec4daf16d43a5c68f914fe0eadaaf2f6706727"
+        ),
+        "AsyncCandidateTransientMarkerExitThisStep": (
+            "ffd02920562c09acae3c0ea9331b09b2a225576e220ae931cb535f6edd941f57"
+        ),
+        "FreshCandidateSequence": (
+            "b25fed7fc0451cac860c90409b8c0000494d40077c8fa6c363ef58a449561da3"
+        ),
+        "AsyncControlServiceResetNodesThisStep": (
+            "82e9fdd115fb7b72a6a52ea4c856c9138f465da3198960aa54b7067dc4b46f31"
+        ),
+        "AsyncControlServiceStateAfterReset": (
+            "75d9c1320486860abfef0265fca6da0e10e7ce5fa7292c2ccb76abbb1a88c0a0"
+        ),
+        "AsyncControlServiceSlotTransition": (
+            "e320b315f78c6076317f08a1434054dac4d8711df2aa878b3ac403da4655a669"
+        ),
+        "AppendCausalSuccessors": (
+            "f4c500c716af8d23357691a07a603700fa1d762b2192a2f310845ea021bc5781"
+        ),
+        "AsyncServeTransportAdmissionGateAllows": (
+            "74737696f6d1de43d3ab002deb7fa5ab204995ff895355fcd0276bb9da79a8d6"
+        ),
+        "AsyncServeLifecycleTypeInvariant": (
+            "49c0c66834b2f4f12b211e6523aaf426d58fb2bc18cf2115960ff3c49081f520"
+        ),
+        "CanAdmitIngressItem": (
+            "04bf55f310b7bb465772fffb1c4675ba714e10d83b24cc448ef16290780b4dc5"
+        ),
+        "ReserveExactServeCapacity": (
+            "301db8a2c6cafdcfd26abedae21fff7b20376071adca5e1309c6b487fcc9b743"
+        ),
+        "AdvanceExactServeCapacity": (
+            "ddd8828a7e7ac7495965d416787227d9b3aa863719fcef1bf06b28c50fcb0c4e"
+        ),
+        "CoalesceExactServeIngressCapacity": (
+            "201ebef767d5b1f2c3f28c66717805c3220f98d0239e814859b4f55548fbf450"
+        ),
+        "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
+            "cf7cbe2fe0979ac886098795788bdeea0f6345ed3eb571214ef1fbc6c6b0c962"
+        ),
+        "PopSelectedIngress": (
+            "f48e04bddc904f89060ffa1d78c648ea4645972ba243d83cc44507cf4e47acda"
+        ),
+    }
+    for symbol in (
+        *reviewed_normalized_operator_sha256,
+        # Policy-rejected packets now drain to deterministic terminal
+        # outcomes; no dormant transport predicate remains.
+        "AsyncDormantExactReplyRequestPacket",
+    ):
+        exact.pop(symbol, None)
+
     fair_action_frames = {
         "AsyncActivateServiceNode": "AsyncServiceActivationFrameVars",
         "PreGstResponsiveRestart": "AsyncCoreOuterFrame",
@@ -73936,6 +76531,22 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{path}:{line}: {symbol} must equal only {expected!r}; "
                 f"found {normalized!r}"
+            )
+    for symbol, expected_sha256 in reviewed_normalized_operator_sha256.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing source-fidelity operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        observed_sha256 = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only the reviewed "
+                "normalized operator body digest "
+                f"{expected_sha256}; found {observed_sha256}"
             )
 
     retired_leader_wire_lifecycle_symbols = (
@@ -74245,7 +76856,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "THEN AcceptOrReserveExactServeIngress("
                 "recipient, candidate) "
                 "ELSE UNCHANGED <<AsyncServeLifecycleVars, "
-                "AsyncServeIngressAdmissionVars>>"
+                "asyncServeIngressAdmissions>>"
             ),
         )
         clause_positions = tuple(
@@ -74909,36 +77520,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{normalized_statement!r}"
                 )
 
-        budget_lifting_theorems = (
-            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired",
-            "AsyncRecoveryRecoveredAtBudgetLeadsLowerCycleOrEligible",
-            "AsyncRecoveryReplayAtBudgetLeadsLowerCycleOrRecovered",
-            "AsyncRecoveryReplayingAtBudgetLeadsLowerCycleOrRecovered",
-        )
-        for symbol in budget_lifting_theorems:
-            extracted = _top_level_theorem_body(
-                async_liveness_source,
-                symbol,
-                preserve_string_contents=True,
-            )
-            if extracted is None:
-                errors.append(
-                    f"{async_liveness_path}: missing recovery-budget theorem "
-                    f"{symbol}"
-                )
-                continue
-            theorem_body, theorem_line = extracted
-            stripped_theorem_body = strip_tla_comments(theorem_body)
-            for required_fact in (
-                "AsyncSpecAlwaysStrongTypeInvariant",
-                "AsyncRecoveryCycleAtBudgetStep",
-            ):
-                if required_fact not in stripped_theorem_body:
-                    errors.append(
-                        f"{async_liveness_path}:{theorem_line}: {symbol} proof "
-                        f"must cite {required_fact}"
-                    )
-
+        # GST is an explicit environmental liveness premise.  The retired
+        # recovery-generation budget tried to derive GST from bounded
+        # pre-GST restarts and is prohibited by the architecture gate above;
+        # do not require its former budget-lifting theorem family here.
         theorem_transition_coverage = {
             "AsyncFaultStepKeepsTimeoutPool": (
                 "InjectUntrustedTransportCompletion",
@@ -75395,7 +77980,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "FifoRuntimeStep": (
             "NextNodeCommand(node)",
-            "RemoveNextNodeCommand(node)",
+            "RemoveNextNodeCommandAfterDispatch(node, command)",
             "AsyncCommitImportExecutionProvenance(command)",
         ),
         "RegularCoreCommand": (
@@ -75719,10 +78304,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             'asyncRecoveryPhase = "RestartRequired"',
             "generation[node] = asyncRecoveryGeneration",
             "Restart(node)",
-            "UNCHANGED AsyncSchedulerVars",
+            "ResetNodeSchedulerForRestart(node, <<>>)",
             'asyncRecoveryPhase\' = "ReplayRequired"',
             "asyncRecoveryGeneration' = generation[node] + 1",
             "asyncRecoveryReplayQueue' = asyncRecoveryReplayQueue",
+            "AsyncCoreOuterFrame",
         ),
         "PreGstResponsiveReplay": (
             "signatures == RestartSignatureReplay(node)",
@@ -75839,7 +78425,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncRunnerPhase' = [asyncRunnerPhase EXCEPT ![node] = \"Local\"]",
             "asyncRunnerBudget' = [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]",
             "UNCHANGED <<asyncNextServeAdmissionOrdinal, asyncNextServeIngressOrdinal>>",
-            "asyncServeIngressAdmissions' = AsyncServeIngressAdmissionsWithoutNode(node)",
+            "asyncServeIngressAdmissions' = AsyncServeIngressAdmissionsAfterRestart(node)",
+            "asyncServeAdmissions' = AsyncServeAdmissionsAfterRestart(node)",
+            "asyncServeReservations' = AsyncServeReservationsAfterRestart(node)",
             "asyncServeTombstones' = AsyncServeRestartRecoveredTombstones(node)",
             "asyncIoQueues' = [asyncIoQueues EXCEPT ![node] = <<>>]",
             "asyncOutstandingWork' = [asyncOutstandingWork EXCEPT ![node] = {}]",
@@ -75860,7 +78448,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncHistoricalRecoveryTargets' = asyncHistoricalRecoveryTargets \\ {node}",
         ),
         "AsyncControlServiceResetNodesThisStep": (
-            "IF PreGstResponsiveReplay THEN {asyncRecoveryNode} ELSE {}",
+            "IF PreGstResponsiveRestart \\/ PreGstResponsiveReplay",
+            "THEN {asyncRecoveryNode}",
         ),
         "AsyncControlServiceStateAfterReset": (
             "nextOrdinal |-> state.nextOrdinal",
@@ -75882,7 +78471,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncControlServiceSlotTransition": (
             "AsyncControlServiceStateAfterReset( asyncControlServiceState, AsyncControlServiceResetNodesThisStep)",
-            "AsyncCandidateServiceStateAfterReclamation(responseState)",
+            "AsyncControlServiceStateAfterTimeoutRetirement(responseState)",
+            "AsyncCandidateServiceStateAfterReclamation(timeoutRetirementState)",
             "asyncControlServiceState' =",
             "AsyncCandidateServiceStateAfterSuccessfulService(",
             "AsyncCandidateServiceStateAfterTerminalRetirement(",
@@ -75891,8 +78481,14 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncCandidateLifecycleDeparturesThisStep",
             "AsyncCandidateLifecycleStateAfterServiceSlotTransfer(",
             "candidateServiceState ==",
-            "AsyncCandidateTerminalDiscardsThisStep",
-            "AsyncCandidateLifecycleReservationsAvailableIn(compactedState)",
+            "AsyncCandidateProducerContinuationStateAfterDeparture(",
+            "ordinaryCarrierState ==",
+            "AsyncOrdinaryIngressCarrierStateAfterTransition(",
+            "leaderWireState ==",
+            "serveIngressState ==",
+            "timeoutState ==",
+            "finalState ==",
+            "AsyncCandidateLifecycleReservationsAvailableIn(serveIngressState)",
             "AsyncCandidateTerminalServiceReservationAvailableIn( "
             "candidateReclamationState)",
             "AsyncCandidateServiceReservationAvailableIn(candidateMarkedState)",
@@ -96411,6 +99007,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalActiveCommitCertificateRequestReachesDecision": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalProtectedServiceRankLeafProperties( "
             "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalCommitCertificateConcreteLeafProperties( "
@@ -96433,6 +99031,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalProtectedServiceRankLeafProperties( "
             "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalDecisionFrontierAvailabilityProperty( "
@@ -96458,6 +99058,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalRecoveryTargetDecisionFromExactCorridor": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
             "AsyncSpecAt(initialContext)) "
             "=> HistoricalRecoveryTargetDecisionProgressProperty( "
@@ -96471,6 +99073,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "ResponsiveDecisionApplicationFromExactCorridor": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
             "AsyncSpecAt(initialContext)) "
             "=> ResponsiveDecisionApplicationProgressProperty( "
@@ -96484,6 +99088,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
             "AsyncSpecAt(initialContext)) "
             "=> HistoricalRecoveryAsyncTemporalPrerequisites( "
@@ -98848,9 +101454,10 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "server \\in IndexedAsync(initialContext)! AsyncCurrentResponsiveVoters",
                 "server \\in IndexedCore(initialContext, 6)",
                 "server \\in joinedByContext[initialContext]",
+                "server \\in source.qc.signers",
                 "BodyHeldBy(IndexedCore(initialContext, 9), server,",
             ),
-            forbidden=("VotingRoster", "source.qc.signers"),
+            forbidden=("VotingRoster",),
         )
         require_chain_operator(
             "IndexedHistoricalRecoveryReady",
@@ -101001,10 +103608,10 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748"
     ),
     "scripts/normalize_sumeragi_v2_tlc_trace.py": (
-        "5a1b24ac957dc95e3b81e9061f456d22133ba965ae2c64d176dc563f8230dfe3"
+        "e21f876507ce5152a8e64a07cfcff235bc9709d294800f77130e819deccd3537"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "3d1e6a4c22b6202d79af2e337817484d66e676fddf86c83ec8a0cc1a3d875c83"
+        "f9db394da086d89622c1459a7dd497c495b52774acacb1b498c1dd3efd60769e"
     ),
     "crates/iroha_sumeragi_core/tests/model_trace_replay.rs": (
         "87305ef2c045f815b18d9bac556285fe15813b4b3ff801f3c1f19c7272a55349"
@@ -101213,6 +103820,11 @@ def _replay_trace_source_fidelity_errors(
 
     normalizer_relative = "scripts/normalize_sumeragi_v2_tlc_trace.py"
     for fragment, description in (
+        ("from typing import Union\n", "the Python 3.9-compatible union import"),
+        (
+            "Scalar = Union[int, str]\n",
+            "the Python 3.9-compatible scalar alias",
+        ),
         ("REPLAY_ACTIONS = frozenset(\n", "the closed replay-action vocabulary"),
         (
             'if actions[-1].action != "PersistDecision":\n',
@@ -101228,6 +103840,14 @@ def _replay_trace_source_fidelity_errors(
         ),
     ):
         require_once(normalizer_relative, fragment, description)
+    normalizer_source = sources.get(normalizer_relative)
+    if normalizer_source is not None:
+        for forbidden in ("from typing import TypeAlias", "Scalar: TypeAlias"):
+            if forbidden in normalizer_source:
+                errors.append(
+                    f"{repo_root / normalizer_relative}: replay normalizer "
+                    "must remain importable by the supported Python 3.9 runtime"
+                )
 
     model_relative = "crates/iroha_sumeragi_core/tests/model_trace_replay.rs"
     for fragment, description in (
@@ -101264,8 +103884,18 @@ def _replay_trace_source_fidelity_errors(
             "the normalizer path",
         ),
         (
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"\n',
+            "the shared TLC result-contract import",
+        ),
+        (
             'if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then\n',
             "the intentional TLC violation-status check",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_regular_log '
+            '"replay-decision-witness" "$tlc_log"\n',
+            "the fresh regular witness-log assertion",
         ),
         (
             'python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" '
@@ -101287,21 +103917,24 @@ def _replay_trace_source_fidelity_errors(
     replay_source = sources.get(replay_relative)
     if replay_source is not None:
         ordered_fragments = (
+            replay_fragments[3][0],
             "tlc2.TLC",
             "tlc_status=$?",
-            replay_fragments[3][0],
             replay_fragments[4][0],
             replay_fragments[5][0],
             replay_fragments[6][0],
+            replay_fragments[7][0],
+            replay_fragments[8][0],
         )
         positions = [replay_source.find(fragment) for fragment in ordered_fragments]
         if any(position < 0 for position in positions) or positions != sorted(
             positions
         ):
             errors.append(
-                f"{repo_root / replay_relative}: replay gate must order TLC, "
-                "status validation, normalization, exact comparison, and "
-                "production dispatch"
+                f"{repo_root / replay_relative}: replay gate must order the "
+                "shared result contract, TLC, status and regular-log "
+                "validation, normalization, exact comparison, and production "
+                "dispatch"
             )
 
     harness_relative = "scripts/formal/run_sumeragi_v2_harness.sh"
@@ -101413,7 +104046,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
 
 _READINESS_TOOL_SOURCE_SHA256 = {
     "ci/check_sumeragi_formal.sh": (
-        "bdce15f99bf1b1db9842d243a0b16df46602e1f20bb8d6c1800fde2ed3b37230"
+        "0d161a86c9e4b80b6c87001b724c95bbaeb380e055194560c6fa619955d31ab8"
     ),
     "scripts/formal/check_sumeragi_v2_begin_timeout_ready_contract.py": (
         "70676b4b572c1b6cbd420ffbcc3f638a151fa3cb60d094d52c27556e6cfee4da"

@@ -1233,6 +1233,23 @@ pub(crate) trait V2EffectServices {
     /// Adapter-specific failure type.
     type Error: fmt::Display;
 
+    /// Fence exact Serve admission immediately before one runtime WAL step.
+    ///
+    /// Implementations publish this marker under the same lock which allocates
+    /// Serve ingress and lifecycle ordinals. While it is present, raw exact
+    /// admission returns bounded backpressure before touching any ordinal.
+    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error>;
+
+    /// Publish the durable Decision observed after the fenced runtime step.
+    ///
+    /// `decided_subject` is `None` when the step did not install a Decision.
+    /// A subject is monotone for the height, and the fence is cleared in the
+    /// same queue-lock transaction which publishes it.
+    fn finish_decision_serve_reconciliation(
+        &mut self,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), Self::Error>;
+
     /// Retire one exact receiver-side leader-wire lifecycle after the runtime
     /// retained all of its causal successor ownership. A volatile terminal is
     /// process-local and reopens after crash; a producer terminal is backed by
@@ -4420,6 +4437,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
+        if let Err(error) = services.begin_decision_serve_reconciliation() {
+            drop(wal_step);
+            return Err(self.close(service_error(error), services));
+        }
         let step = match self.runtime.step_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -4435,6 +4456,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // before invoking any service callback so service operations acquire
         // their own non-nested guard boundary.
         wal_step.complete();
+        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
         match step {
             RuntimeStep::Idle => {
                 if let Err(error) = self.publish_status(services) {
@@ -4490,6 +4514,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
+        if let Err(error) = services.begin_decision_serve_reconciliation() {
+            drop(wal_step);
+            return Err(self.close(service_error(error), services));
+        }
         let step = match self.runtime.step_recovery_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -4502,6 +4530,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(EffectExecutorError::Runtime(reason), services));
         }
         wal_step.complete();
+        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
         match step {
             RuntimeStep::Idle => {
                 self.pending_tip_recovery_last_result =
@@ -8298,6 +8329,36 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(decision)
     }
 
+    fn finish_decision_serve_reconciliation<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        let decided_subject = match self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)?
+        {
+            Some((decision_round, proposal_round, decision_subject, _)) => {
+                if decision_round.context_id != self.context.id()
+                    || decision_round.height != self.context.height
+                    || proposal_round.context_id != self.context.id()
+                    || proposal_round.height != self.context.height
+                    || proposal_round != decision_round
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "post-step durable Decision is outside the frozen height context"
+                            .to_owned(),
+                    ));
+                }
+                Some(decision_subject)
+            }
+            None => None,
+        };
+        services
+            .finish_decision_serve_reconciliation(decided_subject)
+            .map_err(service_error)
+    }
+
     /// Reconcile volatile ownership immediately after the reducer installs a
     /// durable Decision, before dispatching the Decision's body-recovery
     /// effect. The exact decided pipeline remains live until Apply begins;
@@ -10449,6 +10510,8 @@ mod tests {
         operation_calls: BTreeMap<&'static str, usize>,
         validation_error: Option<String>,
         leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
+        decision_serve_reconciliation_pending: bool,
+        durable_serve_decision: Option<wire::BlockSubject>,
     }
 
     impl FakeServices {
@@ -10506,6 +10569,42 @@ mod tests {
 
     impl V2EffectServices for FakeServices {
         type Error = String;
+
+        fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
+            self.check("begin-decision-serve-reconciliation")?;
+            if self.decision_serve_reconciliation_pending {
+                return Err("Decision/Serve reconciliation fence is already active".to_owned());
+            }
+            self.decision_serve_reconciliation_pending = true;
+            Ok(())
+        }
+
+        fn finish_decision_serve_reconciliation(
+            &mut self,
+            decided_subject: Option<wire::BlockSubject>,
+        ) -> Result<(), Self::Error> {
+            self.check("finish-decision-serve-reconciliation")?;
+            if !self.decision_serve_reconciliation_pending {
+                return Err("Decision/Serve reconciliation fence is not active".to_owned());
+            }
+            match (self.durable_serve_decision, decided_subject) {
+                (Some(retained), Some(observed)) if retained != observed => {
+                    return Err(
+                        "one height published two durable Serve Decision subjects".to_owned()
+                    );
+                }
+                (Some(_), None) => {
+                    return Err(
+                        "runtime lost its durable Decision while clearing the Serve admission fence"
+                            .to_owned(),
+                    );
+                }
+                (None, Some(observed)) => self.durable_serve_decision = Some(observed),
+                (Some(_), Some(_)) | (None, None) => {}
+            }
+            self.decision_serve_reconciliation_pending = false;
+            Ok(())
+        }
 
         fn complete_leader_wire_runtime_terminal(
             &mut self,
@@ -18596,6 +18695,8 @@ mod tests {
         assert_eq!(services.cancelled_fetches, vec![losing_id]);
         assert_eq!(services.retired_all_outbound, 1);
         assert_eq!(services.retired_candidate_work, 1);
+        assert_eq!(services.durable_serve_decision, Some(commit.subject));
+        assert!(!services.decision_serve_reconciliation_pending);
         assert!(!executor.status().fail_closed);
         assert!(services.closed.is_empty());
     }
@@ -18635,6 +18736,8 @@ mod tests {
         assert!(services.sign_tasks.is_empty());
         assert_eq!(services.retired_all_outbound, 1);
         assert_eq!(services.retired_candidate_work, 1);
+        assert_eq!(services.durable_serve_decision, Some(commit.subject));
+        assert!(!services.decision_serve_reconciliation_pending);
         assert!(!executor.status().fail_closed);
         assert!(services.closed.is_empty());
     }
@@ -22398,6 +22501,31 @@ mod tests {
     }
 
     #[test]
+    fn decision_serve_fence_rejects_durable_decision_loss_without_reopening() {
+        let fixture = Fixture::new();
+        let mut services = fixture.services();
+        let subject = fixture.manifest.subject;
+        services
+            .begin_decision_serve_reconciliation()
+            .expect("raise the initial Decision/Serve fence");
+        services
+            .finish_decision_serve_reconciliation(Some(subject))
+            .expect("publish the durable Serve Decision");
+        services
+            .begin_decision_serve_reconciliation()
+            .expect("raise the next runtime-step fence");
+        let error = services
+            .finish_decision_serve_reconciliation(None)
+            .expect_err("a durable Decision cannot disappear on a later runtime step");
+        assert!(error.contains("lost its durable Decision"));
+        assert_eq!(services.durable_serve_decision, Some(subject));
+        assert!(
+            services.decision_serve_reconciliation_pending,
+            "failed reconciliation keeps exact Serve admission fenced"
+        );
+    }
+
+    #[test]
     fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -22419,6 +22547,7 @@ mod tests {
         ));
         assert!(services.broadcasts.is_empty());
         assert!(services.statuses.is_empty());
+        assert!(services.decision_serve_reconciliation_pending);
         assert!(executor.output_guard.restart_required());
     }
 
@@ -22436,6 +22565,7 @@ mod tests {
                 if reason.contains("scheduler owner was invalid")
         ));
         assert!(services.statuses.is_empty());
+        assert!(services.decision_serve_reconciliation_pending);
         assert!(executor.output_guard.restart_required());
     }
 

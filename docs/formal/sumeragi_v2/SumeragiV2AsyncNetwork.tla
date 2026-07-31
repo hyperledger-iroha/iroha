@@ -3816,6 +3816,8 @@ CoalesceExactServeIngressCapacity(node, candidate) ==
      /\ candidate.item.kind \in AsyncReplyRequestKinds
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
      /\ AsyncServeLifecycleOwned(node, identity)
+     /\ \/ AsyncServeLifecycleTombstone(node, identity)
+        \/ AsyncServeJobQueued(node, identity)
      /\ asyncNextServeIngressOrdinal' =
           [asyncNextServeIngressOrdinal EXCEPT ![node] = @ + 1]
      /\ asyncServeIngressAdmissions' =
@@ -6570,10 +6572,60 @@ AsyncPersistInstallCommandsForNodeThisStep(node) ==
   {command \in AsyncPersistInstallCommandsThisStep:
      command.node = node}
 
+AsyncPersistDecisionCommandThisStep(command) ==
+  /\ command.kind = "PersistDecision"
+  /\ \E request \in pendingDecision:
+       /\ CommandMatches(
+            command, request.node, request.qc.view, request.qc.subject)
+       /\ PersistDecision(request)
+
+AsyncPersistDecisionCommandsThisStep ==
+  {command \in AsyncCandidateSet:
+     AsyncPersistDecisionCommandThisStep(command)}
+
+AsyncPersistDecisionCommandsForNodeThisStep(node) ==
+  {command \in AsyncPersistDecisionCommandsThisStep:
+     command.node = node}
+
+AsyncServePersistedDecisionHasCheckedDrainOwner(tombstone) ==
+  AsyncServeIngressAdmissionOwned(
+    tombstone.node, tombstone.identity)
+
+AsyncServeTombstoneAfterPersistedDecision(
+    tombstone, node, decidedSubject) ==
+  IF /\ tombstone.node = node
+        /\ tombstone.outcome = AsyncServeResponseOutcome
+        /\ ~AsyncServePersistedDecisionHasCheckedDrainOwner(tombstone)
+        /\ LET request ==
+                 AsyncServeRequestForIdentity(
+                   tombstone.node, tombstone.identity)
+           IN /\ request.kind = "CertifiedRequest"
+              /\ request.envelope.subject # decidedSubject
+  THEN AsyncServeTombstone(
+         tombstone.node, tombstone.identity,
+         tombstone.family, tombstone.view, tombstone.ordinal,
+         AsyncServeSupersededByDurableDecisionOutcome(decidedSubject), {})
+  ELSE tombstone
+
+AsyncServeTombstonesAfterPersistedDecision(node, decidedSubject) ==
+  {AsyncServeTombstoneAfterPersistedDecision(
+     tombstone, node, decidedSubject):
+     tombstone \in asyncServeTombstones}
+
+(***************************************************************************
+Compatibility name retained for the runtime wrappers and proof inventory.
+The transition still retires timeout lifecycles on PersistInstall, and now
+also performs the Serve-table half of the trusted PersistDecision
+linearization: cached incompatible Responses with no physical ingress owner
+become typed negatives under the same serialized runtime cut.  A pre-fence
+carrier retains its exact Response until the checked ingress close action
+independently classifies it against the new durable Decision.  The lifecycle
+partition already excludes a Response tombstone from coexisting with an
+unsealed reservation or queued Serve job.
+***************************************************************************)
 AsyncIoTimeoutLifecycleRetirementTransition(node) ==
-  IF AsyncPersistInstallCommandsForNodeThisStep(node) = {}
-  THEN UNCHANGED AsyncIoVars
-  ELSE LET command ==
+  IF AsyncPersistInstallCommandsForNodeThisStep(node) # {}
+  THEN LET command ==
              CHOOSE installed \in
                AsyncPersistInstallCommandsForNodeThisStep(node): TRUE
        IN /\ asyncIoQueues' =
@@ -6600,6 +6652,84 @@ AsyncIoTimeoutLifecycleRetirementTransition(node) ==
                          asyncServeAdmissions, asyncServeTombstones,
                          asyncNextCompletionSource,
                          asyncIoControlAvailable>>
+  ELSE IF AsyncPersistDecisionCommandsForNodeThisStep(node) # {}
+       THEN LET command ==
+                  CHOOSE persisted \in
+                    AsyncPersistDecisionCommandsForNodeThisStep(node): TRUE
+            IN /\ asyncServeTombstones' =
+                    AsyncServeTombstonesAfterPersistedDecision(
+                      node, command.subject)
+               /\ UNCHANGED
+                    <<asyncIoQueues, asyncNextServeAdmissionOrdinal,
+                      AsyncServeIngressAdmissionVars,
+                      asyncServeAdmissions, asyncServeReservations,
+                      asyncOutstandingWork, asyncIoReadyCompletions,
+                      asyncLocalReadyCompletions,
+                      asyncNextCompletionSource,
+                      asyncIoControlAvailable>>
+       ELSE UNCHANGED AsyncIoVars
+
+THEOREM PersistDecisionConvertsIncompatibleResponseBeforeRetryOrdinal ==
+  \A node \in ValidatorIds,
+     command \in AsyncPersistDecisionCommandsForNodeThisStep(node),
+     tombstone \in asyncServeTombstones:
+    LET request ==
+          AsyncServeRequestForIdentity(
+            tombstone.node, tombstone.identity)
+    IN /\ tombstone.node = node
+       /\ tombstone.outcome = AsyncServeResponseOutcome
+       /\ request.kind = "CertifiedRequest"
+       /\ request.envelope.subject # command.subject
+       /\ ~AsyncServePersistedDecisionHasCheckedDrainOwner(tombstone)
+       /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+       /\ AsyncIoTimeoutLifecycleRetirementTransition(node)
+       => /\ asyncNextServeAdmissionOrdinal'
+                = asyncNextServeAdmissionOrdinal
+          /\ asyncNextServeIngressOrdinal'
+                = asyncNextServeIngressOrdinal
+          /\ \E terminal \in asyncServeTombstones':
+               /\ terminal.node = node
+               /\ terminal.identity = tombstone.identity
+               /\ terminal.outcome
+                    = AsyncServeSupersededByDurableDecisionOutcome(
+                        command.subject)
+               /\ terminal.outputs = {}
+BY Isa
+   DEF AsyncIoTimeoutLifecycleRetirementTransition,
+       AsyncServeTombstonesAfterPersistedDecision,
+       AsyncServeTombstoneAfterPersistedDecision,
+       AsyncServePersistedDecisionHasCheckedDrainOwner
+
+THEOREM PersistDecisionPreservesPreFenceResponseUntilCheckedDrain ==
+  \A node \in ValidatorIds,
+     command \in AsyncPersistDecisionCommandsForNodeThisStep(node),
+     tombstone \in asyncServeTombstones:
+    LET request ==
+          AsyncServeRequestForIdentity(
+            tombstone.node, tombstone.identity)
+    IN /\ tombstone.node = node
+       /\ tombstone.outcome = AsyncServeResponseOutcome
+       /\ request.kind = "CertifiedRequest"
+       /\ request.envelope.subject # command.subject
+       /\ AsyncServeIngressAdmissionOwned(
+            tombstone.node, tombstone.identity)
+       /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+       /\ AsyncIoTimeoutLifecycleRetirementTransition(node)
+       => /\ tombstone \in asyncServeTombstones'
+          /\ AsyncServeIngressAdmissionRecords(
+               tombstone.node, tombstone.identity)'
+               = AsyncServeIngressAdmissionRecords(
+                   tombstone.node, tombstone.identity)
+          /\ asyncNextServeAdmissionOrdinal'
+               = asyncNextServeAdmissionOrdinal
+          /\ asyncNextServeIngressOrdinal'
+               = asyncNextServeIngressOrdinal
+BY Isa
+   DEF AsyncIoTimeoutLifecycleRetirementTransition,
+       AsyncServeTombstonesAfterPersistedDecision,
+       AsyncServeTombstoneAfterPersistedDecision,
+       AsyncServePersistedDecisionHasCheckedDrainOwner,
+       AsyncServeIngressAdmissionRecords
 
 AsyncOlderOrEqualTimeoutLifecycleOwned(
     node, currentContext, roundView) ==
@@ -8916,6 +9046,12 @@ AsyncServeRequestQueueServiceable(node, item) ==
        = AsyncServeResponseOutcome
   /\ AsyncServeRequestServiceable(node, item)
 
+AsyncServeRequestQueueClosable(node, item) ==
+  LET outcome == AsyncServeReconstructedTerminalOutcome(node, item)
+  IN IF outcome = AsyncServeResponseOutcome
+     THEN AsyncServeRequestServiceable(node, item)
+     ELSE TRUE
+
 AsyncServeLifecycleAdmissionRequired(node, item) ==
   AsyncServeRawLifecycleAdmissionAuthorized(item)
 
@@ -8989,7 +9125,8 @@ ExactServeTransportAdmissionCanAdvance(node, request) ==
       family == AsyncServeLifecycleFamily(node, request)
       roundView == AsyncServeRequestView(request)
   IN IF AsyncServeLifecycleOwned(node, identity)
-     THEN TRUE
+     THEN \/ AsyncServeLifecycleTombstone(node, identity)
+          \/ AsyncServeJobQueued(node, identity)
      ELSE IF AsyncServeLifecycleSuperseded(node, request)
           THEN TRUE
      ELSE IF AsyncServeLifecycleConflict(node, request)
@@ -9434,6 +9571,52 @@ BY Isa
    DEF DropPolicyRejectedHiddenPacket, AsyncIoVars,
        AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars,
        AsyncNextCandidateLifecycleOrdinal
+
+THEOREM NonAdvancingServeFamilyRetryConsumesNoFreshOrdinal ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    LET packet == OldestDueSourcePacket(recipient, source)
+        item == packet.item
+    IN /\ AsyncServeNonAdvancingFamilyRetry(item)
+       /\ DropPolicyRejectedHiddenPacket(recipient, source)
+       => /\ packet \notin asyncTransport'
+          /\ asyncNextServeAdmissionOrdinal'
+               = asyncNextServeAdmissionOrdinal
+          /\ asyncNextServeIngressOrdinal'
+               = asyncNextServeIngressOrdinal
+          /\ AsyncNextCandidateLifecycleOrdinal(recipient)'
+               = AsyncNextCandidateLifecycleOrdinal(recipient)
+BY Isa
+   DEF DropPolicyRejectedHiddenPacket,
+       AsyncNextCandidateLifecycleOrdinal
+
+THEOREM SupersededResponseRetryConvertsBeforeFreshOrdinal ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    LET packet == OldestDueSourcePacket(recipient, source)
+        item == packet.item
+        identity ==
+          AsyncServeLogicalRequestIdentity(recipient, item)
+    IN /\ AsyncServeResponseTombstoneNowSuperseded(item)
+       /\ item.envelope.recipient = recipient
+       /\ DropPolicyRejectedHiddenPacket(recipient, source)
+       => /\ packet \notin asyncTransport'
+          /\ asyncNextServeAdmissionOrdinal'
+               = asyncNextServeAdmissionOrdinal
+          /\ asyncNextServeIngressOrdinal'
+               = asyncNextServeIngressOrdinal
+          /\ \E terminal \in asyncServeTombstones':
+               /\ terminal.node = recipient
+               /\ terminal.identity = identity
+               /\ terminal.outcome.kind
+                    = "SupersededByDurableDecision"
+BY Isa
+   DEF DropPolicyRejectedHiddenPacket,
+       AsyncServeTombstonesAfterPolicyRejectedItem,
+       AsyncServeResponseTombstoneNowSuperseded,
+       AsyncServeRestartTombstoneAfterRevalidation,
+       AsyncServeTombstoneOutcome,
+       AsyncServeTombstoneRecord,
+       AsyncServeTombstoneRecords,
+       AsyncServeLifecycleTombstone
 
 DropExactActiveLeaderWireRetry(recipient, source) ==
   LET packet == OldestDueSourcePacket(recipient, source)
@@ -10406,6 +10589,14 @@ AsyncServeInterruptedTipTerminalOwned(node, item) ==
   /\ AsyncServeLifecycleAdmissionRequired(node, item)
   /\ AsyncServeLifecycleTombstone(
        node, AsyncServeLogicalRequestIdentity(node, item))
+  /\ AsyncServeTombstoneOutcome(
+       node, AsyncServeLogicalRequestIdentity(node, item))
+       = AsyncServeResponseOutcome
+
+AsyncServeInterruptedTipLifecycleClassified(node, item) ==
+  \/ ~AsyncServeLifecycleAdmissionRequired(node, item)
+  \/ AsyncServeInterruptedTipUnsealedAdmissionOwned(node, item)
+  \/ AsyncServeInterruptedTipTerminalOwned(node, item)
 
 AsyncServeReservationsAfterInterruptedTipDrain(node, item) ==
   IF AsyncServeInterruptedTipUnsealedAdmissionOwned(node, item)
@@ -10464,6 +10655,7 @@ DrainInterruptedTipRecoveryIngressSelected(node) ==
      /\ asyncIngressReady[node] # <<>>
      /\ DrainableIngressIndices(node) # {}
      /\ AsyncLeaderWireDrainOutcomeDefined(item)
+     /\ AsyncServeInterruptedTipLifecycleClassified(node, item)
      /\ (AsyncServeInterruptedTipUnsealedAdmissionOwned(node, item)
            => AsyncServeStartupAdmissionDischargeReady(
                 AsyncServeAdmissionRecord(node, identity)))
@@ -11096,9 +11288,16 @@ SelectedLocalAdmissionAdvance(node) ==
 
 ServiceIoWorkerWork(node) ==
   LET job == Head(asyncIoQueues[node])
+      serveOutcome ==
+        IF job.class = "Serve"
+        THEN AsyncServeReconstructedTerminalOutcome(
+               node, job.candidate.item)
+        ELSE AsyncServeResponseOutcome
       responseItems ==
         IF job.class # "Serve"
         THEN {}
+        ELSE IF serveOutcome # AsyncServeResponseOutcome
+             THEN {}
         ELSE IF CertifiedServeCanRespond(node, job.candidate.item)
              THEN {CertifiedResponseItem(
                      AsyncUntrustedSource, node, job.candidate.item)}
@@ -11110,17 +11309,22 @@ ServiceIoWorkerWork(node) ==
         THEN AsyncIoServeJobIdentity(node, job)
         ELSE NoAsyncItem
       completedIdentity ==
-        IF job.class = "Serve" /\ responseItems # {}
+        IF job.class = "Serve"
         THEN serveIdentity
         ELSE NoAsyncItem
   IN /\ node \in AsyncActiveServiceNodes
      /\ node \in up
      /\ ResponsiveReplayExecutorAllowed(node)
      /\ AsyncIoQueueDepth(node) > 0
-     \* A reserved Serve is admitted only for a durable retention owner.
-     \* Missing output is therefore a broken local retention contract and
-     \* fail-stops this worker action instead of recreating the request.
-     /\ (job.class = "Serve" => responseItems # {})
+     \* Durable Decision publication and this completion share the exact
+     \* Serve lifecycle linearization.  A newly incompatible Decision wins:
+     \* the job seals its typed negative and emits no stale response.  When
+     \* the independently reconstructed outcome is still Response, missing
+     \* canonical output remains a broken local-retention contract and
+     \* fail-stops instead of recreating the request.
+     /\ (job.class = "Serve"
+           => (serveOutcome = AsyncServeResponseOutcome
+                 => responseItems # {}))
      /\ asyncIoQueues' =
           [asyncIoQueues EXCEPT ![node] = Tail(@)]
      /\ asyncServeReservations' =
@@ -11142,7 +11346,7 @@ ServiceIoWorkerWork(node) ==
                             node, completedIdentity,
                             reservation.family, reservation.view,
                             reservation.ordinal,
-                            AsyncServeResponseOutcome,
+                            serveOutcome,
                             responseItems)}
           ELSE asyncServeTombstones
      /\ UNCHANGED asyncNextServeAdmissionOrdinal
@@ -11175,6 +11379,32 @@ ServiceIoWorkerWork(node) ==
                     asyncRetransmitDeadlines,
                     asyncIngressLanes, asyncIngressReady,
                     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+
+THEOREM ServeWorkerDecisionSupersessionClosesWithoutStaleResponse ==
+  \A node \in ValidatorIds:
+    LET job == Head(asyncIoQueues[node])
+        identity == AsyncIoServeJobIdentity(node, job)
+    IN /\ job.class = "Serve"
+       /\ AsyncServeReconstructedTerminalOutcome(
+            node, job.candidate.item).kind
+              = "SupersededByDurableDecision"
+       /\ ServiceIoWorkerWork(node)
+       => /\ AsyncServeAdmissionRecords(node, identity)' = {}
+          /\ AsyncServeReservationRecords(node, identity)' = {}
+          /\ \E terminal \in asyncServeTombstones':
+               /\ terminal.node = node
+               /\ terminal.identity = identity
+               /\ terminal.outcome.kind
+                    = "SupersededByDurableDecision"
+               /\ terminal.outputs = {}
+BY Isa
+   DEF ServiceIoWorkerWork,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeReservationsWithoutFrom,
+       AsyncServeAdmissionsWithout,
+       AsyncServeTombstonesWithoutFamily,
+       AsyncServeAdmissionRecords,
+       AsyncServeReservationRecords
 
 ServiceIoWorker(node) ==
   /\ node \in AsyncArchiveIoServiceNodes
@@ -12736,16 +12966,23 @@ Same-height restart reconstruction.
 
 Physical ingress occurrences and I/O jobs are volatile, but a startup may not
 expose any queue, producer, or selector while an unsealed Serve lifecycle
-remains.  The production startup loop visits the immutable retained waiter
-ordinal first and the lifecycle admission ordinal second.  For each exact
-request it independently rechecks the frozen QC, the local QC-signer role,
-the durable Decision subject, and canonical retained body.  It then persists
-exactly one typed terminal: Response, InvalidCertificate,
+or persisted terminal-replay waiter remains.  The production startup loop
+visits the union of retained waiter records and unsealed admissions in
+immutable waiter-scheduler/lifecycle order.  For each exact request it
+independently rechecks the frozen QC, the local QC-signer role, the durable
+Decision subject, and canonical retained body.  An unsealed admission
+persists exactly one typed terminal: Response, InvalidCertificate,
 LocalRetentionAuthorityAbsent, or SupersededByDurableDecision.  The compact
 model performs that finite ordered loop atomically in
 `ResetNodeSchedulerForRestart`; the ordering keys below are proof-visible and
 the post-state contains no local ingress waiter, reservation, or unsealed
-admission.
+admission.  A terminal replay waiter must exactly cite a reconstructible
+Response tombstone; startup either retains it, converts it to a Decision
+negative, and removes the waiter, or fails closed on orphan/negative/corrupt
+state.  No startup path waits for requester retransmission.  Exact terminal
+replay and Decision conversion emit no fresh signature; an unsealed,
+serviceable admission is reconstructed and signed once before its Response is
+sealed.
 
 Monotone ordinals survive, but a
 Terminal leader-wire record survives only when production can reconstruct
@@ -12776,6 +13013,49 @@ AsyncServeStartupAdmissionWaiterRecords(admission) ==
      /\ waiter.identity = admission.identity
      /\ waiter.lifecycleOrdinal = admission.ordinal}
 
+AsyncServeStartupWaiterAdmissionRecords(waiter) ==
+  {admission \in asyncServeAdmissions:
+     /\ admission.node = waiter.node
+     /\ admission.identity = waiter.identity
+     /\ admission.ordinal = waiter.lifecycleOrdinal}
+
+AsyncServeStartupWaiterTombstoneRecords(waiter) ==
+  {tombstone \in asyncServeTombstones:
+     /\ tombstone.node = waiter.node
+     /\ tombstone.identity = waiter.identity
+     /\ tombstone.ordinal = waiter.lifecycleOrdinal}
+
+AsyncServeStartupWaiterOwnsUnsealedAdmission(waiter) ==
+  Cardinality(
+    AsyncServeStartupWaiterAdmissionRecords(waiter)) = 1
+
+AsyncServeStartupWaiterOwnsTerminalReplay(waiter) ==
+  Cardinality(
+    AsyncServeStartupWaiterTombstoneRecords(waiter)) = 1
+
+AsyncServeStartupTerminalWaiterDischargeReady(waiter) ==
+  /\ AsyncServeStartupWaiterOwnsTerminalReplay(waiter)
+  /\ ~AsyncServeStartupWaiterOwnsUnsealedAdmission(waiter)
+  /\ LET tombstone ==
+           CHOOSE terminal \in
+             AsyncServeStartupWaiterTombstoneRecords(waiter): TRUE
+     IN \* Negative retries are rejected before ingress reservation.  A
+        \* persisted terminal waiter must therefore cite a Response cache;
+        \* an orphan, negative, or mismatched waiter is corrupt startup state.
+        /\ tombstone.outcome = AsyncServeResponseOutcome
+        /\ tombstone.family
+             \notin AsyncServeRestartAdmissionFamilies(waiter.node)
+        /\ AsyncServeRestartExistingTombstoneValid(
+             tombstone, waiter.node)
+
+AsyncServeStartupWaiterDischargeReady(waiter) ==
+  IF AsyncServeStartupWaiterOwnsUnsealedAdmission(waiter)
+  THEN /\ ~AsyncServeStartupWaiterOwnsTerminalReplay(waiter)
+       /\ AsyncServeStartupAdmissionDischargeReady(
+            CHOOSE admission \in
+              AsyncServeStartupWaiterAdmissionRecords(waiter): TRUE)
+  ELSE AsyncServeStartupTerminalWaiterDischargeReady(waiter)
+
 AsyncServeStartupDischargeSchedulerOrdinal(admission) ==
   LET waiters == AsyncServeStartupAdmissionWaiterRecords(admission)
   IN IF waiters # {}
@@ -12794,6 +13074,18 @@ AsyncServeStartupDischargePrecedes(left, right) ==
   \/ /\ AsyncServeStartupDischargeKey(left).schedulerOrdinal
           = AsyncServeStartupDischargeKey(right).schedulerOrdinal
      /\ left.ordinal < right.ordinal
+
+AsyncServeStartupTerminalWaiterDischargeKey(waiter) ==
+  [schedulerOrdinal |-> waiter.schedulerOrdinal,
+   lifecycleOrdinal |-> waiter.lifecycleOrdinal]
+
+AsyncServeStartupWaiterDischargeKeysUnique(node) ==
+  \A left, right \in asyncServeIngressAdmissions:
+    /\ left.node = node
+    /\ right.node = node
+    /\ AsyncServeStartupTerminalWaiterDischargeKey(left)
+         = AsyncServeStartupTerminalWaiterDischargeKey(right)
+    => left = right
 
 AsyncServeStartupAdmissionDischargeReady(admission) ==
   LET requests ==
@@ -12912,6 +13204,10 @@ AsyncServeReservationsAfterRestart(node) ==
 
 AsyncServeStartupDischargeReady(node) ==
   /\ AsyncServeRestartLocalAdmissionsFamilyUnique(node)
+  /\ AsyncServeStartupWaiterDischargeKeysUnique(node)
+  /\ \A waiter \in asyncServeIngressAdmissions:
+       waiter.node = node
+         => AsyncServeStartupWaiterDischargeReady(waiter)
   /\ \A admission \in asyncServeAdmissions:
        admission.node = node
          => AsyncServeStartupAdmissionDischargeReady(admission)
@@ -13124,6 +13420,31 @@ BY Isa
        AsyncServeRestartRecoveredTombstones,
        AsyncServeRestartRetainedExistingTombstones,
        AsyncServeRestartTombstoneAfterRevalidation
+
+THEOREM SameHeightRestartDischargesTerminalReplayWaiter ==
+  \A node, replay, waiter \in asyncServeIngressAdmissions:
+    /\ waiter.node = node
+    /\ AsyncServeStartupWaiterOwnsTerminalReplay(waiter)
+    /\ ResetNodeSchedulerForRestart(node, replay)
+    => /\ AsyncServeIngressAdmissionRecords(
+             node, waiter.identity)' = {}
+       /\ \E terminal \in asyncServeTombstones':
+            /\ terminal.node = node
+            /\ terminal.identity = waiter.identity
+            /\ terminal.ordinal = waiter.lifecycleOrdinal
+            /\ \/ terminal.outcome = AsyncServeResponseOutcome
+               \/ terminal.outcome.kind
+                    = "SupersededByDurableDecision"
+BY Isa
+   DEF ResetNodeSchedulerForRestart,
+       AsyncServeIngressAdmissionsAfterRestart,
+       AsyncServeIngressAdmissionsWithoutNode,
+       AsyncServeRestartRecoveredTombstones,
+       AsyncServeRestartRetainedExistingTombstones,
+       AsyncServeRestartTombstoneAfterRevalidation,
+       AsyncServeStartupWaiterOwnsTerminalReplay,
+       AsyncServeStartupWaiterTombstoneRecords,
+       AsyncServeIngressAdmissionRecords
 
 THEOREM SameHeightRestartDischargesEveryLocalServeLifecycle ==
   \A node, replay:
@@ -21922,7 +22243,11 @@ AsyncServeServiceabilityInvariant ==
                     AsyncServeLogicalRequestIdentity(node, item)))
                 => AsyncServeRawLifecycleAdmissionAuthorized(item)
     /\ \A index \in AsyncIoServeIndices(asyncIoQueues[node]):
-         AsyncServeRequestQueueServiceable(
+         \* Durable Decision may make an already-queued exact request
+         \* negative.  That is locally closable debt, not a loss of
+         \* serviceability: the worker seals the typed negative before it can
+         \* publish a response.
+         AsyncServeRequestQueueClosable(
            node, asyncIoQueues[node][index].candidate.item)
 
 AsyncServeOrdinalInvariant ==
