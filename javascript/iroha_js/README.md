@@ -3056,6 +3056,32 @@ builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 and Halo2 proofs stay canonical across SDKs. See `index.d.ts` for the
 full set of confidential input shapes.
 
+### Native-independent Exact12 fixture codec
+
+`noritoDecodePrivacyExact12FixtureBundleBase64V1` reads the checked
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64` archive without
+loading `iroha_js_host`. The input must be exact canonical standard base64: no
+whitespace, URL-safe alphabet, omitted padding, or alternate spelling is
+accepted. The raw-byte companion
+`noritoDecodePrivacyExact12FixtureBundleV1` enforces the 2 MiB archive bound,
+canonical schema/header/layout, version 1, all twelve protocol rows in frozen
+discriminant order, and the byte-complete statement, envelope, submission,
+intent, unsigned-payload, signed-transaction, and transaction-hash bindings.
+
+```js
+import {
+  noritoDecodePrivacyExact12FixtureBundleBase64V1,
+  noritoEncodePrivacyExact12FixtureBundleV1,
+} from "@iroha/iroha-js";
+
+const bundle = noritoDecodePrivacyExact12FixtureBundleBase64V1(checkedBase64);
+const canonicalArchive = noritoEncodePrivacyExact12FixtureBundleV1(bundle);
+```
+
+Re-encoding a decoded checked bundle is byte-identical. Unknown fields,
+aliases, reordered or substituted protocol rows, malformed declared lengths,
+truncation, and trailing bytes fail closed.
+
 Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Typed
 helpers normalise casing and payload layouts so tests and automation can inspect
 registry state without manual parsing:

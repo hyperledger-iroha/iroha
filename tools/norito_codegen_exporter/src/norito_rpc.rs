@@ -1351,45 +1351,6 @@ impl Manifest {
         }
         Ok(())
     }
-
-    fn as_map(&self) -> BTreeMap<&str, FixtureComparable<'_>> {
-        self.fixtures
-            .iter()
-            .map(|fixture| {
-                (
-                    fixture.name.as_str(),
-                    FixtureComparable::from_entry(fixture),
-                )
-            })
-            .collect()
-    }
-
-    fn compare_with(&self, canonical: &Manifest) -> Result<()> {
-        let expected = canonical.as_map();
-        let actual = self.as_map();
-
-        let mut issues = Vec::new();
-
-        for name in actual.keys() {
-            if !expected.contains_key(name) {
-                issues.push(format!("unexpected fixture '{name}'"));
-            }
-        }
-
-        for (name, actual_entry) in &actual {
-            if let Some(canonical_entry) = expected.get(name)
-                && actual_entry != canonical_entry
-            {
-                issues.push(format!("fixture '{name}' differs from canonical"));
-            }
-        }
-
-        if issues.is_empty() {
-            Ok(())
-        } else {
-            Err(eyre!(issues.join("; ")))
-        }
-    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -1634,41 +1595,6 @@ fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct FixtureComparable<'a> {
-    authority: &'a str,
-    chain: &'a str,
-    creation_time_ms: u64,
-    encoded_file: &'a str,
-    encoded_len: u64,
-    signed_len: u64,
-    payload_base64: &'a str,
-    signed_base64: &'a str,
-    payload_hash: &'a str,
-    signed_hash: &'a str,
-    nonce: Option<u32>,
-    time_to_live_ms: u64,
-}
-
-impl<'a> FixtureComparable<'a> {
-    fn from_entry(entry: &'a FixtureEntry) -> Self {
-        Self {
-            authority: &entry.authority,
-            chain: &entry.chain,
-            creation_time_ms: entry.creation_time_ms,
-            encoded_file: &entry.encoded_file,
-            encoded_len: entry.encoded_len,
-            signed_len: entry.signed_len,
-            payload_base64: &entry.payload_base64,
-            signed_base64: &entry.signed_base64,
-            payload_hash: &entry.payload_hash,
-            signed_hash: &entry.signed_hash,
-            nonce: entry.nonce,
-            time_to_live_ms: entry.time_to_live_ms,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1759,7 +1685,6 @@ mod tests {
         assert!(err.to_string().contains("at least one item"));
     }
 
-    #[test]
     #[test]
     fn signed_hash_uses_compact_external_entrypoint_domain() {
         let keypair = signing_keypair().expect("fixture signing key");
@@ -1856,7 +1781,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn manifest_validation_rejects_duplicate_fixture_names() {
         let manifest = Manifest {
             fixtures: vec![fixture("alpha"), fixture("alpha")],
@@ -1926,55 +1850,6 @@ mod tests {
                 "unexpected error for {malformed:?}: {err}"
             );
         }
-    }
-
-    #[test]
-    fn compare_with_allows_subset() {
-        let canonical = Manifest {
-            fixtures: vec![fixture("alpha"), fixture("beta")],
-        };
-        let subset = Manifest {
-            fixtures: vec![fixture("alpha")],
-        };
-        subset
-            .compare_with(&canonical)
-            .expect("subset manifests should compare cleanly");
-    }
-
-    #[test]
-    fn compare_with_rejects_unexpected_entries() {
-        let canonical = Manifest {
-            fixtures: vec![fixture("alpha")],
-        };
-        let extra = Manifest {
-            fixtures: vec![fixture("alpha"), fixture("gamma")],
-        };
-        let err = extra
-            .compare_with(&canonical)
-            .expect_err("extra fixtures should fail comparison");
-        assert!(
-            err.to_string().contains("unexpected fixture 'gamma'"),
-            "error should mention unexpected fixture: {err}"
-        );
-    }
-
-    #[test]
-    fn compare_with_rejects_creation_time_drift() {
-        let canonical = Manifest {
-            fixtures: vec![fixture("alpha")],
-        };
-        let mut drift_entry = fixture("alpha");
-        drift_entry.creation_time_ms += 1;
-        let drift = Manifest {
-            fixtures: vec![drift_entry],
-        };
-        let err = drift
-            .compare_with(&canonical)
-            .expect_err("creation_time_ms drift should fail comparison");
-        assert!(
-            err.to_string().contains("fixture 'alpha' differs"),
-            "error should mention fixture mismatch: {err}"
-        );
     }
 
     #[test]

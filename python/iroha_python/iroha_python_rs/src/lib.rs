@@ -125,8 +125,8 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
-        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
-        LaneRelayEnvelope, compute_settlement_hash,
+        LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -158,7 +158,10 @@ use iroha_data_model::{
         validate_privacy_capability_archive_v1, zk_ams_issuer_policy_record_digest_v1,
         zk_ams_registry_record_digest_v1,
     },
-    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    proof::{
+        ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
+        proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
+    },
     query::{
         CommittedTransaction, ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest,
         QueryResponse, QueryWithParams, SingularQueryBox,
@@ -212,7 +215,7 @@ use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
+    types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
@@ -1160,75 +1163,285 @@ fn parse_optional_root_hint(
     py_fixed_array::<32>(value, context).map(Some)
 }
 
-fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResult<ProofAttachment> {
+fn py_exact_dict<'value, 'py>(
+    value: &'value Bound<'py, PyAny>,
+    context: &str,
+    allowed_fields: &[&str],
+) -> PyResult<&'value Bound<'py, PyDict>> {
     let dict = value
         .cast::<PyDict>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a mapping")))?;
-    let backend_value = dict_get_alias(dict, &["backend", "proof_backend", "proofBackend"])?
-        .ok_or_else(|| PyValueError::new_err(format!("{context}.backend is required")))?;
-    let backend_text = py_text(&backend_value, &format!("{context}.backend"))?;
+    for (key, _) in dict.iter() {
+        let key = key.extract::<String>().map_err(|_| {
+            PyTypeError::new_err(format!("{context} field names must be strings"))
+        })?;
+        if !allowed_fields.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{context} contains unknown first-release field `{key}`"
+            )));
+        }
+    }
+    Ok(dict)
+}
+
+fn py_required_dict_field<'py>(
+    dict: &Bound<'py, PyDict>,
+    field: &str,
+    context: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    dict.get_item(field)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{field} is required")))
+}
+
+fn py_exact_bytes(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
+    let bytes = value
+        .cast::<PyBytes>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes")))?;
+    Ok(bytes.as_bytes().to_vec())
+}
+
+fn py_exact_fixed_bytes<const N: usize>(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<[u8; N]> {
+    fixed_array::<N>(&py_exact_bytes(value, context)?, context)
+}
+
+fn py_portable_verifier_id_field(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<String> {
+    let text = value
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a string")))?;
+    if !verifying_key_id_field_is_portable(&text) {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use the bounded portable verifier-key registry grammar"
+        )));
+    }
+    Ok(text)
+}
+
+fn py_exact_u16(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u16> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context} must be an unsigned 16-bit integer"
+        )));
+    }
+    value.extract::<u16>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{context} must be an unsigned 16-bit integer"
+        ))
+    })
+}
+
+fn py_exact_u32(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u32> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context} must be an unsigned 32-bit integer"
+        )));
+    }
+    value.extract::<u32>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{context} must be an unsigned 32-bit integer"
+        ))
+    })
+}
+
+fn parse_lane_privacy_proof_py(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<LanePrivacyProof> {
+    let lane = py_exact_dict(value, context, &["commitment_id", "witness"])?;
+    let commitment_id = py_exact_u16(
+        &py_required_dict_field(lane, "commitment_id", context)?,
+        &format!("{context}.commitment_id"),
+    )?;
+    let witness_value = py_required_dict_field(lane, "witness", context)?;
+    let witness = py_exact_dict(
+        &witness_value,
+        &format!("{context}.witness"),
+        &["kind", "payload"],
+    )?;
+    let kind = py_required_dict_field(witness, "kind", &format!("{context}.witness"))?
+        .extract::<String>()
+        .map_err(|_| {
+            PyTypeError::new_err(format!("{context}.witness.kind must be a string"))
+        })?;
+    if kind != "merkle" {
+        return Err(PyValueError::new_err(format!(
+            "{context}.witness.kind must be exactly `merkle`"
+        )));
+    }
+    let payload_value = py_required_dict_field(witness, "payload", &format!("{context}.witness"))?;
+    let payload = py_exact_dict(
+        &payload_value,
+        &format!("{context}.witness.payload"),
+        &["leaf", "proof"],
+    )?;
+    let leaf = py_exact_fixed_bytes::<32>(
+        &py_required_dict_field(payload, "leaf", &format!("{context}.witness.payload"))?,
+        &format!("{context}.witness.payload.leaf"),
+    )?;
+    let merkle_value =
+        py_required_dict_field(payload, "proof", &format!("{context}.witness.payload"))?;
+    let merkle = py_exact_dict(
+        &merkle_value,
+        &format!("{context}.witness.payload.proof"),
+        &["leaf_index", "audit_path"],
+    )?;
+    let leaf_index = py_exact_u32(
+        &py_required_dict_field(
+            merkle,
+            "leaf_index",
+            &format!("{context}.witness.payload.proof"),
+        )?,
+        &format!("{context}.witness.payload.proof.leaf_index"),
+    )?;
+    let path_value = py_required_dict_field(
+        merkle,
+        "audit_path",
+        &format!("{context}.witness.payload.proof"),
+    )?;
+    let path = path_value.cast::<PyList>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{context}.witness.payload.proof.audit_path must be a list"
+        ))
+    })?;
+    if path.is_empty() || path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+        return Err(PyValueError::new_err(format!(
+            "{context}.witness.payload.proof.audit_path must contain between 1 and {LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+        )));
+    }
+    let mut audit_path = Vec::with_capacity(path.len());
+    for (index, sibling) in path.iter().enumerate() {
+        if sibling.is_none() {
+            return Err(PyValueError::new_err(format!(
+                "{context}.witness.payload.proof.audit_path[{index}] must contain a sibling"
+            )));
+        }
+        audit_path.push(Some(py_exact_fixed_bytes::<32>(
+            &sibling,
+            &format!("{context}.witness.payload.proof.audit_path[{index}]"),
+        )?));
+    }
+    LanePrivacyProof::merkle_from_raw_path(
+        LaneCommitmentId::new(commitment_id),
+        leaf,
+        leaf_index,
+        audit_path,
+    )
+    .map_err(|error| PyValueError::new_err(format!("{context} {error}")))
+}
+
+fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResult<ProofAttachment> {
+    let dict = py_exact_dict(
+        value,
+        context,
+        &[
+            "backend",
+            "proof",
+            "vk_ref",
+            "vk_commitment",
+            "envelope_hash",
+            "lane_privacy",
+        ],
+    )?;
+    let backend_text = py_portable_verifier_id_field(
+        &py_required_dict_field(dict, "backend", context)?,
+        &format!("{context}.backend"),
+    )?;
     let backend = Ident::from_str(&backend_text).map_err(|err| {
         PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
     })?;
-    let proof_value = dict_get_alias(
-        dict,
-        &[
-            "proof_bytes",
-            "proofBytes",
-            "proof_b64",
-            "proofB64",
-            "proofBase64",
-            "proof",
-        ],
-    )?
-    .ok_or_else(|| PyValueError::new_err(format!("{context}.proof_bytes is required")))?;
-    let proof_bytes = py_bytes_or_base64(&proof_value, &format!("{context}.proof_bytes"))?;
-    if proof_bytes.is_empty() {
+
+    let proof_value = py_required_dict_field(dict, "proof", context)?;
+    let proof = py_exact_dict(
+        &proof_value,
+        &format!("{context}.proof"),
+        &["backend", "bytes"],
+    )?;
+    let proof_backend_text = py_portable_verifier_id_field(
+        &py_required_dict_field(proof, "backend", &format!("{context}.proof"))?,
+        &format!("{context}.proof.backend"),
+    )?;
+    if proof_backend_text != backend_text {
         return Err(PyValueError::new_err(format!(
-            "{context}.proof_bytes must be non-empty"
+            "{context}.proof.backend must match {context}.backend"
         )));
     }
-    let vk_value = dict_get_alias(
-        dict,
-        &[
-            "verifying_key_ref",
-            "verifyingKeyRef",
-            "vk_ref",
-            "vkRef",
-            "verifying_key",
-        ],
+    let proof_bytes = py_exact_bytes(
+        &py_required_dict_field(proof, "bytes", &format!("{context}.proof"))?,
+        &format!("{context}.proof.bytes"),
     )?;
-    let vk_ref =
-        parse_required_verifying_key_id_py(vk_value.as_ref(), &format!("{context}.vk_ref"))?;
-    if vk_ref.backend != backend {
+    if proof_bytes.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context}.proof.bytes must be non-empty"
+        )));
+    }
+    let maximum_proof_bytes = proof_box_max_proof_bytes_v1(&backend_text).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{context}.proof backend and canonical framing exceed the 64 MiB ProofBox limit"
+        ))
+    })?;
+    if proof_bytes.len() > maximum_proof_bytes {
+        return Err(PyValueError::new_err(format!(
+            "{context}.proof.bytes exceeds the {maximum_proof_bytes}-byte limit for this backend"
+        )));
+    }
+
+    let vk_value = py_required_dict_field(dict, "vk_ref", context)?;
+    let vk = py_exact_dict(
+        &vk_value,
+        &format!("{context}.vk_ref"),
+        &["backend", "name"],
+    )?;
+    let vk_backend_text = py_portable_verifier_id_field(
+        &py_required_dict_field(vk, "backend", &format!("{context}.vk_ref"))?,
+        &format!("{context}.vk_ref.backend"),
+    )?;
+    if vk_backend_text != backend_text {
         return Err(PyValueError::new_err(format!(
             "{context}.vk_ref.backend must match {context}.backend"
         )));
     }
-    let mut attachment =
-        ProofAttachment::new_ref(backend.clone(), ProofBox::new(backend, proof_bytes), vk_ref);
-    if let Some(commitment) = dict_get_alias(
-        dict,
-        &[
-            "verifying_key_commitment",
-            "verifyingKeyCommitment",
-            "vk_commitment",
-            "vkCommitment",
-        ],
-    )? && !commitment.is_none()
+    let vk_name = py_portable_verifier_id_field(
+        &py_required_dict_field(vk, "name", &format!("{context}.vk_ref"))?,
+        &format!("{context}.vk_ref.name"),
+    )?;
+    let mut attachment = ProofAttachment::new_ref(
+        backend.clone(),
+        ProofBox::new(backend.clone(), proof_bytes),
+        VerifyingKeyId::new(backend, vk_name),
+    );
+    if let Some(commitment) = dict.get_item("vk_commitment")?
+        && !commitment.is_none()
     {
-        attachment.vk_commitment = Some(py_fixed_array::<32>(
+        attachment.vk_commitment = Some(py_exact_fixed_bytes::<32>(
             &commitment,
-            &format!("{context}.verifying_key_commitment"),
+            &format!("{context}.vk_commitment"),
         )?);
     }
-    if let Some(envelope_hash) = dict_get_alias(dict, &["envelope_hash", "envelopeHash"])?
+    if let Some(envelope_hash) = dict.get_item("envelope_hash")?
         && !envelope_hash.is_none()
     {
-        attachment.envelope_hash = Some(py_fixed_array::<32>(
+        attachment.envelope_hash = Some(py_exact_fixed_bytes::<32>(
             &envelope_hash,
             &format!("{context}.envelope_hash"),
         )?);
+    }
+    if let Some(lane_privacy) = dict.get_item("lane_privacy")?
+        && !lane_privacy.is_none()
+    {
+        attachment.lane_privacy = Some(parse_lane_privacy_proof_py(
+            &lane_privacy,
+            &format!("{context}.lane_privacy"),
+        )?);
+    }
+    if let Some((field, message)) = attachment.structural_error() {
+        return Err(PyValueError::new_err(format!(
+            "{context}.{field} {message}"
+        )));
     }
     Ok(attachment)
 }
@@ -8317,13 +8530,34 @@ mod tests {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
-            let json_module = py.import("json").expect("json module");
-            let proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"component_verify_v1"},"verifying_key_commitment":"4444444444444444444444444444444444444444444444444444444444444444","envelope_hash":"5555555555555555555555555555555555555555555555555555555555555555"}"#,),
+            let proof = PyDict::new(py);
+            proof.set_item("backend", "halo2/ipa").expect("backend");
+            let proof_box = PyDict::new(py);
+            proof_box
+                .set_item("backend", "halo2/ipa")
+                .expect("proof backend");
+            proof_box
+                .set_item("bytes", PyBytes::new(py, b"proof"))
+                .expect("proof bytes");
+            proof.set_item("proof", proof_box).expect("proof box");
+            let vk_ref = PyDict::new(py);
+            vk_ref
+                .set_item("backend", "halo2/ipa")
+                .expect("vk backend");
+            vk_ref
+                .set_item("name", "component_verify_v1")
+                .expect("vk name");
+            proof.set_item("vk_ref", vk_ref).expect("vk ref");
+            proof
+                .set_item("vk_commitment", PyBytes::new(py, &[0x44; 32]))
+                .expect("vk commitment");
+            let expected_envelope_hash: [u8; 32] = Hash::new(b"proof").into();
+            proof
+                .set_item(
+                    "envelope_hash",
+                    PyBytes::new(py, &expected_envelope_hash),
                 )
-                .expect("proof loads");
+                .expect("envelope hash");
 
             let instruction = Instruction::verify_proof(&instruction_type, proof.as_any())
                 .expect("VerifyProof instruction builds");
@@ -8336,7 +8570,10 @@ mod tests {
             assert_eq!(verify.attachment.proof.bytes, b"proof");
             assert_eq!(verify.attachment.vk_ref.name, "component_verify_v1");
             assert_eq!(verify.attachment.vk_commitment, Some([0x44; 32]));
-            assert_eq!(verify.attachment.envelope_hash, Some([0x55; 32]));
+            assert_eq!(
+                verify.attachment.envelope_hash,
+                Some(expected_envelope_hash)
+            );
         });
     }
 
@@ -13609,14 +13846,14 @@ impl TransactionBuilder {
     /// Add a Merkle-based lane privacy proof attachment for Nexus private lanes.
     ///
     /// `leaf` and `audit_path` entries are treated as pre-hashed 32-byte digests.
-    /// `audit_path` entries may be `None` to represent missing siblings.
+    /// The first-release witness is complete: every path level must carry a sibling.
     #[allow(clippy::too_many_arguments)]
     fn add_lane_privacy_merkle_attachment(
         &mut self,
         commitment_id: u16,
         leaf: &[u8],
         leaf_index: u32,
-        audit_path: Vec<Option<Vec<u8>>>,
+        audit_path: Vec<Vec<u8>>,
         proof_backend: &str,
         proof_bytes: &[u8],
         verifying_key_name: &str,
@@ -13626,10 +13863,30 @@ impl TransactionBuilder {
                 "leaf must be a 32-byte hash (pre-hashed commitment leaf)",
             ));
         }
-        if verifying_key_name.trim().is_empty() {
+        if !verifying_key_id_field_is_portable(proof_backend) {
             return Err(PyValueError::new_err(
-                "verifying_key_name must not be empty",
+                "proof_backend must use the bounded portable verifier-key registry grammar",
             ));
+        }
+        if !verifying_key_id_field_is_portable(verifying_key_name) {
+            return Err(PyValueError::new_err(
+                "verifying_key_name must use the bounded portable verifier-key registry grammar",
+            ));
+        }
+        if proof_bytes.is_empty() {
+            return Err(PyValueError::new_err(
+                "proof_bytes must be non-empty",
+            ));
+        }
+        let maximum_proof_bytes = proof_box_max_proof_bytes_v1(proof_backend).ok_or_else(|| {
+            PyValueError::new_err(
+                "proof_backend and canonical framing exceed the 64 MiB ProofBox limit",
+            )
+        })?;
+        if proof_bytes.len() > maximum_proof_bytes {
+            return Err(PyValueError::new_err(format!(
+                "proof_bytes exceeds the {maximum_proof_bytes}-byte limit for this backend"
+            )));
         }
         let backend = Ident::from_str(proof_backend).map_err(|err| {
             PyValueError::new_err(format!("invalid proof backend identifier: {err}"))
@@ -13638,20 +13895,17 @@ impl TransactionBuilder {
             .try_into()
             .map_err(|_| PyValueError::new_err("leaf must be exactly 32 bytes"))?;
 
+        if audit_path.is_empty() || audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+            return Err(PyValueError::new_err(format!(
+                "audit_path must contain between 1 and {LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+            )));
+        }
         let mut audit_bytes = Vec::with_capacity(audit_path.len());
-        for (index, entry) in audit_path.into_iter().enumerate() {
-            let converted = match entry {
-                Some(bytes) => {
-                    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
-                        PyValueError::new_err(format!(
-                            "audit_path[{index}] must be 32 bytes when provided"
-                        ))
-                    })?;
-                    Some(arr)
-                }
-                None => None,
-            };
-            audit_bytes.push(converted);
+        for (index, bytes) in audit_path.into_iter().enumerate() {
+            let arr: [u8; 32] = bytes.try_into().map_err(|_| {
+                PyValueError::new_err(format!("audit_path[{index}] must be exactly 32 bytes"))
+            })?;
+            audit_bytes.push(Some(arr));
         }
 
         let privacy_proof = LanePrivacyProof::merkle_from_raw_path(
@@ -13665,9 +13919,14 @@ impl TransactionBuilder {
         let mut attachment = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), proof_bytes.to_vec()),
-            VerifyingKeyId::new(backend, verifying_key_name.trim()),
+            VerifyingKeyId::new(backend, verifying_key_name),
         );
         attachment.lane_privacy = Some(privacy_proof);
+        if let Some((field, message)) = attachment.structural_error() {
+            return Err(PyValueError::new_err(format!(
+                "lane privacy attachment {field} {message}"
+            )));
+        }
         self.attachments.push(attachment);
         Ok(())
     }

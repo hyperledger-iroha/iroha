@@ -1,4 +1,4 @@
-"""Tests for the Swift fixture parity policy."""
+"""Tests for the Python Norito RPC fixture mirror policy."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "check_swift_fixtures.py"
-SPEC = importlib.util.spec_from_file_location("check_swift_fixtures", MODULE_PATH)
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "check_python_fixtures.py"
+SPEC = importlib.util.spec_from_file_location("check_python_fixtures", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
@@ -21,48 +23,29 @@ def write(root: Path, relative: str, contents: str) -> None:
     path.write_text(contents, encoding="utf-8")
 
 
-def test_compare_only_manages_generated_descriptors(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    write(source, "transaction_payloads.json", "payloads")
-    write(source, "transaction_fixtures.manifest.json", "manifest")
-    write(target, "transaction_payloads.json", "payloads")
-    write(target, "transaction_fixtures.manifest.json", "manifest")
-
-    write(source, "transfer_asset.norito", "canonical-only")
-    write(target, "swift_mint_asset_basic.norito", "swift-only")
-    write(target, "swift_parity_manifest.json", "{}")
-    write(target, "js_email_identifier_request.json", "{}")
-    write(target, "offline/kagemusha_peer_transport_v2.json", "{}")
-
-    assert MODULE.compare(source, target) == ([], [], [])
-
-
-def test_compare_rejects_non_swift_and_nested_norito_orphans(
+def test_compare_only_manages_descriptors_and_rejects_redundant_blobs(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source"
     target = tmp_path / "target"
     write(source, "transaction_payloads.json", "payloads")
     write(source, "transaction_fixtures.manifest.json", "manifest")
+    write(source, "transfer_asset.norito", "canonical")
     write(target, "transaction_payloads.json", "payloads")
     write(target, "transaction_fixtures.manifest.json", "manifest")
-    write(target, "transfer_asset.norito", "redundant")
-    write(target, "nested/swift_looks_owned.norito", "nested-orphan")
+    write(target, "unrelated.json", "{}")
 
+    assert MODULE.compare(source, target) == ([], [], [])
+
+    write(target, "nested/transfer_asset.norito", "redundant")
     assert MODULE.compare(source, target) == (
         [],
-        [
-            Path("nested/swift_looks_owned.norito"),
-            Path("transfer_asset.norito"),
-        ],
+        [Path("nested/transfer_asset.norito")],
         [],
     )
 
 
-def test_compare_reports_descriptor_missing_and_content_drift(
-    tmp_path: Path,
-) -> None:
+def test_compare_reports_missing_and_content_drift(tmp_path: Path) -> None:
     source = tmp_path / "source"
     target = tmp_path / "target"
     write(source, "transaction_payloads.json", "source")
@@ -84,8 +67,6 @@ def test_compare_reports_descriptor_missing_and_content_drift(
 
 
 def test_compare_requires_both_canonical_descriptors(tmp_path: Path) -> None:
-    import pytest
-
     source = tmp_path / "source"
     target = tmp_path / "target"
     write(source, "transaction_payloads.json", "payloads")

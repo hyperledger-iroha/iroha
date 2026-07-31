@@ -459,7 +459,7 @@ class TransactionDraft:
         commitment_id: int,
         leaf: bytes,
         leaf_index: int,
-        audit_path: Iterable[Optional[bytes]],
+        audit_path: Iterable[bytes],
         proof_backend: str,
         proof_bytes: bytes,
         verifying_key_name: str,
