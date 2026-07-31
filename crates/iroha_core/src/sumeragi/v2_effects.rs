@@ -2264,6 +2264,11 @@ enum RestartEffectSource {
 }
 
 pub(crate) trait EffectRuntime {
+    /// Publish the first receiver-local physical ordinal not yet admitted.
+    /// Synthetic runtimes have no outer ingress and may retain the default.
+    fn set_ingress_physical_cut(&mut self, _physical_cut: u128) -> Result<(), String> {
+        Ok(())
+    }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     fn step_recovery_effects(&mut self, now: Instant)
     -> Result<RuntimeStep<AdapterEffect>, String>;
@@ -2518,6 +2523,10 @@ pub(crate) trait EffectRuntime {
 }
 
 impl EffectRuntime for SerializedV2Runtime {
+    fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
+        SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
+    }
+
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step(now).map_err(|error| error.to_string())
     }
@@ -3311,6 +3320,18 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Freeze the receiver-local physical predecessor cut used by any producer
+    /// continuation created during the next serialized runtime turn.
+    pub(crate) fn set_ingress_physical_cut(
+        &mut self,
+        physical_cut: u128,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        self.runtime
+            .set_ingress_physical_cut(physical_cut)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
     /// Return the immutable archive fanout in frozen roster order.
     fn frozen_archive_sources(&self) -> Vec<PeerId> {
         self.context

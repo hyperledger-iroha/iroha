@@ -46,7 +46,9 @@ use tokio::{
     time::Duration,
 };
 
-use crate::{ConsensusConfigCaps, ConsensusHandshakeCaps, Error, RelayRole, boilerplate::*};
+use crate::{
+    ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole, boilerplate::*,
+};
 // (keep fully-qualified uses inline; avoid unused import warnings)
 
 /// Max length of a handshake message in bytes excluding the length prefix.
@@ -12515,11 +12517,9 @@ mod run {
             let message = Message::Data(Blob(vec![1u8, 2, 3]));
             let bytes = ncore::to_bytes(&message).expect("encode message");
             let view = ncore::from_bytes_view(&bytes).expect("message view");
-            let payload = view.as_bytes();
-            let (decoded, used) =
-                <Message<Blob> as ncore::DecodeFromSlice>::decode_from_slice(payload)
-                    .expect("decode from slice");
-            assert_eq!(used, payload.len());
+            let decoded = view
+                .decode_exact::<Message<Blob>>()
+                .expect("decode from slice");
 
             match decoded {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8, 2, 3]),
@@ -14258,9 +14258,9 @@ mod state {
         }
     }
 
-    #[derive(Clone, Debug, Encode, Decode)]
+    #[derive(Clone, Copy, Debug, Encode, Decode)]
     pub(super) struct HandshakeConsensusMeta {
-        pub(super) mode_tag: Option<String>,
+        pub(super) mode: Option<ConsensusMode>,
         pub(super) proto_version: Option<u32>,
         pub(super) consensus_fingerprint: Option<[u8; 32]>,
         pub(super) config: Option<ConsensusConfigCaps>,
@@ -14314,16 +14314,16 @@ mod state {
     fn build_consensus_meta(caps: Option<&ConsensusHandshakeCaps>) -> HandshakeConsensusMeta {
         caps.map_or(
             HandshakeConsensusMeta {
-                mode_tag: None,
+                mode: None,
                 proto_version: None,
                 consensus_fingerprint: None,
                 config: None,
             },
             |caps| HandshakeConsensusMeta {
-                mode_tag: Some(caps.mode_tag.clone()),
+                mode: Some(caps.mode),
                 proto_version: Some(caps.proto_version),
                 consensus_fingerprint: Some(caps.consensus_fingerprint),
-                config: Some(caps.config.clone()),
+                config: Some(caps.config),
             },
         )
     }
@@ -14368,15 +14368,16 @@ mod state {
         meta: &HandshakeConsensusMeta,
     ) -> Result<(), crate::Error> {
         if let Some(caps) = caps {
-            let Some(mode) = &meta.mode_tag else {
+            let Some(mode) = meta.mode else {
                 return Err(crate::Error::HandshakeConsensusMismatch {
-                    reason: "missing consensus mode tag".to_string(),
+                    reason: "missing consensus mode".to_string(),
                 });
             };
-            if mode != &caps.mode_tag {
+            if mode != caps.mode {
                 let reason = format!(
-                    "mode tag mismatch (expected {}, got {})",
-                    caps.mode_tag, mode
+                    "consensus mode mismatch (expected {}, got {})",
+                    caps.mode.tag(),
+                    mode.tag()
                 );
                 iroha_logger::warn!(reason, "peer rejected due to consensus config mismatch");
                 return Err(crate::Error::HandshakeConsensusMismatch { reason });
@@ -16004,6 +16005,37 @@ mod state {
             assert!(mismatch.contains(&hex_bytes(&[0x5A; 32])));
         }
 
+        #[test]
+        fn peer_admission_requires_an_exact_typed_consensus_mode() {
+            let caps = ConsensusHandshakeCaps {
+                mode: ConsensusMode::Permissioned,
+                proto_version: 2,
+                consensus_fingerprint: [0xA5; 32],
+                config: consensus_caps([0x5A; 32]),
+            };
+            let matching = build_consensus_meta(Some(&caps));
+            enforce_consensus_caps(Some(&caps), &matching)
+                .expect("identical typed consensus mode must be admitted");
+
+            let mut mismatched = matching;
+            mismatched.mode = Some(ConsensusMode::Npos);
+            let error = enforce_consensus_caps(Some(&caps), &mismatched)
+                .expect_err("a different typed consensus mode must be rejected");
+            let crate::Error::HandshakeConsensusMismatch { reason } = error else {
+                panic!("unexpected consensus-mode mismatch error: {error:?}");
+            };
+            assert!(reason.contains(ConsensusMode::Permissioned.tag()));
+            assert!(reason.contains(ConsensusMode::Npos.tag()));
+
+            let mut missing = matching;
+            missing.mode = None;
+            assert!(matches!(
+                enforce_consensus_caps(Some(&caps), &missing),
+                Err(crate::Error::HandshakeConsensusMismatch { reason })
+                    if reason == "missing consensus mode"
+            ));
+        }
+
         #[cfg(feature = "noise_handshake")]
         #[tokio::test(flavor = "current_thread")]
         async fn noise_handshake_derives_shared_disambiguator() {
@@ -16175,7 +16207,7 @@ mod tests {
             addr,
             relay: RelayRole::Disabled,
             consensus: HandshakeConsensusMeta {
-                mode_tag: None,
+                mode: None,
                 proto_version: None,
                 consensus_fingerprint: None,
                 config: None,
@@ -16346,7 +16378,7 @@ mod tests {
             .expect("valid key length");
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let mut hello = unsigned_handshake_hello(&KeyPair::random(), addr);
-        hello.consensus.mode_tag = Some("permissioned".to_owned());
+        hello.consensus.mode = Some(ConsensusMode::Permissioned);
         hello.confidential.enabled = Some(true);
         hello.crypto.sm_enabled = Some(false);
         let chain_id = iroha_data_model::ChainId::from("test-chain");
@@ -16371,7 +16403,7 @@ mod tests {
         );
 
         let mut changed = hello.clone();
-        changed.consensus.mode_tag = Some("nexus".to_owned());
+        changed.consensus.mode = Some(ConsensusMode::Npos);
         assert_ne!(
             expected,
             handshake_signature_payload::<ChaCha20Poly1305>(
@@ -16851,7 +16883,7 @@ mod tests {
             addr: addr.clone(),
             relay: RelayRole::Disabled,
             consensus: HandshakeConsensusMeta {
-                mode_tag: None,
+                mode: None,
                 proto_version: None,
                 consensus_fingerprint: None,
                 config: None,
@@ -16898,7 +16930,7 @@ mod tests {
             addr: addr.clone(),
             relay: RelayRole::Hub,
             consensus: HandshakeConsensusMeta {
-                mode_tag: Some("mode".to_string()),
+                mode: Some(ConsensusMode::Permissioned),
                 proto_version: Some(1),
                 consensus_fingerprint: Some([7u8; 32]),
                 config: None,
@@ -17078,7 +17110,7 @@ mod tests {
             addr,
             relay: RelayRole::Disabled,
             consensus: HandshakeConsensusMeta {
-                mode_tag: None,
+                mode: None,
                 proto_version: None,
                 consensus_fingerprint: None,
                 config: None,

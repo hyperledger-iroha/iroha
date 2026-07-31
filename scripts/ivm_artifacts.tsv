@@ -59,12 +59,4 @@ kotodama-standard	crates/kotodama_lang/src/samples/smart_contract_can_filter_que
 kotodama-standard	crates/kotodama_lang/src/samples/threshold_escrow.ko	integration_tests/fixtures/ivm/threshold_escrow.to
 predecoder	0	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to
 predecoder	1	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to
-synthetic	0	integration_tests/fixtures/ivm/executor_with_admin.to
-synthetic	1	integration_tests/fixtures/ivm/executor_with_custom_permission.to
-synthetic	2	integration_tests/fixtures/ivm/executor_remove_permission.to
-synthetic	3	integration_tests/fixtures/ivm/executor_custom_instructions_simple.to
-synthetic	4	integration_tests/fixtures/ivm/executor_custom_instructions_complex.to
-synthetic	5	integration_tests/fixtures/ivm/executor_with_migration_fail.to
-synthetic	6	integration_tests/fixtures/ivm/executor_with_fuel.to
-synthetic	7	integration_tests/fixtures/ivm/executor_with_custom_parameter.to
 default	v1	defaults/executor.to

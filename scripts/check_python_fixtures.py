@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify Python fixture parity with the canonical Android set."""
+"""Verify Python's generated Norito RPC descriptor mirrors."""
 
 from __future__ import annotations
 
@@ -9,16 +9,12 @@ import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
-DEFAULT_SOURCE = Path("java/iroha_android/src/test/resources")
+DEFAULT_SOURCE = Path("fixtures/norito_rpc")
 DEFAULT_TARGET = Path("python/iroha_python/tests/fixtures")
-
-
-def collect_files(root: Path) -> List[Path]:
-    if not root.exists():
-        raise FileNotFoundError(f"missing directory: {root}")
-    files = [p for p in root.rglob("*") if p.is_file()]
-    files.sort()
-    return files
+MANAGED_FIXTURES = (
+    Path("transaction_payloads.json"),
+    Path("transaction_fixtures.manifest.json"),
+)
 
 
 def fingerprint(path: Path) -> str:
@@ -30,11 +26,27 @@ def fingerprint(path: Path) -> str:
 def compare(
     source: Path, target: Path
 ) -> Tuple[List[Path], List[Path], List[Tuple[Path, Path]]]:
-    source_map = {p.relative_to(source): p for p in collect_files(source)}
-    target_map = {p.relative_to(target): p for p in collect_files(target)}
+    for root in (source, target):
+        if not root.is_dir():
+            raise FileNotFoundError(f"missing directory: {root}")
+
+    source_map = {}
+    target_map = {}
+    for relative in MANAGED_FIXTURES:
+        source_path = source / relative
+        if not source_path.is_file():
+            raise FileNotFoundError(f"missing canonical fixture: {source_path}")
+        source_map[relative] = source_path
+        target_path = target / relative
+        if target_path.is_file():
+            target_map[relative] = target_path
 
     missing = sorted(rel for rel in source_map if rel not in target_map)
-    extra = sorted(rel for rel in target_map if rel not in source_map)
+    extra = sorted(
+        path.relative_to(target)
+        for path in target.rglob("*.norito")
+        if path.is_file()
+    )
 
     diffs: List[Tuple[Path, Path]] = []
     for rel, src_path in source_map.items():
@@ -48,7 +60,7 @@ def compare(
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Check Python fixture parity with Android fixtures"
+        description="Check Python Norito RPC descriptor parity"
     )
     parser.add_argument(
         "--source",
@@ -95,7 +107,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 1
 
     if not args.quiet:
-        print(f"[ok] Fixtures match between {args.source} and {args.target}")
+        print(f"[ok] Norito RPC descriptors match between {args.source} and {args.target}")
     return 0
 
 

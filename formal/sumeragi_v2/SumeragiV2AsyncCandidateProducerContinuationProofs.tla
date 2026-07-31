@@ -29,19 +29,20 @@ THEOREM AsyncCandidateProducerContinuationConstructorIsTyped ==
      handoffCandidates \in SUBSET AsyncCandidateSet,
      lifecycleSlot \in AsyncCandidateLifecycleSlots,
      ordinal \in Nat \ {0},
+     physicalCut \in Nat,
      status \in AsyncCandidateProducerContinuationStatuses:
     candidate.kind \in AsyncCandidateServiceTrackedKinds
       => /\ AsyncCandidateProducerContinuationRecord(
                candidate, handoffCandidates,
-               lifecycleSlot, ordinal, status)
+               lifecycleSlot, ordinal, physicalCut, status)
              \in AsyncCandidateProducerContinuationRecordSet
          /\ (AsyncCandidateProducerContinuationRecord(
                 candidate, handoffCandidates,
-                lifecycleSlot, ordinal, status)).sourceClass
+                lifecycleSlot, ordinal, physicalCut, status)).sourceClass
               = AsyncCandidateProducerContinuationSourceClass(candidate)
          /\ (AsyncCandidateProducerContinuationRecord(
                 candidate, handoffCandidates,
-                lifecycleSlot, ordinal, status)).address
+                lifecycleSlot, ordinal, physicalCut, status)).address
               \in AsyncCandidateServiceStageOwnerAddresses
 BY AsyncCandidateServiceTrackedKindProjectionIsCovered, SMT
    DEF AsyncCandidateProducerContinuationRecord,
@@ -224,6 +225,7 @@ THEOREM AsyncCandidateProducerContinuationStateInstallsExactSourceRecord ==
                AsyncCandidateProducerContinuationHandoffCandidatesThisStep(
                  candidate),
                lifecycle.slot, lifecycle.ordinal,
+               AsyncNextIngressPhysicalOrdinal(candidate.node),
                AsyncCandidateProducerContinuationInitialStatusAfter(
                  candidate))
            next ==
@@ -233,7 +235,9 @@ THEOREM AsyncCandidateProducerContinuationStateInstallsExactSourceRecord ==
           /\ installed.identity =
                AsyncCandidateServiceIdentity(candidate)
           /\ installed.causalOrigin = candidate.causalOrigin
-         /\ installed.phase = candidate.kind
+          /\ installed.physicalCut =
+               AsyncNextIngressPhysicalOrdinal(candidate.node)
+          /\ installed.phase = candidate.kind
          /\ installed.sourceClass =
               AsyncCandidateProducerContinuationSourceClass(candidate)
          /\ installed.ordinal = lifecycle.ordinal
@@ -750,30 +754,29 @@ AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates(
 \* A leader-wire lifecycle owns its exact future Runtime candidate before the
 \* physical ingress carrier drains.  Charge that candidate while the immutable
 \* logical scheduler ordinal is inside the target cut, including while an
-\* exact retry is Dormant.  Dormant-to-Ingress and Ingress-to-Runtime are then
-\* carrier transfers of the same set element, not producer replenishment.
+\* exact carrier is already Active below a rigid physical admission cut.
+\* Dormant records never enter this set: an exact retry admitted after the
+\* cut receives the cut itself and is physically behind the frozen prefix.
+\* Ingress-to-Runtime is a carrier transfer of the same set element.
 \* Fresh identities receive the current shared high-watermark and cannot enter
 \* an older target cut; terminal identities contribute no latent candidate.
 \* The strict boundary deliberately omits the target ordinal itself: an
 \* equal-ordinal leader-wire/continuation pair is one shared lifecycle cell and
 \* its Runtime publication coalesces against the target continuation identity.
 AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
-    node, targetOrdinal) ==
+    node, targetOrdinal, physicalCut) ==
   {AsyncLeaderWireRuntimeCandidate(record.item):
      record \in asyncLeaderWireLifecycles,
      /\ record.recipient = node
      /\ record.schedulerOrdinal < targetOrdinal
-     /\ \/ AsyncLeaderWireLifecycleDormant(record)
-        \/ AsyncLeaderWireLifecycleActive(record)}
+     /\ AsyncLeaderWireLifecycleActive(record)
+     /\ record.physicalAdmissionOrdinal < physicalCut}
 
 AsyncCandidateProducerContinuationFrozenCandidateOwners(
     node, targetOrdinal) ==
   AsyncCausalEpisodeCandidates(node, targetOrdinal)
     \cup
       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates(
-        node, targetOrdinal)
-    \cup
-      AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
         node, targetOrdinal)
 
 AsyncCandidateProducerContinuationFrozenCandidateTokens(
@@ -1036,19 +1039,20 @@ Frozen leader-wire ingress barrier.
 
 Two callers share this rank but freeze different predecessor cuts:
 
-  * a producer continuation has no physical carrier, so every immutable
-    leader-wire identity with a smaller logical scheduler ordinal is in its
-    finite owner universe.  A dormant retry retains that identity, consumes
-    one prepaid non-descent stage, and receives a fresh physical ordinal;
+  * a producer continuation has no physical carrier, so it freezes the
+    receiver's physical high-watermark at rank entry.  Only already-Active
+    records below that cut and below the logical scheduler cut are in its
+    finite owner universe.  A Dormant retry admitted later receives an ordinal
+    at the cut and is physically behind the target;
   * a claimed response already owns a physical carrier.  Only non-dormant
     records whose physical carrier was admitted before the claim are
     predecessors.  A dormant identity replayed later is physically behind the
     claim even when its retained logical scheduler ordinal is smaller.
 
-The stage budget is deliberately the outer component.  Dormant-to-Ingress
-replacement consumes 2 -> 1, and Ingress-to-Runtime/terminal transfer consumes
-1 -> 0 before the resulting Candidate can increase the inner producer budget.
-Neither replacement nor transfer is advertised as semantic progress.  The
+The stage budget is deliberately the outer component.  Ingress-to-Runtime or
+terminal transfer consumes 1 -> 0 before the resulting Candidate can increase
+the inner producer budget.  Carrier replacement is not advertised as semantic
+progress.  The
 dependency tail then reuses the existing physical-owner/frozen-prefix pair and
 spells out the mode, capacity, runner-reach, priority selector, lane, and
 source components required to drain the selected physical occurrence.
@@ -1061,15 +1065,15 @@ AsyncFrozenLeaderWireBarrierRecords(
   {record \in asyncLeaderWireLifecycles:
      /\ record.recipient = node
      /\ IF barrierMode = "Logical"
-        THEN record.schedulerOrdinal <= logicalCutoff
+        THEN /\ record.schedulerOrdinal <= logicalCutoff
+             /\ AsyncLeaderWireLifecycleActive(record)
+             /\ record.physicalAdmissionOrdinal < physicalCut
         ELSE /\ barrierMode = "Physical"
-             /\ ~AsyncLeaderWireLifecycleDormant(record)
+             /\ AsyncLeaderWireLifecycleActive(record)
              /\ record.physicalAdmissionOrdinal < physicalCut}
 
 AsyncFrozenLeaderWireBarrierRemainingStage(record, barrierMode) ==
-  CASE /\ barrierMode = "Logical"
-          /\ AsyncLeaderWireLifecycleDormant(record) -> 2
-    [] AsyncLeaderWireLifecycleIngressProtected(record) -> 1
+  CASE AsyncLeaderWireLifecycleIngressProtected(record) -> 1
     [] OTHER -> 0
 
 AsyncFrozenLeaderWireBarrierStageTokens(
@@ -1264,23 +1268,22 @@ AsyncFrozenLeaderWireBarrierRankOrdering ==
     Nat, AsyncFrozenLeaderWireBarrierTailRankCarrier)
 
 AsyncCandidateProducerContinuationIngressBarrierRank(
-    node, targetOrdinal) ==
+    node, targetOrdinal, physicalCut) ==
   AsyncFrozenLeaderWireBarrierRank(
-    node, targetOrdinal, targetOrdinal - 1, 0, "Logical")
+    node, targetOrdinal, targetOrdinal - 1, physicalCut, "Logical")
 
 THEOREM CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier ==
   \A node \in ValidatorIds,
-     targetOrdinal \in Nat \ {0}:
+     targetOrdinal \in Nat \ {0},
+     physicalCut \in Nat:
     AsyncStrongTypeInvariant
       => AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
-           node, targetOrdinal)
+           node, targetOrdinal, physicalCut)
            =
          {AsyncLeaderWireRuntimeCandidate(record.item):
             record \in
               AsyncFrozenLeaderWireBarrierRecords(
-                node, targetOrdinal - 1, 0, "Logical"),
-            /\ AsyncLeaderWireLifecycleDormant(record)
-               \/ AsyncLeaderWireLifecycleActive(record)}
+                node, targetOrdinal - 1, physicalCut, "Logical")}
 BY Isa
    DEF AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
        AsyncFrozenLeaderWireBarrierRecords,
@@ -1290,6 +1293,102 @@ BY Isa
        AsyncTransportTypeInvariant,
        AsyncLeaderWireLifecycleTypeInvariant,
        AsyncLeaderWireLifecycleTyped
+
+THEOREM CandidateProducerContinuationActionInertDormantHasZeroFrozenStage ==
+  \A record \in asyncLeaderWireLifecycles,
+     node \in ValidatorIds,
+     logicalCutoff, physicalCut \in Nat,
+     barrierMode \in AsyncFrozenLeaderWireBarrierModes:
+    AsyncLeaderWireActionInertDormant(record)
+      => /\ AsyncFrozenLeaderWireBarrierRemainingStage(
+               record, barrierMode) = 0
+         /\ record
+              \notin
+                AsyncFrozenLeaderWireBarrierRecords(
+                  node, logicalCutoff, physicalCut, barrierMode)
+BY Isa
+   DEF AsyncFrozenLeaderWireBarrierRemainingStage,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncLeaderWireActionInertDormant,
+       AsyncLeaderWireLifecycleActive,
+       AsyncLeaderWireLifecycleDormant
+
+THEOREM CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix ==
+  \A node \in ValidatorIds,
+     targetOrdinal, physicalCut \in Nat,
+     recipient \in ValidatorIds,
+     source \in AsyncIngressSources:
+    /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
+    /\ recipient = node
+    /\ AdmitHiddenPacket(recipient, source)
+      => \A record \in asyncLeaderWireLifecycles':
+           record.physicalAdmissionOrdinal >= physicalCut
+             => record
+                  \notin
+                    AsyncFrozenLeaderWireBarrierRecords(
+                      node, targetOrdinal, physicalCut, "Logical")'
+BY AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal,
+   AsyncIngressPhysicalHighWatermarkIsMonotone, Isa
+   DEF AsyncFrozenLeaderWireBarrierRecords,
+       AsyncLeaderWireLifecycleActive
+
+THEOREM CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame ==
+  \A node \in ValidatorIds,
+     targetOrdinal, physicalCut \in Nat,
+     recipient \in ValidatorIds,
+     source \in AsyncIngressSources:
+    DropPolicyRejectedHiddenPacket(recipient, source)
+      => /\ (AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+                node, targetOrdinal, physicalCut))'
+              = AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+                  node, targetOrdinal, physicalCut)
+         /\ (AsyncFrozenLeaderWireBarrierStageTokens(
+                node, targetOrdinal - 1, physicalCut, "Logical"))'
+              = AsyncFrozenLeaderWireBarrierStageTokens(
+                  node, targetOrdinal - 1, physicalCut, "Logical")
+BY Isa
+   DEF DropPolicyRejectedHiddenPacket,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenLeaderWireBarrierRemainingStage
+
+THEOREM CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage ==
+  \A node \in ValidatorIds,
+     targetOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     source \in AsyncIngressSources,
+     laneIndex \in 1..Len(IngressLane(node, source)),
+     record \in asyncLeaderWireLifecycles:
+    LET item == IngressLane(node, source)[laneIndex]
+    IN /\ AsyncStrongTypeInvariant
+       /\ Len(asyncIngressReady[node]) > 0
+       /\ source = asyncIngressReady[node][1]
+       /\ record
+            \in AsyncFrozenLeaderWireBarrierRecords(
+                 node, targetOrdinal - 1, physicalCut, "Logical")
+       /\ AsyncLeaderWireLifecycleIngressProtected(record)
+       /\ AsyncLeaderWireAdmissionMatchesRecord(item, record)
+       /\ AsyncLeaderWireDrainInstallsRuntimeOwner(item)
+       /\ PopSelectedIngress(node, 1, laneIndex)
+       => /\ AsyncLeaderWireRuntimeCandidate(item)
+                \in
+                  AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+                    node, targetOrdinal, physicalCut)'
+          /\ AsyncFrozenLeaderWireBarrierStageBudget(
+               node, targetOrdinal - 1, physicalCut, "Logical")'
+               < AsyncFrozenLeaderWireBarrierStageBudget(
+                   node, targetOrdinal - 1, physicalCut, "Logical")
+BY LeaderWireIngressDrainNeverInventsRuntimeOwner,
+   FS_CardinalityType, FS_Subset, IsaT(1800)
+   DEF AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncFrozenLeaderWireBarrierRemainingStage,
+       AsyncLeaderWireLifecycleRecordAfterIngressDrain,
+       AsyncLeaderWireLifecyclesAfterIngressDrain,
+       PopSelectedIngress, IngressLane
 
 (***************************************************************************
 The claimed-response physical barrier is selected only from the immutable
@@ -1592,24 +1691,16 @@ THEOREM CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound ==
                 node, targetOrdinal))
               <= AsyncCandidateProducerEpisodeCapacity
                    + AsyncCandidateProducerContinuationCapacity
-                   + Cardinality(AsyncLeaderWireLifecycleSlotSet)
 BY AsyncCausalEpisodeCandidateCarrierHasConfiguredBound,
    AsyncCandidateProducerContinuationsInjectIntoLifecycleStageOwners,
-   CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
-   AsyncLeaderWireLifecycleSlotUniverseIsFinite,
    FS_Image, FS_Union, FS_Subset, FS_CardinalityType, IsaT(1200)
    DEF AsyncCandidateProducerContinuationFrozenCandidateOwners,
-       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
        AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
        AsyncCandidateProducerContinuationFrozenRecords,
        AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuations,
        AsyncCandidateProducerContinuationCapacity,
-       AsyncLeaderWireRuntimeCandidate,
-       AsyncLeaderWireLifecycleDormant,
-       AsyncLeaderWireLifecycleActive,
-       AsyncLeaderWireLifecycleSlotSet,
        AsyncCausalEpisodeCandidates,
        AsyncStrongTypeInvariant
 
@@ -1689,28 +1780,31 @@ BY Isa
        AsyncCandidateProducerContinuations
 
 THEOREM CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst ==
-  \A node \in ValidatorIds, targetOrdinal \in Nat:
+  \A node \in ValidatorIds,
+     targetOrdinal \in Nat,
+     physicalCut \in Nat:
     /\ gst
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ targetOrdinal < AsyncNextCandidateLifecycleOrdinal(node)
+    /\ targetOrdinal <= AsyncNextCandidateLifecycleOrdinal(node)
+    /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
     /\ [AsyncNext]_AsyncAllVars
       => (AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
-             node, targetOrdinal))'
+             node, targetOrdinal, physicalCut))'
            \subseteq
              AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
-               node, targetOrdinal)
+               node, targetOrdinal, physicalCut)
 BY AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
    CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
    CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,
-   AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix,
-   PostGstStepCannotCreateDormantLeaderWirePotential,
+   AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier,
+   AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal,
    RuntimeLeaderWireCannotRetireMerelyFromIngressPop,
    RetireLeaderWireLifecycleRetainsTerminalTombstone,
    FS_Image, FS_Subset, IsaT(2400)
    DEF AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
        AsyncLeaderWireRuntimeCandidate,
-       AsyncLeaderWireLifecycleDormant,
        AsyncLeaderWireLifecycleActive,
        AsyncLeaderWireLifecycleRecordAfterIngressDrain,
        AsyncLeaderWireLifecyclesAfterIngressDrain,
@@ -2019,9 +2113,12 @@ THEOREM CandidateProducerContinuationFrozenPrefixStepCannotReplenish ==
 BY CandidateProducerContinuationFrozenOriginsCannotReplenish,
    CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
    CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst,
-   CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
-   CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,
    CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
+   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
+   CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage,
+   CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,
    CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge,
    ExternalContinuationPersistsOrDescendsOrReplayExits,
    LocalContinuationPersistsOrDescendsOrReplayExits,

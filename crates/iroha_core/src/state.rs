@@ -67196,6 +67196,125 @@ seiyaku SequentialNfts {
         (key, marker)
     }
 
+    #[test]
+    fn world_transaction_apply_commits_sorafs_da_and_direct_lane_overlays() {
+        let world = World::default();
+        let mut block = world.block();
+
+        let provider_id = ProviderId::new([0x91; 32]);
+        let provider_owner = AccountId::new(checked_keypair().public_key().clone());
+        let provider_authority = ProviderIngestCompletionAuthorityV1::new(
+            provider_owner.clone(),
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x92; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x93; 32],
+            },
+        );
+        let mut pricing = PricingScheduleRecord::launch_default();
+        pricing.notes = Some("WorldTransaction apply regression".to_owned());
+        let credit = ProviderCreditRecord::new(
+            provider_id,
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            5,
+            7,
+            Metadata::default(),
+        );
+
+        let lane_id = LaneId::SINGLE;
+        let epoch = 11;
+        let sequence = 13;
+        let ticket = StorageTicketId::new([0x94; 32]);
+        let manifest = ManifestDigest::new([0x95; 32]);
+        let alias = "world-transaction-apply-regression".to_owned();
+        let mut intent = DaPinIntent::new(lane_id, epoch, sequence, ticket, manifest);
+        intent.alias = Some(alias.clone());
+        let intent_with_location = DaPinIntentWithLocation {
+            intent: intent.clone(),
+            location: DaCommitmentLocation {
+                block_height: 17,
+                index_in_bundle: 19,
+            },
+        };
+        let (marker_key, marker) = sample_direct_lane_application_marker(
+            lane_id,
+            lane_id,
+            DataSpaceId::UNIVERSAL,
+            23,
+            0x96,
+        );
+
+        {
+            let mut transaction =
+                block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+            *transaction.sorafs_pricing.get_mut() = pricing.clone();
+            transaction
+                .provider_credit_ledger
+                .insert(provider_id, credit.clone());
+            transaction
+                .provider_owners
+                .insert(provider_id, provider_owner.clone());
+            transaction
+                .provider_ingest_completion_authorities
+                .insert(provider_id, provider_authority.clone());
+            transaction
+                .da_pin_intents_by_ticket
+                .insert(ticket, intent_with_location.clone());
+            transaction
+                .da_pin_intents_by_alias
+                .insert(alias.clone(), ticket);
+            transaction
+                .da_pin_intents_by_manifest
+                .insert(manifest, ticket);
+            transaction
+                .da_pin_intents_by_lane_epoch
+                .insert((lane_id, epoch, sequence), ticket);
+            transaction
+                .direct_lane_block_application_markers
+                .insert(marker_key, marker.clone());
+            transaction.apply();
+        }
+
+        assert_eq!(block.sorafs_pricing.get(), &pricing);
+        assert_eq!(
+            block.provider_credit_ledger.get(&provider_id),
+            Some(&credit)
+        );
+        assert_eq!(
+            block.provider_owners.get(&provider_id),
+            Some(&provider_owner)
+        );
+        assert_eq!(
+            block
+                .provider_ingest_completion_authorities
+                .get(&provider_id),
+            Some(&provider_authority)
+        );
+        assert_eq!(
+            block.da_pin_intents_by_ticket.get(&ticket),
+            Some(&intent_with_location)
+        );
+        assert_eq!(block.da_pin_intents_by_alias.get(&alias), Some(&ticket));
+        assert_eq!(
+            block.da_pin_intents_by_manifest.get(&manifest),
+            Some(&ticket)
+        );
+        assert_eq!(
+            block
+                .da_pin_intents_by_lane_epoch
+                .get(&(lane_id, epoch, sequence)),
+            Some(&ticket)
+        );
+        assert_eq!(
+            block.direct_lane_block_application_markers.get(&marker_key),
+            Some(&marker)
+        );
+    }
+
     fn seed_direct_lane_application_marker(
         state: &State,
         lane_id: LaneId,

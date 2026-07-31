@@ -7,7 +7,9 @@ use std::{io, net::AddrParseError};
 
 use aead::{Nonce, Tag};
 use iroha_crypto::encryption::ChaCha20Poly1305;
-pub use iroha_data_model::confidential::ConfidentialFeatureDigest;
+pub use iroha_data_model::{
+    block::consensus_v2::ConsensusMode, confidential::ConfidentialFeatureDigest,
+};
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -273,10 +275,10 @@ pub struct ConsensusConfigCaps {
 ///
 /// These fields allow peers to gate connections by consensus mode/protocol
 /// and a deterministic fingerprint derived from genesis and parameters.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConsensusHandshakeCaps {
-    /// Compile-time mode tag (e.g., "`iroha2-consensus::permissioned-sumeragi@v2`").
-    pub mode_tag: String,
+    /// Canonical consensus mode.
+    pub mode: ConsensusMode,
     /// Protocol wire version for consensus messages.
     pub proto_version: u32,
     /// Deterministic consensus fingerprint (blake2b-32 bytes).

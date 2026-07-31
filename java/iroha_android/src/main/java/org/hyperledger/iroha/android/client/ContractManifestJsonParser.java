@@ -106,8 +106,7 @@ public final class ContractManifestJsonParser {
           "is_ok",
           "is_err",
           "unwrap_or",
-          "unwrap_err_or",
-          "Amount");
+          "unwrap_err_or");
   private static final Set<String> RETIRED_NUMERIC_TYPE_NAMES =
       set(
           "i8",
@@ -1137,8 +1136,8 @@ public final class ContractManifestJsonParser {
     final String id =
         exactString(required(root, "id", "trigger descriptor"), "trigger descriptor.id");
     check(
-        !"Amount".equals(id),
-        "trigger descriptor.id must not use retired Kotodama source form Amount");
+        canonicalDeclarationIdentifier(id),
+        "trigger descriptor.id must be a canonical Kotodama declaration identifier");
     final ContractManifest.TriggerRepeats repeats =
         parseRepeats(
             object(
@@ -1187,8 +1186,8 @@ public final class ContractManifestJsonParser {
     exactKeys(root, set("namespace", "entrypoint"), "trigger callback");
     final String namespace = optionalExactString(root, "namespace", "trigger callback.namespace");
     check(
-        !"Amount".equals(namespace),
-        "trigger callback.namespace must not use retired Kotodama source form Amount");
+        namespace == null || canonicalTypeDeclarationIdentifier(namespace),
+        "trigger callback.namespace must be a canonical Kotodama type-declaration identifier");
     final String entrypoint =
         exactString(
             required(root, "entrypoint", "trigger callback"), "trigger callback.entrypoint");

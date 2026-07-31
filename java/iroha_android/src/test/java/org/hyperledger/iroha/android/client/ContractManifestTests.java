@@ -96,7 +96,7 @@ public final class ContractManifestTests {
         replaceFirst(
             replaceFirst(response, "\"id\":\"settle\"", "\"id\":\"amount\""),
             "\"namespace\":null",
-            "\"namespace\":\"amount\"");
+            "\"namespace\":\"RemoteLedger\"");
     final ContractManifest.TriggerDescriptor trigger =
         ContractJsonParser.parseManifestRecord(lowercase.getBytes(StandardCharsets.UTF_8))
             .manifest()
@@ -106,8 +106,8 @@ public final class ContractManifestTests {
             .get(0);
     require("amount".equals(trigger.id()), "lowercase amount trigger id");
     require(
-        "amount".equals(trigger.callback().namespace()),
-        "lowercase amount callback namespace");
+        "RemoteLedger".equals(trigger.callback().namespace()),
+        "canonical callback namespace");
   }
 
   private static void manifestRejectsUnknownEnglishAndNoncanonicalShapes() {

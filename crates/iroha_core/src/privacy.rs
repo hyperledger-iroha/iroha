@@ -680,7 +680,7 @@ mod tests {
 
     use super::*;
     use crate::privacy_profiles::{
-        compiled_privacy_profile_v1, compiled_zk_x509_profile_material_v1,
+        compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
     };
 
     const PROPOSAL_HEIGHT: u64 = 1_000;
@@ -897,7 +897,7 @@ mod tests {
     fn unavailable_compiled_engine_cannot_resume_through_lifecycle_transition() {
         let suspended_at_height = ACTIVATION_HEIGHT + 1;
         let transition_height = suspended_at_height + 1;
-        let record = compiled_zk_x509_profile_material_v1()
+        let record = zk_x509_release_candidate_profile_material_v1()
             .expect("release-candidate X509 profile material")
             .activation_record(PrivacyProtocolLifecycleV1::Suspended(
                 PrivacySuspendedLifecycleV1 {

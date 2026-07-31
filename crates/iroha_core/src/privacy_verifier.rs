@@ -36,7 +36,8 @@ use thiserror::Error;
 use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
 #[cfg(feature = "privacy-release-evidence")]
 use crate::privacy_profiles::{
-    compiled_zk_x509_profile_material_v1, validate_compiled_privacy_activation_against_profile_v1,
+    validate_compiled_privacy_activation_against_profile_v1,
+    zk_x509_release_candidate_profile_material_v1,
 };
 use crate::{
     privacy_engines::{
@@ -578,7 +579,7 @@ pub(crate) fn verify_zk_x509_release_candidate_envelope_v1(
     envelope: &PrivacyProofEnvelopeV1,
     context: PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
-    let candidate = compiled_zk_x509_profile_material_v1().map_err(|source| {
+    let candidate = zk_x509_release_candidate_profile_material_v1().map_err(|source| {
         PrivacyVerificationErrorV1::CompiledActivation(Box::new(
             PrivacyCompiledActivationFailureV1 {
                 source: CompiledPrivacyProfileValidationErrorV1::Profile(source),
@@ -2449,7 +2450,7 @@ mod tests {
         },
         privacy_profiles::{
             CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
-            compiled_zk_x509_profile_material_v1,
+            zk_x509_release_candidate_profile_material_v1,
         },
         privacy_state::{
             PrivacyCommitmentKeyV1, PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1,
@@ -2526,7 +2527,7 @@ mod tests {
     }
 
     fn active_zk_x509_profile() -> (CompiledPrivacyProfileV1, PrivacyProtocolActivationRecordV1) {
-        let profile = compiled_zk_x509_profile_material_v1()
+        let profile = zk_x509_release_candidate_profile_material_v1()
             .expect("release-pinned zk-X.509 candidate profile");
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {

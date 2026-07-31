@@ -290,8 +290,8 @@ client.shield_asset_and_wait(
 
 prepared_proof = {
     "backend": "halo2/ipa",
-    "proof_bytes": b"...",
-    "verifying_key_ref": "halo2/ipa:vk_transfer",
+    "proof": {"backend": "halo2/ipa", "bytes": b"..."},
+    "vk_ref": {"backend": "halo2/ipa", "name": "vk_transfer"},
 }
 
 client.zk_transfer_prepared_and_wait(

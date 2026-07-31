@@ -3035,20 +3035,52 @@ const transferTx = buildZkTransferTransaction({
     proof: {
       backend: "halo2/ipa",
       proof: Buffer.from("proof-bytes", "base64"),
-      verifyingKeyRef: "halo2/ipa:vk_transfer",
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
     },
   },
   privateKey,
 });
 ```
 
-`ProofAttachmentInput` requires `verifyingKeyRef`; embedded key bytes are not
-accepted by generic proof attachments. It also supports optional
-`verifyingKeyCommitment` digests. Election
+`ProofAttachmentInput` requires the exact `{ backend, name }`
+`verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
+not accepted. Both id fields use the Rust portable registry grammar. Complete
+ProofBox size is capped at 64 MiB, including its fixed overhead and UTF-8
+backend label. Optional `verifyingKeyCommitment` and `envelopeHash` digests must
+be non-zero, and `envelopeHash` must equal the typed BLAKE2b-256 hash of the
+proof bytes. Lane Merkle inputs require a complete 1–255-level path; raw
+32-byte siblings are converted to canonical prehashed `HashOf` bytes before
+Norito encoding. Election
 builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 `buildFinalizeElectionTransaction`) share the same helpers so ballot ciphertexts
 and Halo2 proofs stay canonical across SDKs. See `index.d.ts` for the
 full set of confidential input shapes.
+
+### Native-independent Exact12 fixture codec
+
+`noritoDecodePrivacyExact12FixtureBundleBase64V1` reads the checked
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64` archive without
+loading `iroha_js_host`. The input must be exact canonical standard base64: no
+whitespace, URL-safe alphabet, omitted padding, or alternate spelling is
+accepted. The raw-byte companion
+`noritoDecodePrivacyExact12FixtureBundleV1` enforces the 2 MiB archive bound,
+canonical schema/header/layout, version 1, all twelve protocol rows in frozen
+discriminant order, and the byte-complete statement, envelope, submission,
+intent, unsigned-payload, signed-transaction, and transaction-hash bindings.
+
+```js
+import {
+  noritoDecodePrivacyExact12FixtureBundleBase64V1,
+  noritoEncodePrivacyExact12FixtureBundleV1,
+} from "@iroha/iroha-js";
+
+const bundle = noritoDecodePrivacyExact12FixtureBundleBase64V1(checkedBase64);
+const canonicalArchive = noritoEncodePrivacyExact12FixtureBundleV1(bundle);
+```
+
+Re-encoding a decoded checked bundle is byte-identical. Unknown fields,
+aliases, reordered or substituted protocol rows, malformed declared lengths,
+truncation, and trailing bytes fail closed.
 
 Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Typed
 helpers normalise casing and payload layouts so tests and automation can inspect

@@ -29,6 +29,8 @@ public final class PrivacyNativeBridgeTest {
     sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests();
     aliasesAndNonCanonicalSpellingsAreRejected();
     sharedTypedValidatorStatusContractIsStable();
+    compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
+    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable();
     exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
     exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable();
     retiredGenericProofSurfaceIsAbsent();
@@ -158,17 +160,18 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void sharedTypedValidatorStatusContractIsStable() {
-    assert PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024;
+    assert PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES == 256 * 1024;
     assert PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES == 2 * 1024 * 1024;
-    final PrivacyNativeBridge.ValidationStatusV1[] statuses =
-        PrivacyNativeBridge.ValidationStatusV1.values();
+    final PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1[] statuses =
+        PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.values();
     assert statuses.length == 9;
     for (int index = 0; index < statuses.length; index++) {
       assert statuses[index].code() == index;
     }
     try {
       final java.lang.reflect.Method validator =
-          PrivacyNativeBridge.class.getDeclaredMethod("nativeValidateCapabilities", byte[].class);
+          PrivacyNativeBridge.class.getDeclaredMethod(
+              "nativeValidateCompiledProfileCatalog", byte[].class);
       assert java.lang.reflect.Modifier.isNative(validator.getModifiers());
       assert validator.getReturnType() == int.class;
       final java.lang.reflect.Method fixtureQuery =
@@ -188,6 +191,57 @@ public final class PrivacyNativeBridgeTest {
     assert fixtureStatuses.length == 9;
     for (int index = 0; index < fixtureStatuses.length; index++) {
       assert fixtureStatuses[index].code() == index;
+    }
+  }
+
+  private static void
+      compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(null)
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.NULL_POINTER;
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(new byte[0])
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.EMPTY;
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(
+            new byte[PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1])
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE;
+  }
+
+  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
+    final boolean available = PrivacyNativeBridge.isNativeAvailable();
+    if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
+      throw new AssertionError(
+          "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required");
+    }
+    if (!available) {
+      return;
+    }
+
+    final byte[] canonical = PrivacyNativeBridge.compiledProfileCatalogV1();
+    assert canonical.length > 0;
+    assert canonical.length <= PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES;
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical)
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
+    assert Arrays.equals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1());
+
+    final byte[][] truncated = {
+      Arrays.copyOfRange(canonical, 0, canonical.length - 1),
+      Arrays.copyOfRange(canonical, 1, canonical.length),
+      Arrays.copyOfRange(canonical, 0, canonical.length / 2)
+    };
+    for (final byte[] candidate : truncated) {
+      assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(candidate)
+          != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
+      assertThrows(() -> PrivacyNativeBridge.requireCompiledProfileCatalog(candidate));
+    }
+
+    final byte[] trailing = Arrays.copyOf(canonical, canonical.length + 1);
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(trailing)
+        != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
+    final int[] mutationIndices = {0, canonical.length / 2, canonical.length - 1};
+    for (final int index : mutationIndices) {
+      final byte[] mutated = Arrays.copyOf(canonical, canonical.length);
+      mutated[index] ^= (byte) 0x80;
+      assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(mutated)
+          != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
     }
   }
 
@@ -246,7 +300,7 @@ public final class PrivacyNativeBridgeTest {
     }
 
     assert PrivacyNativeBridge.validateExact12FixtureBundleV1(
-            PrivacyNativeBridge.capabilitiesArchiveV1())
+            PrivacyNativeBridge.compiledProfileCatalogV1())
         != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
   }
 

@@ -791,6 +791,7 @@ def test_manifest_accepts_lowercase_amount_entrypoint_and_parameter() -> None:
     entrypoint["name"] = "amount"
     entrypoint["params"][0]["name"] = "amount"
     entrypoint["argument_schema"]["fields"][0]["name"] = "amount"
+    entrypoint["triggers"][0]["callback"]["entrypoint"] = "amount"
 
     manifest = ContractManifest.from_payload(payload)
 

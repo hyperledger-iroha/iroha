@@ -29,3 +29,19 @@ def test_python_ids_match_the_rust_first_release_labels() -> None:
     assert len(PRIVACY_PROTOCOL_IDS_V1) == 12
     for protocol_id in PRIVACY_PROTOCOL_IDS_V1:
         assert f'"{protocol_id}"' in source
+
+
+def test_python_native_action_registry_covers_all_exact_twelve_protocols() -> None:
+    source = (
+        ROOT
+        / "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs"
+    ).read_text(encoding="utf-8")
+    assert (
+        "PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: "
+        "[PrivacyNativeActionCapabilityV1; 12]"
+    ) in source
+    for protocol_id in PRIVACY_PROTOCOL_IDS_V1:
+        assert f'"{protocol_id}"' in source
+    assert 'operation_schema: "zk_x509_identity_presentation_v1"' in source
+    assert "PrivacyNativeActionRequestV1::ZkX509" in source
+    assert "ZK-X509 is intentionally absent" not in source

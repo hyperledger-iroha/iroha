@@ -151,8 +151,10 @@ def _write_tar(
     extra_payloads: Mapping[str, bytes],
     source_date_epoch: int,
 ) -> StableFile:
-    if source_date_epoch < 0:
-        _fail("source date epoch must be nonnegative")
+    try:
+        format_source_date_epoch(source_date_epoch)
+    except ReleaseArtifactError as exc:
+        raise TairaCandidateBuildError(str(exc)) from exc
     member_list = sorted(members, key=lambda row: row.archive_relative)
     directory_list = sorted(directories)
     directory_set = set(directory_list)

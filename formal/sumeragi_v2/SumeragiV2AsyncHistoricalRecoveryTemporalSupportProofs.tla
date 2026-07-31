@@ -5867,21 +5867,21 @@ BY DEF HistoricalTemporalFixedClockLeaves,
 Historical producer-continuation ingress-cut corridor.
 
 The target remains in the global durable continuation table while a physical
-Serve or leader-wire barrier owns the historical runner.  The immutable
-target ordinal freezes a finite logical leader-wire universe.  Dormant
-identities in that universe contribute two prepaid non-descent stages:
-reactivation retains the identity but allocates a fresh physical carrier and
-the current per-source predecessor snapshot, then Ingress drain consumes the
-second stage.  Fresh identities use the current shared high-watermark and
-cannot enter the old cut; terminal identities cannot resurrect after GST.
+Serve or leader-wire barrier owns the historical runner.  The target record
+retains both its immutable lifecycle ordinal and the receiver physical
+high-watermark frozen at reservation.  Only already-Active leader-wire records
+below both cuts are predecessors.  Dormant identities contribute zero:
+reactivation retains the logical identity but allocates a physical carrier at
+or above the frozen cut, so it cannot enter the old prefix.  Fresh identities
+likewise cannot enter; terminal identities cannot resurrect after GST.
 For the positive target ordinal, the strict scheduler cut is exactly the
 Logical barrier cutoff `<= targetOrdinal - 1`; an equal-ordinal leader-wire
 carrier is the target lifecycle cell and coalesces instead of being charged.
 
 The inner continuation prefix already charges Candidate, Serve, and
 Reserved/Materialized continuation tokens.  The leader-wire stage budget is
-outside it, so admission or ingress-to-Candidate transfer cannot replenish
-the composite rank.  The physical dependency tail carries the existing
+outside it, so Ingress-to-Candidate transfer cannot replenish the composite
+rank.  The physical dependency tail carries the existing
 earlier-carrier/frozen-prefix pair and explicit
 mode/capacity/runner/priority-selector/lane/source components.  Reaching a
 lower auxiliary rank is not target progress, and clearing the barrier is not
@@ -5889,9 +5889,10 @@ target progress: the only exposed exit is the same framed continuation prefix
 becoming runner-eligible (or its independently proved strict prefix descent).
 ***************************************************************************)
 
-HistoricalCandidateProducerContinuationIngressCutEpisodeRank(node, record) ==
+HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+    node, record, physicalCut) ==
   AsyncCandidateProducerContinuationIngressBarrierRank(
-    node, record.ordinal)
+    node, record.ordinal, physicalCut)
 
 HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier ==
   AsyncFrozenLeaderWireBarrierRankCarrier
@@ -5900,18 +5901,21 @@ HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering ==
   AsyncFrozenLeaderWireBarrierRankOrdering
 
 HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
-    node, record, status, budget, episodeRank) ==
+    node, record, status, budget, physicalCut, episodeRank) ==
   /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
        node, record, status, budget)
+  /\ physicalCut \in Nat
+  /\ physicalCut = record.physicalCut
+  /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
   /\ episodeRank
        \in
          HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
   /\ episodeRank =
        HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-         node, record)
+         node, record, physicalCut)
 
 HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
-    node, record, status, budget, episodeRank) ==
+    node, record, status, budget, physicalCut, episodeRank) ==
   \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
        node, record, status, budget)
   \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
@@ -5922,23 +5926,33 @@ HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
          HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
          HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier):
        HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
-         node, record, status, budget, lower)
+         node, record, status, budget, physicalCut, lower)
+
+\* This predicate is used once, at temporal episode entry.  The quantified
+\* physicalCut is then a rigid value in every lower-rank successor cell.
+HistoricalCandidateProducerContinuationIngressCutCapturedAtPhysicalCut(
+    node, record, status, budget, physicalCut) ==
+  /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+       node, record, status, budget)
+  /\ physicalCut = record.physicalCut
 
 HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
-    node, targetOrdinal) ==
+    node, record) ==
   /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
+  /\ (AsyncLeaderWireEarliestPhysicalIngressRecord(node)).physicalAdmissionOrdinal
+       < record.physicalCut
   /\ (AsyncLeaderWireEarliestPhysicalIngressRecord(node)).schedulerOrdinal
-       < targetOrdinal
+       < record.ordinal
 
 HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds ==
   {"HistoricalRunner", "HistoricalIoWorker"}
 
 HistoricalCandidateProducerContinuationIngressCutFairOwner(
-    node, targetOrdinal) ==
+    node, record) ==
   IF HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
-       node, targetOrdinal)
+       node, record)
   THEN "HistoricalRunner"
-  ELSE IF AsyncCausalEpisodeIoOwnerRequired(node, targetOrdinal)
+  ELSE IF AsyncCausalEpisodeIoOwnerRequired(node, record.ordinal)
        THEN "HistoricalIoWorker"
        ELSE "HistoricalRunner"
 
@@ -5955,12 +5969,15 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutRankIsFinite ==
      record \in AsyncCandidateProducerContinuationRecordSet,
      status \in {"Reserved", "Materialized"},
      budget \in
-       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+     physicalCut \in Nat:
     /\ AsyncStrongTypeInvariant
     /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
          node, record, status, budget)
+    /\ physicalCut = record.physicalCut
+    /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
       => HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-           node, record)
+           node, record, physicalCut)
            \in
              HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
 BY CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
@@ -5982,17 +5999,23 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutClassifiesPhysicalOwner
     /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
          node, record, status, budget)
       => /\ AsyncIngressSchedulerBarrierActive(node)
+         /\ AsyncEarliestIngressPhysicalOrdinal(node) < record.physicalCut
          /\ AsyncEarliestIngressSchedulerOrdinal(node) < record.ordinal
          /\ \/ HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
-                  node, record.ordinal)
+                  node, record)
             \/ /\ AsyncServeIngressOwnsSharedPhysicalTurn(node)
+               /\ AsyncServeIngressAdmissionOrdinal(
+                    node,
+                    AsyncServeEarliestIngressLifecycleOwnerIdentity(node))
+                    < record.physicalCut
                /\ AsyncServeEarliestIngressSchedulerOrdinal(node)
                     < record.ordinal
          /\ HistoricalCandidateProducerContinuationIngressCutFairOwner(
-              node, record.ordinal)
+              node, record)
               \in
                 HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds
-BY AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn,
+BY AsyncCandidateProducerContinuationOnlyPreCutIngressCanBlockRunnerTurn,
+   AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn,
    AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
    AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler,
    FS_CardinalityType, IsaT(1800)
@@ -6046,12 +6069,15 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFram
      record \in AsyncCandidateProducerContinuationRecordSet,
      status \in {"Reserved", "Materialized"},
      budget \in
-       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+     physicalCut \in Nat:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
     /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
          node, record, status, budget)
+    /\ physicalCut = record.physicalCut
+    /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
     /\ [AsyncNext]_AsyncAllVars
       => \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
                node, record, status, budget)'
@@ -6060,18 +6086,18 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFram
          \/ /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
                   node, record, status, budget)'
             /\ <<HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-                    node, record)',
+                    node, record, physicalCut)',
                   HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-                    node, record)>>
+                    node, record, physicalCut)>>
                  \in
                    HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering
          \/ /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
                   node, record, status, budget)'
             /\ HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-                 node, record)'
+                 node, record, physicalCut)'
                  =
                HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-                 node, record)
+                 node, record, physicalCut)
 BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits,
    CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
    CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,
@@ -6087,8 +6113,13 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
    AsyncServeTombstonedIdentityCannotRequeueAtGst,
    AsyncSharedSchedulerHighWatermarkIsMonotone,
    AsyncIngressPhysicalHighWatermarkIsMonotone,
-   PostGstStepCannotCreateDormantLeaderWirePotential,
-   AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix,
+   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
+   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
+   CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage,
+   AsyncCandidateProducerContinuationStepPreservesPhysicalCut,
+   AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn,
    LeaderWireIngressDrainNeverInventsRuntimeOwner,
    RuntimeLeaderWireCannotRetireMerelyFromIngressPop,
    RetireLeaderWireLifecycleRetainsTerminalTombstone,
@@ -6170,7 +6201,7 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled 
          node, record, status, budget)
       => LET owner ==
                HistoricalCandidateProducerContinuationIngressCutFairOwner(
-                 node, record.ordinal)
+                 node, record)
          IN /\ owner
                   \in
                     HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds
@@ -6201,15 +6232,18 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutSelectedActionConsumesC
      record \in AsyncCandidateProducerContinuationRecordSet,
      status \in {"Reserved", "Materialized"},
      budget \in
-       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+     physicalCut \in Nat:
     LET owner ==
           HistoricalCandidateProducerContinuationIngressCutFairOwner(
-            node, record.ordinal)
+            node, record)
     IN /\ AsyncStrongTypeInvariant
        /\ AsyncProgressOwnershipInvariant
        /\ AsyncCandidateServiceLifecycleInvariant
        /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
            node, record, status, budget)
+       /\ physicalCut = record.physicalCut
+       /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
        /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
        /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
        /\ <<HistoricalCandidateProducerContinuationIngressCutFairAction(
@@ -6221,9 +6255,9 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutSelectedActionConsumesC
           \/ /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
                    node, record, status, budget)'
              /\ <<HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-                     node, record)',
+                     node, record, physicalCut)',
                    HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-                     node, record)>>
+                     node, record, physicalCut)>>
                   \in
                     HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering
 BY HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFrame,
@@ -6244,29 +6278,35 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutOwnerPersistsInCell ==
      record \in AsyncCandidateProducerContinuationRecordSet,
      status \in {"Reserved", "Materialized"},
      budget \in
-       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+     physicalCut \in Nat:
     LET owner ==
           HistoricalCandidateProducerContinuationIngressCutFairOwner(
-            node, record.ordinal)
+            node, record)
         episodeRank ==
           HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-            node, record)
+            node, record, physicalCut)
     IN /\ AsyncStrongTypeInvariant
        /\ AsyncProgressOwnershipInvariant
        /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
             node, record, status, budget)
+       /\ physicalCut = record.physicalCut
+       /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)
        /\ [AsyncNext]_AsyncAllVars
        /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
             node, record, status, budget)'
        /\ HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
-            node, record)' = episodeRank
+            node, record, physicalCut)' = episodeRank
        => HistoricalCandidateProducerContinuationIngressCutFairOwner(
-            node, record.ordinal)' = owner
+            node, record)' = owner
 BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits,
    CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
+   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
+   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   AsyncCandidateProducerContinuationStepPreservesPhysicalCut,
    AsyncServeQueuedIdentityDepartureInstallsTombstone,
    AsyncServeTombstonedIdentityCannotRequeueAtGst,
-   PostGstStepCannotCreateDormantLeaderWirePotential,
    IsaT(2400)
    DEF HistoricalCandidateProducerContinuationIngressCutFairOwner,
        HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
@@ -6303,12 +6343,13 @@ HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty(
           status \in {"Reserved", "Materialized"},
           budget \in
             AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+          physicalCut \in Nat,
           episodeRank \in
             HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier:
          HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
-           node, record, status, budget, episodeRank)
+           node, record, status, budget, physicalCut, episodeRank)
            ~> HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
-                node, record, status, budget, episodeRank)
+                node, record, status, budget, physicalCut, episodeRank)
 
 THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankStep ==
   \A initialContext:
@@ -6337,6 +6378,58 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        HistoricalCandidateProducerContinuationAtStatus,
        AsyncLiveSpecAt
 
+HistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCutProperty(
+    specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          record \in AsyncCandidateProducerContinuationRecordSet,
+          status \in {"Reserved", "Materialized"},
+          budget \in
+            AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+          physicalCut \in Nat:
+         HistoricalCandidateProducerContinuationIngressCutCapturedAtPhysicalCut(
+           node, record, status, budget, physicalCut)
+           ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                    node, record, status, budget)
+               \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+                    node, record, status, budget)
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutResidualCapturesPhysicalCut ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+         node, record, status, budget)
+      => \E physicalCut \in Nat:
+           /\ HistoricalCandidateProducerContinuationIngressCutCapturedAtPhysicalCut(
+                node, record, status, budget, physicalCut)
+           /\ HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+                node, record, status, budget, physicalCut,
+                HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                  node, record, physicalCut))
+BY HistoricalCandidateProducerContinuationIngressCutRankIsFinite, IsaT(600)
+   DEF HistoricalCandidateProducerContinuationIngressCutCapturedAtPhysicalCut,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank
+
+THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCut ==
+  \A initialContext:
+    HistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCutProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankStep,
+   HistoricalCandidateProducerContinuationIngressCutRankIsFinite,
+   HistoricalCandidateProducerContinuationIngressCutResidualCapturesPhysicalCut,
+   AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded,
+   WellFoundedLeadsTo, PTL
+   DEF HistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCutProperty,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
+
 HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty(
     specification) ==
   specification
@@ -6356,16 +6449,12 @@ THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRanked
   \A initialContext:
     HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty(
       AsyncLiveSpecAt(initialContext))
-BY AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankStep,
-   HistoricalCandidateProducerContinuationIngressCutRankIsFinite,
-   AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded,
-   WellFoundedLeadsTo, PTL
+BY AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCut,
+   HistoricalCandidateProducerContinuationIngressCutResidualCapturesPhysicalCut,
+   PTL
    DEF HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
+       HistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCutProperty,
+       HistoricalCandidateProducerContinuationIngressCutCapturedAtPhysicalCut
 
 THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutClosure ==
   \A initialContext:

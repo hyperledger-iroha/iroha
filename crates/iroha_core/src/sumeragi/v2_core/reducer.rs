@@ -5367,8 +5367,7 @@ mod source_link_tests {
             })
             .expect("complete the recovered Commit signature");
 
-        let incoming_timeout =
-            timeout_certificate(&context, 1, Some(incoming_prepare.clone()));
+        let incoming_timeout = timeout_certificate(&context, 1, Some(incoming_prepare.clone()));
         let begin = pending
             .step(Event::TimeoutCertificateReceived {
                 tag: pending.current_tag(),
@@ -5407,10 +5406,7 @@ mod source_link_tests {
 
         let projection = pending.transition_projection(&event, &after, outcome.effects());
         for incoming in [
-            projection
-                .enter_view
-                .pending_record_timeout
-                .highest_prepare,
+            projection.enter_view.pending_record_timeout.highest_prepare,
             projection
                 .enter_view
                 .pending_continuation_timeout

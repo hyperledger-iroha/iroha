@@ -47,7 +47,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_data_model::prelude::{DomainId, QueryBuilderExt};
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, sample_ivm_path};
+use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
 use reqwest::Url;
 
@@ -63,13 +63,6 @@ fn program() -> PathBuf {
 
 fn program_reuse_existing_or_build() -> PathBuf {
     iroha_program_reuse_existing_or_resolve().unwrap()
-}
-
-fn ivm_build_profile_exists() -> bool {
-    // Mirror the check used in other integration tests
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/ivm/target/prebuilt/build_config.toml")
-        .exists()
 }
 
 fn soracloud_fixture(path: &str) -> PathBuf {
@@ -985,24 +978,7 @@ fn tagged_enum_label<'a>(value: &'a Value, tag: &str) -> Option<&'a str> {
 #[tokio::test]
 async fn can_upgrade_executor() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
-    if !ivm_build_profile_exists() {
-        eprintln!("Skipping test: missing IVM build profile");
-        return Ok(());
-    }
-    // Guard against placeholder prebuilt samples (tiny `.to` blobs). Real
-    // executor bytecode should be larger than a minimal stub. If we detect a
-    // stub, skip this test to avoid a false failure.
-    let sample_path = sample_ivm_path("executor_with_admin");
-    if let Ok(meta) = tokio::fs::metadata(&sample_path).await
-        && meta.len() < 64
-    {
-        eprintln!(
-            "Skipping test: prebuilt IVM sample appears to be a placeholder: {} ({} bytes)",
-            sample_path.display(),
-            meta.len()
-        );
-        return Ok(());
-    }
+    let sample_path = workspace_root().join("defaults/executor.to");
     // Assuming Alice already has the CanUpgradeExecutor permission
     let builder = NetworkBuilder::new()
         .with_ivm_fuel(iroha_test_network::IvmFuelConfig::Auto)

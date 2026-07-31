@@ -399,17 +399,37 @@ exposed as `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` is capability-only. `capabilitiesArchiveV1()` returns the
-canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
+`PrivacyNativeBridge` exposes local build metadata only.
+`compiledProfileCatalogV1()` returns this binary's canonical typed
+`PrivacyCompiledProfileCatalogV1` Norito archive, and
 `protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
 generic proof request/build/verify ABI and free-form algorithm selectors are
-absent; proofs must use protocol-specific typed APIs.
+absent; proofs must use protocol-specific typed APIs. The local catalog never
+establishes activation or readiness; proof submission requires a fresh
+committed `/v1/privacy/capabilities` snapshot from live Torii.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.
 `ClientConfigManifestLoader` rejects those keys (and their camel-case aliases)
 at any depth. Proof construction must use Torii's committed
 `/v1/privacy/capabilities` response and the on-chain verifying-key registry.
+
+`PrivacyExact12FixtureCodecV1` decodes the first-release
+`PrivacyExact12FixtureBundleV1` entirely in Kotlin; it does not load the native
+bridge. Pass one canonical standard-Base64 line (without the fixture file's
+final LF), or decode raw Norito bytes directly:
+
+```kotlin
+val bundle = PrivacyExact12FixtureCodecV1.decodeCanonicalBase64(fixtureLine)
+val canonicalArchive = PrivacyExact12FixtureCodecV1.encodeCanonical(bundle)
+PrivacyExact12FixtureCodecV1.requireCanonicalArchive(receivedArchive, canonicalArchive)
+```
+
+The codec requires the exact schema, version, twelve-row order, uncompressed
+`COMPACT_LEN` layout, and configured field/aggregate limits. It rejects
+alternate Base64, truncation, trailing or unknown data, and reordered rows.
+Use `requireCanonicalArchive` with an independently trusted fixture when exact
+cross-row and cross-field identity matters.
 
 The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,

@@ -210,7 +210,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core, DecodeFromSlice},
+    core::{self as norito_core},
     decode_from_bytes,
     json::{self, JsonDeserialize, Map, Value},
 };
@@ -2353,19 +2353,14 @@ pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
 
 #[allow(unsafe_code)]
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
-    if let Ok(instruction) = decode_from_bytes::<InstructionBox>(bytes) {
-        return Ok(instruction);
+    let primary_error = match norito::decode_canonical::<InstructionBox>(bytes) {
+        Ok(instruction) => return Ok(instruction),
+        Err(error) => error,
+    };
+    match norito::decode_canonical::<ProposeValidationFeePolicy>(bytes) {
+        Ok(instruction) => Ok(instruction.into()),
+        Err(_) => Err(primary_error),
     }
-    if let Ok(instruction) = decode_from_bytes::<ProposeValidationFeePolicy>(bytes) {
-        return Ok(instruction.into());
-    }
-    let view = norito_core::from_bytes_view(bytes)?;
-    let payload = view.as_bytes();
-    let (instruction, used) = <InstructionBox as DecodeFromSlice>::decode_from_slice(payload)?;
-    if used != payload.len() {
-        return Err(norito_core::Error::LengthMismatch);
-    }
-    Ok(instruction)
 }
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 #[napi]

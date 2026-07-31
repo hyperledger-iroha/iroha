@@ -1,6 +1,6 @@
 ---- MODULE SumeragiV2AdequateLeaderProducerTransportClosureProofs ----
 EXTENDS SumeragiV2AsyncCandidateProducerContinuationProofs,
-        SumeragiV2AdequateLeaderServiceClosureProofs
+        SumeragiV2AdequateLeaderRetainedProducerClosureProofs
 
 (***************************************************************************
 Exact adequate-leader producer/transport boundary.
@@ -22,10 +22,12 @@ the complement itself into a fair owner.
 
 The scheduled-producer projection exposes an existing bounded lifecycle
 reservation before physical drain; after drain, the stage-exact continuation
-inherits the same ordinal. It does not prove that an empty producer residual
-contains such a scheduled candidate. That remaining debt needs a real durable
-semantic-handoff producer reservation (or an unreachability proof); this
-module keeps it explicit instead of manufacturing a producer.
+inherits the same ordinal.  A source-qualified packet before admission, or a
+retained nonterminal Serve attempt after atomic admission, is now an explicit
+finite-universe producer owner too.  It does not prove that an otherwise empty
+producer residual contains such an owner.  That remaining debt still needs a
+real durable semantic-handoff producer reservation (or an unreachability
+proof); this module keeps it explicit instead of manufacturing a producer.
 ***************************************************************************)
 
 AdequateLeaderTargetProducerTransportOccurrenceSource(
@@ -121,6 +123,17 @@ AdequateLeaderTargetConcreteProducerTransportOwner(
           \/ LeaderWireCandidateOwned(item)
           \/ LeaderWireLiveControlServiceOwner(item)
 
+\* Keep the retained ingress producer on a distinct boundary until the
+\* source-derived journal rank is supplied.  Widening the legacy concrete
+\* predicate would let the older synthetic ordinal-ceiling route consume it
+\* without proving the request/source episode.
+AdequateLeaderTargetConcreteRetainedProducerTransportOwner(
+    target, leaderContext, leader, leaderView, subject) ==
+  \/ AdequateLeaderTargetConcreteProducerTransportOwner(
+       target, leaderContext, leader, leaderView, subject)
+  \/ AdequateLeaderTargetRetainedProducerTransportOwner(
+       target, leaderContext, leader, leaderView, subject)
+
 THEOREM AdequateLeaderScheduledProducerOriginUsesBoundedLifecycleToken ==
   \A target, leaderContext, leader, leaderView, subject:
     /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
@@ -168,10 +181,11 @@ Receipt-backed producer exposure.
 
 This is a state split only.  A scheduled reservation, inherited continuation,
 active exact leader wire, durable body terminal, or frozen replay origin is a
-concrete owner supplied to the separate temporal closure provider.  An
-authority-bound corridor exit is already the exact occurrence goal.  The
-service receipt itself is never a producer and count-increasing replenishment
-is never called progress.
+concrete owner supplied to the legacy temporal closure provider.  The
+source-qualified retained ingress owner is composed only by the strengthened
+boundary below.  An authority-bound corridor exit is already the exact
+occurrence goal.  The service receipt itself is never a producer and
+count-increasing replenishment is never called progress.
 ***************************************************************************)
 THEOREM AdequateLeaderProducerOriginReceiptClosesExactDebt ==
   \A target, leaderContext, leader, leaderView,
@@ -330,6 +344,34 @@ BY PTL
        AdequateLeaderTargetProducerTransportOccurrenceClosureProperty,
        AdequateLeaderTargetProducerTransportOccurrenceSource,
        AdequateLeaderTargetProducerTransportOccurrenceGoal
+
+(***************************************************************************
+Retained-producer/occurrence composition seam.
+
+The first conjunct closes the existing candidate/wire occurrence corridor.
+The second closes only the source-qualified ingress replenishment episode.
+Keeping the pair explicit prevents a downstream rotating-leader consumer from
+silently using the older occurrence theorem while omitting the new monotone
+producer journal.  The composition theorem is conditional on the concrete
+retained-producer step provider; it introduces no additional fairness.
+***************************************************************************)
+AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+    specification) ==
+  /\ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
+       specification)
+  /\ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty(
+       specification)
+
+THEOREM AdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose ==
+  \A specification:
+    /\ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
+         specification)
+    /\ AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty(
+         specification)
+    => AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+         specification)
+BY AdequateLeaderFiniteRetainedProducerBudgetClosesNonDescentEpisode
+   DEF AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty
 
 (***************************************************************************
 Authority-bound fixed-deadline carry interface.

@@ -97,11 +97,19 @@ esac
 
 export PYTHONDONTWRITEBYTECODE=1
 
+"${NODE_BIN}" scripts/build-dist.mjs
 "${NODE_BIN}" --test \
   test/privacyFfiContractParity.test.js \
   test/privacyCatalogParity.test.js \
-  test/privacyNative.test.js
-"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy capability bridge" \
+  test/privacyNative.test.js \
+  test/privacyCapabilities.test.js
+"${NODE_BIN}" --test --test-name-pattern "verifier ids use|complete ProofBox|exact canonical base64|commitments and envelope|support lane privacy|reject empty lane|malformed and impossible|non-canonical lane|invalid ids and extra tails" \
+  test/instructionBuilders.test.js
+"${NODE_BIN}" --test test/proofAttachmentParity.test.js
+"${NODE_BIN}" --test test/privacyExact12FixtureBundle.test.js
+"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy capability bridge|package declarations expose readonly snapshot metadata without retired privacy types" \
   test/package_dist.test.js
+"${NODE_BIN}" --test --test-name-pattern "strict NodeNext resolves the root and every public subpath from a packed layout" \
+  test/packageTypes.test.js
 "${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy capability bridge as a safe stub" \
   test/crypto.browser.test.js

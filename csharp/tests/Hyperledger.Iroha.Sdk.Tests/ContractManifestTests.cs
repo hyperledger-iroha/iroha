@@ -61,12 +61,12 @@ public sealed class ContractManifestTests
         var lowercase = ReplaceFirst(
             ReplaceFirst(response, "\"id\":\"settle\"", "\"id\":\"amount\""),
             "\"namespace\":null",
-            "\"namespace\":\"amount\"");
+            "\"namespace\":\"RemoteLedger\"");
         var manifest = JsonSerializer.Deserialize<ToriiContractCodeRecord>(lowercase)!.Manifest;
         var entrypoint = manifest.Entrypoints!.Single();
         var trigger = entrypoint.Triggers.Single();
         Assert.Equal("amount", trigger.Id);
-        Assert.Equal("amount", trigger.Callback.Namespace);
+        Assert.Equal("RemoteLedger", trigger.Callback.Namespace);
 
         var retiredId = manifest with
         {

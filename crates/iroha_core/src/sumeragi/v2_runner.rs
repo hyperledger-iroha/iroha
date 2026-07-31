@@ -1467,7 +1467,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // The matching PendingFetch is itself an older passive
                     // owner, so this is one bounded opportunity rather than a
                     // prerequisite for retry.
-                    advance_executor_once_before_exact_serve(&mut executor, &mut services)?;
+                    advance_executor_once_before_exact_serve(
+                        &block_rx,
+                        &mut executor,
+                        &mut services,
+                    )?;
                 }
                 match executor.retry_retained_certified_body_response(&mut services) {
                     Ok(_) => {}
@@ -1528,7 +1532,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 1,
                             )?;
                         } else {
-                            advance_executor_once_before_exact_serve(&mut executor, &mut services)?;
+                            advance_executor_once_before_exact_serve(
+                                &block_rx,
+                                &mut executor,
+                                &mut services,
+                            )?;
                         }
                     }
                     older_predecessor_remains = executor
@@ -1777,7 +1785,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     control_queue_capacity,
                 )?;
             } else {
-                advance_executor(&mut executor, &mut services, control_queue_capacity)?;
+                advance_executor(
+                    &block_rx,
+                    &mut executor,
+                    &mut services,
+                    control_queue_capacity,
+                )?;
                 let _ = retry_exact_output_and_apply_sidecar_admissions(
                     &mut lane_work,
                     &services,
@@ -2844,7 +2857,7 @@ fn drain_v2_ingress(
                 .local_proposal_directive()?
                 .decided_subject()
                 .is_some();
-            advance_executor(executor, services, 1)?;
+            advance_executor(receiver, executor, services, 1)?;
             let is_terminal = executor
                 .local_proposal_directive()?
                 .decided_subject()
@@ -3941,11 +3954,13 @@ fn commit_certificate_admission_completed(
 }
 
 fn advance_executor(
+    receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
     for _ in 0..limit.max(1) {
+        executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
         match executor.step(Instant::now(), services)? {
             EffectExecutorStep::Idle => break,
             EffectExecutorStep::Advanced { .. } => {
@@ -3967,9 +3982,11 @@ fn advance_executor(
 /// the ordinary runner path performs them after the barrier drains. This is
 /// deliberately not a loop, even when the older causal episode remains live.
 fn advance_executor_once_before_exact_serve(
+    receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
 ) -> Result<(), V2RunnerError> {
+    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
     let _ = executor.step(Instant::now(), services)?;
     Ok(())
 }
@@ -5721,10 +5738,11 @@ mod tests {
             ownership.leader_wire_runtime_receipt().is_some(),
             "the synthetic stale Coalesce result carries a fresh runtime receipt"
         );
-        assert!(
+        assert_eq!(
             gate.earliest_ingress_scheduler_ordinal()
-                .expect("read runner leader-wire minimum")
-                .is_some()
+                .expect("read runner leader-wire minimum"),
+            None,
+            "a runtime-bound owner has already left the durable Ingress selector"
         );
 
         assert!(matches!(

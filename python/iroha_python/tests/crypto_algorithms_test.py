@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from array import array
+from typing import Any
 
 import pytest
 
@@ -65,7 +66,7 @@ def test_lane_privacy_attachment_rejects_padded_verifier_selectors() -> None:
         "commitment_id": 7,
         "leaf": b"l" * 32,
         "leaf_index": 0,
-        "audit_path": [None, b"a" * 32],
+        "audit_path": [b"a" * 32, b"b" * 32],
         "proof_backend": "halo2/ipa",
         "proof_bytes": b"proof",
         "verifying_key_name": "vk_lane_privacy",
@@ -78,23 +79,78 @@ def test_lane_privacy_attachment_rejects_padded_verifier_selectors() -> None:
     for override, message in [
         (
             {"proof_backend": " halo2/ipa"},
-            r"proof_backend must not contain surrounding whitespace",
+            r"proof_backend must use the bounded portable",
         ),
         (
             {"proof_backend": "halo2/ipa "},
-            r"proof_backend must not contain surrounding whitespace",
+            r"proof_backend must use the bounded portable",
         ),
         (
             {"verifying_key_name": " vk_lane_privacy"},
-            r"verifying_key_name must not contain surrounding whitespace",
+            r"verifying_key_name must use the bounded portable",
         ),
         (
             {"verifying_key_name": "vk_lane_privacy "},
-            r"verifying_key_name must not contain surrounding whitespace",
+            r"verifying_key_name must use the bounded portable",
         ),
     ]:
         with pytest.raises(ValueError, match=message):
             crypto_module._normalize_lane_privacy_attachment({**base, **override})
+
+
+def test_lane_privacy_attachment_normalizer_enforces_first_release_contract() -> None:
+    base: dict[str, Any] = {
+        "commitment_id": 7,
+        "leaf": b"l" * 32,
+        "leaf_index": 1,
+        "audit_path": [b"a" * 32],
+        "proof_backend": "halo2/ipa",
+        "proof_bytes": b"proof",
+        "verifying_key_name": "vk_lane_privacy",
+    }
+    assert crypto_module._normalize_lane_privacy_attachment(base) == base
+
+    cases: list[tuple[dict[str, Any], type[Exception], str]] = [
+        ({"shadow": 1}, ValueError, "unknown first-release field"),
+        ({"commitment_id": True}, TypeError, "unsigned 16-bit"),
+        ({"commitment_id": -1}, ValueError, "unsigned 16-bit"),
+        ({"commitment_id": 1 << 16}, ValueError, "unsigned 16-bit"),
+        ({"leaf_index": True}, TypeError, "unsigned 32-bit"),
+        ({"leaf_index": -1}, ValueError, "unsigned 32-bit"),
+        ({"leaf_index": 1 << 32}, ValueError, "unsigned 32-bit"),
+        ({"proof_backend": "Halo2/ipa"}, ValueError, "portable"),
+        ({"proof_backend": "halo2/ipa/../vk"}, ValueError, "portable"),
+        ({"proof_backend": "halo2/ipa\ud800"}, ValueError, "portable"),
+        ({"verifying_key_name": "vk_transfer_"}, ValueError, "portable"),
+        ({"verifying_key_name": "a" * 257}, ValueError, "portable"),
+        ({"proof_bytes": b""}, ValueError, "non-empty"),
+        ({"audit_path": []}, ValueError, "between 1 and 255"),
+        ({"audit_path": [b"a" * 32] * 256}, ValueError, "between 1 and 255"),
+        ({"audit_path": [None]}, ValueError, "must contain a sibling"),
+        ({"audit_path": [b"a" * 31]}, ValueError, "exactly 32 bytes"),
+        ({"audit_path": {b"a" * 32}}, TypeError, "list or tuple"),
+        ({"leaf_index": 2}, ValueError, "not representable"),
+    ]
+    for override, error_type, message in cases:
+        with pytest.raises(error_type, match=message):
+            crypto_module._normalize_lane_privacy_attachment({**base, **override})
+
+
+def test_lane_privacy_attachment_normalizer_requires_every_declared_field() -> None:
+    base = {
+        "commitment_id": 7,
+        "leaf": b"l" * 32,
+        "leaf_index": 0,
+        "audit_path": [b"a" * 32],
+        "proof_backend": "halo2/ipa",
+        "proof_bytes": b"proof",
+        "verifying_key_name": "vk_lane_privacy",
+    }
+    for field in base:
+        with pytest.raises(KeyError, match="missing required key"):
+            crypto_module._normalize_lane_privacy_attachment(
+                {key: value for key, value in base.items() if key != field}
+            )
 
 
 def test_supported_crypto_algorithms_include_all_rust_signature_suites() -> None:

@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncFiniteProducerEpisodes ----
-EXTENDS SumeragiV2AsyncNetwork
+EXTENDS SumeragiV2AsyncCausalWorkBudgetProofs
 
 (***************************************************************************
 Async specialization of the finite producer-episode kernel.
@@ -202,57 +202,16 @@ AsyncFiniteReplyServeJobPhysicalKeys ==
       index \in AsyncIoServeIndices(asyncIoQueues[node])}:
     node \in ValidatorIds}
 
-AsyncFiniteReplyOutputCarriers ==
-  UNION {
-    {output \in tombstone.outputs:
-       /\ output.key.owner \in ValidatorIds
-       /\ output.key.identity.request
-            \in AsyncReplySemanticIdentities
-       /\ output.key.source \in AsyncAuthenticatedDeliverySources}:
-    tombstone \in asyncServeTombstones}
-
-AsyncFiniteReplyOutputPhysicalKey(output) ==
-  AsyncFiniteReplyPhysicalSourceKey(
-    output.key.owner,
-    output.key.identity.request,
-    output.key.source)
-
-AsyncFiniteReplyOutputPhysicalKeys ==
-  {AsyncFiniteReplyOutputPhysicalKey(output):
-     output \in AsyncFiniteReplyOutputCarriers}
-
 (***************************************************************************
-An output cached in a tombstone is not by itself physical completion.
-Completion requires the matching source attempt to be `Complete` and the
-same source-keyed response to have crossed the model's atomic emitted edge:
-the item is in immutable send history and a matching authenticated packet is
-present in transport in that transition's post-state.  The composed journal
-records this transient edge before later transport delivery removes it.
+Base tombstone outputs are deliberately route-neutral network items.  Their
+authenticated source is retained only by `asyncServeAttempts`; manufacturing
+a source-keyed output record here would reintroduce the provenance defect.
+The reply-route product owns the positive-output/ticket edge, so this base
+specialization exposes no emitted ReplyComplete episode.
 ***************************************************************************)
-
-AsyncFiniteReplyOutputHasEmittedTransportEdge(output) ==
-  /\ output.item \in asyncSentItems
-  /\ \E packet \in asyncTransport:
-       /\ packet.item = output.item
-       /\ packet.authenticatedSource = output.key.source
-
-AsyncFiniteReplyOutputHasCompleteAttempt(output) ==
-  \E attempt \in asyncServeAttempts:
-    /\ attempt.key = output.key
-    /\ attempt.stage = "Complete"
-
-AsyncFiniteReplyEmittedCompletionOutputCarriers ==
-  {output \in AsyncFiniteReplyOutputCarriers:
-     /\ AsyncFiniteReplyOutputHasCompleteAttempt(output)
-     /\ AsyncFiniteReplyOutputHasEmittedTransportEdge(output)}
-
-AsyncFiniteReplyEmittedCompletionPhysicalKeys ==
-  {AsyncFiniteReplyOutputPhysicalKey(output):
-     output \in AsyncFiniteReplyEmittedCompletionOutputCarriers}
-
-AsyncFiniteReplyEmittedCompletionObligations ==
-  {AsyncFiniteReplyObligationForPhysicalKey(key):
-     key \in AsyncFiniteReplyEmittedCompletionPhysicalKeys}
+AsyncFiniteReplyOutputPhysicalKeys == {}
+AsyncFiniteReplyEmittedCompletionPhysicalKeys == {}
+AsyncFiniteReplyEmittedCompletionObligations == {}
 
 AsyncFiniteProducerSourceCompatible(obligation) ==
   IF obligation.request.family = "Timeout"
@@ -448,13 +407,11 @@ AsyncFiniteTimeoutVisibleEpisodes(vote) ==
 (***************************************************************************
 Source-connected reply observations available in base AsyncNetwork.
 
-The union follows one physical request/source coordinate through transport,
-the source-indexed ingress lane, the retained source attempt, the coalesced
-semantic Serve job's matching attempt set, and source-keyed output cache.
-Only `ReplyObserve` is consumed at this boundary: output emission is journaled
-separately by the route composition and cannot complete route cursor work by
-itself.  The monotone producer journal prevents a source obligation from being
-recreated when any volatile carrier advances or disappears.
+The physical carrier union remains a diagnostic projection.  Ownership is
+derived from the base monotone consumed journal, not from volatile packet or
+lane residence.  Only `ReplyObserve` is consumed at this boundary; the
+positive output/ticket edge belongs to ReplyRoutes.  Exact retransmission is
+therefore a journal stutter even after every volatile carrier disappears.
 ***************************************************************************)
 
 AsyncFiniteObservedReplyAttempts ==
@@ -467,9 +424,21 @@ AsyncFiniteReplyPhysicalSourceKeys ==
     \cup AsyncFiniteReplyServeJobPhysicalKeys
     \cup AsyncFiniteReplyOutputPhysicalKeys
 
+AsyncFiniteBaseReplyIngressEpisodes ==
+  {episode \in asyncProducerConsumedEpisodes:
+     /\ episode.request \in AsyncServeLogicalRequestIdentities
+     /\ episode.authenticatedSource
+          \in AsyncAuthenticatedDeliverySources}
+
+AsyncFiniteReplyObligationForBaseEpisode(episode) ==
+  AsyncFiniteReplyObligation(
+    episode.request.owner,
+    episode.request.request,
+    episode.authenticatedSource)
+
 AsyncFiniteObservedReplyObligations ==
-  {AsyncFiniteReplyObligationForPhysicalKey(key):
-     key \in AsyncFiniteReplyPhysicalSourceKeys}
+  {AsyncFiniteReplyObligationForBaseEpisode(episode):
+     episode \in AsyncFiniteBaseReplyIngressEpisodes}
 
 AsyncFiniteProducerObservedObligations ==
   {AsyncFiniteTimeoutObligation(vote):
@@ -482,9 +451,10 @@ AsyncFiniteProducerVisibleEpisodes ==
        vote \in AsyncFiniteTrackedTimeoutVotes}
   \cup
   {AsyncFiniteProducerEpisode(
-     AsyncFiniteReplyObligationForPhysicalKey(key), "ReplyObserve",
-     AsyncFiniteValidatorCursor(key.source)):
-     key \in AsyncFiniteReplyPhysicalSourceKeys}
+     AsyncFiniteReplyObligationForBaseEpisode(episode),
+     "ReplyObserve",
+     AsyncFiniteValidatorCursor(episode.authenticatedSource)):
+     episode \in AsyncFiniteBaseReplyIngressEpisodes}
 
 (***************************************************************************
 Opaque current Async rank snapshot.
@@ -624,6 +594,115 @@ AsyncFiniteProducerKernel ==
     fpRankState <- asyncFiniteProducerRankState
 
 (***************************************************************************
+Composition with the existing candidate-episode budget.
+
+The ingress component is the finite source/request universe minus the base
+consumed journal.  The tail is the existing exact remaining-candidate
+occurrence budget at a frozen scheduler cutoff;
+`AsyncCandidateProducerEpisodeBudget` is its already-proved bound and radix,
+not a new producer limit or runtime knob.  A first distinct ingress episode
+may decrease the leading component.  Exact retransmission preserves it and
+is a separate proofless non-descent episode; it is never called progress.
+***************************************************************************)
+AsyncFiniteCandidateEpisodeRadix ==
+  AsyncCandidateProducerEpisodeBudget + 1
+
+AsyncFiniteCandidateEpisodeTailRank(node, cutoffOrdinal) ==
+  AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+    node, cutoffOrdinal)
+
+AsyncFiniteCandidateEpisodeTailTypeInvariant ==
+  \A node \in ValidatorIds, cutoffOrdinal \in Nat:
+    AsyncFiniteCandidateEpisodeTailRank(node, cutoffOrdinal)
+      \in 0..AsyncCandidateProducerEpisodeBudget
+
+AsyncFiniteIngressCandidateCompositeRank(node, cutoffOrdinal) ==
+  AsyncProducerRemainingIngressRank
+    * AsyncFiniteCandidateEpisodeRadix
+    + AsyncFiniteCandidateEpisodeTailRank(node, cutoffOrdinal)
+
+AsyncFiniteIngressCandidateCompositeRankFor(
+    request, node, cutoffOrdinal) ==
+  AsyncProducerRemainingIngressRankFor(request)
+    * AsyncFiniteCandidateEpisodeRadix
+    + AsyncFiniteCandidateEpisodeTailRank(node, cutoffOrdinal)
+
+THEOREM AsyncFiniteStrongTypeBoundsCandidateEpisodeTail ==
+  AsyncStrongTypeInvariant
+    => AsyncFiniteCandidateEpisodeTailTypeInvariant
+BY AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode, Isa
+   DEF AsyncFiniteCandidateEpisodeTailTypeInvariant,
+       AsyncFiniteCandidateEpisodeTailRank
+
+THEOREM AsyncFiniteFirstDistinctIngressDominatesCandidateEpisodeTail ==
+  \A node \in ValidatorIds, cutoffOrdinal \in Nat:
+    /\ AsyncConfiguration
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerFirstDistinctIngressEpisodeStep
+    /\ AsyncFiniteCandidateEpisodeTailTypeInvariant
+    /\ AsyncFiniteCandidateEpisodeTailTypeInvariant'
+    => AsyncFiniteIngressCandidateCompositeRank(
+         node, cutoffOrdinal)'
+         < AsyncFiniteIngressCandidateCompositeRank(
+             node, cutoffOrdinal)
+BY AsyncProducerFirstDistinctEpisodeStrictlyConsumesFiniteRank, Isa
+   DEF AsyncFiniteIngressCandidateCompositeRank,
+       AsyncFiniteCandidateEpisodeRadix,
+       AsyncFiniteCandidateEpisodeTailTypeInvariant
+
+THEOREM AsyncFiniteFirstDistinctTargetIngressDominatesCandidateEpisodeTail ==
+  \A request \in AsyncProducerIngressRequests,
+     node \in ValidatorIds, cutoffOrdinal \in Nat:
+    /\ AsyncConfiguration
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerFirstDistinctIngressEpisodeStepFor(request)
+    /\ AsyncFiniteCandidateEpisodeTailTypeInvariant
+    /\ AsyncFiniteCandidateEpisodeTailTypeInvariant'
+    => AsyncFiniteIngressCandidateCompositeRankFor(
+         request, node, cutoffOrdinal)'
+         < AsyncFiniteIngressCandidateCompositeRankFor(
+             request, node, cutoffOrdinal)
+BY AsyncProducerFirstDistinctEpisodeForStrictlyConsumesFiniteRank, Isa
+   DEF AsyncFiniteIngressCandidateCompositeRankFor,
+       AsyncFiniteCandidateEpisodeRadix,
+       AsyncFiniteCandidateEpisodeTailTypeInvariant
+
+THEOREM AsyncFiniteExactRetransmissionPreservesCompositeUnderTailFrame ==
+  \A node \in ValidatorIds, cutoffOrdinal \in Nat:
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerExactRetransmissionEpisodeStep
+    /\ AsyncFiniteCandidateEpisodeTailRank(
+         node, cutoffOrdinal)' =
+         AsyncFiniteCandidateEpisodeTailRank(
+           node, cutoffOrdinal)
+    => AsyncFiniteIngressCandidateCompositeRank(
+         node, cutoffOrdinal)' =
+         AsyncFiniteIngressCandidateCompositeRank(
+           node, cutoffOrdinal)
+BY AsyncProducerExactRetransmissionIsJournalStutter, Isa
+   DEF AsyncFiniteIngressCandidateCompositeRank
+
+THEOREM AsyncFiniteExactTargetRetransmissionPreservesCompositeUnderTailFrame ==
+  \A request \in AsyncProducerIngressRequests,
+     node \in ValidatorIds, cutoffOrdinal \in Nat:
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerExactRetransmissionEpisodeStepFor(request)
+    /\ AsyncFiniteCandidateEpisodeTailRank(
+         node, cutoffOrdinal)' =
+         AsyncFiniteCandidateEpisodeTailRank(
+           node, cutoffOrdinal)
+    => AsyncFiniteIngressCandidateCompositeRankFor(
+         request, node, cutoffOrdinal)' =
+         AsyncFiniteIngressCandidateCompositeRankFor(
+           request, node, cutoffOrdinal)
+BY AsyncProducerExactRetransmissionPreservesTargetIngressRank, Isa
+   DEF AsyncFiniteIngressCandidateCompositeRankFor
+
+(***************************************************************************
 Coupled initialization, deterministic projection step, and spec skeleton.
 
 Every Async step journals exactly the obligations and episodes visible in its
@@ -725,19 +804,44 @@ AsyncFiniteProducerObservationInvariant ==
   /\ AsyncFiniteProducerVisibleEpisodes
        \subseteq asyncFiniteProducerConsumedEpisodes
 
+AsyncFiniteBaseReplyJournalProjectionInvariant ==
+  \A episode \in AsyncFiniteBaseReplyIngressEpisodes:
+    LET obligation ==
+          AsyncFiniteReplyObligationForBaseEpisode(episode)
+        observed ==
+          AsyncFiniteProducerEpisode(
+            obligation, "ReplyObserve",
+            AsyncFiniteValidatorCursor(
+              episode.authenticatedSource))
+    IN /\ obligation \in asyncFiniteProducerKnownObligations
+       /\ observed \in asyncFiniteProducerConsumedEpisodes
+
 AsyncFiniteProducerRankSnapshotInvariant ==
   asyncFiniteProducerRankState =
     AsyncFiniteProducerCurrentRankState
 
 AsyncFiniteProducerSafety ==
   /\ AsyncFiniteProducerKernel!ProducerSafetyInvariant
+  /\ AsyncProducerTypeInvariant
   /\ AsyncFiniteProducerIdentityInvariant
   /\ AsyncFiniteProducerObservationInvariant
+  /\ AsyncFiniteBaseReplyJournalProjectionInvariant
   /\ AsyncFiniteProducerRankSnapshotInvariant
+  /\ AsyncFiniteCandidateEpisodeTailTypeInvariant
 
 AsyncFiniteProducerStepSafety ==
   /\ AsyncFiniteProducerProjectionStep
   /\ AsyncFiniteProducerKernel!ProducerJournalStepInvariant
+
+THEOREM AsyncFiniteProducerNextProjectsBothMonotoneJournals ==
+  AsyncFiniteProducerNext
+    => /\ AsyncProducerProjectionStep
+       /\ AsyncFiniteProducerProjectionStep
+       /\ AsyncProducerJournalMonotoneStep
+BY Isa
+   DEF AsyncFiniteProducerNext, AsyncNext,
+       AsyncProducerProjectionStep,
+       AsyncProducerJournalMonotoneStep
 
 (***************************************************************************
 Named route-refinement operators.
@@ -761,7 +865,7 @@ AsyncFiniteReplyObserveNewSourceRefinement(
   IN
     /\ owner \in ValidatorIds
     /\ semantic \in AsyncReplySemanticIdentities
-    /\ source \in ValidatorIds
+    /\ source \in AsyncAuthenticatedDeliverySources
     /\ AsyncFiniteProducerKernel!ObserveNewProducerSource(
          request, source, AsyncFiniteProducerCurrentRankState')
 
@@ -772,7 +876,7 @@ AsyncFiniteReplyRefreshSourceRefinement(
   IN
     /\ owner \in ValidatorIds
     /\ semantic \in AsyncReplySemanticIdentities
-    /\ source \in ValidatorIds
+    /\ source \in AsyncAuthenticatedDeliverySources
     /\ AsyncFiniteProducerKernel!TransferProducerObligation(
          obligation, AsyncFiniteProducerCurrentRankState')
 
@@ -787,7 +891,7 @@ AsyncFiniteReplyConsumeMessageRefinement(
   IN
     /\ owner \in ValidatorIds
     /\ semantic \in AsyncReplySemanticIdentities
-    /\ source \in ValidatorIds
+    /\ source \in AsyncAuthenticatedDeliverySources
     /\ messageCursor \in AsyncFiniteReplyMessagePositions
     /\ AsyncFiniteProducerKernel!ConsumeProducerEpisodes(
          obligation, {episode}, AsyncFiniteProducerCurrentRankState')
@@ -803,7 +907,7 @@ AsyncFiniteReplyConsumeChunkRefinement(
   IN
     /\ owner \in ValidatorIds
     /\ semantic \in AsyncReplySemanticIdentities
-    /\ source \in ValidatorIds
+    /\ source \in AsyncAuthenticatedDeliverySources
     /\ chunkCursor \in AsyncFiniteReplyChunkPositions
     /\ AsyncFiniteProducerKernel!ConsumeProducerEpisodes(
          obligation, {episode}, AsyncFiniteProducerCurrentRankState')
@@ -815,7 +919,7 @@ AsyncFiniteReplyCompleteSourceRefinement(
   IN
     /\ owner \in ValidatorIds
     /\ semantic \in AsyncReplySemanticIdentities
-    /\ source \in ValidatorIds
+    /\ source \in AsyncAuthenticatedDeliverySources
     /\ AsyncFiniteProducerKernel!CompleteProducerObligation(
          obligation, AsyncFiniteProducerCurrentRankState')
 
@@ -826,7 +930,7 @@ AsyncFiniteReplyCancelExactSourceRefinement(
   IN
     /\ owner \in ValidatorIds
     /\ semantic \in AsyncReplySemanticIdentities
-    /\ source \in ValidatorIds
+    /\ source \in AsyncAuthenticatedDeliverySources
     /\ AsyncFiniteProducerKernel!CompleteProducerObligation(
          obligation, AsyncFiniteProducerCurrentRankState')
 
