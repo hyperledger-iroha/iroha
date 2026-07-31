@@ -576,11 +576,15 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
 #[test]
 fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans-commit-window.norito");
     let reservation_path = dir.path().join("lane-reservations-commit-window.norito");
     let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
+    );
     let hash = transaction.hash();
     let key = {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));

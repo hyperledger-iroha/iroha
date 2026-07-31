@@ -1233,6 +1233,23 @@ pub(crate) trait V2EffectServices {
     /// Adapter-specific failure type.
     type Error: fmt::Display;
 
+    /// Fence exact Serve admission immediately before one runtime WAL step.
+    ///
+    /// Implementations publish this marker under the same lock which allocates
+    /// Serve ingress and lifecycle ordinals. While it is present, raw exact
+    /// admission returns bounded backpressure before touching any ordinal.
+    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error>;
+
+    /// Publish the durable Decision observed after the fenced runtime step.
+    ///
+    /// `decided_subject` is `None` when the step did not install a Decision.
+    /// A subject is monotone for the height, and the fence is cleared in the
+    /// same queue-lock transaction which publishes it.
+    fn finish_decision_serve_reconciliation(
+        &mut self,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), Self::Error>;
+
     /// Retire one exact receiver-side leader-wire lifecycle after the runtime
     /// retained all of its causal successor ownership. A volatile terminal is
     /// process-local and reopens after crash; a producer terminal is backed by
@@ -1301,7 +1318,16 @@ pub(crate) trait V2EffectServices {
         task: &BodyFetchTask,
     ) -> Result<(), Self::Error>;
     /// Retire the exact service owner after a certified response wins acquisition.
-    fn complete_certified_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error>;
+    ///
+    /// Implementations must validate the complete task before mutation. Both
+    /// [`CertifiedBodyFetchCompletionDisposition::Retryable`] and every
+    /// returned error leave the exact service owner unchanged. `Retryable` is
+    /// reserved for an explicitly transient handoff; a missing, conflicting,
+    /// or corrupt owner must return an error so the executor fails closed.
+    fn complete_certified_body_fetch(
+        &mut self,
+        task: &BodyFetchTask,
+    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error>;
     /// Hand one structurally, cryptographically, and outer-peer authenticated
     /// chunk to the persistent chunk/reconstruction adapter.
     fn accept_authenticated_chunk(
@@ -1385,6 +1411,16 @@ pub(crate) enum CompletionDisposition {
     Rejected,
     /// The work identifier was already completed or belongs to an old owner.
     Stale,
+}
+
+/// Result of transferring one certified-body fetch owner into the executor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedBodyFetchCompletionDisposition {
+    /// The exact service owner was retired once.
+    Completed,
+    /// A typed transient boundary rejected the handoff without changing the
+    /// exact service owner; only the identical response may retry it.
+    Retryable,
 }
 
 /// Result of handing an authenticated chunk to the persistent reconstruction
@@ -2316,7 +2352,9 @@ pub(crate) trait EffectRuntime {
         &mut self,
         reservation: BodyAvailableReservation,
     ) -> Result<(), EnqueueError>;
-    /// Release one unpublished body-completion reservation infallibly.
+    /// Retain one unpublished body-completion reservation for exact retry.
+    /// This is not a terminal release and cannot mint a replacement owner;
+    /// stale or mismatched abort tokens likewise cannot clear the exact owner.
     fn abort_body_available(&mut self, reservation: BodyAvailableReservation);
     /// Rebind one already queued exact-body completion to a later reducer incarnation.
     ///
@@ -4420,6 +4458,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
+        if let Err(error) = services.begin_decision_serve_reconciliation() {
+            drop(wal_step);
+            return Err(self.close(service_error(error), services));
+        }
         let step = match self.runtime.step_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -4435,6 +4477,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // before invoking any service callback so service operations acquire
         // their own non-nested guard boundary.
         wal_step.complete();
+        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
         match step {
             RuntimeStep::Idle => {
                 if let Err(error) = self.publish_status(services) {
@@ -4490,6 +4535,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
+        if let Err(error) = services.begin_decision_serve_reconciliation() {
+            drop(wal_step);
+            return Err(self.close(service_error(error), services));
+        }
         let step = match self.runtime.step_recovery_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -4502,6 +4551,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(EffectExecutorError::Runtime(reason), services));
         }
         wal_step.complete();
+        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
         match step {
             RuntimeStep::Idle => {
                 self.pending_tip_recovery_last_result =
@@ -5440,7 +5492,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     /// Whether one exact receiver carrier is blocking later ingress while its
-    /// fetch completion waits for local capacity.
+    /// fetch completion waits for local capacity or a typed retryable service
+    /// handoff.
     pub(crate) const fn has_retained_certified_body_response(&self) -> bool {
         self.retained_certified_body_response.is_some()
     }
@@ -5477,10 +5530,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Retry the sole retained response without admitting another physical
     /// occurrence.
     ///
-    /// A repeated capacity rejection restores the byte-for-byte carrier and
-    /// its immutable runtime receipt. Every other outcome retires that receipt
-    /// before returning, including stale/authentication rejection and
-    /// fail-closed errors.
+    /// A repeated capacity rejection or typed retryable service handoff
+    /// restores the byte-for-byte carrier and its immutable runtime receipt.
+    /// Every other outcome retires that receipt before returning, including
+    /// stale/authentication rejection and fail-closed errors.
     pub(crate) fn retry_retained_certified_body_response<S: V2EffectServices>(
         &mut self,
         services: &mut S,
@@ -5633,19 +5686,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .outstanding_requests
             .claim_authenticated_response(&authenticated)
         {
-            Ok(CertifiedBodyResponseClaimDisposition::Acquired) => {}
-            Ok(CertifiedBodyResponseClaimDisposition::Coalesced) => {
-                self.abort_fetch_completion(plan);
-                return Ok(CompletionDisposition::Stale);
-            }
+            Ok(
+                CertifiedBodyResponseClaimDisposition::Acquired
+                | CertifiedBodyResponseClaimDisposition::Coalesced,
+            ) => {}
             Err(error) => {
                 self.abort_fetch_completion(plan);
                 return Err(error.into());
             }
         }
-        if let Err(error) = services.complete_certified_body_fetch(&task) {
-            self.abort_fetch_completion(plan);
-            return Err(self.fail_closed_transport(error, services));
+        match services.complete_certified_body_fetch(&task) {
+            Ok(CertifiedBodyFetchCompletionDisposition::Completed) => {}
+            Ok(CertifiedBodyFetchCompletionDisposition::Retryable) => {
+                self.abort_fetch_completion(plan);
+                return Err(EffectTransportError::Backpressure);
+            }
+            Err(error) => {
+                self.abort_fetch_completion(plan);
+                return Err(self.fail_closed_transport(error, services));
+            }
         }
         if let Err(error) = self.commit_fetch_completion(plan) {
             return Err(self.fail_closed_transport(runtime_enqueue_error(error), services));
@@ -8298,6 +8357,36 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(decision)
     }
 
+    fn finish_decision_serve_reconciliation<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        let decided_subject = match self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)?
+        {
+            Some((decision_round, proposal_round, decision_subject, _)) => {
+                if decision_round.context_id != self.context.id()
+                    || decision_round.height != self.context.height
+                    || proposal_round.context_id != self.context.id()
+                    || proposal_round.height != self.context.height
+                    || proposal_round != decision_round
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "post-step durable Decision is outside the frozen height context"
+                            .to_owned(),
+                    ));
+                }
+                Some(decision_subject)
+            }
+            None => None,
+        };
+        services
+            .finish_decision_serve_reconciliation(decided_subject)
+            .map_err(service_error)
+    }
+
     /// Reconcile volatile ownership immediately after the reducer installs a
     /// durable Decision, before dispatching the Decision's body-recovery
     /// effect. The exact decided pipeline remains live until Apply begins;
@@ -10042,11 +10131,18 @@ mod tests {
                 (0, 0) => {}
                 _ => return Err(EnqueueError::DuplicateCompletionOwnership),
             }
+            if let Some(existing) = &self.reserved_body_available {
+                let expected = BodyAvailableReservation::reserved(tag, manifest.clone());
+                if existing == &expected {
+                    return Ok(existing.clone());
+                }
+                return Err(EnqueueError::DuplicateCompletionOwnership);
+            }
             if self.fail_enqueue {
                 self.fail_enqueue_hits = self.fail_enqueue_hits.saturating_add(1);
                 return Err(EnqueueError::Full);
             }
-            if self.reserved_body_available.is_some() || self.completions.len() >= 16 {
+            if self.completions.len() >= 16 {
                 return Err(EnqueueError::Full);
             }
             let reservation = BodyAvailableReservation::reserved(tag, manifest);
@@ -10073,11 +10169,8 @@ mod tests {
         }
 
         fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
-            if reservation.owns_new_slot()
-                && self.reserved_body_available.as_ref() == Some(&reservation)
-            {
-                self.reserved_body_available = None;
-            }
+            let _retained_exact_owner = !reservation.owns_new_slot()
+                || self.reserved_body_available.as_ref() == Some(&reservation);
         }
 
         fn rebind_body_available(
@@ -10446,9 +10539,12 @@ mod tests {
         closed: Vec<String>,
         fail_on: Option<&'static str>,
         fail_on_call: Option<(&'static str, usize)>,
+        retry_certified_fetch_once: bool,
         operation_calls: BTreeMap<&'static str, usize>,
         validation_error: Option<String>,
         leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
+        decision_serve_reconciliation_pending: bool,
+        durable_serve_decision: Option<wire::BlockSubject>,
     }
 
     impl FakeServices {
@@ -10506,6 +10602,42 @@ mod tests {
 
     impl V2EffectServices for FakeServices {
         type Error = String;
+
+        fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
+            self.check("begin-decision-serve-reconciliation")?;
+            if self.decision_serve_reconciliation_pending {
+                return Err("Decision/Serve reconciliation fence is already active".to_owned());
+            }
+            self.decision_serve_reconciliation_pending = true;
+            Ok(())
+        }
+
+        fn finish_decision_serve_reconciliation(
+            &mut self,
+            decided_subject: Option<wire::BlockSubject>,
+        ) -> Result<(), Self::Error> {
+            self.check("finish-decision-serve-reconciliation")?;
+            if !self.decision_serve_reconciliation_pending {
+                return Err("Decision/Serve reconciliation fence is not active".to_owned());
+            }
+            match (self.durable_serve_decision, decided_subject) {
+                (Some(retained), Some(observed)) if retained != observed => {
+                    return Err(
+                        "one height published two durable Serve Decision subjects".to_owned()
+                    );
+                }
+                (Some(_), None) => {
+                    return Err(
+                        "runtime lost its durable Decision while clearing the Serve admission fence"
+                            .to_owned(),
+                    );
+                }
+                (None, Some(observed)) => self.durable_serve_decision = Some(observed),
+                (Some(_), Some(_)) | (None, None) => {}
+            }
+            self.decision_serve_reconciliation_pending = false;
+            Ok(())
+        }
 
         fn complete_leader_wire_runtime_terminal(
             &mut self,
@@ -10621,10 +10753,14 @@ mod tests {
         fn complete_certified_body_fetch(
             &mut self,
             task: &BodyFetchTask,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
+            if self.retry_certified_fetch_once {
+                self.retry_certified_fetch_once = false;
+                return Ok(CertifiedBodyFetchCompletionDisposition::Retryable);
+            }
             self.check("complete-certified-fetch")?;
             self.completed_certified_fetches.push(task.id());
-            Ok(())
+            Ok(CertifiedBodyFetchCompletionDisposition::Completed)
         }
 
         fn accept_authenticated_chunk(
@@ -10970,7 +11106,7 @@ mod tests {
                 DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&manifest));
             let validated = ValidatedBodyReceipt::for_test(durable.clone());
             let canonical_commitment = validated.execution_commitment();
-            let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+            let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"conflicting parent state"),
                 Hash::new(b"conflicting post state"),
                 Hash::new(b"conflicting ordinary writes"),
@@ -11327,7 +11463,7 @@ mod tests {
     }
 
     fn fixture_execution_commitment() -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups(
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"effects fixture parent state"),
             Hash::new(b"effects fixture post state"),
             Hash::new(b"effects fixture ordinary writes"),
@@ -17397,13 +17533,14 @@ mod tests {
             fixture.manifest.clone(),
         );
         let mut drifted_vote = vote(&fixture);
-        drifted_vote.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"drifted effects fixture parent state"),
-            Hash::new(b"drifted effects fixture post state"),
-            Hash::new(b"drifted effects fixture ordinary writes"),
-            1,
-            Hash::new(b"drifted effects fixture executed block wire"),
-        );
+        drifted_vote.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"drifted effects fixture parent state"),
+                Hash::new(b"drifted effects fixture post state"),
+                Hash::new(b"drifted effects fixture ordinary writes"),
+                1,
+                Hash::new(b"drifted effects fixture executed block wire"),
+            );
         assert!(matches!(
             drift.consume_effects(
                 vec![AdapterEffect::Sign {
@@ -18517,12 +18654,132 @@ mod tests {
             Err(EffectTransportError::FailClosed(_))
         ));
         assert!(executor.status().fail_closed);
-        assert_eq!(executor.body_ownership_projection(), before);
+        let mut after = executor.body_ownership_projection();
+        let retained = after
+            .runtime_body_reservation
+            .take()
+            .expect("failed service transfer retains the exact runtime token");
+        assert_eq!(retained.tag(), tag(0));
+        assert_eq!(retained.manifest(), &fixture.manifest);
+        assert_eq!(
+            after, before,
+            "no ownership other than the explicit retry token changes",
+        );
         assert!(
             services.fail_on.is_none(),
             "failure injection was not consumed"
         );
         assert_eq!(services.closed.len(), 1);
+    }
+
+    #[test]
+    fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owner() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: certified_sources(&fixture, &prepare),
+                    certificate: Some(prepare),
+                }],
+                &mut services,
+            )
+            .expect("hybrid fetch");
+        let task = services.fetch_tasks[0].clone();
+        let exact_response = signed_certified_response(
+            &fixture,
+            &task,
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            0,
+        );
+        let exact_responder = fixture.context.roster[0].validator.clone();
+        let service_owners_before = services.fetch_tasks.clone();
+        let ownership_before = executor.body_ownership_projection();
+        services.retry_certified_fetch_once = true;
+
+        assert_eq!(
+            executor.accept_certified_body_response(
+                exact_response.clone(),
+                &exact_responder,
+                &mut services,
+            ),
+            Err(EffectTransportError::Backpressure),
+            "only the typed retryable service disposition reopens the handoff",
+        );
+        assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
+        assert_eq!(executor.outstanding_requests.len(), 1);
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert_eq!(services.fetch_tasks, service_owners_before);
+        assert!(services.completed_certified_fetches.is_empty());
+        assert!(services.closed.is_empty());
+        assert!(!executor.status().fail_closed);
+        let ownership_after_retryable = executor.body_ownership_projection();
+        let retained = ownership_after_retryable
+            .runtime_body_reservation
+            .as_ref()
+            .expect("retryable service handoff retains the exact runtime token");
+        assert_eq!(retained.tag(), tag(0));
+        assert_eq!(retained.manifest(), &fixture.manifest);
+        let mut without_token = ownership_after_retryable.clone();
+        without_token.runtime_body_reservation = None;
+        assert_eq!(
+            without_token, ownership_before,
+            "the typed retryable boundary changes only the explicit unpublished token",
+        );
+
+        let competing_response = signed_certified_response(
+            &fixture,
+            &task,
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            1,
+        );
+        let competing_responder = fixture.context.roster[1].validator.clone();
+        assert!(matches!(
+            executor.accept_certified_body_response(
+                competing_response,
+                &competing_responder,
+                &mut services,
+            ),
+            Err(EffectTransportError::Authentication(
+                V2TransportError::ConflictingCertifiedBodyResponseClaim { .. }
+            ))
+        ));
+        assert_eq!(
+            executor.body_ownership_projection(),
+            ownership_after_retryable,
+            "a losing authenticated occurrence cannot transfer any exact owner",
+        );
+        assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
+        assert_eq!(services.fetch_tasks, service_owners_before);
+        assert!(services.completed_certified_fetches.is_empty());
+        assert!(!executor.status().fail_closed);
+
+        assert_eq!(
+            executor
+                .accept_certified_body_response(exact_response, &exact_responder, &mut services,)
+                .expect("the identical claimed response resumes the same handoff"),
+            CompletionDisposition::Accepted,
+        );
+        assert_eq!(services.completed_certified_fetches, vec![task.id()]);
+        assert!(executor.pending_fetches.is_empty());
+        assert!(executor.certified_work.is_empty());
+        assert!(executor.outstanding_requests.is_empty());
+        assert_eq!(executor.outstanding_requests.response_claim_count(), 0);
+        assert!(
+            executor
+                .body_ownership_projection()
+                .runtime_body_reservation
+                .is_none()
+        );
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]
@@ -18601,6 +18858,8 @@ mod tests {
         assert_eq!(services.cancelled_fetches, vec![losing_id]);
         assert_eq!(services.retired_all_outbound, 1);
         assert_eq!(services.retired_candidate_work, 1);
+        assert_eq!(services.durable_serve_decision, Some(commit.subject));
+        assert!(!services.decision_serve_reconciliation_pending);
         assert!(!executor.status().fail_closed);
         assert!(services.closed.is_empty());
     }
@@ -18640,6 +18899,8 @@ mod tests {
         assert!(services.sign_tasks.is_empty());
         assert_eq!(services.retired_all_outbound, 1);
         assert_eq!(services.retired_candidate_work, 1);
+        assert_eq!(services.durable_serve_decision, Some(commit.subject));
+        assert!(!services.decision_serve_reconciliation_pending);
         assert!(!executor.status().fail_closed);
         assert!(services.closed.is_empty());
     }
@@ -18972,7 +19233,7 @@ mod tests {
             )
             .expect("start exact local proposal");
         complete_local_proposal_chain(&mut executor, &mut services);
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"Decision conflict parent state"),
             Hash::new(b"Decision conflict post state"),
             Hash::new(b"Decision conflict ordinary writes"),
@@ -19021,7 +19282,7 @@ mod tests {
         let retired_outbound = services.retired_all_outbound;
         let retired_candidate = services.retired_candidate_work;
 
-        let drifted_commitment = wire::ExecutionCommitment::without_topups(
+        let drifted_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"drifted Decision parent state"),
             Hash::new(b"drifted Decision post state"),
             Hash::new(b"drifted Decision ordinary writes"),
@@ -20540,12 +20801,10 @@ mod tests {
         assert_eq!(executor.certified_work.len(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
         assert!(executor.has_retained_certified_body_response());
-        assert!(
-            executor
-                .retained_certified_body_response_scheduler_ordinal()
-                .expect("read retained response ordinal")
-                .is_some()
-        );
+        let retained_scheduler_ordinal = executor
+            .retained_certified_body_response_scheduler_ordinal()
+            .expect("read retained response ordinal")
+            .expect("retained response owns one scheduler position");
         assert!(!executor.can_admit_local_proposal());
         assert!(
             !executor.retained_dispatch_allows_network_ingress(&response_envelope.payload),
@@ -20578,6 +20837,40 @@ mod tests {
 
         executor.config.max_ready_body_bytes =
             u64::try_from(fixture.body.len()).expect("body length");
+        services.retry_certified_fetch_once = true;
+        assert_eq!(
+            executor.retry_retained_certified_body_response(&mut services),
+            Err(EffectTransportError::Backpressure),
+            "the typed retryable service boundary retains the production carrier",
+        );
+        assert!(executor.has_retained_certified_body_response());
+        assert_eq!(
+            executor
+                .retained_certified_body_response_scheduler_ordinal()
+                .expect("read typed-retry response ordinal"),
+            Some(retained_scheduler_ordinal),
+            "typed retry preserves the original leader-wire ticket",
+        );
+        assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert_eq!(executor.certified_work.len(), 1);
+        let retained_runtime_token = executor
+            .body_ownership_projection()
+            .runtime_body_reservation
+            .expect("typed retry retains the successfully reserved runtime token");
+        assert_eq!(retained_runtime_token.tag(), tag(0));
+        assert_eq!(retained_runtime_token.manifest(), &fixture.manifest);
+        assert!(services.completed_certified_fetches.is_empty());
+        assert!(services.leader_wire_terminals.is_empty());
+        assert!(
+            leader_wire_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("read typed-retry response gate")
+                .is_some(),
+            "typed retry cannot tombstone the retained leader-wire ticket",
+        );
+        assert!(!executor.status().fail_closed);
+
         assert_eq!(
             executor
                 .retry_retained_certified_body_response(&mut services)
@@ -20615,6 +20908,7 @@ mod tests {
         assert!(executor.pending_fetches.is_empty());
         assert!(executor.certified_work.is_empty());
         assert!(executor.outstanding_requests.is_empty());
+        assert_eq!(services.completed_certified_fetches, vec![fetch_task.id()]);
     }
 
     #[test]
@@ -21813,6 +22107,31 @@ mod tests {
 
     include!("tests/v2_effects_01_view_churn_and_runtime_steps.rs");
     #[test]
+    fn decision_serve_fence_rejects_durable_decision_loss_without_reopening() {
+        let fixture = Fixture::new();
+        let mut services = fixture.services();
+        let subject = fixture.manifest.subject;
+        services
+            .begin_decision_serve_reconciliation()
+            .expect("raise the initial Decision/Serve fence");
+        services
+            .finish_decision_serve_reconciliation(Some(subject))
+            .expect("publish the durable Serve Decision");
+        services
+            .begin_decision_serve_reconciliation()
+            .expect("raise the next runtime-step fence");
+        let error = services
+            .finish_decision_serve_reconciliation(None)
+            .expect_err("a durable Decision cannot disappear on a later runtime step");
+        assert!(error.contains("lost its durable Decision"));
+        assert_eq!(services.durable_serve_decision, Some(subject));
+        assert!(
+            services.decision_serve_reconciliation_pending,
+            "failed reconciliation keeps exact Serve admission fenced"
+        );
+    }
+
+    #[test]
     fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -21834,6 +22153,7 @@ mod tests {
         ));
         assert!(services.broadcasts.is_empty());
         assert!(services.statuses.is_empty());
+        assert!(services.decision_serve_reconciliation_pending);
         assert!(executor.output_guard.restart_required());
     }
 
@@ -21851,6 +22171,7 @@ mod tests {
                 if reason.contains("scheduler owner was invalid")
         ));
         assert!(services.statuses.is_empty());
+        assert!(services.decision_serve_reconciliation_pending);
         assert!(executor.output_guard.restart_required());
     }
 

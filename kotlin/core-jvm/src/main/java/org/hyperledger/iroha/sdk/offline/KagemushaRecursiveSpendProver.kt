@@ -108,7 +108,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAXIMUM_BRANCH_CLAIMS: Int = 2
         const val MAXIMUM_PEER_HOPS: Int = 8
         const val MAXIMUM_PROOF_STEPS: Int = 128
-        const val MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4: Int = 256 * 1024
+        const val MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4: Int = 384 * 1024
         const val CONFIDENTIAL_TREE_DEPTH: Int = 16
         const val MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4: Int = 4 * 1024
         const val MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4: Int = 16 * 1024

@@ -67,6 +67,37 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         }
     }
 
+    func testRustMergeCarrierFixturePinsCurrentV4Shape() throws {
+        let rows = try fixtureRows()
+        let carriedRow = try XCTUnwrap(rows.first {
+            $0.kind == "message" && $0.name == "quorum_certificate_merge_carrier"
+        })
+        let carriedMessage = try SumeragiV2ConsensusMessage.decodeCanonical(
+            Data(sumeragiV2Hex: carriedRow.hex)
+        )
+        guard case .quorumCertificate(let certificate) = carriedMessage.payload else {
+            return XCTFail("merge-carrier fixture decoded to the wrong payload")
+        }
+        let carrier = try XCTUnwrap(certificate.executionCommitment.mergeCarrier)
+        XCTAssertEqual(carrier.version, SumeragiV2MergeCarrierCommitment.canonicalVersion)
+        XCTAssertEqual(carrier.entryHash.bytes.count, 32)
+
+        for name in [
+            "execution_commitment_merge_carrier_wrong_version",
+            "execution_commitment_missing_merge_carrier_field",
+        ] {
+            let row = try XCTUnwrap(rows.first {
+                $0.kind == "negative_message" && $0.name == name
+            })
+            XCTAssertThrowsError(
+                try SumeragiV2ConsensusMessage.decodeCanonical(
+                    Data(sumeragiV2Hex: row.hex)
+                ),
+                name
+            )
+        }
+    }
+
     func testCommitReproposalsRequireTheirVoteAndCertificateRound() throws {
         func message(_ name: String) throws -> SumeragiV2ConsensusMessage {
             let row = try XCTUnwrap(
@@ -713,6 +744,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         "proposal",
         "vote",
         "quorum_certificate",
+        "quorum_certificate_merge_carrier",
         "commit_vote_reproposal",
         "commit_quorum_certificate_reproposal",
         "timeout_vote",

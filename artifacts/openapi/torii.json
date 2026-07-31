@@ -18524,14 +18524,164 @@
       },
       "SumeragiAutonomousLaneExecution": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "descriptor_hash": {
+                    "$ref": "#/components/schemas/Hash"
+                  },
+                  "proposal_hash": {
+                    "$ref": "#/components/schemas/Hash"
+                  }
+                },
+                "required": [
+                  "proposal_hash",
+                  "descriptor_hash"
+                ]
+              },
+              {
+                "properties": {
+                  "descriptor_hash": {
+                    "type": "null"
+                  },
+                  "proposal_hash": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "application_block_hash": {
+                    "$ref": "#/components/schemas/Hash"
+                  },
+                  "application_block_height": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "application_block_height",
+                  "application_block_hash"
+                ]
+              },
+              {
+                "properties": {
+                  "application_block_hash": {
+                    "type": "null"
+                  },
+                  "application_block_height": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "highest_durable_stage": {
+                  "const": "reservations_durable"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "application_block_hash": {
+                  "type": "null"
+                },
+                "application_block_height": {
+                  "type": "null"
+                },
+                "descriptor_hash": {
+                  "type": "null"
+                },
+                "executable_payload_hash": {
+                  "type": "null"
+                },
+                "merge_entry_hash": {
+                  "type": "null"
+                },
+                "proposal_hash": {
+                  "type": "null"
+                },
+                "proposal_view": {
+                  "type": "null"
+                },
+                "source_bundle_hash": {
+                  "type": "null"
+                },
+                "stuck_reason": {
+                  "const": "awaiting_executable_payload"
+                }
+              },
+              "required": [
+                "stuck_reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "highest_durable_stage": {
+                  "enum": [
+                    "executable_payload_durable",
+                    "payload_availability_certified",
+                    "lane_certified",
+                    "certified_bundle_durable",
+                    "merge_candidate_durable",
+                    "global_carrier_committed",
+                    "kura_wsv_application_receipt_durable",
+                    "queue_finalized"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "descriptor_hash": {
+                  "$ref": "#/components/schemas/Hash"
+                },
+                "proposal_hash": {
+                  "$ref": "#/components/schemas/Hash"
+                }
+              },
+              "required": [
+                "proposal_hash",
+                "descriptor_hash"
+              ]
+            }
+          }
+        ],
+        "description": "Bounded autonomous-lane durability evidence. Optional values may be omitted or null; after normalization proposal_hash and descriptor_hash form an exact pair. ReservationsDurable has no authenticated proposal view, finalized identity, executable payload, source bundle, merge entry, or carrier and requires equal reservation/transaction counts. Later non-conflict stages require the finalized identity pair and may carry an authenticated proposal view when the durable payload supplies one. Rows are strictly ordered by lane_id, dataspace_id, lane_incarnation, lane_block_height, lane_block_view, proposal_height, and proposal_identity_hash.",
         "properties": {
           "application_block_hash": {
-            "$ref": "#/components/schemas/Hash"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "application_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "dataspace_id": {
             "format": "uint64",
@@ -18539,10 +18689,24 @@
             "type": "integer"
           },
           "descriptor_hash": {
-            "$ref": "#/components/schemas/Hash"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "executable_payload_hash": {
-            "$ref": "#/components/schemas/Hash"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "highest_durable_stage": {
             "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStage"
@@ -18567,20 +18731,53 @@
             "$ref": "#/components/schemas/Hash"
           },
           "merge_entry_hash": {
-            "$ref": "#/components/schemas/Hash"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "proposal_height": {
             "format": "uint64",
             "minimum": 1,
             "type": "integer"
           },
+          "proposal_identity_hash": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "not": {
+                  "pattern": "^hash:0{64}#[0-9A-F]{4}$"
+                }
+              }
+            ]
+          },
           "proposal_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reservation_count": {
             "format": "uint64",
@@ -18588,11 +18785,49 @@
             "minimum": 0,
             "type": "integer"
           },
+          "reservation_group_hash": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "not": {
+                  "pattern": "^hash:0{64}#[0-9A-F]{4}$"
+                }
+              }
+            ]
+          },
+          "reservation_owner_hash": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "not": {
+                  "pattern": "^hash:0{64}#[0-9A-F]{4}$"
+                }
+              }
+            ]
+          },
           "source_bundle_hash": {
-            "$ref": "#/components/schemas/Hash"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "stuck_reason": {
-            "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStuckReason"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStuckReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "transaction_count": {
             "format": "uint64",
@@ -18608,9 +18843,9 @@
           "lane_block_height",
           "lane_block_view",
           "proposal_height",
-          "proposal_view",
-          "proposal_hash",
-          "descriptor_hash",
+          "reservation_owner_hash",
+          "proposal_identity_hash",
+          "reservation_group_hash",
           "reservation_count",
           "transaction_count",
           "highest_durable_stage"
@@ -18634,6 +18869,7 @@
       },
       "SumeragiAutonomousLaneExecutionStuckReason": {
         "enum": [
+          "awaiting_executable_payload",
           "awaiting_payload_availability",
           "awaiting_lane_certification",
           "certified_bundle_unavailable",

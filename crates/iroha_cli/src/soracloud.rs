@@ -21383,7 +21383,8 @@ iroha app sorafs toolkit pack ./frontend/dist \
 mod tests {
     use super::*;
     use iroha::data_model::soracloud::{
-        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
+        SECRET_ENVELOPE_VERSION_V1, SecretEnvelopeEncryptionV1, SoraInrouGuestImageV1,
+        SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use iroha_crypto::Algorithm;
     use norito::json::Value;
@@ -21886,6 +21887,97 @@ mod tests {
     fn soracloud_fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid Soracloud keypair")
+    }
+
+    fn assert_signed_mutation_omits_inline_signing_material<T: JsonSerialize + ?Sized>(
+        request: &T,
+    ) {
+        let value = json::to_value(request).expect("serialize signed Soracloud mutation request");
+        let object = value
+            .as_object()
+            .expect("signed Soracloud mutation request must be a JSON object");
+        assert!(
+            !object.contains_key("authority"),
+            "signed mutation request must not serialize inline authority"
+        );
+        assert!(
+            !object.contains_key("private_key"),
+            "signed mutation request must not serialize inline private key"
+        );
+    }
+
+    #[test]
+    fn signed_soracloud_mutation_requests_omit_inline_signing_material() {
+        let key_pair = soracloud_fixture_key_pair(0x12);
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        let config_set = signed_service_config_set_request(
+            "web_portal",
+            "feature_flags",
+            norito::json!({ "enabled": true }),
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service config set request");
+        assert_signed_mutation_omits_inline_signing_material(&config_set);
+
+        let config_delete = signed_service_config_delete_request(
+            "web_portal",
+            "feature_flags",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service config delete request");
+        assert_signed_mutation_omits_inline_signing_material(&config_delete);
+
+        let secret = SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: "test-kms-key".to_owned(),
+            key_version: NonZeroU32::new(1).expect("non-zero key version"),
+            nonce: vec![0x01; 12],
+            ciphertext: vec![0x02; 32],
+            commitment: Hash::new(b"test ciphertext"),
+            aad_digest: None,
+        };
+        let secret_set = signed_service_secret_set_request(
+            "web_portal",
+            "api_token",
+            secret,
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service secret set request");
+        assert_signed_mutation_omits_inline_signing_material(&secret_set);
+
+        let secret_delete =
+            signed_service_secret_delete_request("web_portal", "api_token", &authority, &key_pair)
+                .expect("signed service secret delete request");
+        assert_signed_mutation_omits_inline_signing_material(&secret_delete);
+
+        let app_infra = signed_app_infra_request(
+            MutationMode::Deploy,
+            SoraAppInfraManifestV1 {
+                schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+                app_name: "web_portal".parse().expect("valid app name"),
+                app_version: "1.0.0".to_owned(),
+                public_url: "https://web-portal.example".to_owned(),
+                static_site: None,
+                services: Vec::new(),
+            },
+            Vec::new(),
+            &key_pair,
+        )
+        .expect("signed app infra request");
+        assert_signed_mutation_omits_inline_signing_material(&app_infra);
+
+        let heartbeat = signed_model_host_heartbeat_request(1, &authority, &key_pair)
+            .expect("signed model host heartbeat request");
+        assert_signed_mutation_omits_inline_signing_material(&heartbeat);
+
+        let withdraw = signed_model_host_withdraw_request(&authority, &key_pair)
+            .expect("signed model host withdraw request");
+        assert_signed_mutation_omits_inline_signing_material(&withdraw);
     }
 
     #[test]

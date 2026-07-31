@@ -101,7 +101,7 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
     let mut parent: Option<V2FinalityArtifact> = None;
     for block in blocks {
         let height = block.header().height().get();
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"eviction bench parent state"),
             Hash::new(b"eviction bench post state"),
             Hash::new(b"eviction bench ordinary writes"),

@@ -2419,7 +2419,7 @@ mod v2_liveness_watchdog_tests {
                     block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
                     payload_hash: Hash::new(b"watchdog-network-ingress-payload"),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"watchdog-network-ingress-parent-state"),
                     Hash::new(b"watchdog-network-ingress-post-state"),
                     Hash::new(b"watchdog-network-ingress-writes"),
@@ -2486,7 +2486,7 @@ mod v2_liveness_watchdog_tests {
     }
 
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
-        ExecutionCommitment::without_topups(
+        ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),

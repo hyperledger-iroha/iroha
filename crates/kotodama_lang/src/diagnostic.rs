@@ -564,6 +564,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use `int`, `decimal`, or the nominal non-negative `quantity` type."
     ),
     explanation!(
+        "E_FORBIDDEN_SOURCE_IDENTIFIER",
+        Parse,
+        "source uses an identifier spelling forbidden in every Kotodama V1 context",
+        "Choose a domain-specific identifier; lowercase `amount` remains an ordinary business identifier."
+    ),
+    explanation!(
         "E_RETIRED_DECLARATION_ORDER",
         Parse,
         "a typed declaration uses the retired name-colon-type order",
@@ -946,6 +952,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Semantic,
         "a native JSON object repeats a decoded key",
         "Keep each decoded key exactly once; identifier and quoted spellings of the same key still collide."
+    ),
+    explanation!(
+        "E_JSON_LITERAL_REQUIRED",
+        Semantic,
+        "Json::parse requires a direct string literal",
+        "Use a direct JSON string literal so it is validated at compile time, or construct dynamic typed values with native `json { ... }` and `json [ ... ]` syntax."
     ),
     explanation!(
         "E_JSON_LITERAL_INVALID",

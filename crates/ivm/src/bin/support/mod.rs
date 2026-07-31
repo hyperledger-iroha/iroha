@@ -13,6 +13,12 @@ pub(crate) enum GenerationMode {
     Check,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GenerationOptions {
+    pub(crate) mode: GenerationMode,
+    pub(crate) root: PathBuf,
+}
+
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 /// One fully rendered generated file.
@@ -135,25 +141,48 @@ pub(crate) fn sync_generated_outputs(
     Ok(updated)
 }
 
-pub(crate) fn parse_generation_mode(
+pub(crate) fn parse_generation_options(
     args: impl IntoIterator<Item = String>,
-) -> Result<GenerationMode, String> {
+    default_root: impl Into<PathBuf>,
+) -> Result<GenerationOptions, String> {
     let mut mode = None;
-    for argument in args {
-        let requested = match argument.as_str() {
-            "--write" => GenerationMode::Write,
-            "--check" => GenerationMode::Check,
+    let mut root = None;
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--write" | "--check" => {
+                let requested = if argument == "--write" {
+                    GenerationMode::Write
+                } else {
+                    GenerationMode::Check
+                };
+                if mode.replace(requested).is_some() {
+                    return Err("select exactly one of --write or --check".to_owned());
+                }
+            }
+            "--root" => {
+                if root.is_some() {
+                    return Err("--root was supplied more than once".to_owned());
+                }
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--root requires a directory path".to_owned())?;
+                if value.is_empty() || value.starts_with("--") {
+                    return Err("--root requires a non-empty directory path".to_owned());
+                }
+                root = Some(PathBuf::from(value));
+            }
             _ => {
                 return Err(format!(
-                    "unknown argument `{argument}`; usage: --write or --check"
+                    "unknown argument `{argument}`; usage: --write|--check [--root <path>]"
                 ));
             }
-        };
-        if mode.replace(requested).is_some() {
-            return Err("select exactly one of --write or --check".to_owned());
         }
     }
-    mode.ok_or_else(|| "select exactly one of --write or --check".to_owned())
+    Ok(GenerationOptions {
+        mode: mode.ok_or_else(|| "select exactly one of --write or --check".to_owned())?,
+        root: root.unwrap_or_else(|| default_root.into()),
+    })
 }
 
 struct TemporaryFile {
@@ -333,7 +362,9 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{GeneratedOutput, GenerationMode, parse_generation_mode, sync_generated_outputs};
+    use super::{
+        GeneratedOutput, GenerationMode, parse_generation_options, sync_generated_outputs,
+    };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -346,19 +377,62 @@ mod tests {
     }
 
     #[test]
-    fn generation_mode_is_exactly_one_known_argument() {
+    fn generation_options_require_exactly_one_mode_and_accept_an_explicit_root() {
+        let default_root = std::path::PathBuf::from("/workspace");
         assert_eq!(
-            parse_generation_mode(["--check".to_owned()]),
-            Ok(GenerationMode::Check)
+            parse_generation_options(["--check".to_owned()], &default_root),
+            Ok(super::GenerationOptions {
+                mode: GenerationMode::Check,
+                root: default_root.clone(),
+            })
         );
         assert_eq!(
-            parse_generation_mode(["--write".to_owned()]),
-            Ok(GenerationMode::Write)
+            parse_generation_options(
+                [
+                    "--root".to_owned(),
+                    "/staged/repository".to_owned(),
+                    "--write".to_owned(),
+                ],
+                &default_root,
+            ),
+            Ok(super::GenerationOptions {
+                mode: GenerationMode::Write,
+                root: std::path::PathBuf::from("/staged/repository"),
+            })
         );
-        assert!(parse_generation_mode(Vec::new()).is_err());
-        assert!(parse_generation_mode(["--check".to_owned(), "--write".to_owned()]).is_err());
-        assert!(parse_generation_mode(["--write".to_owned(), "--write".to_owned()]).is_err());
-        assert!(parse_generation_mode(["--unknown".to_owned()]).is_err());
+        assert!(parse_generation_options(Vec::new(), &default_root).is_err());
+        assert!(
+            parse_generation_options(["--check".to_owned(), "--write".to_owned()], &default_root,)
+                .is_err()
+        );
+        assert!(
+            parse_generation_options(["--write".to_owned(), "--write".to_owned()], &default_root,)
+                .is_err()
+        );
+        assert!(parse_generation_options(["--unknown".to_owned()], &default_root).is_err());
+    }
+
+    #[test]
+    fn generation_options_reject_malformed_root_arguments() {
+        let default_root = std::path::PathBuf::from("/workspace");
+        for arguments in [
+            vec!["--write".to_owned(), "--root".to_owned()],
+            vec!["--write".to_owned(), "--root".to_owned(), String::new()],
+            vec![
+                "--write".to_owned(),
+                "--root".to_owned(),
+                "--check".to_owned(),
+            ],
+            vec![
+                "--write".to_owned(),
+                "--root".to_owned(),
+                "/first".to_owned(),
+                "--root".to_owned(),
+                "/second".to_owned(),
+            ],
+        ] {
+            assert!(parse_generation_options(arguments, &default_root).is_err());
+        }
     }
 
     #[test]

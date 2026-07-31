@@ -3002,7 +3002,7 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"predecessor payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"predecessor parent state"),
                 Hash::new(b"predecessor post state"),
                 Hash::new(b"predecessor ordinary writes"),

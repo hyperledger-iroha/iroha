@@ -17681,6 +17681,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "entry_hash": nativeAmxTestHash(0xD1),
         ]
         XCTAssertThrowsError(try decode(wrongVersion))
+        var missingVersion = carried
+        missingVersion["merge_carrier"] = [
+            "entry_hash": nativeAmxTestHash(0xD1),
+        ]
+        XCTAssertThrowsError(try decode(missingVersion))
+        var missingEntryHash = carried
+        missingEntryHash["merge_carrier"] = ["version": 1]
+        XCTAssertThrowsError(try decode(missingEntryHash))
         var badHash = carried
         badHash["merge_carrier"] = ["version": 1, "entry_hash": "bad"]
         XCTAssertThrowsError(try decode(badHash))
@@ -17771,6 +17779,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "lane_incarnation": nativeAmxTestHash(0xB8),
             "lane_block_height": 8, "lane_block_view": 1,
             "proposal_height": 10, "proposal_view": 2,
+            "reservation_owner_hash": nativeAmxTestHash(0x5D),
+            "proposal_identity_hash": nativeAmxTestHash(0x5E),
+            "reservation_group_hash": nativeAmxTestHash(0x5F),
             "proposal_hash": nativeAmxTestHash(0x60),
             "descriptor_hash": nativeAmxTestHash(0x9E),
             "executable_payload_hash": nativeAmxTestHash(0x61),
@@ -17788,6 +17799,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let snapshot = try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
         XCTAssertEqual(snapshot.autonomousLaneExecutions.first?.mergeEntryHash,
                        nativeAmxTestHash(0x63))
+        XCTAssertEqual(snapshot.autonomousLaneExecutions.first?.proposalIdentityHash,
+                       nativeAmxTestHash(0x5E))
 
         let duplicate = try mutatedNativeAmxDiagnosticsPayload { root in
             root["autonomous_lane_executions"] = [row, row]
@@ -17821,6 +17834,188 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 from: missingRequiredVector
             )
         )
+    }
+
+    func testSumeragiDiagnosticsReservationsDurableIdentityAndGeometryAreExact() throws {
+        func appliedRow() -> [String: Any] {
+            [
+                "lane_id": 9, "dataspace_id": 13,
+                "lane_incarnation": nativeAmxTestHash(0xB8),
+                "lane_block_height": 8, "lane_block_view": 1,
+                "proposal_height": 10, "proposal_view": 2,
+                "reservation_owner_hash": nativeAmxTestHash(0x5D),
+                "proposal_identity_hash": nativeAmxTestHash(0x5E),
+                "reservation_group_hash": nativeAmxTestHash(0x5F),
+                "proposal_hash": nativeAmxTestHash(0x60),
+                "descriptor_hash": nativeAmxTestHash(0x9E),
+                "executable_payload_hash": nativeAmxTestHash(0x61),
+                "source_bundle_hash": nativeAmxTestHash(0x62),
+                "merge_entry_hash": nativeAmxTestHash(0x63),
+                "application_block_height": 42,
+                "application_block_hash": nativeAmxTestHash(0xA2),
+                "reservation_count": 2, "transaction_count": 2,
+                "highest_durable_stage": "kura_wsv_application_receipt_durable",
+                "stuck_reason": "queue_finalization_unverifiable",
+            ]
+        }
+        func reservationRow() -> [String: Any] {
+            var row = appliedRow()
+            for field in [
+                "proposal_view", "proposal_hash", "descriptor_hash", "executable_payload_hash",
+                "source_bundle_hash", "merge_entry_hash", "application_block_height",
+                "application_block_hash",
+            ] {
+                row.removeValue(forKey: field)
+            }
+            row["highest_durable_stage"] = "reservations_durable"
+            row["stuck_reason"] = "awaiting_executable_payload"
+            return row
+        }
+        func data(_ row: [String: Any]) throws -> Data {
+            try mutatedNativeAmxDiagnosticsPayload { root in
+                root["autonomous_lane_executions"] = [row]
+            }
+        }
+
+        let reservation = try JSONDecoder().decode(
+            ToriiSumeragiDiagnosticsSnapshot.self,
+            from: data(reservationRow())
+        ).autonomousLaneExecutions[0]
+        XCTAssertNil(reservation.proposalHash)
+        XCTAssertNil(reservation.descriptorHash)
+        XCTAssertNil(reservation.proposalView)
+        XCTAssertEqual(reservation.stuckReason, .awaitingExecutablePayload)
+
+        for field in [
+            "reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash",
+        ] {
+            for invalid: Any in [NSNull(), "hash:" + String(repeating: "00", count: 32) + "#6A0A",
+                                 [UInt8](repeating: 1, count: 32), String(repeating: "ab", count: 32)] {
+                var row = appliedRow()
+                row[field] = invalid
+                XCTAssertThrowsError(
+                    try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                             from: data(row))
+                )
+            }
+            var missing = appliedRow()
+            missing.removeValue(forKey: field)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                         from: data(missing))
+            )
+        }
+
+        for missingField in ["proposal_hash", "descriptor_hash"] {
+            var row = appliedRow()
+            row.removeValue(forKey: missingField)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data(row))
+            )
+        }
+        var missingFinalizedPair = appliedRow()
+        missingFinalizedPair["proposal_hash"] = NSNull()
+        missingFinalizedPair["descriptor_hash"] = NSNull()
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: data(missingFinalizedPair))
+        )
+        var missingAuthenticatedView = appliedRow()
+        missingAuthenticatedView.removeValue(forKey: "proposal_view")
+        XCTAssertNil(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: data(missingAuthenticatedView))
+                .autonomousLaneExecutions[0].proposalView
+        )
+        var nullReservationView = reservationRow()
+        nullReservationView["proposal_view"] = NSNull()
+        XCTAssertNil(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: data(nullReservationView))
+                .autonomousLaneExecutions[0].proposalView
+        )
+        var reservationWithView = reservationRow()
+        reservationWithView["proposal_view"] = 0
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: data(reservationWithView))
+        )
+
+        for field in [
+            "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
+        ] {
+            var row = reservationRow()
+            row[field] = nativeAmxTestHash(0xA4)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data(row))
+            )
+        }
+        var reservationWithFinalizedIdentity = reservationRow()
+        reservationWithFinalizedIdentity["proposal_hash"] = nativeAmxTestHash(0xA5)
+        reservationWithFinalizedIdentity["descriptor_hash"] = nativeAmxTestHash(0xA6)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: data(reservationWithFinalizedIdentity))
+        )
+        var oldReason = reservationRow()
+        oldReason["stuck_reason"] = "awaiting_payload_availability"
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data(oldReason))
+        )
+        var wrongCount = reservationRow()
+        wrongCount["reservation_count"] = 1
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data(wrongCount))
+        )
+
+        let first = appliedRow()
+        var sameProvisionalIdentity = appliedRow()
+        sameProvisionalIdentity["proposal_hash"] = nativeAmxTestHash(0xA7)
+        sameProvisionalIdentity["descriptor_hash"] = nativeAmxTestHash(0xA8)
+        let duplicateIdentity = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [first, sameProvisionalIdentity]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: duplicateIdentity)
+        )
+
+        var descendingFirst = appliedRow()
+        descendingFirst["proposal_identity_hash"] = nativeAmxTestHash(0x90)
+        var descendingSecond = appliedRow()
+        descendingSecond["proposal_identity_hash"] = nativeAmxTestHash(0x80)
+        let orderingDrift = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [descendingFirst, descendingSecond]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: orderingDrift)
+        )
+    }
+
+    func testSumeragiDiagnosticsRejectsUnknownAutonomousLaneExecutionField() throws {
+        let row: [String: Any] = [
+            "lane_id": 9, "dataspace_id": 13,
+            "lane_incarnation": nativeAmxTestHash(0xB8),
+            "lane_block_height": 8, "lane_block_view": 1,
+            "proposal_height": 10,
+            "reservation_owner_hash": nativeAmxTestHash(0x5D),
+            "proposal_identity_hash": nativeAmxTestHash(0x5E),
+            "reservation_group_hash": nativeAmxTestHash(0x5F),
+            "reservation_count": 2, "transaction_count": 2,
+            "highest_durable_stage": "reservations_durable",
+            "stuck_reason": "awaiting_executable_payload",
+            "unexpected_field": true,
+        ]
+        let data = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("unexpected_field"))
+        }
     }
 
     func testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows() throws {
@@ -19091,6 +19286,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
+            #"{"states":[{"name":"Amount","type_name":"quantity"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Transfer{Amount: quantity}"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, amount>"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"Amount: quantity"}]}"#,
@@ -19105,11 +19302,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
             #"{"provenance":"not-an-object"}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":null,\"return_schema\":null,\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
             #"{"error_codes":[{"namespace":"Failure","name":"Denied","code":0}]}"#,
+            #"{"error_codes":[{"namespace":"Failure","name":"Amount","code":1}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
@@ -19180,6 +19380,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "amount",
             "Transfer{amount: amount}",
             "Transfer{amount:: quantity}",
+            "Transfer{Amount: quantity}",
             "Transfer{amount:quantity}",
             "Transfer{amount:  quantity}",
             "Transfer {amount: quantity}",
@@ -19363,6 +19564,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "state:*",
             "state:Balances.more",
             "state:Balances:Other",
+            "state:Amount",
             "state:state:Balances",
             "state:match",
             "state:StateMap",
@@ -19577,6 +19779,35 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "encoded retired error namespace \(retired)"
             )
         }
+    }
+
+    func testContractManifestTriggerBoundariesRejectExactAmountSourceFormOnly() throws {
+        let filter = "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
+
+        func payload(id: String, namespace: String?) -> Data {
+            let encodedNamespace = namespace.map { "\"\($0)\"" } ?? "null"
+            return Data(
+                """
+                {"id":"\(id)","repeats":{"Indefinitely":null},"filter":"\(filter)","authority":null,"metadata":{},"callback":{"namespace":\(encodedNamespace),"entrypoint":"transfer"}}
+                """.utf8
+            )
+        }
+
+        for (id, namespace) in [("Amount", nil), ("tick", "Amount")] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractTriggerDescriptor.self,
+                    from: payload(id: id, namespace: namespace)
+                )
+            )
+        }
+
+        let lowercase = try JSONDecoder().decode(
+            ToriiContractTriggerDescriptor.self,
+            from: payload(id: "amount", namespace: "amount")
+        )
+        XCTAssertEqual(lowercase.id, "amount")
+        XCTAssertEqual(lowercase.callback.namespace, "amount")
     }
 
     func testContractManifestEnforcesStrictCrossFieldInvariants() throws {

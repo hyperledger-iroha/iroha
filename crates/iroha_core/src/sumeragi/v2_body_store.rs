@@ -220,7 +220,7 @@ impl ValidatedBodyReceipt {
             Hash::new(preimage)
         };
         Self {
-            execution_commitment: wire::ExecutionCommitment::new(
+            execution_commitment: wire::ExecutionCommitment::new_without_merge_carrier(
                 bind_frame(b"iroha:sumeragi:v2:test-parent-state-root:v1"),
                 bind_frame(b"iroha:sumeragi:v2:test-post-state-root:v1"),
                 empty,

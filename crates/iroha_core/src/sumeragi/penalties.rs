@@ -870,7 +870,7 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"penalties fixture parent state"),
             Hash::new(b"penalties fixture post state"),
             Hash::new(b"penalties fixture ordinary writes"),

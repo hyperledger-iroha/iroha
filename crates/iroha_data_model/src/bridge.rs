@@ -1487,13 +1487,14 @@ mod tests {
             height: 1,
             view: 0,
         };
-        let execution_commitment = crate::block::consensus_v2::ExecutionCommitment::without_topups(
-            Hash::new(b"bridge v2 parent state"),
-            Hash::new(b"bridge v2 post state"),
-            Hash::new(b"bridge v2 ordinary writes"),
-            1,
-            Hash::new(b"bridge v2 executed block wire"),
-        );
+        let execution_commitment =
+            crate::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"bridge v2 parent state"),
+                Hash::new(b"bridge v2 post state"),
+                Hash::new(b"bridge v2 ordinary writes"),
+                1,
+                Hash::new(b"bridge v2 executed block wire"),
+            );
         let mut commit_qc = QuorumCertificate {
             round,
             proposal_round: round,
@@ -1620,7 +1621,7 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),

@@ -16,6 +16,7 @@ from iroha_python import (
     SumeragiNativeAmxPhase,
     SumeragiNativeAmxSourceId,
     SumeragiNativeAmxTransactionEntrypointHash,
+    SumeragiV2ExecutionCommitment,
 )
 from iroha_torii_client.client import (
     SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
@@ -110,7 +111,21 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
             raise ValueError(message)
 
     require(execution["native_amx_application_manifest_version"] == 1, "manifest version")
-    require("merge_carrier" in execution and execution["merge_carrier"] is None, "merge carrier")
+    try:
+        parsed_execution = SumeragiV2ExecutionCommitment.from_payload(
+            execution,
+            "golden.application_evidence.execution_commitment",
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("execution commitment") from error
+    require(parsed_execution.merge_carrier is not None, "merge carrier")
+    assert parsed_execution.merge_carrier is not None
+    require(parsed_execution.merge_carrier.version == 1, "merge carrier version")
+    require(
+        parsed_execution.merge_carrier.entry_hash
+        == execution["merge_carrier"]["entry_hash"],
+        "merge carrier entry hash",
+    )
     require(
         execution["native_amx_application_manifest_count"] == len(artifacts) == 1,
         "manifest count",
@@ -239,6 +254,10 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     assert fixture["format"] == "iroha-native-amx-v2-grouped"
     assert fixture["fixture_version"] == 1
     assert fixture["rust_owner"] == "iroha_data_model::block::consensus"
+    assert {
+        "execution_commitment_merge_carrier_wrong_version",
+        "execution_commitment_missing_merge_carrier_field",
+    } <= {control["id"] for control in fixture["negative_controls"]}
 
     payload = fixture["golden"]["receipt_group"]
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)

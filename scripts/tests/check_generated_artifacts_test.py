@@ -21,6 +21,7 @@ schema_version = 1
 [policy]
 forbidden_tracked_globs = [
   "dist/**",
+  "**/.docusaurus/**",
   "**/__pycache__/**",
 ]
 allowed_tracked_paths = ["dist/.gitkeep"]
@@ -97,6 +98,20 @@ def test_forbidden_tracked_build_artifact_fails(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "forbidden generated/build artifacts" in result.stderr
     assert "dist/bundle.js" in result.stderr
+
+
+def test_forbidden_tracked_docusaurus_cache_fails(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    path = repo / "docs" / "portal" / ".docusaurus" / "client-manifest.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{}\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(path)], cwd=repo, check=True)
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "forbidden generated/build artifacts" in result.stderr
+    assert "docs/portal/.docusaurus/client-manifest.json" in result.stderr
 
 
 def test_allowed_directory_marker_passes(tmp_path: Path) -> None:

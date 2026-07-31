@@ -990,7 +990,8 @@ pub struct LaneQueueReservationReplaySummary {
 /// carrying these exact lifecycle and proposal coordinates belongs to the same immutable group
 /// for restart classification, including when journal compaction has flattened the original
 /// atomic `PutBatch` frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationGroupIdentityV1 {
     /// Coordinator lane that owns the group.
     pub(crate) lane_id: LaneId,
@@ -1011,7 +1012,7 @@ pub(crate) struct LaneQueueReservationGroupIdentityV1 {
 }
 
 impl LaneQueueReservationGroupIdentityV1 {
-    fn from_key(key: &LaneQueueReservationKeyV2) -> Self {
+    pub(crate) fn from_key(key: &LaneQueueReservationKeyV2) -> Self {
         Self {
             lane_id: key.lane_id,
             dataspace_id: key.dataspace_id,
@@ -1023,6 +1024,108 @@ impl LaneQueueReservationGroupIdentityV1 {
             proposal_identity_hash: key.proposal_identity_hash,
         }
     }
+
+    fn slot_key(self) -> (LaneId, DataSpaceId, Hash, u64) {
+        (
+            self.lane_id,
+            self.dataspace_id,
+            self.lane_incarnation,
+            self.lane_block_height,
+        )
+    }
+}
+
+const LANE_QUEUE_RESERVATION_GROUP_HASH_START_V1: &[u8] =
+    b"iroha:queue-lane-reservation-group-hash:start:v1\0";
+const LANE_QUEUE_RESERVATION_GROUP_HASH_STEP_V1: &[u8] =
+    b"iroha:queue-lane-reservation-group-hash:step:v1\0";
+const LANE_QUEUE_RESERVATION_GROUP_HASH_FINAL_V1: &[u8] =
+    b"iroha:queue-lane-reservation-group-hash:final:v1\0";
+
+/// Exact payload-free binding of one FIFO-ordered autonomous reservation group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LaneQueueReservationGroupBindingV1 {
+    /// Lifecycle and provisional proposal-slot identity shared by every key.
+    pub(crate) identity: LaneQueueReservationGroupIdentityV1,
+    /// Domain-separated digest of every complete key in exact FIFO order.
+    pub(crate) reservation_group_hash: Hash,
+    /// Number of exact reservation identities covered by the digest.
+    pub(crate) reservation_count: u64,
+}
+
+/// One bounded Queue-owned autonomous diagnostics input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LaneQueueReservationDiagnosticGroupV1 {
+    /// Exact durable group binding reconstructed from journal-owned records.
+    pub(crate) binding: LaneQueueReservationGroupBindingV1,
+    /// Another durable provisional identity claims the same lane-local slot.
+    pub(crate) conflict: bool,
+}
+
+/// Recompute the canonical binding of complete reservation keys in their exact FIFO order.
+///
+/// The rolling construction keeps diagnostic snapshots payload-free and lets Queue hash one
+/// bounded group without cloning key vectors. Every step includes the complete key digest and
+/// its one-based position, so insertion, removal, replacement, and reordering all change the
+/// final identity.
+pub(crate) fn lane_queue_reservation_group_binding_from_ordered_keys<'a, I>(
+    ordered_keys: I,
+) -> Result<LaneQueueReservationGroupBindingV1, &'static str>
+where
+    I: IntoIterator<Item = &'a LaneQueueReservationKeyV2>,
+{
+    let mut ordered_keys = ordered_keys.into_iter();
+    let first = ordered_keys
+        .next()
+        .ok_or("lane queue reservation diagnostics group must not be empty")?;
+    first.validate()?;
+    let identity = LaneQueueReservationGroupIdentityV1::from_key(first);
+    let identity_bytes = norito::encode_canonical(&identity)
+        .map_err(|_| "lane queue reservation diagnostics identity cannot encode")?;
+    let mut accumulator = Hash::new_from_chunks(&[
+        LANE_QUEUE_RESERVATION_GROUP_HASH_START_V1,
+        identity_bytes.as_slice(),
+    ]);
+    let mut signed_hashes = BTreeSet::new();
+    let mut key_digests = BTreeSet::new();
+    let mut count = 0_u64;
+
+    for key in core::iter::once(first).chain(ordered_keys) {
+        key.validate()?;
+        if LaneQueueReservationGroupIdentityV1::from_key(key) != identity {
+            return Err("lane queue reservation diagnostics group mixes proposal-slot identities");
+        }
+        count = count
+            .checked_add(1)
+            .ok_or("lane queue reservation diagnostics group count overflow")?;
+        if usize::try_from(count).unwrap_or(usize::MAX)
+            > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
+        {
+            return Err("lane queue reservation diagnostics group exceeds its protocol bound");
+        }
+        let key_digest = key.digest();
+        if !signed_hashes.insert(key.signed_transaction_hash) || !key_digests.insert(key_digest) {
+            return Err("lane queue reservation diagnostics group contains a duplicate key");
+        }
+        let position = count.to_be_bytes();
+        accumulator = Hash::new_from_chunks(&[
+            LANE_QUEUE_RESERVATION_GROUP_HASH_STEP_V1,
+            accumulator.as_ref(),
+            &position,
+            key_digest.as_ref(),
+        ]);
+    }
+
+    let count_bytes = count.to_be_bytes();
+    Ok(LaneQueueReservationGroupBindingV1 {
+        identity,
+        reservation_group_hash: Hash::new_from_chunks(&[
+            LANE_QUEUE_RESERVATION_GROUP_HASH_FINAL_V1,
+            accumulator.as_ref(),
+            &count_bytes,
+        ]),
+        reservation_count: count,
+    })
 }
 
 /// One complete live queue owner captured for restart classification.
@@ -1045,7 +1148,8 @@ pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
 }
 
 /// Complete FIFO-ordered membership of one exact autonomous proposal slot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
     /// Exact lifecycle and proposal-slot identity.
     pub(crate) identity: LaneQueueReservationGroupIdentityV1,
@@ -1658,6 +1762,10 @@ pub struct Queue {
     /// Deterministic test handoff between a durability precheck and its protected recheck.
     #[cfg(test)]
     durability_observer_lock_handoff:
+        parking_lot::Mutex<Option<QueueDurabilityObserverLockHandoff>>,
+    /// Deterministic test handoff after Nexus snapshots queue hashes but before it observes one.
+    #[cfg(test)]
+    nexus_revalidation_snapshot_handoff:
         parking_lot::Mutex<Option<QueueDurabilityObserverLockHandoff>>,
     /// One-shot append fault consumed by install-time reservation reconciliation tests.
     #[cfg(test)]
@@ -4764,6 +4872,181 @@ impl Queue {
         })
     }
 
+    /// Derive a bounded, deterministic, payload-free snapshot of durable reservation groups.
+    ///
+    /// Route quotas divide the global row limit deterministically, so a busy route cannot hide
+    /// every other active route. Each quota retains its newest groups plus one overflow sentinel
+    /// while selecting; the sentinel is discarded before any key references are collected. The
+    /// returned summaries contain only exact group identities, counts, and hashes. Transaction
+    /// bodies and reservation-key vectors never leave the transition-fenced Queue snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed durability, installation, FIFO, identity, or bound error instead of
+    /// exposing a partial or proposer-cache-derived view.
+    pub(crate) fn lane_reservation_diagnostic_groups_bounded(
+        &self,
+        active_routes: &[(LaneId, DataSpaceId, Hash)],
+        limit: NonZeroUsize,
+    ) -> Result<Vec<LaneQueueReservationDiagnosticGroupV1>, LaneQueueReservationError> {
+        if active_routes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.get();
+        let mut canonical_routes = BTreeSet::new();
+        for route in active_routes {
+            if !canonical_routes.contains(route) && canonical_routes.len() == limit {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "lane reservation diagnostics route input exceeds its row bound".to_owned(),
+                ));
+            }
+            canonical_routes.insert(*route);
+        }
+        let canonical_routes = canonical_routes.into_iter().collect::<Vec<_>>();
+        let route_count = canonical_routes.len();
+        let quota_base = limit / route_count;
+        let quota_remainder = limit % route_count;
+        let route_quotas = canonical_routes
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, route)| {
+                (
+                    route,
+                    quota_base.saturating_add(usize::from(index < quota_remainder)),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        if self.lane_reservation_journal.lock().is_none() {
+            return Err(LaneQueueReservationError::JournalNotInstalled);
+        }
+
+        let store = self.lane_reservations.lock();
+        let mut selected_by_route = canonical_routes
+            .iter()
+            .copied()
+            .map(|route| (route, BTreeSet::new()))
+            .collect::<BTreeMap<_, BTreeSet<LaneQueueReservationGroupIdentityV1>>>();
+        for record in store.live_by_hash.values() {
+            let identity = LaneQueueReservationGroupIdentityV1::from_key(&record.key);
+            let route = (
+                identity.lane_id,
+                identity.dataspace_id,
+                identity.lane_incarnation,
+            );
+            let Some(selected) = selected_by_route.get_mut(&route) else {
+                continue;
+            };
+            record
+                .validate()
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+            self.validate_live_reservation_against_queue(record)?;
+            let hash = record.key.signed_transaction_hash;
+            if self
+                .fifo_order_by_hash
+                .get(&hash)
+                .is_none_or(|fifo_order| *fifo_order.value() != record.fifo_order)
+            {
+                return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
+            }
+            selected.insert(identity);
+            let quota_with_sentinel = route_quotas[&route].saturating_add(1);
+            while selected.len() > quota_with_sentinel {
+                selected.pop_first();
+            }
+        }
+        for (route, selected) in &mut selected_by_route {
+            let quota = route_quotas[route];
+            while selected.len() > quota {
+                selected.pop_first();
+            }
+        }
+
+        let selected = selected_by_route
+            .into_values()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let mut records_by_group = selected
+            .iter()
+            .copied()
+            .map(|identity| (identity, Vec::new()))
+            .collect::<BTreeMap<_, Vec<&LaneQueueReservationRecordV5>>>();
+        let mut selected_by_slot = BTreeMap::<
+            (LaneId, DataSpaceId, Hash, u64),
+            Vec<LaneQueueReservationGroupIdentityV1>,
+        >::new();
+        for identity in &selected {
+            selected_by_slot
+                .entry(identity.slot_key())
+                .or_default()
+                .push(*identity);
+        }
+        let mut conflicts = BTreeSet::new();
+        for record in store.live_by_hash.values() {
+            let identity = LaneQueueReservationGroupIdentityV1::from_key(&record.key);
+            if let Some(records) = records_by_group.get_mut(&identity) {
+                if records.len() == crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "lane reservation diagnostics group exceeds its protocol bound".to_owned(),
+                    ));
+                }
+                records.push(record);
+            }
+            if let Some(slot_identities) = selected_by_slot.get(&identity.slot_key()) {
+                for selected_identity in slot_identities {
+                    if *selected_identity != identity {
+                        conflicts.insert(*selected_identity);
+                    }
+                }
+            }
+        }
+
+        let mut summaries = Vec::with_capacity(records_by_group.len());
+        for (identity, mut records) in records_by_group {
+            records.sort_by_key(|record| {
+                (
+                    record.fifo_order.ordinal,
+                    record.key.signed_transaction_hash,
+                )
+            });
+            for pair in records.windows(2) {
+                if pair[0].fifo_order.ordinal == pair[1].fifo_order.ordinal {
+                    return Err(
+                        LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal {
+                            ordinal: pair[0].fifo_order.ordinal,
+                            first_hash: pair[0].key.signed_transaction_hash,
+                            second_hash: pair[1].key.signed_transaction_hash,
+                        },
+                    );
+                }
+            }
+            let binding = lane_queue_reservation_group_binding_from_ordered_keys(
+                records.iter().map(|record| &record.key),
+            )
+            .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+            if binding.identity != identity {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "lane reservation diagnostics selection changed under its transition fence"
+                        .to_owned(),
+                ));
+            }
+            summaries.push(LaneQueueReservationDiagnosticGroupV1 {
+                binding,
+                conflict: conflicts.contains(&identity),
+            });
+        }
+        Ok(summaries)
+    }
+
     /// Return whether durable replay state proves that an exact committed group
     /// no longer has queue ownership or an unfinished crash barrier.
     ///
@@ -5018,6 +5301,15 @@ impl Queue {
     #[cfg(test)]
     fn wait_for_durability_observer_lock_handoff_for_test(&self) {
         let handoff = self.durability_observer_lock_handoff.lock().take();
+        if let Some(handoff) = handoff {
+            handoff.reached.wait();
+            handoff.resume.wait();
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_for_nexus_revalidation_snapshot_handoff_for_test(&self) {
+        let handoff = self.nexus_revalidation_snapshot_handoff.lock().take();
         if let Some(handoff) = handoff {
             handoff.reached.wait();
             handoff.resume.wait();
@@ -7491,6 +7783,8 @@ impl Queue {
                 lane_reservation_transition_lock: parking_lot::Mutex::new(()),
                 #[cfg(test)]
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
+                #[cfg(test)]
+                nexus_revalidation_snapshot_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
                 install_reconciliation_append_fault: parking_lot::Mutex::new(None),
                 #[cfg(test)]
@@ -11694,21 +11988,24 @@ impl Queue {
     }
 
     /// Remove expired transactions if the configured sweep interval has elapsed.
+    ///
+    /// A zero interval disables throttling, not reclamation: every caller runs a
+    /// bounded sweep. This keeps the queue live for an explicit zero-duration
+    /// configuration instead of turning the TTL mechanism off.
     pub(crate) fn cull_expired_entries_if_due(&self) -> usize {
         if self.lane_reservation_startup_reconciliation_pending() {
             return 0;
         }
         let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
-        if interval_ms == 0 {
-            return 0;
-        }
         let now = self.time_source.get_unix_time();
-        let now_ms = Self::duration_to_millis(now);
-        let last_ms = self.last_expired_cull_ms.load(Ordering::Relaxed);
-        if now_ms.saturating_sub(last_ms) < interval_ms {
-            return 0;
+        if interval_ms != 0 {
+            let now_ms = Self::duration_to_millis(now);
+            let last_ms = self.last_expired_cull_ms.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last_ms) < interval_ms {
+                return 0;
+            }
+            self.last_expired_cull_ms.store(now_ms, Ordering::Relaxed);
         }
-        self.last_expired_cull_ms.store(now_ms, Ordering::Relaxed);
         self.cull_expired_entries(now)
     }
 
@@ -13926,11 +14223,24 @@ impl Queue {
         let tracked = self
             .txs
             .iter()
-            .map(|entry| (*entry.key(), Arc::clone(entry.value())))
+            .map(|entry| *entry.key())
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        self.wait_for_nexus_revalidation_snapshot_handoff_for_test();
         let mut invalid_lifecycle = Vec::new();
         let mut corrupt_ownership = Vec::new();
-        for (hash, tx) in tracked {
+        for hash in tracked {
+            // Observe the current owner and all of its immutable indexes under the same
+            // transition-index lock. A hash can disappear after the outer snapshot when an
+            // admission rolls back or a terminal operation completes; absence is then a normal
+            // completed transition, not corrupt ownership of the stale transaction snapshot.
+            let active_transitions = self.durability_transitions.lock();
+            if active_transitions.contains(&hash) {
+                continue;
+            }
+            let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
+                continue;
+            };
             if !self.is_pending(tx.as_ref(), state_view) {
                 #[cfg(feature = "telemetry")]
                 {
@@ -13938,15 +14248,14 @@ impl Queue {
                 }
                 continue;
             }
-            let routing_plan = match self.immutable_queued_routing_plan_if_available_in_view(
+            let routing_plan = match self.immutable_queued_routing_plan_in_view(
                 hash,
                 tx.as_ref(),
                 state_view,
                 &routing_nexus,
                 block_height,
             ) {
-                Ok(Some(plan)) => plan,
-                Ok(None) => continue,
+                Ok(plan) => plan,
                 Err(err) => {
                     iroha_logger::warn!(
                         tx = %hash,
@@ -14620,6 +14929,8 @@ pub mod tests {
 
         let transaction = accepted_tx_by_someone(&time_source);
         let follower_transaction = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        register_accepted_tx_authority_for_queue_test(&mut state, &follower_transaction);
         let routing_plan = queue
             .route_plan_with_state(&transaction, &state)
             .expect("route global guard fixture transaction");
@@ -17562,6 +17873,13 @@ pub mod tests {
         accepted_tx_by(account_id, &key_pair, time_source)
     }
 
+    fn register_accepted_tx_authority_for_queue_test(
+        state: &mut State,
+        transaction: &AcceptedTransaction<'_>,
+    ) {
+        register_test_authority(state, transaction.as_ref().authority());
+    }
+
     fn accepted_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
@@ -17908,6 +18226,7 @@ pub mod tests {
             .expect("install journal");
 
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let entrypoint = tx.entrypoint().clone();
         let entrypoint_bytes =
@@ -18110,6 +18429,7 @@ pub mod tests {
             .expect("strict claim journal baseline metadata")
             .len();
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let entrypoint = tx.entrypoint().clone();
         let entrypoint_hash = entrypoint.hash();
         let signed_transaction_hash = exact_signed_transaction_hash(&entrypoint);
@@ -18227,6 +18547,7 @@ pub mod tests {
             .expect("install V4 claim journal");
         seed_committed_height_for_queue_test(&state, 1);
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let plan = queue
             .route_plan_with_state(&tx, &state)
             .expect("resolve strict retry route");
@@ -18327,6 +18648,7 @@ pub mod tests {
         ));
 
         let mutated_tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &mutated_tx);
         assert!(!queue.has_revalidatable_durable_plan_claim_with_state(
             &mutated_tx,
             &state,
@@ -18498,6 +18820,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install rollover journal");
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let plan = queue
             .route_plan_with_state(&tx, &state)
             .expect("resolve rollover route");
@@ -18705,6 +19028,7 @@ pub mod tests {
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("install fault-boundary rollover journal");
             let tx = accepted_tx_by_someone(&time_source);
+            register_accepted_tx_authority_for_queue_test(&mut state, &tx);
             let plan = queue
                 .route_plan_with_state(&tx, &state)
                 .expect("resolve fault-boundary rollover route");
@@ -18840,6 +19164,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install removed-claim journal");
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let plan = queue
             .route_plan_with_state(&tx, &state)
@@ -19236,6 +19561,7 @@ pub mod tests {
         let queue = Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
 
         let startup_pending = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &startup_pending);
         let startup_pending_plan = queue
             .route_plan_with_state(&startup_pending, &state)
             .expect("route startup-pending transaction");
@@ -19329,6 +19655,7 @@ pub mod tests {
             queue.inject_plan_journal_fault_script(faults);
 
             let tx = accepted_tx_by_someone(&time_source);
+            register_accepted_tx_authority_for_queue_test(&mut state, &tx);
             let hash = tx.hash();
             let plan = queue.route_plan_with_state(&tx, &state).expect("route");
             let error = queue
@@ -19983,6 +20310,7 @@ pub mod tests {
             .expect("install journal");
 
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let entrypoint = tx.entrypoint().clone();
         let plan = queue
@@ -21729,13 +22057,15 @@ pub mod tests {
     fn durability_transition_defers_reads_without_reordering_fifo_or_latching_fault() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
 
         let first = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
         let first_hash = first.hash();
         let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
         let second_hash = second.hash();
         queue.push(first.clone(), state.view()).expect("push first");
         queue.push(second, state.view()).expect("push second");
@@ -21766,6 +22096,56 @@ pub mod tests {
         drop(transition);
         assert_eq!(queue.pop_queued_hash(), Some(first_hash));
         assert_eq!(queue.pop_queued_hash(), Some(second_hash));
+    }
+
+    #[test]
+    fn nexus_revalidation_skips_owner_removed_after_hash_snapshot_without_latching_fault() {
+        let fixture = globally_bound_guard_fixture();
+        let queue = Arc::clone(&fixture.queue);
+        let binding = fixture.binding.clone();
+        let hash = fixture.transaction.hash();
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        *queue.nexus_revalidation_snapshot_handoff.lock() =
+            Some(QueueDurabilityObserverLockHandoff {
+                reached: Arc::clone(&reached),
+                resume: Arc::clone(&resume),
+            });
+
+        thread::scope(|scope| {
+            let observer_queue = Arc::clone(&queue);
+            let state = &fixture.state;
+            let observer = scope.spawn(move || {
+                let router = observer_queue.router.read().clone();
+                let lane_catalog = observer_queue.lane_catalog.read().clone();
+                let dataspace_catalog = observer_queue.dataspace_catalog.read().clone();
+                observer_queue.revalidate_pending_transactions_with_state(
+                    &router,
+                    state,
+                    &lane_catalog,
+                    &dataspace_catalog,
+                    true,
+                );
+            });
+
+            reached.wait();
+            assert!(
+                matches!(
+                    queue.reject_exact_queue_plan_admission_claim(&binding),
+                    Ok(true)
+                ),
+                "the terminal owner removal must complete after the reconfiguration hash snapshot"
+            );
+            assert!(!queue.txs.contains_key(&hash));
+            resume.wait();
+            observer.join().expect("join Nexus revalidation observer");
+        });
+
+        assert!(
+            !queue.accepted_work_validation_faulted(),
+            "a hash removed after the outer snapshot is completed ownership, not corruption"
+        );
+        fixture.assert_terminally_removed();
     }
 
     #[test]
@@ -28151,6 +28531,37 @@ pub mod tests {
             0,
             "expired tx removed from active count"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
+    fn zero_expired_cull_interval_runs_on_every_call() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(1),
+                expired_cull_interval: Duration::ZERO,
+                ..config_factory()
+            },
+            &time_source,
+        );
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        time_handle.advance(Duration::from_secs(2));
+
+        assert_eq!(
+            queue.cull_expired_entries_if_due(),
+            1,
+            "a zero interval must mean unthrottled reclamation"
+        );
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
         queue.assert_pressure_counters_consistent_for_tests();
     }
 

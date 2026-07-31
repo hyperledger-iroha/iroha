@@ -243,7 +243,23 @@ def _healthy_diagnostics() -> dict[str, object]:
                 "state": "durably_applied",
             }
         ],
-        "autonomous_lane_executions": [],
+        "autonomous_lane_executions": [
+            {
+                "lane_id": 3,
+                "dataspace_id": 8,
+                "lane_incarnation": _canonical_hash(0x65),
+                "lane_block_height": 8,
+                "lane_block_view": 1,
+                "proposal_height": 10,
+                "reservation_owner_hash": _canonical_hash(0x81),
+                "proposal_identity_hash": _canonical_hash(0x82),
+                "reservation_group_hash": _canonical_hash(0x83),
+                "reservation_count": 2,
+                "transaction_count": 2,
+                "highest_durable_stage": "reservations_durable",
+                "stuck_reason": "awaiting_executable_payload",
+            }
+        ],
     }
 
 
@@ -306,6 +322,11 @@ def test_diagnostics_parse_separately_from_authoritative_status() -> None:
     assert diagnostics.tx_queue_depth == 3
     assert diagnostics.pipeline_execution.tx_vertices_total == 1
     assert diagnostics.native_amx_participant_applications[0].state == "durably_applied"
+    autonomous = diagnostics.autonomous_lane_executions[0]
+    assert autonomous.proposal_identity_hash == _canonical_hash(0x82)
+    assert autonomous.proposal_view is None
+    assert autonomous.proposal_hash is None
+    assert autonomous.stuck_reason == "awaiting_executable_payload"
 
     status = _healthy_status()
     status["lane_settlement_commitments"] = []
@@ -428,6 +449,14 @@ def test_execution_commitment_requires_exact_merge_carrier_projection() -> None:
         "entry_hash": _canonical_hash(0x56),
     }
     invalid_payloads.append(wrong_version)
+    missing_version = _execution_commitment()
+    missing_version["merge_carrier"] = {
+        "entry_hash": _canonical_hash(0x56),
+    }
+    invalid_payloads.append(missing_version)
+    missing_entry_hash = _execution_commitment()
+    missing_entry_hash["merge_carrier"] = {"version": 1}
+    invalid_payloads.append(missing_entry_hash)
     bad_hash = _execution_commitment()
     bad_hash["merge_carrier"] = {"version": 1, "entry_hash": "not-a-hash"}
     invalid_payloads.append(bad_hash)

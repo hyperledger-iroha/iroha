@@ -6151,6 +6151,7 @@ export type ToriiSumeragiAutonomousLaneExecutionStage =
   | "conflict";
 
 export type ToriiSumeragiAutonomousLaneExecutionStuckReason =
+  | "awaiting_executable_payload"
   | "awaiting_payload_availability"
   | "awaiting_lane_certification"
   | "certified_bundle_unavailable"
@@ -6167,9 +6168,12 @@ export interface ToriiSumeragiAutonomousLaneExecution {
   lane_block_height: ToriiU64;
   lane_block_view: ToriiU64;
   proposal_height: ToriiU64;
-  proposal_view: ToriiU64;
-  proposal_hash: string;
-  descriptor_hash: string;
+  proposal_view: ToriiU64 | null;
+  reservation_owner_hash: string;
+  proposal_identity_hash: string;
+  reservation_group_hash: string;
+  proposal_hash: string | null;
+  descriptor_hash: string | null;
   executable_payload_hash: string | null;
   source_bundle_hash: string | null;
   merge_entry_hash: string | null;

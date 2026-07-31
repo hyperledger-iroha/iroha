@@ -1,34 +1,105 @@
-const HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1: &str =
-    "historical_autonomous_recoveries_v1";
+const HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1: &str = "historical_autonomous_recoveries_v1";
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1: u16 = 1;
-const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES: usize = 4 * 1024;
+const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS: usize = 4_096;
+const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES: u64 =
+    V2_PENDING_CONTROL_SIDECAR_BYTES.get() as u64;
 
-/// Immutable Kura seal proving that one historical autonomous payload crossed
-/// the durable execution-input boundary before Queue ownership reopened.
+fn accumulate_historical_autonomous_recovery_bytes(
+    current: u64,
+    encoded_len: usize,
+    exact_duplicate: bool,
+) -> Option<u64> {
+    if exact_duplicate {
+        return (current <= HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES).then_some(current);
+    }
+    current
+        .checked_add(u64::try_from(encoded_len).ok()?)
+        .filter(|total| *total <= HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES)
+}
+
+/// Immutable, self-contained Kura seal for historical autonomous lane work.
+///
+/// Records live below the exact active lane-incarnation directory. Lane
+/// relabel, retirement, archive GC, and recreation therefore move or retire
+/// the record with the rest of that incarnation instead of leaving a global
+/// orphan which a later incarnation could accidentally hydrate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct HistoricalAutonomousRecoveryRecordV1 {
-    version: u16,
-    recovery_id: Hash,
-    install_hash: Hash,
-    canonical_body: crate::sumeragi::message::CanonicalExecutedBlockNeedV1,
-    historical_context_hash: HashOf<HeightContext>,
-    payload_hash: Hash,
-    reservation_group_hash: Hash,
+pub(crate) struct HistoricalAutonomousLaneRecoveryRecordV1 {
+    pub(crate) version: u16,
+    pub(crate) recovery_id: Hash,
+    pub(crate) canonical_body: crate::sumeragi::message::CanonicalExecutedBlockNeedV1,
+    pub(crate) historical_context: HeightContext,
+    pub(crate) historical_context_id: HeightContextId,
+    pub(crate) historical_context_hash: HashOf<HeightContext>,
+    pub(crate) carrier_view: u64,
+    pub(crate) payload: LaneExecutablePayloadV1,
+    pub(crate) reservation_group: LaneQueueReservationReconciliationGroupV1,
+    /// Complete PoP vector in `payload.origin_proposal.descriptor.validator_set`
+    /// order. It is intentionally not a sparse signer map: this record must be
+    /// enough to resume the unfinished two-phase lane session after pruning.
+    pub(crate) validator_pops: Vec<Vec<u8>>,
+}
+
+impl HistoricalAutonomousLaneRecoveryRecordV1 {
+    pub(crate) fn from_install(
+        install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
+        validator_pops: Vec<Vec<u8>>,
+    ) -> Self {
+        Self {
+            version: HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1,
+            recovery_id: install.recovery_id,
+            canonical_body: install.canonical_body,
+            historical_context: install.historical_context.clone(),
+            historical_context_id: install.historical_context_id,
+            historical_context_hash: install.historical_context_hash,
+            carrier_view: install.carrier_view,
+            payload: install.payload.clone(),
+            reservation_group: install.reservation_group.clone(),
+            validator_pops,
+        }
+    }
+
+    pub(crate) fn installation_input(
+        &self,
+    ) -> crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1 {
+        crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1 {
+            version: crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1::VERSION,
+            recovery_id: self.recovery_id,
+            canonical_body: self.canonical_body,
+            historical_context: self.historical_context.clone(),
+            historical_context_id: self.historical_context_id,
+            historical_context_hash: self.historical_context_hash,
+            carrier_view: self.carrier_view,
+            payload: self.payload.clone(),
+            reservation_group: self.reservation_group.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HistoricalAutonomousLaneRecoveryPersistOutcome {
+    Installed,
+    AlreadyInstalled,
 }
 
 macro_rules! kura_historical_autonomous_recovery_methods {
     () => {
-        fn historical_autonomous_recovery_directory(&self) -> PathBuf {
-            self.store_root
+        fn historical_autonomous_recovery_directory_for_entry(
+            entry: &LaneConfigEntry,
+            store_root: &Path,
+        ) -> PathBuf {
+            Self::lane_artifact_dir(&entry.blocks_dir(store_root))
                 .join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)
         }
 
-        fn historical_autonomous_recovery_path(
-            &self,
+        fn historical_autonomous_recovery_path_for_entry(
+            entry: &LaneConfigEntry,
+            store_root: &Path,
             recovery_id: Hash,
         ) -> PathBuf {
-            self.historical_autonomous_recovery_directory()
+            Self::historical_autonomous_recovery_directory_for_entry(entry, store_root)
                 .join(format!("{}.norito", hex::encode(recovery_id.as_ref())))
         }
 
@@ -42,279 +113,102 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             )
         }
 
-        fn historical_autonomous_payload_without_carrier_hint(
-            payload: &LaneExecutablePayloadV1,
-        ) -> LaneExecutablePayloadV1 {
-            let mut normalized = payload.clone();
-            normalized.origin_proposal.payload_block_hint = None;
-            normalized
-        }
-
-        fn historical_autonomous_expected_record(
-            install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
-        ) -> HistoricalAutonomousRecoveryRecordV1 {
-            HistoricalAutonomousRecoveryRecordV1 {
-                version: HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1,
-                recovery_id: install.recovery_id,
-                install_hash: HashOf::new(install).into(),
-                canonical_body: install.canonical_body,
-                historical_context_hash: install.historical_context_hash,
-                payload_hash: install.payload.payload_hash,
-                reservation_group_hash: HashOf::new(&install.reservation_group).into(),
-            }
-        }
-
-        fn validate_historical_autonomous_install_base(
+        fn validate_historical_autonomous_recovery_record_shape(
             &self,
-            install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
-        ) -> Result<HistoricalAutonomousRecoveryRecordV1> {
-            let path = self.historical_autonomous_recovery_path(install.recovery_id);
-            if !install.has_valid_identity() {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous install has an invalid immutable identity",
-                ));
-            }
-            Self::validate_autonomous_reservation_reconciliation_group(
-                &install.reservation_group,
-            )
-            .map_err(|error| {
-                Self::invalid_historical_autonomous_recovery(
-                    path.clone(),
-                    format!("historical autonomous reservation group is invalid: {error}"),
-                )
-            })?;
-
-            let descriptor = &install.payload.origin_proposal.descriptor;
-            let identity = &install.reservation_group.identity;
-            let hint = install
+            record: &HistoricalAutonomousLaneRecoveryRecordV1,
+            path: &Path,
+        ) -> Result<()> {
+            let install = record.installation_input();
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            let identity = &record.reservation_group.identity;
+            let hint = record
                 .payload
                 .origin_proposal
                 .payload_block_hint
                 .ok_or_else(|| {
                     Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        "historical autonomous payload has no canonical carrier hint",
+                        path.to_path_buf(),
+                        "historical autonomous recovery payload has no canonical carrier hint",
                     )
                 })?;
-            if install.canonical_body.height == 0
-                || install.historical_context.height != install.canonical_body.height
-                || install.historical_context.id() != install.historical_context_id
-                || HashOf::new(&install.historical_context) != install.historical_context_hash
-                || install.carrier_view != hint.proposal_view
-                || hint.proposal_height != install.canonical_body.height
-                || hint.proposal_block_hash != install.canonical_body.block_hash
+            if record.version != HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1
+                || !install.has_valid_identity()
+                || record.canonical_body.height == 0
+                || record.canonical_body.executed_block_wire_len == 0
+                || record.canonical_body.executed_block_wire_len > STRICT_INIT_MAX_BLOCK_BYTES
+                || record.canonical_body.executed_block_wire_len
+                    != record
+                        .canonical_body
+                        .execution_commitment
+                        .executed_block_wire_len
+                || record.canonical_body.executed_block_wire_hash
+                    != record
+                        .canonical_body
+                        .execution_commitment
+                        .executed_block_wire_hash
+                || record.canonical_body.execution_commitment.validate().is_err()
+                || record.historical_context.validate().is_err()
+                || record.historical_context.height != record.canonical_body.height
+                || record.historical_context.id() != record.historical_context_id
+                || HashOf::new(&record.historical_context) != record.historical_context_hash
+                || record.carrier_view != hint.proposal_view
+                || hint.proposal_height != record.canonical_body.height
+                || hint.proposal_block_hash != record.canonical_body.block_hash
                 || descriptor.lane_id != identity.lane_id
                 || descriptor.dataspace_id != identity.dataspace_id
                 || descriptor.lane_incarnation != identity.lane_incarnation
                 || descriptor.proposal_height != identity.proposal_height
                 || descriptor.lane_block_height != identity.lane_block_height
                 || descriptor.lane_block_view != identity.lane_block_view
-                || install.payload.reservation_keys != install.reservation_group.ordered_keys
-            {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous install has conflicting carrier, context, slot, or reservation bindings",
-                ));
-            }
-            install
-                .payload
-                .validate(install.payload.chain_id_hash, install.payload.epoch)
-                .map_err(|error| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        format!("historical autonomous payload is invalid: {error}"),
-                    )
-                })?;
-
-            let (reservation_owner_hash, proposal_identity_hash) =
-                crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-                    install.payload.chain_id_hash,
-                    install.historical_context_id,
-                    install.payload.epoch,
-                    &install.payload.origin_proposal,
-                    &install.payload.producer,
-                )
-                .map_err(|error| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        format!("historical autonomous reservation identity is invalid: {error}"),
-                    )
-                })?;
-            if install.payload.reservation_keys.iter().any(|key| {
-                key.reservation_owner_hash != reservation_owner_hash
-                    || key.proposal_identity_hash != proposal_identity_hash
-            }) {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous reservations differ from the finalized context identity",
-                ));
-            }
-
-            let (header, finality) = self
-                .v2_finality_artifact_with_header(install.canonical_body.height)?
-                .ok_or_else(|| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        "historical autonomous carrier has no verified finality artifact",
-                    )
-                })?;
-            if header.height().get() != install.canonical_body.height
-                || header.hash() != install.canonical_body.block_hash
-                || header.view_change_index() != install.carrier_view
-                || finality.height_context != install.historical_context
-                || HashOf::new(&finality) != install.canonical_body.finality_artifact_hash
-                || finality.block_hash != install.canonical_body.block_hash
-                || finality.commit_qc.execution_commitment
-                    != install.canonical_body.execution_commitment
-                || finality
-                    .commit_qc
-                    .execution_commitment
-                    .executed_block_wire_hash
-                    != install.canonical_body.executed_block_wire_hash
-            {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous carrier differs from verified Kura finality",
-                ));
-            }
-
-            let height = NonZeroUsize::new(usize::try_from(install.canonical_body.height)?)
-                .ok_or_else(|| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        "historical autonomous carrier height is zero",
-                    )
-                })?;
-            let block = self
-                .get_block_without_merge_sidecar(height)
-                .ok_or_else(|| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        "historical autonomous carrier body is unavailable",
-                    )
-                })?;
-            if block.header() != header
-                || block.hash() != install.canonical_body.block_hash
-                || !block.executed_block_wire_hash().is_ok_and(|hash| {
-                    hash == install.canonical_body.executed_block_wire_hash
-                })
-            {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous carrier body differs from the signed execution commitment",
-                ));
-            }
-
-            let normalized =
-                Self::historical_autonomous_payload_without_carrier_hint(&install.payload);
-            let bundle = block.execution_context().ok_or_else(|| {
-                Self::invalid_historical_autonomous_recovery(
-                    path.clone(),
-                    "historical autonomous carrier has no execution context",
-                )
-            })?;
-            let mut exact_matches = 0_usize;
-            for envelope in &bundle.autonomous_lane_payloads {
-                let decoded = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
-                    envelope,
-                    install.payload.chain_id_hash,
-                    install.payload.epoch,
-                )
-                .map_err(|error| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.clone(),
-                        format!(
-                            "historical autonomous carrier contains an invalid payload envelope: {error}"
-                        ),
-                    )
-                })?;
-                let same_slot = decoded.origin_proposal.descriptor.lane_id == identity.lane_id
-                    && decoded.origin_proposal.descriptor.lane_block_height
-                        == identity.lane_block_height
-                    && decoded.origin_proposal.descriptor.proposal_height
-                        == identity.proposal_height;
-                let overlaps = decoded.reservation_keys.iter().any(|candidate| {
-                    install.reservation_group.ordered_keys.iter().any(|expected| {
-                        candidate.signed_transaction_hash == expected.signed_transaction_hash
-                            || candidate.entrypoint_hash == expected.entrypoint_hash
-                    })
-                });
-                if same_slot || overlaps {
-                    if decoded != normalized {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            path,
-                            "historical autonomous carrier contains a conflicting payload at the recovered slot",
-                        ));
-                    }
-                    exact_matches = exact_matches.checked_add(1).ok_or_else(|| {
-                        Self::invalid_historical_autonomous_recovery(
-                            path.clone(),
-                            "historical autonomous carrier payload match count overflowed",
-                        )
-                    })?;
-                }
-            }
-            if exact_matches != 1 {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous carrier does not contain exactly one recovered payload",
-                ));
-            }
-
-            let Some((durable_payload, _)) = self.current_autonomous_lane_payload(
-                identity.lane_id,
-                identity.lane_block_height,
-                install.payload.chain_id_hash,
-                install.payload.epoch,
-            ) else {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous payload is not independently durable in Kura",
-                ));
-            };
-            if Self::historical_autonomous_payload_without_carrier_hint(&durable_payload)
-                != normalized
-            {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous payload differs from the exact durable Kura payload",
-                ));
-            }
-            Ok(Self::historical_autonomous_expected_record(install))
-        }
-
-        fn validate_historical_autonomous_execution_input(
-            &self,
-            install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
-            path: &Path,
-        ) -> Result<()> {
-            let normalized =
-                Self::historical_autonomous_payload_without_carrier_hint(&install.payload);
-            let descriptor = &normalized.origin_proposal.descriptor;
-            let input = self
-                .read_lane_block_execution_input(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                )
-                .ok_or_else(|| {
-                    Self::invalid_historical_autonomous_recovery(
-                        path.to_path_buf(),
-                        "historical autonomous execution input is not durably readable",
-                    )
-                })?;
-            if input.proposal != normalized.origin_proposal
-                || input.autonomous_chain_id_hash != Some(normalized.chain_id_hash)
-                || input.autonomous_epoch != Some(normalized.epoch)
-                || input.autonomous_payload_hash != Some(normalized.payload_hash)
-                || input.entrypoint_hashes != normalized.entrypoint_hashes
-                || input.reservation_keys != normalized.reservation_keys
-                || input.routing_plans != normalized.routing_plans
-                || input.native_amx_receipts != normalized.native_amx_receipts
+                || record.payload.reservation_keys != record.reservation_group.ordered_keys
             {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     path.to_path_buf(),
-                    "historical autonomous execution input differs from the recovered payload",
+                    "historical autonomous recovery record has invalid context, carrier, slot, or execution bindings",
+                ));
+            }
+            Self::validate_autonomous_reservation_reconciliation_group(&record.reservation_group)
+                .map_err(|error| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.to_path_buf(),
+                        format!("historical autonomous recovery group is invalid: {error}"),
+                    )
+                })?;
+            record
+                .payload
+                .validate(record.payload.chain_id_hash, record.payload.epoch)
+                .map_err(|error| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.to_path_buf(),
+                        format!("historical autonomous recovery payload is invalid: {error}"),
+                    )
+                })?;
+            if descriptor.validator_set.is_empty()
+                || descriptor.validator_set.len() > crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS
+                || record.validator_pops.len() != descriptor.validator_set.len()
+                || descriptor
+                    .validator_set
+                    .iter()
+                    .zip(&record.validator_pops)
+                    .any(|(validator, pop)| {
+                        pop.len() != crate::lane_consensus::LANE_BLS_PROOF_BYTES
+                            || iroha_crypto::bls_normal_pop_verify(
+                                validator.public_key(),
+                                pop.as_slice(),
+                            )
+                            .is_err()
+                    })
+            {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path.to_path_buf(),
+                    "historical autonomous recovery PoPs are missing, misordered, oversized, or invalid",
+                ));
+            }
+            let bytes = record.encode();
+            if bytes.is_empty() || bytes.len() > HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path.to_path_buf(),
+                    "historical autonomous recovery record exceeds its hard byte limit",
                 ));
             }
             Ok(())
@@ -324,7 +218,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             path: &Path,
             directory: &Path,
-        ) -> Result<Option<HistoricalAutonomousRecoveryRecordV1>> {
+        ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
             let Some(snapshot) = self.read_regular_sidecar_snapshot(
                 path,
                 directory,
@@ -333,109 +227,685 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 return Ok(None);
             };
             let mut cursor = snapshot.bytes.as_slice();
-            let record = HistoricalAutonomousRecoveryRecordV1::decode_all(&mut cursor)
+            let record = HistoricalAutonomousLaneRecoveryRecordV1::decode_all(&mut cursor)
                 .map_err(Error::NoritoFrame)?;
+            let expected_name = format!("{}.norito", hex::encode(record.recovery_id.as_ref()));
             if record.encode() != snapshot.bytes
-                || record.version != HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1
-                || path.file_stem().and_then(std::ffi::OsStr::to_str)
-                    != Some(hex::encode(record.recovery_id.as_ref()).as_str())
+                || path.file_name().and_then(std::ffi::OsStr::to_str)
+                    != Some(expected_name.as_str())
             {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     path.to_path_buf(),
                     "historical autonomous recovery record is noncanonical, unsupported, or mis-associated",
                 ));
             }
+            self.validate_historical_autonomous_recovery_record_shape(&record, path)?;
             Ok(Some(record))
         }
 
-        /// Return whether the exact immutable historical recovery seal exists
-        /// and all of its independently durable dependencies still agree.
-        pub(crate) fn historical_autonomous_lane_recovery_matches(
+        fn validate_historical_autonomous_recovery_dependencies(
             &self,
-            install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
-        ) -> Result<bool> {
-            let expected = self.validate_historical_autonomous_install_base(install)?;
-            let directory = self.historical_autonomous_recovery_directory();
-            let path = self.historical_autonomous_recovery_path(install.recovery_id);
-            let Some(record) =
-                self.read_historical_autonomous_recovery_record(&path, &directory)?
-            else {
-                return Ok(false);
+            record: &HistoricalAutonomousLaneRecoveryRecordV1,
+            path: &Path,
+        ) -> Result<()> {
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            let durable_payload = {
+                let _geometry_guard = self.lane_geometry_lock.lock();
+                let entry = self.lane_storage_entry(descriptor.lane_id)?;
+                self.require_active_lane_artifact(&entry, descriptor)?;
+                let _sidecar_guard = self.sidecar_lock.lock();
+                let durable = self
+                    .read_current_autonomous_lane_block_record_self_context_locked(
+                        &entry,
+                        descriptor.lane_block_height,
+                        false,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            path.to_path_buf(),
+                            "historical autonomous recovery payload is not independently durable",
+                        )
+                    })?;
+                if durable.retirement.is_some() {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        path.to_path_buf(),
+                        "historical autonomous recovery payload was durably retired",
+                    ));
+                }
+                durable.artifact.executable_payload
             };
-            if record != expected {
+            if durable_payload != record.payload {
                 return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous recovery record conflicts with the requested install",
+                    path.to_path_buf(),
+                    "historical autonomous recovery payload differs from durable Kura bytes",
                 ));
             }
-            self.validate_historical_autonomous_execution_input(install, &path)?;
-            let confirmed = self
+            let recovered = self
+                .recover_autonomous_lane_block_payload_with_sidecar_repair(
+                    &record.payload.origin_proposal,
+                    record.payload.chain_id_hash,
+                    record.payload.epoch,
+                    false,
+                )
+                .map_err(|availability| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.to_path_buf(),
+                        format!(
+                            "historical autonomous execution input recovery failed: {availability:?}"
+                        ),
+                    )
+                })?;
+            let input = self
+                .read_lane_block_execution_input_with_repair_policy(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    false,
+                )
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.to_path_buf(),
+                        "historical autonomous execution input is not durably readable",
+                    )
+                })?;
+            if input != LaneBlockExecutionInputArtifact::new(recovered) {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path.to_path_buf(),
+                    "historical autonomous execution input differs from the recovered payload",
+                ));
+            }
+            Ok(())
+        }
+
+        /// Revalidate one record returned by the bounded inventory against its
+        /// exact immutable file plus the ordinary autonomous payload and
+        /// execution-input sidecars. Holding the prune lock across the direct
+        /// record read and dependency checks prevents retirement from turning
+        /// a successfully hydrated record into an archived owner mid-check.
+        pub(crate) fn validate_historical_autonomous_lane_recovery_record_dependencies(
+            &self,
+            expected: &HistoricalAutonomousLaneRecoveryRecordV1,
+        ) -> Result<()> {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let descriptor = &expected.payload.origin_proposal.descriptor;
+            let (path, directory) = {
+                let _geometry_guard = self.lane_geometry_lock.lock();
+                let entry = self.lane_storage_entry(descriptor.lane_id)?;
+                self.require_active_lane_artifact(&entry, descriptor)?;
+                (
+                    Self::historical_autonomous_recovery_path_for_entry(
+                        &entry,
+                        &self.store_root,
+                        expected.recovery_id,
+                    ),
+                    Self::historical_autonomous_recovery_directory_for_entry(
+                        &entry,
+                        &self.store_root,
+                    ),
+                )
+            };
+            let actual = self
                 .read_historical_autonomous_recovery_record(&path, &directory)?
                 .ok_or_else(|| {
                     Self::invalid_historical_autonomous_recovery(
                         path.clone(),
-                        "historical autonomous recovery record disappeared during read-back",
+                        "historical autonomous recovery record disappeared during hydration",
                     )
                 })?;
-            if confirmed != expected {
+            if actual != *expected {
                 return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous recovery record changed during read-back",
+                    path.clone(),
+                    "historical autonomous recovery record changed after bounded inventory",
                 ));
             }
+            self.validate_historical_autonomous_recovery_dependencies(expected, &path)
+        }
+
+        fn validate_historical_autonomous_recovery_inventory_collisions(
+            &self,
+            records: &[HistoricalAutonomousLaneRecoveryRecordV1],
+        ) -> Result<()> {
+            let mut by_recovery = BTreeMap::new();
+            let mut by_slot = BTreeMap::new();
+            let mut by_proposal = BTreeMap::new();
+            let mut by_transaction = BTreeMap::new();
+            for record in records {
+                let descriptor = &record.payload.origin_proposal.descriptor;
+                let record_hash = HashOf::new(record);
+                let slot = (
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.lane_block_height,
+                );
+                let path = self.store_root.clone();
+                if by_recovery
+                    .insert(record.recovery_id, record_hash)
+                    .is_some_and(|existing| existing != record_hash)
+                {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        path,
+                        "historical autonomous recovery ID aliases different canonical record bytes",
+                    ));
+                }
+                for conflict in [
+                    by_slot.insert(slot, record.recovery_id),
+                    by_proposal.insert(
+                        record.payload.origin_proposal.proposal_hash,
+                        record.recovery_id,
+                    ),
+                ] {
+                    if conflict.is_some_and(|existing| existing != record.recovery_id) {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            path,
+                            "historical autonomous recovery inventory contains a path, slot, or proposal collision",
+                        ));
+                    }
+                }
+                for key in &record.reservation_group.ordered_keys {
+                    if by_transaction
+                        .insert(key.signed_transaction_hash, record.recovery_id)
+                        .is_some_and(|existing| existing != record.recovery_id)
+                    {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            self.store_root.clone(),
+                            "historical autonomous recovery inventory aliases FIFO transaction ownership",
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        /// Read the complete active-incarnation recovery namespace under both
+        /// caller and hard limits. Unknown, temporary, linked, or noncanonical
+        /// entries fail closed; archived incarnations are deliberately outside
+        /// this active namespace.
+        pub(crate) fn historical_autonomous_lane_recovery_records_bounded(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            if limit == 0 || limit > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    self.store_root.clone(),
+                    "historical autonomous recovery reader has an invalid record limit",
+                ));
+            }
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entries = self
+                .lane_storage_entries
+                .lock()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            let _sidecar_guard = self.sidecar_lock.lock();
+            let mut records = Vec::new();
+            let mut aggregate_bytes = 0_u64;
+            for entry in entries {
+                let directory = Self::historical_autonomous_recovery_directory_for_entry(
+                    &entry,
+                    &self.store_root,
+                );
+                if self.canonical_sidecar_directory(&directory)?.is_none() {
+                    continue;
+                }
+                let mut directory_entries = std::fs::read_dir(&directory)
+                    .map_err(|error| Error::IO(error, directory.clone()))?
+                    .collect::<std::io::Result<Vec<_>>>()
+                    .map_err(|error| Error::IO(error, directory.clone()))?;
+                directory_entries.sort_by_key(std::fs::DirEntry::file_name);
+                for directory_entry in directory_entries {
+                    let path = directory_entry.path();
+                    let name = directory_entry.file_name().into_string().map_err(|_| {
+                        Self::invalid_historical_autonomous_recovery(
+                            path.clone(),
+                            "historical autonomous recovery namespace contains a non-UTF-8 entry",
+                        )
+                    })?;
+                    let canonical_name = name
+                        .strip_suffix(".norito")
+                        .is_some_and(|stem| {
+                            stem.len() == Hash::LENGTH * 2
+                                && stem.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                        });
+                    if name.starts_with(".kura-sidecar-") || !canonical_name {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            path,
+                            "historical autonomous recovery namespace contains a temporary or unknown entry",
+                        ));
+                    }
+                    let metadata = std::fs::symlink_metadata(&path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if metadata.file_type().is_symlink()
+                        || !metadata.file_type().is_file()
+                        || !Self::sidecar_is_single_link(&metadata)
+                    {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            path,
+                            "historical autonomous recovery namespace contains a linked or non-regular entry",
+                        ));
+                    }
+                    aggregate_bytes = aggregate_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            directory.clone(),
+                            "historical autonomous recovery aggregate byte count overflowed",
+                        )
+                    })?;
+                    if aggregate_bytes > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            directory,
+                            "historical autonomous recovery namespace exceeds its aggregate byte limit",
+                        ));
+                    }
+                    if records.len() >= limit {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            path,
+                            "historical autonomous recovery namespace exceeds caller capacity",
+                        ));
+                    }
+                    let record = self
+                        .read_historical_autonomous_recovery_record(&path, &directory)?
+                        .ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                path.clone(),
+                                "historical autonomous recovery record disappeared during bounded inventory",
+                            )
+                        })?;
+                    if record.payload.origin_proposal.descriptor.lane_id != entry.lane_id
+                        || record.payload.origin_proposal.descriptor.dataspace_id != entry.dataspace_id
+                    {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            path,
+                            "historical autonomous recovery record is stored in another lane namespace",
+                        ));
+                    }
+                    self.require_active_lane_artifact(
+                        &entry,
+                        &record.payload.origin_proposal.descriptor,
+                    )?;
+                    records.push(record);
+                }
+            }
+            records.sort_by_key(|record| {
+                let descriptor = &record.payload.origin_proposal.descriptor;
+                (
+                    descriptor.proposal_height,
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    record.recovery_id,
+                )
+            });
+            self.validate_historical_autonomous_recovery_inventory_collisions(&records)?;
+            Ok(records)
+        }
+
+        /// Resolve the sole immutable recovery owner for one exact FIFO group.
+        /// The bounded inventory rejects any slot, proposal, transaction, or
+        /// recovery-ID collision before this lookup can return a record.
+        pub(crate) fn historical_autonomous_lane_recovery_record_for_group(
+            &self,
+            group: &LaneQueueReservationReconciliationGroupV1,
+        ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            let records = self.historical_autonomous_lane_recovery_records_bounded(
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            )?;
+            Ok(records
+                .into_iter()
+                .find(|record| record.reservation_group == *group))
+        }
+
+        /// Prove that normal autonomous-payload and execution-input writers
+        /// will accept this record before an all-item runner batch mutates its
+        /// first file. This is deliberately read-only; crash repair remains the
+        /// responsibility of the later guarded persistence calls.
+        fn preflight_historical_autonomous_recovery_install_dependencies(
+            &self,
+            record: &HistoricalAutonomousLaneRecoveryRecordV1,
+            path: &Path,
+        ) -> Result<()> {
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                &record.payload,
+                record.payload.chain_id_hash,
+                record.payload.epoch,
+            )
+            .map_err(|availability| {
+                Self::invalid_historical_autonomous_recovery(
+                    path.to_path_buf(),
+                    format!(
+                        "historical autonomous execution-input preflight failed: {availability:?}"
+                    ),
+                )
+            })?;
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entry = self.lane_storage_entry(descriptor.lane_id)?;
+            self.require_active_lane_artifact(&entry, descriptor)?;
+            let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+                &entry,
+                &self.store_root,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            );
+            let (input_data_path, input_index_path) =
+                Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
+            let _sidecar_guard = self.sidecar_lock.lock();
+            if let Some(existing) = self
+                .read_current_autonomous_lane_block_record_self_context_locked(
+                    &entry,
+                    descriptor.lane_block_height,
+                    false,
+                )?
+            {
+                let existing_payload = &existing.artifact.executable_payload;
+                let exact_or_promotable = existing_payload == &record.payload
+                    || (existing.retirement.is_none()
+                        && existing_payload
+                            .origin_proposal
+                            .payload_block_hint
+                            .is_none()
+                        && record
+                            .payload
+                            .origin_proposal
+                            .payload_block_hint
+                            .is_some()
+                        && existing_payload
+                            .attach_global_hint_exact(
+                                record
+                                    .payload
+                                    .origin_proposal
+                                    .payload_block_hint
+                                    .expect("checked present"),
+                                record.payload.chain_id_hash,
+                                record.payload.epoch,
+                            )
+                            .is_ok_and(|promoted| promoted == record.payload));
+                if existing.retirement.is_some() || !exact_or_promotable {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        attempt_path,
+                        "historical autonomous payload conflicts with the active lane-height owner",
+                    ));
+                }
+            }
+            self.preflight_autonomous_lane_entrypoint_claims_locked(
+                &record.payload,
+                MAX_AUTONOMOUS_LANE_CLAIM_FILES,
+            )?;
+
+            let existing_input = Self::read_indexed_sidecar_from_paths(
+                descriptor.lane_block_height,
+                &input_data_path,
+                &input_index_path,
+                norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
+                "historical autonomous lane block execution input preflight",
+            );
+            match existing_input {
+                Some(existing) if existing != expected_input => {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        input_data_path,
+                        "historical autonomous execution input conflicts with durable bytes",
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    let tracked = Self::sidecar_tracked_bytes(
+                        &input_data_path,
+                        &input_index_path,
+                        None,
+                    )?;
+                    if tracked != 0 {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            input_data_path,
+                            "historical autonomous execution-input sidecar is non-empty but unreadable",
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        pub(crate) fn preflight_historical_autonomous_lane_recovery_records(
+            &self,
+            incoming: &[HistoricalAutonomousLaneRecoveryRecordV1],
+        ) -> Result<()> {
+            if incoming.is_empty()
+                || incoming.len() > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
+            {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    self.store_root.clone(),
+                    "historical autonomous recovery batch is empty or exceeds its hard record limit",
+                ));
+            }
+            let mut combined = self.historical_autonomous_lane_recovery_records_bounded(
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            )?;
+            let mut combined_encoded_bytes = 0_u64;
+            for existing in &combined {
+                let encoded = norito::encode_canonical(existing).map_err(Error::NoritoFrame)?;
+                combined_encoded_bytes = accumulate_historical_autonomous_recovery_bytes(
+                    combined_encoded_bytes,
+                    encoded.len(),
+                    false,
+                )
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        self.store_root.clone(),
+                        "existing historical autonomous recovery bytes exceed their aggregate bound",
+                    )
+                })?;
+            }
+            for record in incoming {
+                let descriptor = &record.payload.origin_proposal.descriptor;
+                let entry = self.lane_storage_entry(descriptor.lane_id)?;
+                let directory = Self::historical_autonomous_recovery_directory_for_entry(
+                    &entry,
+                    &self.store_root,
+                );
+                let path = Self::historical_autonomous_recovery_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                    record.recovery_id,
+                );
+                self.validate_historical_autonomous_recovery_record_shape(record, &path)?;
+                let encoded = norito::encode_canonical(record).map_err(Error::NoritoFrame)?;
+                if let Some(parent) = directory.parent() {
+                    self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            parent.to_path_buf(),
+                            "historical autonomous recovery lane-artifact directory is unavailable",
+                        )
+                    })?;
+                }
+                if let Some(existing) = combined
+                    .iter()
+                    .find(|existing| existing.recovery_id == record.recovery_id)
+                {
+                    if existing != record {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            path.clone(),
+                            "historical autonomous recovery path conflicts with existing immutable bytes",
+                        ));
+                    }
+                    combined_encoded_bytes = accumulate_historical_autonomous_recovery_bytes(
+                        combined_encoded_bytes,
+                        encoded.len(),
+                        true,
+                    )
+                    .ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            path.clone(),
+                            "historical autonomous recovery bytes exceed their aggregate bound",
+                        )
+                    })?;
+                    self.validate_historical_autonomous_recovery_dependencies(existing, &path)?;
+                } else {
+                    combined_encoded_bytes = accumulate_historical_autonomous_recovery_bytes(
+                        combined_encoded_bytes,
+                        encoded.len(),
+                        false,
+                    )
+                    .ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            path.clone(),
+                            "historical autonomous recovery batch exceeds its aggregate byte bound",
+                        )
+                    })?;
+                    self.preflight_historical_autonomous_recovery_install_dependencies(
+                        record, &path,
+                    )?;
+                    combined.push(record.clone());
+                }
+            }
+            if combined.len() > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    self.store_root.clone(),
+                    "historical autonomous recovery batch exceeds namespace capacity",
+                ));
+            }
+            self.validate_historical_autonomous_recovery_inventory_collisions(&combined)
+        }
+
+        pub(crate) fn historical_autonomous_lane_recovery_record_matches(
+            &self,
+            expected: &HistoricalAutonomousLaneRecoveryRecordV1,
+        ) -> Result<bool> {
+            let records = self.historical_autonomous_lane_recovery_records_bounded(
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            )?;
+            let Some(record) = records
+                .into_iter()
+                .find(|record| record.recovery_id == expected.recovery_id)
+            else {
+                return Ok(false);
+            };
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            let entry = self.lane_storage_entry(descriptor.lane_id)?;
+            let path = Self::historical_autonomous_recovery_path_for_entry(
+                &entry,
+                &self.store_root,
+                record.recovery_id,
+            );
+            if &record != expected {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path,
+                    "historical autonomous recovery record conflicts with requested immutable bytes",
+                ));
+            }
+            self.validate_historical_autonomous_recovery_dependencies(&record, &path)?;
             Ok(true)
         }
 
-        /// Install the exact execution input and immutable recovery seal for a
-        /// finalized historical autonomous payload.
-        pub(crate) fn persist_historical_autonomous_lane_recovery(
+        /// Match an in-memory planner DTO to its complete durable record. The
+        /// record reader still validates the stored ordered PoPs; the DTO does
+        /// not get to supply or override that historical authority.
+        pub(crate) fn historical_autonomous_lane_recovery_matches(
             &self,
             install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
-        ) -> Result<()> {
+        ) -> Result<bool> {
+            let records = self.historical_autonomous_lane_recovery_records_bounded(
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            )?;
+            let Some(record) = records
+                .into_iter()
+                .find(|record| record.recovery_id == install.recovery_id)
+            else {
+                return Ok(false);
+            };
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            let entry = self.lane_storage_entry(descriptor.lane_id)?;
+            let path = Self::historical_autonomous_recovery_path_for_entry(
+                &entry,
+                &self.store_root,
+                record.recovery_id,
+            );
+            if record.installation_input() != *install {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path,
+                    "historical autonomous recovery record conflicts with requested installation",
+                ));
+            }
+            self.validate_historical_autonomous_recovery_dependencies(&record, &path)?;
+            Ok(true)
+        }
+
+        /// Persist carrier-extracted executable bytes through the ordinary
+        /// autonomous lane path, then persist the execution input, and only then
+        /// publish the separate immutable recovery seal.
+        pub(crate) fn persist_historical_autonomous_lane_recovery_record(
+            &self,
+            record: &HistoricalAutonomousLaneRecoveryRecordV1,
+        ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
             self.ensure_prune_recovery_not_required()?;
             self.durable_mutation_authorized()?;
-            let _ = self.validate_historical_autonomous_install_base(install)?;
-            let normalized =
-                Self::historical_autonomous_payload_without_carrier_hint(&install.payload);
+            self.preflight_historical_autonomous_lane_recovery_records(std::slice::from_ref(
+                record,
+            ))?;
+            if self.historical_autonomous_lane_recovery_record_matches(record)? {
+                return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
+            }
+
+            self.persist_lane_executable_payload(
+                &record.payload,
+                record.payload.chain_id_hash,
+                record.payload.epoch,
+            )?;
             let recovered = self
                 .recover_autonomous_lane_block_payload(
-                    &normalized.origin_proposal,
-                    normalized.chain_id_hash,
-                    normalized.epoch,
+                    &record.payload.origin_proposal,
+                    record.payload.chain_id_hash,
+                    record.payload.epoch,
                 )
-                .map_err(|error| {
+                .map_err(|availability| {
                     Self::invalid_historical_autonomous_recovery(
-                        self.historical_autonomous_recovery_path(install.recovery_id),
+                        self.store_root.clone(),
                         format!(
-                            "historical autonomous execution input recovery failed: {error:?}"
+                            "historical autonomous execution input recovery failed after payload persistence: {availability:?}"
                         ),
                     )
                 })?;
-            if recovered.reservation_keys != normalized.reservation_keys
-                || recovered.routing_plans != normalized.routing_plans
-                || recovered.native_amx_receipts != normalized.native_amx_receipts
-            {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    self.historical_autonomous_recovery_path(install.recovery_id),
-                    "historical autonomous recovered execution input is not exact",
-                ));
-            }
             self.persist_lane_block_execution_input(&recovered)?;
 
-            let expected = self.validate_historical_autonomous_install_base(install)?;
-            let directory = self.historical_autonomous_recovery_directory();
-            let path = self.historical_autonomous_recovery_path(install.recovery_id);
-            self.validate_historical_autonomous_execution_input(install, &path)?;
-            let bytes = expected.encode();
-            if bytes.len() > HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES {
-                return Err(Self::invalid_historical_autonomous_recovery(
-                    path,
-                    "historical autonomous recovery record exceeds its hard byte limit",
-                ));
-            }
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            let provisional_entry = self.lane_storage_entry(descriptor.lane_id)?;
+            let provisional_path = Self::historical_autonomous_recovery_path_for_entry(
+                &provisional_entry,
+                &self.store_root,
+                record.recovery_id,
+            );
+            self.validate_historical_autonomous_recovery_dependencies(
+                record,
+                &provisional_path,
+            )?;
+            let bytes = record.encode();
 
             let accounting_mutation = self.begin_total_disk_usage_mutation();
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entry = self.lane_storage_entry(descriptor.lane_id)?;
+            self.require_active_lane_artifact(&entry, descriptor)?;
+            let directory = Self::historical_autonomous_recovery_directory_for_entry(
+                &entry,
+                &self.store_root,
+            );
+            let path = Self::historical_autonomous_recovery_path_for_entry(
+                &entry,
+                &self.store_root,
+                record.recovery_id,
+            );
+            let _sidecar_guard = self.sidecar_lock.lock();
             if self.canonical_sidecar_directory(&directory)?.is_none() {
+                let parent = directory.parent().ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        directory.clone(),
+                        "historical autonomous recovery directory has no parent",
+                    )
+                })?;
+                self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        parent.to_path_buf(),
+                        "historical autonomous recovery parent is unavailable",
+                    )
+                })?;
                 create_dir_all_with_context(&directory)?;
                 self.canonical_sidecar_directory(&directory)?.ok_or_else(|| {
                     Self::invalid_historical_autonomous_recovery(
@@ -443,52 +913,89 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         "historical autonomous recovery directory disappeared after creation",
                     )
                 })?;
-                if let Some(parent) = directory.parent() {
-                    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-                }
+                sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
             }
 
-            let _sidecar_guard = self.sidecar_lock.lock();
             if let Some(existing) =
                 self.read_historical_autonomous_recovery_record(&path, &directory)?
             {
-                if existing != expected {
+                if existing != *record {
                     return Err(Self::invalid_historical_autonomous_recovery(
                         path,
-                        "immutable historical autonomous recovery record conflicts with an existing seal",
+                        "immutable historical autonomous recovery seal conflicts after dependency persistence",
                     ));
                 }
                 accounting_mutation.finish();
-                return Ok(());
+                return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
             }
             let wrote = self.write_atomic_synced_noclobber(&path, &bytes)?;
             if wrote {
-                self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
+                self.update_disk_usage_delta(0, u64::try_from(bytes.len())?);
             } else {
                 let existing = self
                     .read_historical_autonomous_recovery_record(&path, &directory)?
                     .ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
                             path.clone(),
-                            "historical autonomous recovery lost a no-clobber publication race",
+                            "historical autonomous recovery no-clobber collision disappeared",
                         )
                     })?;
-                if existing != expected {
+                if existing != *record {
                     return Err(Self::invalid_historical_autonomous_recovery(
                         path,
-                        "historical autonomous recovery no-clobber race published conflicting bytes",
+                        "historical autonomous recovery no-clobber collision has conflicting bytes",
                     ));
                 }
             }
-            accounting_mutation.finish();
-            drop(_sidecar_guard);
-            if !self.historical_autonomous_lane_recovery_matches(install)? {
+            let confirmed = self
+                .read_historical_autonomous_recovery_record(&path, &directory)?
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.clone(),
+                        "historical autonomous recovery record is absent after publication",
+                    )
+                })?;
+            if confirmed != *record {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     path,
-                    "historical autonomous recovery seal is absent after publication",
+                    "historical autonomous recovery record changed during read-back",
                 ));
             }
-            Ok(())
+            accounting_mutation.finish();
+            self.note_committed_lane_status_change();
+            Ok(if wrote {
+                HistoricalAutonomousLaneRecoveryPersistOutcome::Installed
+            } else {
+                HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled
+            })
         }
     };
+}
+
+#[cfg(test)]
+mod historical_autonomous_recovery_bound_tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_byte_bound_is_exact_and_duplicate_aware() {
+        let limit = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES;
+        assert_eq!(
+            accumulate_historical_autonomous_recovery_bytes(limit - 1, 1, false),
+            Some(limit),
+        );
+        assert_eq!(
+            accumulate_historical_autonomous_recovery_bytes(limit, 1, false),
+            None,
+            "one unique byte beyond the aggregate bound must fail",
+        );
+        assert_eq!(
+            accumulate_historical_autonomous_recovery_bytes(
+                limit,
+                HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES,
+                true,
+            ),
+            Some(limit),
+            "an exact immutable duplicate must not consume aggregate bytes twice",
+        );
+    }
 }

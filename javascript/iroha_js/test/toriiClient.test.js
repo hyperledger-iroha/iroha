@@ -1035,6 +1035,33 @@ function createSumeragiDiagnosticsPayload(overrides = {}) {
   };
 }
 
+function createAutonomousLaneExecution(overrides = {}) {
+  return {
+    lane_id: 3,
+    dataspace_id: 8,
+    lane_incarnation: fakeSumeragiHash(0x65),
+    lane_block_height: 8,
+    lane_block_view: 1,
+    proposal_height: 10,
+    proposal_view: 2,
+    reservation_owner_hash: fakeSumeragiHash(0x66),
+    proposal_identity_hash: fakeSumeragiHash(0x67),
+    reservation_group_hash: fakeSumeragiHash(0x68),
+    proposal_hash: fakeSumeragiHash(0x69),
+    descriptor_hash: fakeSumeragiHash(0x73),
+    executable_payload_hash: fakeSumeragiHash(0x74),
+    source_bundle_hash: fakeSumeragiHash(0x75),
+    merge_entry_hash: fakeSumeragiHash(0x76),
+    application_block_height: 12,
+    application_block_hash: fakeSumeragiHash(0x77),
+    reservation_count: 2,
+    transaction_count: 2,
+    highest_durable_stage: "kura_wsv_application_receipt_durable",
+    stuck_reason: "queue_finalization_unverifiable",
+    ...overrides,
+  };
+}
+
 function createLaneSettlementCommitment(overrides = {}) {
   return {
     block_height: 9,
@@ -12281,27 +12308,17 @@ test("getSumeragiDiagnosticsTyped requires the autonomous execution vector", asy
 });
 
 test("getSumeragiDiagnosticsTyped parses autonomous execution stages and explicit conflict", async () => {
-  const row = {
-    lane_id: 3, dataspace_id: 8, lane_incarnation: fakeSumeragiHash(0x65),
-    lane_block_height: 8, lane_block_view: 1,
-    proposal_height: 10, proposal_view: 2,
-    proposal_hash: fakeSumeragiHash(0x69),
-    descriptor_hash: fakeSumeragiHash(0x73),
-    executable_payload_hash: fakeSumeragiHash(0x74),
-    source_bundle_hash: fakeSumeragiHash(0x75),
-    merge_entry_hash: fakeSumeragiHash(0x76),
-    application_block_height: 12,
-    application_block_hash: fakeSumeragiHash(0x77),
-    reservation_count: 2, transaction_count: 2,
-    highest_durable_stage: "kura_wsv_application_receipt_durable",
-    stuck_reason: "queue_finalization_unverifiable",
-  };
+  const row = createAutonomousLaneExecution();
   const payload = createSumeragiDiagnosticsPayload({
     autonomous_lane_executions: [row],
   });
   const diagnostics = await sumeragiDiagnosticsClientForPayload(payload)
     .getSumeragiDiagnosticsTyped();
   assert.equal(diagnostics.autonomous_lane_executions[0].merge_entry_hash, row.merge_entry_hash);
+  assert.equal(
+    diagnostics.autonomous_lane_executions[0].proposal_identity_hash,
+    row.proposal_identity_hash,
+  );
 
   payload.autonomous_lane_executions = [row, { ...row }];
   await assert.rejects(
@@ -12326,6 +12343,160 @@ test("getSumeragiDiagnosticsTyped parses autonomous execution stages and explici
     sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
     /stage and stuck reason disagree/,
   );
+});
+
+test("getSumeragiDiagnosticsTyped requires exact provisional identity hashes", async () => {
+  for (const field of [
+    "reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash",
+  ]) {
+    for (const mutation of ["missing", "zero", "type", "bare-lowercase"]) {
+      const row = createAutonomousLaneExecution();
+      if (mutation === "missing") delete row[field];
+      else if (mutation === "zero") row[field] = `hash:${"00".repeat(32)}#6A0A`;
+      else if (mutation === "type") row[field] = Array(32).fill(1);
+      else row[field] = "ab".repeat(32);
+      const payload = createSumeragiDiagnosticsPayload({
+        autonomous_lane_executions: [row],
+      });
+      await assert.rejects(
+        sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+        new RegExp(field, "u"),
+      );
+    }
+  }
+});
+
+test("getSumeragiDiagnosticsTyped enforces reservation-only geometry", async () => {
+  const row = createAutonomousLaneExecution({
+    highest_durable_stage: "reservations_durable",
+    stuck_reason: "awaiting_executable_payload",
+  });
+  for (const field of [
+    "proposal_view", "proposal_hash", "descriptor_hash", "executable_payload_hash",
+    "source_bundle_hash",
+    "merge_entry_hash", "application_block_height", "application_block_hash",
+  ]) delete row[field];
+  const payload = createSumeragiDiagnosticsPayload({ autonomous_lane_executions: [row] });
+  const parsed = await sumeragiDiagnosticsClientForPayload(payload)
+    .getSumeragiDiagnosticsTyped();
+  assert.equal(parsed.autonomous_lane_executions[0].proposal_hash, null);
+  assert.equal(parsed.autonomous_lane_executions[0].descriptor_hash, null);
+  assert.equal(parsed.autonomous_lane_executions[0].proposal_view, null);
+
+  for (const field of [
+    "proposal_hash", "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
+    "application_block_height",
+  ]) {
+    const invalid = { ...row };
+    if (field === "proposal_hash") {
+      invalid.proposal_hash = fakeSumeragiHash(0x79);
+      invalid.descriptor_hash = fakeSumeragiHash(0x7a);
+    } else if (field === "application_block_height") {
+      invalid.application_block_height = 12;
+      invalid.application_block_hash = fakeSumeragiHash(0x7b);
+    } else invalid[field] = fakeSumeragiHash(0x7c);
+    payload.autonomous_lane_executions = [invalid];
+    await assert.rejects(
+      sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+      /finalized identity|evidence/u,
+    );
+  }
+
+  payload.autonomous_lane_executions = [{
+    ...row, stuck_reason: "awaiting_payload_availability",
+  }];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /stage and stuck reason disagree/u,
+  );
+  payload.autonomous_lane_executions = [{ ...row, reservation_count: 1 }];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /reservation and transaction counts disagree/u,
+  );
+  payload.autonomous_lane_executions = [{ ...row, proposal_view: null }];
+  assert.equal(
+    (await sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped())
+      .autonomous_lane_executions[0].proposal_view,
+    null,
+  );
+  payload.autonomous_lane_executions = [{ ...row, proposal_view: 0 }];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /proposal view disagrees/u,
+  );
+});
+
+test("getSumeragiDiagnosticsTyped pairs finalized identity and orders by provisional identity", async () => {
+  const payload = createSumeragiDiagnosticsPayload();
+  for (const missing of ["proposal_hash", "descriptor_hash"]) {
+    const row = createAutonomousLaneExecution();
+    delete row[missing];
+    payload.autonomous_lane_executions = [row];
+    await assert.rejects(
+      sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+      /must appear together/u,
+    );
+  }
+
+  payload.autonomous_lane_executions = [createAutonomousLaneExecution({
+    proposal_hash: null, descriptor_hash: null,
+  })];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /finalized identity disagrees/u,
+  );
+
+  const missingView = createAutonomousLaneExecution();
+  delete missingView.proposal_view;
+  payload.autonomous_lane_executions = [missingView];
+  assert.equal(
+    (await sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped())
+      .autonomous_lane_executions[0].proposal_view,
+    null,
+  );
+
+  const first = createAutonomousLaneExecution();
+  payload.autonomous_lane_executions = [first, createAutonomousLaneExecution({
+    proposal_hash: fakeSumeragiHash(0x7d),
+    descriptor_hash: fakeSumeragiHash(0x7e),
+  })];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /strictly ordered/u,
+  );
+
+  payload.autonomous_lane_executions = [
+    createAutonomousLaneExecution({ proposal_identity_hash: fakeSumeragiHash(0x90) }),
+    createAutonomousLaneExecution({
+      proposal_identity_hash: fakeSumeragiHash(0x80),
+      proposal_hash: fakeSumeragiHash(0x91),
+      descriptor_hash: fakeSumeragiHash(0x92),
+    }),
+  ];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /strictly ordered/u,
+  );
+});
+
+test("autonomous diagnostics declarations expose provisional and optional identities", () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  const match = declarations.match(
+    /export interface ToriiSumeragiAutonomousLaneExecution \{([\s\S]*?)\n\}/u,
+  );
+  assert.ok(match, "missing ToriiSumeragiAutonomousLaneExecution declaration");
+  for (const field of [
+    "proposal_view: ToriiU64 | null;",
+    "reservation_owner_hash: string;",
+    "proposal_identity_hash: string;",
+    "reservation_group_hash: string;",
+    "proposal_hash: string | null;",
+    "descriptor_hash: string | null;",
+  ]) {
+    assert.ok(match[1].includes(field), `missing declaration: ${field}`);
+  }
+  assert.match(declarations, /\| "awaiting_executable_payload"/u);
 });
 
 test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", async () => {
@@ -12453,6 +12624,12 @@ test("getSumeragiStatusTyped requires an exact merge carrier projection", async 
       commitment.merge_carrier = { version: 2, entry_hash: fakeSumeragiHash(0x39) };
     },
     (commitment) => {
+      commitment.merge_carrier = { entry_hash: fakeSumeragiHash(0x39) };
+    },
+    (commitment) => {
+      commitment.merge_carrier = { version: 1 };
+    },
+    (commitment) => {
       commitment.merge_carrier = { version: 1, entry_hash: "not-a-hash" };
     },
     (commitment) => {
@@ -12514,6 +12691,12 @@ test("Sumeragi execution commitment declarations expose current mandatory fields
   ]) {
     assert.ok(match[1].includes(field), `missing declaration: ${field}`);
   }
+  const carrierMatch = declarations.match(
+    /export interface ToriiSumeragiV2MergeCarrierCommitment \{([\s\S]*?)\n\}/,
+  );
+  assert.ok(carrierMatch, "missing ToriiSumeragiV2MergeCarrierCommitment declaration");
+  assert.match(carrierMatch[1], /version: 1;/u);
+  assert.match(carrierMatch[1], /entry_hash: string;/u);
 });
 
 test("getSumeragiStatusTyped preserves exact proposal rounds", async () => {
@@ -25013,7 +25196,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
   );
 });
 
-test("getContractManifest rejects aliases, unknown fields, and unsupported feature bits", async () => {
+test("getContractManifest rejects retired trigger sources, aliases, unknown fields, and unsupported feature bits", async () => {
   const canonicalCodeHash =
     "hash:1111111111111111111111111111111111111111111111111111111111111111#4667";
   const signer = `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
@@ -25236,6 +25419,12 @@ test("getContractManifest rejects aliases, unknown fields, and unsupported featu
     ["unknown repeat variant", (payload) => {
       payload.manifest.entrypoints[0].triggers[0].repeats.Legacy = null;
     }],
+    ["retired trigger id", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].id = "Amount";
+    }],
+    ["retired callback namespace", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].callback.namespace = "Amount";
+    }],
     ["camelCase callback alias", (payload) => {
       payload.manifest.entrypoints[0].triggers[0].callback.entryPoint = "mutate";
     }],
@@ -25271,10 +25460,27 @@ test("getContractManifest rejects aliases, unknown fields, and unsupported featu
     });
     await assert.rejects(
       () => client.getContractManifest("11".repeat(32)),
-      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap/u,
+      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|retired Kotodama source form/u,
       label,
     );
   }
+
+  const lowercaseAmount = JSON.parse(JSON.stringify(base));
+  const lowercaseTrigger = lowercaseAmount.manifest.entrypoints[0].triggers[0];
+  lowercaseTrigger.id = "amount";
+  lowercaseTrigger.callback.namespace = "amount";
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: lowercaseAmount,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const accepted = await client.getContractManifest("11".repeat(32));
+  const parsedTrigger = accepted?.manifest.entrypoints[0].triggers[0];
+  assert.equal(parsedTrigger?.id, "amount");
+  assert.equal(parsedTrigger?.callback.namespace, "amount");
 });
 
 test("getContractManifest returns null on 404", async () => {

@@ -17168,11 +17168,13 @@ function parseSumeragiAutonomousLaneExecutions(value) {
   const context = "sumeragi diagnostics.autonomous_lane_executions";
   const required = [
     "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-    "lane_block_view", "proposal_height", "proposal_view", "proposal_hash",
-    "descriptor_hash", "reservation_count", "transaction_count",
+    "lane_block_view", "proposal_height",
+    "reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash",
+    "reservation_count", "transaction_count",
     "highest_durable_stage",
   ];
   const optional = [
+    "proposal_view", "proposal_hash", "descriptor_hash",
     "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
     "application_block_height", "application_block_hash", "stuck_reason",
   ];
@@ -17184,7 +17186,8 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     "queue_finalized", "conflict",
   ]);
   const reasons = new Set([
-    "awaiting_payload_availability", "awaiting_lane_certification",
+    "awaiting_executable_payload", "awaiting_payload_availability",
+    "awaiting_lane_certification",
     "certified_bundle_unavailable", "awaiting_merge_selection",
     "awaiting_global_carrier", "awaiting_application_receipt",
     "queue_finalization_unverifiable", "evidence_conflict",
@@ -17209,18 +17212,24 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     const hash = (field) => record[field] == null ? null : parseSumeragiNonzeroHash(
       record[field], `${itemContext}.${field}`,
     );
+    const requiredHash = (field) => parseSumeragiNonzeroHash(
+      record[field], `${itemContext}.${field}`,
+    );
     const laneId = u64("lane_id", { max: 0xffffffff });
     const dataspaceId = u64("dataspace_id");
-    const incarnation = hash("lane_incarnation");
+    const incarnation = requiredHash("lane_incarnation");
     const laneHeight = u64("lane_block_height", { positive: true });
     const laneView = u64("lane_block_view");
     const proposalHeight = u64("proposal_height", { positive: true });
-    const proposalView = u64("proposal_view");
+    const proposalView = record.proposal_view == null ? null : u64("proposal_view");
+    const reservationOwnerHash = requiredHash("reservation_owner_hash");
+    const proposalIdentityHash = requiredHash("proposal_identity_hash");
+    const reservationGroupHash = requiredHash("reservation_group_hash");
     const proposalHash = hash("proposal_hash");
     const descriptorHash = hash("descriptor_hash");
     const key = [
       laneId, dataspaceId, incarnation, laneHeight, laneView,
-      proposalHeight, proposalView, proposalHash,
+      proposalHeight, proposalIdentityHash,
     ];
     if (previousKey !== null && compareSumeragiDiagnosticKeys(previousKey, key) >= 0) {
       throw new TypeError(`${context} must be strictly ordered by exact identity`);
@@ -17247,7 +17256,7 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       throw new TypeError(`${itemContext}.stuck_reason has an unknown variant`);
     }
     const expectedReasons = {
-      reservations_durable: "awaiting_payload_availability",
+      reservations_durable: "awaiting_executable_payload",
       executable_payload_durable: "awaiting_payload_availability",
       payload_availability_certified: "awaiting_lane_certification",
       lane_certified: "certified_bundle_unavailable",
@@ -17263,6 +17272,18 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     }
     if (stage !== "conflict" && reservationCount !== transactionCount) {
       throw new TypeError(`${itemContext} reservation and transaction counts disagree`);
+    }
+    if ((proposalHash === null) !== (descriptorHash === null)) {
+      throw new TypeError(
+        `${itemContext} proposal and descriptor hashes must appear together`,
+      );
+    }
+    if (stage !== "conflict"
+      && ((stage === "reservations_durable") !== (proposalHash === null))) {
+      throw new TypeError(`${itemContext} finalized identity disagrees with durable stage`);
+    }
+    if (stage === "reservations_durable" && proposalView !== null) {
+      throw new TypeError(`${itemContext} proposal view disagrees with durable stage`);
     }
     const payloadHash = hash("executable_payload_hash");
     const bundleHash = hash("source_bundle_hash");
@@ -17291,6 +17312,9 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       lane_id: laneId, dataspace_id: dataspaceId, lane_incarnation: incarnation,
       lane_block_height: laneHeight, lane_block_view: laneView,
       proposal_height: proposalHeight, proposal_view: proposalView,
+      reservation_owner_hash: reservationOwnerHash,
+      proposal_identity_hash: proposalIdentityHash,
+      reservation_group_hash: reservationGroupHash,
       proposal_hash: proposalHash, descriptor_hash: descriptorHash,
       executable_payload_hash: payloadHash,
       source_bundle_hash: bundleHash,
@@ -23960,8 +23984,21 @@ function normalizeManifestTriggersPayload(value, context) {
     const record = ensureRecord(trigger, `${context}[${index}]`);
     const callback = ensureRecord(record.callback, `${context}[${index}].callback`);
     const metadata = ensureRecord(record.metadata ?? {}, `${context}[${index}].metadata`);
+    const id = requireCanonicalKotodamaIdentifier(
+      record.id,
+      `${context}[${index}].id`,
+      { declaration: true },
+    );
+    const namespace =
+      callback.namespace === undefined || callback.namespace === null
+        ? null
+        : requireCanonicalKotodamaIdentifier(
+            callback.namespace,
+            `${context}[${index}].callback.namespace`,
+            { typeDeclaration: true },
+          );
     return {
-      id: requireExactNonEmptyString(record.id, `${context}[${index}].id`),
+      id,
       repeats: normalizeManifestRepeatsPayload(
         record.repeats,
         `${context}[${index}].repeats`,
@@ -23976,10 +24013,7 @@ function normalizeManifestTriggersPayload(value, context) {
           : normalizeAccountId(record.authority, `${context}[${index}].authority`),
       metadata: cloneJsonValue(metadata, `${context}[${index}].metadata`),
       callback: {
-        namespace: normalizeOptionalManifestString(
-          callback.namespace,
-          `${context}[${index}].callback.namespace`,
-        ),
+        namespace,
         entrypoint: requireCanonicalKotodamaEntrypoint(
           callback.entrypoint,
           `${context}[${index}].callback.entrypoint`,

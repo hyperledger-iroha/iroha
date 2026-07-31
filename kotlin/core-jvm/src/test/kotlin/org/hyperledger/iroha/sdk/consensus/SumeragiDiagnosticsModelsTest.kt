@@ -12,6 +12,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -140,6 +141,7 @@ class SumeragiDiagnosticsModelsTest {
         val applied = autonomousExecution(3)
         val encoded = Json.encodeToString(applied)
         assertTrue(encoded.contains("\"highest_durable_stage\":\"kura_wsv_application_receipt_durable\""))
+        assertTrue(encoded.contains("\"proposal_identity_hash\""))
         assertEquals(applied, Json.decodeFromString<SumeragiAutonomousLaneExecution>(encoded))
 
         val conflict = autonomousExecution(
@@ -166,6 +168,164 @@ class SumeragiDiagnosticsModelsTest {
                 3,
                 SumeragiAutonomousLaneExecutionStage.CONFLICT,
                 SumeragiAutonomousLaneExecutionStuckReason.AWAITING_MERGE_SELECTION,
+            )
+        }
+    }
+
+    @Test
+    fun `autonomous reservations require provisional identity and exact geometry`() {
+        val applied = autonomousExecution(3)
+        val appliedObject = Json.parseToJsonElement(Json.encodeToString(applied)).jsonObject
+        for (field in listOf(
+            "reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash",
+        )) {
+            assertFails {
+                Json.decodeFromString<SumeragiAutonomousLaneExecution>(
+                    JsonObject(appliedObject - field).toString(),
+                )
+            }
+            for (invalid in listOf(
+                JsonPrimitive("hash:${"00".repeat(32)}#6A0A"),
+                JsonPrimitive("ab".repeat(32)),
+                JsonArray(List(32) { JsonPrimitive(1) }),
+            )) {
+                assertFails {
+                    Json.decodeFromString<SumeragiAutonomousLaneExecution>(
+                        JsonObject(appliedObject + (field to invalid)).toString(),
+                    )
+                }
+            }
+        }
+        for (missing in listOf("proposal_hash", "descriptor_hash")) {
+            assertFailsWith<IllegalArgumentException> {
+                Json.decodeFromString<SumeragiAutonomousLaneExecution>(
+                    JsonObject(appliedObject - missing).toString(),
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            autonomousExecution(3, proposalHash = null, descriptorHash = null)
+        }
+        assertEquals(null, autonomousExecution(3, proposalView = null).proposalView)
+
+        val diagnosticsRoot = Json.parseToJsonElement(
+            Json.encodeToString(diagnostics()),
+        ).jsonObject
+        val diagnosticRows = diagnosticsRoot["autonomous_lane_executions"] as JsonArray
+        val nullViewRow = JsonObject(
+            diagnosticRows[0].jsonObject + ("proposal_view" to JsonNull),
+        )
+        val explicitNullView = JsonObject(
+            diagnosticsRoot +
+                ("autonomous_lane_executions" to JsonArray(listOf(nullViewRow))),
+        )
+        assertEquals(
+            null,
+            SumeragiDiagnosticsStatus.parseJson(explicitNullView.toString())
+                .autonomousLaneExecutions[0].proposalView,
+        )
+
+        val reservations = autonomousExecution(
+            3,
+            SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD,
+            proposalView = null,
+            proposalHash = null,
+            descriptorHash = null,
+            executablePayloadHash = null,
+            sourceBundleHash = null,
+            mergeEntryHash = null,
+            applicationBlockHeight = null,
+            applicationBlockHash = null,
+        )
+        assertEquals(null, reservations.proposalHash)
+        assertEquals(
+            SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD,
+            reservations.stuckReason,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            autonomousExecution(
+                3,
+                SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD,
+                proposalView = BigInteger.ZERO,
+                proposalHash = null,
+                descriptorHash = null,
+                executablePayloadHash = null,
+                sourceBundleHash = null,
+                mergeEntryHash = null,
+                applicationBlockHeight = null,
+                applicationBlockHash = null,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            autonomousExecution(
+                3,
+                SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY,
+                proposalView = null,
+                proposalHash = null,
+                descriptorHash = null,
+                executablePayloadHash = null,
+                sourceBundleHash = null,
+                mergeEntryHash = null,
+                applicationBlockHeight = null,
+                applicationBlockHash = null,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            autonomousExecution(
+                3,
+                SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD,
+                proposalView = null,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            autonomousExecution(
+                3,
+                SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD,
+                proposalView = null,
+                proposalHash = null,
+                descriptorHash = null,
+                sourceBundleHash = null,
+                mergeEntryHash = null,
+                applicationBlockHeight = null,
+                applicationBlockHash = null,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            autonomousExecution(
+                3,
+                SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD,
+                reservationCount = 1,
+                proposalView = null,
+                proposalHash = null,
+                descriptorHash = null,
+                executablePayloadHash = null,
+                sourceBundleHash = null,
+                mergeEntryHash = null,
+                applicationBlockHeight = null,
+                applicationBlockHash = null,
+            )
+        }
+
+        val sameProvisionalIdentity = autonomousExecution(
+            3,
+            proposalHash = hash(0x7e),
+            descriptorHash = hash(0x7f),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiAutonomousLaneExecutions(listOf(applied, sameProvisionalIdentity))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiAutonomousLaneExecutions(
+                listOf(
+                    autonomousExecution(3, proposalIdentityHash = hash(0x90)),
+                    autonomousExecution(3, proposalIdentityHash = hash(0x80)),
+                ),
             )
         }
     }
@@ -400,6 +560,17 @@ class SumeragiDiagnosticsModelsTest {
         reason: SumeragiAutonomousLaneExecutionStuckReason =
             SumeragiAutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE,
         reservationCount: Long = 2,
+        proposalView: BigInteger? = BigInteger.valueOf(2),
+        reservationOwnerHash: String = hash(0x6f),
+        proposalIdentityHash: String = hash(0x70),
+        reservationGroupHash: String = hash(0x71),
+        proposalHash: String? = hash(0x73),
+        descriptorHash: String? = hash(0x75),
+        executablePayloadHash: String? = hash(0x77),
+        sourceBundleHash: String? = hash(0x79),
+        mergeEntryHash: String? = hash(0x7b),
+        applicationBlockHeight: BigInteger? = BigInteger.valueOf(12),
+        applicationBlockHash: String? = hash(0x7d),
     ) = SumeragiAutonomousLaneExecution(
         laneId = laneId,
         dataspaceId = BigInteger.valueOf(8),
@@ -407,14 +578,17 @@ class SumeragiDiagnosticsModelsTest {
         laneBlockHeight = BigInteger.valueOf(8),
         laneBlockView = BigInteger.ONE,
         proposalHeight = BigInteger.TEN,
-        proposalView = BigInteger.valueOf(2),
-        proposalHash = hash(0x73),
-        descriptorHash = hash(0x75),
-        executablePayloadHash = hash(0x77),
-        sourceBundleHash = hash(0x79),
-        mergeEntryHash = hash(0x7b),
-        applicationBlockHeight = BigInteger.valueOf(12),
-        applicationBlockHash = hash(0x7d),
+        proposalView = proposalView,
+        reservationOwnerHash = reservationOwnerHash,
+        proposalIdentityHash = proposalIdentityHash,
+        reservationGroupHash = reservationGroupHash,
+        proposalHash = proposalHash,
+        descriptorHash = descriptorHash,
+        executablePayloadHash = executablePayloadHash,
+        sourceBundleHash = sourceBundleHash,
+        mergeEntryHash = mergeEntryHash,
+        applicationBlockHeight = applicationBlockHeight,
+        applicationBlockHash = applicationBlockHash,
         reservationCount = reservationCount,
         transactionCount = 2,
         highestDurableStage = stage,

@@ -5,9 +5,10 @@ EXTENDS SumeragiV2AsyncNetwork
 Production reply-route composition for `SumeragiV2AsyncNetwork`.
 
 The established asynchronous consensus spec and proof hierarchy retain their
-exact `AsyncSpec` boundary.  This module extends it with the independent
-process-local reply owner.  Protocol and route steps explicitly interleave;
-neither component can manufacture progress for the other's weak fairness.
+exact `AsyncSpec` boundary.  This module extends it with the process-local
+reply owner coupled to the base model's retained Serve source attempts.
+Protocol and route steps explicitly interleave; neither component can
+manufacture progress for the other's weak fairness.
 Exact retries and later same-tenure deliveries preserve reply progress.  A new
 connection tenure invalidates the old ticket while preserving the affected
 attempt's current cursor and every independent source attempt.
@@ -89,15 +90,58 @@ AsyncReplyRoute ==
 AsyncReplyRouteVars ==
   AsyncReplyRoute!ReplyRouteV2Vars
 
+AsyncProductionVars == <<AsyncAllVars, AsyncReplyRouteVars>>
+
 AsyncReplySemanticOf(item) ==
-  AsyncReplySemanticIdentity(item.kind, item.envelope)
+  AsyncReplySemanticIdentity(item.kind, item.source, item.envelope)
+
+AsyncReplyBaseAttemptMatches(
+    attempt, owner, source, semantic) ==
+  /\ attempt.key.owner = owner
+  /\ attempt.key.identity =
+       AsyncServeLogicalRequestIdentity(owner, attempt.request)
+  /\ attempt.key.identity.owner = owner
+  /\ attempt.key.identity.request = semantic
+  /\ attempt.key.source = source
+  /\ attempt.request.kind \in AsyncReplyRequestKinds
+  /\ attempt.request.envelope.recipient = owner
+  /\ AsyncReplySemanticOf(attempt.request) = semantic
+
+AsyncReplySemanticObservedIn(attempts, owner, source, semantic) ==
+  \E attempt \in attempts:
+    AsyncReplyBaseAttemptMatches(
+      attempt, owner, source, semantic)
 
 AsyncReplySemanticObserved(owner, source, semantic) ==
-  \E item \in asyncSentItems:
-    /\ item.kind \in AsyncReplyRequestKinds
-    /\ item.envelope.recipient = owner
-    /\ item.source = source
-    /\ AsyncReplySemanticOf(item) = semantic
+  AsyncReplySemanticObservedIn(
+    asyncServeAttempts, owner, source, semantic)
+
+AsyncReplySemanticServiceReady(owner, source, semantic) ==
+  \E attempt \in asyncServeAttempts:
+    /\ AsyncReplyBaseAttemptMatches(
+         attempt, owner, source, semantic)
+    /\ attempt.stage = "Complete"
+
+(***************************************************************************
+The route machine cannot infer provenance from the signed request sender.
+Every live route attempt and durable lifecycle identity must refine one exact
+base `(owner, semantic, authenticated source)` attempt.  Base history is
+monotone and survives same-height restart/family replacement, so this product
+needs no cancellation action that could resurrect a serviced identity.
+***************************************************************************)
+AsyncReplyRouteToBaseAttemptCoupling ==
+  /\ \A attempt \in asyncReplyAttempts:
+       AsyncReplySemanticObserved(
+         attempt.owner, attempt.source, attempt.semantic)
+  /\ \A identity \in asyncReplyAttemptLifecycleIdentities:
+       AsyncReplySemanticObserved(
+         identity.owner, identity.source, identity.semantic)
+
+AsyncReplyRouteBaseAttemptCoupling ==
+  /\ AsyncReplyRoute!ReplySources =
+       AsyncAuthenticatedDeliverySources
+  /\ AsyncUntrustedSource \notin AsyncReplyRoute!ReplySources
+  /\ AsyncReplyRouteToBaseAttemptCoupling
 
 AsyncObserveNewReplySource(owner, semantic, source) ==
   /\ AsyncReplySemanticObserved(owner, source, semantic)
@@ -121,6 +165,20 @@ AsyncExactReplyCapabilityRetry(owner, semantic, source) ==
   /\ AsyncReplyRoute!RetryExactReplySourceV2(
        owner, semantic, source)
 
+AsyncAcquireReplyTicket(owner, semantic, source) ==
+  /\ AsyncReplySemanticServiceReady(owner, source, semantic)
+  /\ AsyncReplyRoute!AcquireReplyTicketV2(
+       owner, semantic, source)
+
+AsyncReplySelectedServiceSource(owner, semantic) ==
+  AsyncReplySourceOrder[
+    AsyncReplyRoute!ReplySelectedSourceIndex(owner, semantic)]
+
+AsyncServiceReplyRoute(owner, semantic) ==
+  LET source == AsyncReplySelectedServiceSource(owner, semantic)
+  IN /\ AsyncReplySemanticServiceReady(owner, source, semantic)
+     /\ AsyncReplyRoute!ServiceReplyRouteV2(owner, semantic)
+
 AsyncReplyRouteNext ==
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
@@ -140,10 +198,10 @@ AsyncReplyRouteNext ==
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
        source \in AsyncReplyRoute!ReplySources:
-       AsyncReplyRoute!AcquireReplyTicketV2(owner, semantic, source)
+       AsyncAcquireReplyTicket(owner, semantic, source)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities:
-       AsyncReplyRoute!ServiceReplyRouteV2(owner, semantic)
+       AsyncServiceReplyRoute(owner, semantic)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
        source \in AsyncReplyRoute!ReplySources:
@@ -197,39 +255,122 @@ AsyncReplyRouteNext ==
 
 AsyncReplyRouteInit ==
   /\ AsyncReplyRoute!ReplyRouteV2Init
-  /\ AsyncReplyRoute!ReplySources = ValidatorIds
+  /\ AsyncReplyRoute!ReplySources =
+       AsyncAuthenticatedDeliverySources
+  /\ AsyncReplyRouteBaseAttemptCoupling
 
-(*
-Keep the production premise definitionally identical to the V2 ownership
-kernel.  A copied subset can silently omit a terminal-close action or use the
-legacy state vector, allowing coordinate-only steps to masquerade as service.
-The premise remains local scheduling only; it does not assert network
-responsiveness.
-*)
+(***************************************************************************
+Every fair action below is the exact fully framed product action.  Observation
+and stream-epoch persistence are deterministic local ownership work.  Ticket
+acquisition and service additionally require the matching completed base
+attempt.  Close retry/acknowledgement retain the kernel's existing local
+fairness.  None of these clauses assumes relay delivery or network fairness.
+***************************************************************************)
+AsyncProductionObserveNewReplySourceStep(owner, semantic, source) ==
+  /\ AsyncObserveNewReplySource(owner, semantic, source)
+  /\ UNCHANGED AsyncAllVars
+
+AsyncProductionPersistFreshRequesterStreamEpochStep(owner, source) ==
+  /\ AsyncReplyRoute!PersistFreshRequesterStreamEpoch(owner, source)
+  /\ UNCHANGED AsyncAllVars
+
+AsyncProductionAcquireReplyTicketStep(owner, semantic, source) ==
+  /\ AsyncAcquireReplyTicket(owner, semantic, source)
+  /\ UNCHANGED AsyncAllVars
+
+AsyncProductionServiceReplyRouteStep(owner, semantic) ==
+  /\ AsyncServiceReplyRoute(owner, semantic)
+  /\ UNCHANGED AsyncAllVars
+
+AsyncProductionRetryCloseReplyStep(witness) ==
+  /\ AsyncReplyRoute!RetryCloseSemanticRequestV2(witness)
+  /\ UNCHANGED AsyncAllVars
+
+AsyncProductionAcknowledgeCloseReplyStep(acknowledgement) ==
+  /\ AsyncReplyRoute!AcknowledgeCloseSemanticRequestV2(
+       acknowledgement)
+  /\ UNCHANGED AsyncAllVars
+
 AsyncReplyRouteFairness ==
-  AsyncReplyRoute!ReplyRouteV2Fairness
+  /\ \A owner \in ValidatorIds,
+       semantic \in AsyncReplySemanticIdentities,
+       source \in AsyncReplyRoute!ReplySources:
+       WF_AsyncProductionVars(
+         AsyncProductionObserveNewReplySourceStep(
+           owner, semantic, source))
+  /\ \A owner \in ValidatorIds,
+       source \in AsyncReplyRoute!ReplySources:
+       WF_AsyncProductionVars(
+         AsyncProductionPersistFreshRequesterStreamEpochStep(
+           owner, source))
+  /\ \A owner \in ValidatorIds,
+       semantic \in AsyncReplySemanticIdentities,
+       source \in AsyncReplyRoute!ReplySources:
+       WF_AsyncProductionVars(
+         AsyncProductionAcquireReplyTicketStep(
+           owner, semantic, source))
+  /\ \A owner \in ValidatorIds,
+       semantic \in AsyncReplySemanticIdentities:
+       WF_AsyncProductionVars(
+         AsyncProductionServiceReplyRouteStep(owner, semantic))
+  /\ \A witness \in AsyncReplyRoute!ReplyCloseWitnessSet:
+       WF_AsyncProductionVars(
+         AsyncProductionRetryCloseReplyStep(witness))
+  /\ \A acknowledgement
+       \in AsyncReplyRoute!ReplyCloseAcknowledgementSet:
+       WF_AsyncProductionVars(
+         AsyncProductionAcknowledgeCloseReplyStep(
+           acknowledgement))
 
 AsyncAcquireAnyReplyTicket ==
   \E owner \in ValidatorIds,
     semantic \in AsyncReplySemanticIdentities,
     source \in AsyncReplyRoute!ReplySources:
-    AsyncReplyRoute!AcquireReplyTicketV2(owner, semantic, source)
+    AsyncProductionAcquireReplyTicketStep(
+      owner, semantic, source)
+
+AsyncObserveAnyNewReplySource ==
+  \E owner \in ValidatorIds,
+    semantic \in AsyncReplySemanticIdentities,
+    source \in AsyncReplyRoute!ReplySources:
+    AsyncProductionObserveNewReplySourceStep(
+      owner, semantic, source)
+
+AsyncPersistAnyFreshRequesterStreamEpoch ==
+  \E owner \in ValidatorIds,
+    source \in AsyncReplyRoute!ReplySources:
+    AsyncProductionPersistFreshRequesterStreamEpochStep(
+      owner, source)
 
 AsyncServiceAnyReplyRoute ==
   \E owner \in ValidatorIds,
      semantic \in AsyncReplySemanticIdentities:
-    AsyncReplyRoute!ServiceReplyRouteV2(owner, semantic)
+    AsyncProductionServiceReplyRouteStep(owner, semantic)
+
+AsyncRetryAnyCloseReply ==
+  \E witness \in AsyncReplyRoute!ReplyCloseWitnessSet:
+    AsyncProductionRetryCloseReplyStep(witness)
+
+AsyncAcknowledgeAnyCloseReply ==
+  \E acknowledgement
+       \in AsyncReplyRoute!ReplyCloseAcknowledgementSet:
+    AsyncProductionAcknowledgeCloseReplyStep(acknowledgement)
 
 (***************************************************************************
 The finite TLC configuration checks safety and counterexamples, not a
 deductive source-isolated fairness discharge.  Its aggregate clauses avoid a
 temporal tableau branch for every member of the finite payload universe.  The
-unbounded production spec uses `AsyncReplyRouteFairness` above; the shared
-mutation model checks the actual per-semantic round-robin transition.
+unbounded production spec uses the source-indexed clauses above; neither form
+turns finite relay fanout into a delivery premise.
 ***************************************************************************)
 AsyncFiniteReplyRouteFairness ==
-  /\ WF_AsyncReplyRouteVars(AsyncAcquireAnyReplyTicket)
-  /\ WF_AsyncReplyRouteVars(AsyncServiceAnyReplyRoute)
+  /\ WF_AsyncProductionVars(AsyncObserveAnyNewReplySource)
+  /\ WF_AsyncProductionVars(
+       AsyncPersistAnyFreshRequesterStreamEpoch)
+  /\ WF_AsyncProductionVars(AsyncAcquireAnyReplyTicket)
+  /\ WF_AsyncProductionVars(AsyncServiceAnyReplyRoute)
+  /\ WF_AsyncProductionVars(AsyncRetryAnyCloseReply)
+  /\ WF_AsyncProductionVars(AsyncAcknowledgeAnyCloseReply)
 
 AsyncReplyRouteTypeInvariant == AsyncReplyRoute!ReplyRouteTypeInvariant
 AsyncReplyRouteOwnershipInvariant ==
@@ -263,13 +404,25 @@ AsyncReplyLifecycleJournal ==
 AsyncReplyCloseWorkEventuallyTerminates(requester, responder) ==
   AsyncReplyRoute!ReplyCloseWorkEventuallyTerminates(requester, responder)
 
-AsyncProductionVars == <<AsyncAllVars, AsyncReplyRouteVars>>
+(***************************************************************************
+The product projections are exact: a base step cannot mutate route state and
+a route step cannot mutate consensus/scheduler state.  The primed coupling is
+not a fairness premise; it is the inductive provenance check that rejects any
+route transition which would manufacture an owner/source coordinate.
+***************************************************************************)
+AsyncProductionAsyncProjectionStep ==
+  /\ AsyncNext
+  /\ UNCHANGED AsyncReplyRouteVars
+  /\ AsyncReplyRouteBaseAttemptCoupling'
+
+AsyncProductionReplyProjectionStep ==
+  /\ AsyncReplyRouteNext
+  /\ UNCHANGED AsyncAllVars
+  /\ AsyncReplyRouteBaseAttemptCoupling'
 
 AsyncProductionNext ==
-  \/ /\ AsyncNext
-     /\ UNCHANGED AsyncReplyRouteVars
-  \/ /\ AsyncReplyRouteNext
-     /\ UNCHANGED AsyncAllVars
+  \/ AsyncProductionAsyncProjectionStep
+  \/ AsyncProductionReplyProjectionStep
 
 AsyncProductionSpec ==
   AsyncInit

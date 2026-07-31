@@ -1533,23 +1533,37 @@
                     .is_none()
             );
 
-            fixture
-                .kura
-                .persist_historical_autonomous_lane_recovery(install)
-                .expect("install historical autonomous recovery");
-            fixture
-                .kura
-                .persist_historical_autonomous_lane_recovery(install)
-                .expect("historical autonomous recovery retry is idempotent");
+            assert_eq!(
+                install_historical_autonomous_lane_recovery(
+                    fixture.state.as_ref(),
+                    fixture.kura.as_ref(),
+                    install,
+                )
+                .expect("install historical autonomous recovery"),
+                HistoricalAutonomousLaneRecoveryInstallOutcome::Installed,
+            );
+            assert_eq!(
+                install_historical_autonomous_lane_recovery(
+                    fixture.state.as_ref(),
+                    fixture.kura.as_ref(),
+                    install,
+                )
+                .expect("historical autonomous recovery retry is idempotent"),
+                HistoricalAutonomousLaneRecoveryInstallOutcome::AlreadyInstalled,
+            );
             assert!(
                 fixture
                     .kura
                     .historical_autonomous_lane_recovery_matches(install)
                     .expect("read back historical autonomous recovery")
             );
-            let recovery_path = fixture
-                .kura
-                .store_root()
+            let lane_config = RuntimeLaneConfig::default();
+            let lane = lane_config
+                .entry(descriptor.lane_id)
+                .expect("historical recovery lane is configured");
+            let recovery_path = lane
+                .blocks_dir(fixture.kura.store_root())
+                .join("lane_artifacts")
                 .join("historical_autonomous_recoveries_v1")
                 .join(format!(
                     "{}.norito",
@@ -2708,7 +2722,7 @@
         {
             let fixture = ApplyFixture::new();
             let mut certificate = fixture.task.certificate().clone();
-            certificate.execution_commitment = wire::ExecutionCommitment::without_topups(
+            certificate.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"wrong parent state"),
                 Hash::new(b"wrong post state"),
                 Hash::new(b"wrong ordinary writes"),
@@ -2738,7 +2752,7 @@
         fresh_apply_recomputes_and_rejects_a_consistently_forged_marker_and_qc,
         {
             let fixture = ApplyFixture::new();
-            let forged_commitment = wire::ExecutionCommitment::without_topups(
+            let forged_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"forged parent state"),
                 Hash::new(b"forged post state"),
                 Hash::new(b"forged ordinary writes"),

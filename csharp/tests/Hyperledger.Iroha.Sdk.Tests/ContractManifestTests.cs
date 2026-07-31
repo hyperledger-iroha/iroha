@@ -45,6 +45,58 @@ public sealed class ContractManifestTests
     }
 
     [Fact]
+    public void ManifestTriggerBoundariesRejectExactAmountSourceFormOnly()
+    {
+        var response = FullResponse();
+        foreach (var retired in new[]
+        {
+            ReplaceFirst(response, "\"id\":\"settle\"", "\"id\":\"Amount\""),
+            ReplaceFirst(response, "\"namespace\":null", "\"namespace\":\"Amount\""),
+        })
+        {
+            Assert.Throws<JsonException>(
+                () => JsonSerializer.Deserialize<ToriiContractCodeRecord>(retired));
+        }
+
+        var lowercase = ReplaceFirst(
+            ReplaceFirst(response, "\"id\":\"settle\"", "\"id\":\"amount\""),
+            "\"namespace\":null",
+            "\"namespace\":\"amount\"");
+        var manifest = JsonSerializer.Deserialize<ToriiContractCodeRecord>(lowercase)!.Manifest;
+        var entrypoint = manifest.Entrypoints!.Single();
+        var trigger = entrypoint.Triggers.Single();
+        Assert.Equal("amount", trigger.Id);
+        Assert.Equal("amount", trigger.Callback.Namespace);
+
+        var retiredId = manifest with
+        {
+            Entrypoints = new[]
+            {
+                entrypoint with { Triggers = new[] { trigger with { Id = "Amount" } } },
+            },
+        };
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(retiredId));
+
+        var retiredNamespace = manifest with
+        {
+            Entrypoints = new[]
+            {
+                entrypoint with
+                {
+                    Triggers = new[]
+                    {
+                        trigger with
+                        {
+                            Callback = trigger.Callback with { Namespace = "Amount" },
+                        },
+                    },
+                },
+            },
+        };
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(retiredNamespace));
+    }
+
+    [Fact]
     public void EntrypointSchemasUseOneFlatPreorderTapeAndExactReservedNames()
     {
         var views = QueryViews();
@@ -248,6 +300,12 @@ public sealed class ContractManifestTests
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
+            ReplaceFirst(response, "\"name\":\"transfer\",", "\"name\":\"Amount\","),
+            ReplaceFirst(response, "\"name\":\"request\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
+            ReplaceFirst(response, "\"fields\":[\"amount\",\"memo\"]", "\"fields\":[\"Amount\",\"memo\"]"),
+            ReplaceFirst(response, "\"name\":\"Balances\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
+            ReplaceFirst(response, "\"name\":\"InsufficientFunds\",\"code\"", "\"name\":\"Amount\",\"code\""),
+            ReplaceFirst(response, "\"base_key\":\"state:Balances\"", "\"base_key\":\"state:Amount\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"__kotodama_link_private\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"state_map_get\""),
             ReplaceFirst(
@@ -344,6 +402,7 @@ public sealed class ContractManifestTests
             "Amount",
             "amount",
             "Transfer{amount: amount}",
+            "Transfer{Amount: quantity}",
             "Transfer{amount:: quantity}",
             "Transfer{amount:quantity}",
             "Transfer{amount:  quantity}",
@@ -554,6 +613,7 @@ public sealed class ContractManifestTests
             "state:*",
             "state:Balances.more",
             "state:Balances:Other",
+            "state:Amount",
             "state:state:Balances",
             "state:match",
             "state:StateMap",

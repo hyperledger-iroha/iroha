@@ -72,6 +72,32 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
+    fun `Rust merge carrier fixture pins the current v4 shape`() {
+        val rows = fixtureRows()
+        val carried = SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+            rows.single {
+                it.kind == "message" && it.name == "quorum_certificate_merge_carrier"
+            }.hex.hexBytes(),
+        )
+        val certificate = (
+            carried.payload as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+        val carrier = requireNotNull(certificate.executionCommitment.mergeCarrier)
+        assertEquals(1, carrier.version)
+        assertEquals(32, carrier.entryHash.bytes().size)
+
+        setOf(
+            "execution_commitment_merge_carrier_wrong_version",
+            "execution_commitment_missing_merge_carrier_field",
+        ).forEach { name ->
+            val row = rows.single { it.kind == "negative_message" && it.name == name }
+            assertFailsWith<IllegalArgumentException>(name) {
+                SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(row.hex.hexBytes())
+            }
+        }
+    }
+
+    @Test
     fun `commit reproposals require their vote and certificate round`() {
         fun message(name: String): SumeragiV2Wire.ConsensusMessageV2 =
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
@@ -763,6 +789,7 @@ class SumeragiV2WireFixtureTest {
             "proposal",
             "vote",
             "quorum_certificate",
+            "quorum_certificate_merge_carrier",
             "commit_vote_reproposal",
             "commit_quorum_certificate_reproposal",
             "timeout_vote",

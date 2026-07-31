@@ -967,6 +967,7 @@ fn prepare_bundle_metadata(
         pallas_proving_key_output,
     )
     .map_err(|error| format!("current-source Kagemusha V4 generation failed: {error}"))?;
+    let max_proof_bytes = generated.max_recursive_pair_bytes;
     let vesta_generated = generated.step_eq;
     let pallas_generated = generated.step_ep;
     let measured_proof_pair = generated.measured_live_pair_bytes;
@@ -1014,16 +1015,17 @@ fn prepare_bundle_metadata(
         return Err("generated bootstrap measurements differ from calibrated Step sizes".into());
     }
 
-    let max_proof_bytes = u32::try_from(measured_proof_pair.len())
+    let measured_pair_bytes = u32::try_from(measured_proof_pair.len())
         .map_err(|_| "measured V4 proof pair length does not fit u32")?;
     let measured_steps = vesta_generated
         .step_proof_size_bytes
         .checked_add(pallas_generated.step_proof_size_bytes)
         .ok_or("generated V4 Step-size sum overflow")?;
     if max_proof_bytes <= measured_steps
+        || measured_pair_bytes >= max_proof_bytes
         || max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
     {
-        return Err("generated V4 proof pair exceeds its provisional rejection ceiling".into());
+        return Err("generated V4 recursive proof-pair maximum is inconsistent".into());
     }
     let measured = validate_kagemusha_proof_pair_measurement_v4(
         &measured_proof_pair,
@@ -2769,9 +2771,11 @@ fn write_candidate(
         manifest.max_proof_bytes,
     )?;
     if measured != metadata.measured_proof_pair.len()
-        || u32::try_from(measured) != Ok(manifest.max_proof_bytes)
+        || u32::try_from(measured)
+            .ok()
+            .is_none_or(|bytes| bytes >= manifest.max_proof_bytes)
     {
-        return Err("generated V4 manifest changed the measured proof-pair limit".into());
+        return Err("generated V4 manifest does not admit its initialization proof pair".into());
     }
 
     let candidate = KagemushaRecursiveSpendCandidateV4 {

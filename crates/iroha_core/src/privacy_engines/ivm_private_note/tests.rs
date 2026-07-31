@@ -107,7 +107,7 @@ pub(super) fn fixture() -> Fixture {
     let output_commitment = derive_note_commitment_v1(&output_note).expect("output commitment");
     let pool_id = PrivacyPoolIdV1::new(bytes(0x61));
     let recipient_public_key =
-        ivm_private_recipient_public_key_v1(bytes(0x71)).expect("recipient public key");
+        ivm_private_recipient_public_key_v1(&bytes(0x71)).expect("recipient public key");
     let encrypted_output = encrypt_ivm_private_wallet_note_v1(
         &mut StdRng::seed_from_u64(0x49_50_4e_45),
         pool_id,

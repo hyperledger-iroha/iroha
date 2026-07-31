@@ -5,12 +5,9 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
         BlockHeader, BlockSignature, SignedBlock,
-        consensus::{
-            LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1,
-        },
+        consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
         consensus_v2::{ConsensusMessageV2, ExecutionCommitment, finality::V2FinalityArtifact},
     },
-    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -673,47 +670,10 @@ pub struct CanonicalExecutedBlockNeedV1 {
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
     /// Exact transition commitment authenticated by the CommitQC.
     pub execution_commitment: ExecutionCommitment,
+    /// Exact non-zero canonical result-bearing `SignedBlockWire` length.
+    pub executed_block_wire_len: u64,
     /// Exact canonical result-bearing `SignedBlockWire` hash.
     pub executed_block_wire_hash: Hash,
-}
-
-/// Exact replicated Native AMX participant frontier which owns a carrier-body repair.
-///
-/// The requester copies these fields from State's canonical route/incarnation
-/// marker.  A responder and the eventual importer both require the recovered
-/// block's QC-authenticated application-manifest leaf to reproduce this
-/// identity exactly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-#[norito(deny_unknown_fields)]
-pub struct NativeAmxParticipantRecoveryMarkerV1 {
-    /// Exact replicated State frontier-marker layout version.
-    pub frontier_version: u8,
-    /// Participant lane route.
-    pub lane_id: LaneId,
-    /// Participant dataspace route.
-    pub dataspace_id: DataSpaceId,
-    /// Exact active lane incarnation.
-    pub lane_incarnation: Hash,
-    /// Contiguous participant height.
-    pub participant_height: u64,
-    /// Independently certified participant view.
-    pub participant_view: u64,
-    /// Exact predecessor height.
-    pub predecessor_height: u64,
-    /// Exact predecessor descriptor, absent only at height one.
-    pub predecessor_descriptor_hash: Option<Hash>,
-    /// Exact participant descriptor.
-    pub descriptor_hash: Hash,
-    /// Exact participant proposal.
-    pub proposal_hash: Hash,
-    /// Exact zero-effect participant settlement.
-    pub settlement_hash: HashOf<LaneBlockCommitment>,
-    /// Canonical global application height.
-    pub application_block_height: u64,
-    /// Canonical global application hash.
-    pub application_block_hash: HashOf<BlockHeader>,
-    /// Number of unique grouped sources in the application leaf.
-    pub source_count: u64,
 }
 
 /// Exact durable dependency named by a historical lane recovery request.
@@ -741,16 +701,9 @@ pub enum LaneHistoricalRecoveryKindV1 {
         /// Hash of the matching CommitQC.
         commit_qc_hash: HashOf<LaneBlockQcV1>,
     },
-    /// Rehydrate a pruned canonical carrier needed to repair Native participant evidence.
-    #[codec(index = 3)]
-    NativeAmxParticipantCanonicalBlock {
-        /// Exact State frontier whose manifest leaf must be recovered.
-        marker: Box<NativeAmxParticipantRecoveryMarkerV1>,
-        /// Hash of the requester's locally durable, verified V2 finality artifact.
-        finality_artifact_hash: HashOf<V2FinalityArtifact>,
-        /// Exact execution commitment authenticated by that finality artifact.
-        execution_commitment: Box<ExecutionCommitment>,
-    },
+    // Codec index 3 is intentionally retired. It was the unbounded Native-only
+    // whole-block recovery corridor; current startup repair uses the generic
+    // chunked canonical executed-block dependency below.
     /// Rehydrate one pruned canonical executed block needed by a durable
     /// evidence repair owner.
     #[codec(index = 4)]
@@ -802,10 +755,6 @@ impl LaneHistoricalRecoveryRequestV1 {
     pub const fn source_height(&self) -> u64 {
         match (&self.certificate, &self.kind) {
             (Some(certificate), _) => certificate.proposal.descriptor.proposal_height,
-            (
-                None,
-                LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { marker, .. },
-            ) => marker.application_block_height,
             (None, LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { need, .. }) => {
                 need.height
             }

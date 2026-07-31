@@ -1,39 +1,50 @@
-    use std::{
-        cell::Cell,
-        collections::VecDeque,
-        sync::{Mutex, atomic::AtomicUsize},
-    };
+    #[test]
+    fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
+        let need = |height: u64| {
+            let executed_block_wire_hash = Hash::new(&height.to_le_bytes());
+            CanonicalExecutedBlockNeedV1 {
+                height,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    &[b"block".as_slice(), &height.to_le_bytes()].concat(),
+                )),
+                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    &[b"finality".as_slice(), &height.to_le_bytes()].concat(),
+                )),
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                    Hash::new(b"parent state"),
+                    Hash::new(b"post state"),
+                    Hash::new(b"writes"),
+                    1,
+                    executed_block_wire_hash,
+                ),
+                executed_block_wire_len: 1,
+                executed_block_wire_hash,
+            }
+        };
+        let needs = (1..=8).map(need).collect::<Vec<_>>();
+        let mut startup_gate_pending = true;
+        let mut observed_heights = Vec::new();
+        let batches = canonical_executed_block_recovery_batches(&needs, 3)
+            .expect("ordered distinct recovery plan is batchable");
+        for batch in batches {
+            assert!(
+                startup_gate_pending,
+                "the Queue startup gate remains closed for every recovery batch"
+            );
+            assert!(batch.len() <= 3);
+            observed_heights.extend(batch.iter().map(|need| need.height));
+        }
+        assert_eq!(observed_heights, (1..=8).collect::<Vec<_>>());
+        startup_gate_pending = false;
+        assert!(
+            !startup_gate_pending,
+            "the gate opens only after all batches"
+        );
 
-    use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{
-        ChainId,
-        account::AccountId,
-        block::decode_framed_signed_block,
-        isi::Log,
-        peer::PeerId,
-        transaction::{TransactionBuilder, signed::TransactionResultInner},
-        trigger::DataTriggerSequence,
-    };
-    use iroha_logger::Level;
-    use iroha_p2p::network::{
-        NetworkActorAdmissionError, NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture,
-        NetworkReplyRoutes,
-    };
-    use tempfile::TempDir;
-
-    use super::super::FairV2IngressPushError;
-    use super::*;
-    use crate::{
-        NetworkMessage,
-        merge_sidecar::{
-            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
-            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
-            CertifiedMergeSidecarStreamEpochV1,
-        },
-        sumeragi::LaneRelayMessage,
-    };
+        let mut duplicated = needs;
+        duplicated[4] = duplicated[3];
+        assert!(canonical_executed_block_recovery_batches(&duplicated, 3).is_err());
+    }
 
     #[test]
     fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
@@ -224,6 +235,490 @@
             },
             keys,
         )
+    }
+
+    fn decided_recovery_certified_request(
+        context: &wire::HeightContext,
+        requester_key: &KeyPair,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> wire::CertifiedBodyRequest {
+        let mut request = wire::CertifiedBodyRequest {
+            round,
+            subject,
+            certificate: wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                    Hash::new(b"runner recovery parent state"),
+                    Hash::new(b"runner recovery post state"),
+                    Hash::new(b"runner recovery ordinary writes"),
+                    1,
+                    Hash::new(b"runner recovery executed block"),
+                ),
+                signers: (0..context.roster.len())
+                    .map(|index| u32::try_from(index).expect("small runner roster index"))
+                    .collect(),
+                aggregate_signature: vec![0xA5; 48],
+            },
+            requester: PeerId::new(requester_key.public_key().clone()),
+            signature: Vec::new(),
+        };
+        request.signature =
+            Signature::new(requester_key.private_key(), &request.signature_preimage())
+                .payload()
+                .to_vec();
+        request
+    }
+
+    fn admitted_decided_recovery_request(
+        context: &wire::HeightContext,
+        request: &wire::CertifiedBodyRequest,
+    ) -> InboundBlockMessage {
+        let requester = request.requester.clone();
+        super::super::fair_v2_ingress_admit_with_roster_for_test(
+            InboundBlockMessage::from_transport(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                )),
+                requester.clone(),
+                requester,
+            ),
+            context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+        )
+    }
+
+    enum RecordedPrepareOutcome {
+        Admitted(u8),
+        Backpressure,
+        Rejected(&'static str),
+        Service(&'static str),
+    }
+
+    struct RecordingDecidedLaneAuthorizer {
+        calls: Vec<&'static str>,
+        stage_error: Option<&'static str>,
+        prepare_outcome: Option<RecordedPrepareOutcome>,
+    }
+
+    impl RecordingDecidedLaneAuthorizer {
+        fn new(prepare_outcome: RecordedPrepareOutcome) -> Self {
+            Self {
+                calls: Vec::new(),
+                stage_error: None,
+                prepare_outcome: Some(prepare_outcome),
+            }
+        }
+    }
+
+    impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
+        type Admission = u8;
+
+        fn stage_negative(
+            &mut self,
+            _request_hash: HashOf<wire::CertifiedBodyRequest>,
+            _outcome: CertifiedServeNegativeOutcome,
+        ) -> Result<(), String> {
+            self.calls.push("stage-negative");
+            self.stage_error
+                .map_or(Ok(()), |reason| Err(reason.to_owned()))
+        }
+
+        fn prepare_exact(
+            &mut self,
+            _authenticated_via: &PeerId,
+            _request: AuthenticatedCertifiedBodyRequest,
+        ) -> Result<Self::Admission, CertifiedServePrepareError> {
+            self.calls.push("prepare-exact");
+            match self
+                .prepare_outcome
+                .take()
+                .expect("recording authorizer is called at most once")
+            {
+                RecordedPrepareOutcome::Admitted(admission) => Ok(admission),
+                RecordedPrepareOutcome::Backpressure => {
+                    Err(CertifiedServePrepareError::Backpressure)
+                }
+                RecordedPrepareOutcome::Rejected(reason) => {
+                    Err(CertifiedServePrepareError::Rejected(reason.to_owned()))
+                }
+                RecordedPrepareOutcome::Service(reason) => {
+                    Err(CertifiedServePrepareError::Service(reason.to_owned()))
+                }
+            }
+        }
+    }
+
+    struct RecordingDecidedLaneCommitter {
+        calls: Vec<&'static str>,
+        fail_on: Option<&'static str>,
+    }
+
+    impl RecordingDecidedLaneCommitter {
+        fn new(fail_on: Option<&'static str>) -> Self {
+            Self {
+                calls: Vec::new(),
+                fail_on,
+            }
+        }
+
+        fn record(&mut self, operation: &'static str) -> Result<(), V2RunnerError> {
+            self.calls.push(operation);
+            if self.fail_on == Some(operation) {
+                Err(V2RunnerError::Service(format!("{operation} failed")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl DecidedLaneRecoveryDrainCommitter for RecordingDecidedLaneCommitter {
+        type Admission = u8;
+
+        fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
+            self.record("lane-local")
+        }
+
+        fn commit_current_serve(
+            &mut self,
+            current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
+        ) -> Result<(), V2RunnerError> {
+            match current {
+                DecidedLaneRecoveryCurrentDrain::Admitted(7) => self.record("serve-exact-decided"),
+                DecidedLaneRecoveryCurrentDrain::Rejected(_) => {
+                    self.record("retire-staged-negative")
+                }
+                DecidedLaneRecoveryCurrentDrain::Admitted(other) => Err(V2RunnerError::Service(
+                    format!("unexpected test admission {other}"),
+                )),
+            }
+        }
+
+        fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
+            self.record("bind-leader-wire")
+        }
+
+        fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
+            self.record("serve-history")
+        }
+
+        fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
+            self.record("retire-volatile")
+        }
+    }
+
+    #[test]
+    fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let subject = proposal_subject(b"decided drain authorization subject");
+        let decided_subject = proposal_subject(b"decided drain authorization winner");
+        let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
+        let inbound = admitted_decided_recovery_request(&context, &request);
+        let prepare = |winner| {
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                winner,
+                |request, sender| {
+                    super::super::v2_transport::authenticate_certified_body_request(
+                        &context,
+                        request,
+                        sender,
+                        |_, _| Ok::<(), String>(()),
+                    )
+                    .map_err(|error| error.to_string())
+                },
+            )
+        };
+
+        let mut staged = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
+        let staged_decision =
+            authorize_decided_lane_recovery_drain(prepare(decided_subject), &mut staged);
+        assert!(matches!(
+            staged_decision,
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(_)
+                )
+            )
+        ));
+        staged.calls.push("checked-drain");
+        assert_eq!(staged.calls, ["stage-negative", "checked-drain"]);
+
+        let mut failed_stage =
+            RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
+        failed_stage.stage_error = Some("durable negative write failed");
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(
+                prepare(decided_subject),
+                &mut failed_stage,
+            ),
+            DecidedLaneRecoveryDrainDecision::FailClosed(reason)
+                if reason == "durable negative write failed"
+        ));
+        assert_eq!(failed_stage.calls, ["stage-negative"]);
+
+        let mut admitted = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Admitted(7));
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut admitted),
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Admitted(7)
+                )
+            )
+        ));
+        admitted.calls.push("checked-drain");
+        assert_eq!(admitted.calls, ["prepare-exact", "checked-drain"]);
+
+        let mut typed_rejection = RecordingDecidedLaneAuthorizer::new(
+            RecordedPrepareOutcome::Rejected("typed negative was staged"),
+        );
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut typed_rejection),
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(reason)
+                )
+            ) if reason == "typed negative was staged"
+        ));
+        typed_rejection.calls.push("checked-drain");
+        assert_eq!(typed_rejection.calls, ["prepare-exact", "checked-drain"]);
+
+        let mut backpressured =
+            RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut backpressured),
+            DecidedLaneRecoveryDrainDecision::Retain
+        ));
+        assert_eq!(backpressured.calls, ["prepare-exact"]);
+
+        let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(
+            RecordedPrepareOutcome::Service("Serve preparation failed"),
+        );
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut failed_prepare),
+            DecidedLaneRecoveryDrainDecision::FailClosed(reason)
+                if reason == "Serve preparation failed"
+        ));
+        assert_eq!(
+            failed_prepare.calls,
+            ["prepare-exact"],
+            "service failure cannot authorize checked dequeue"
+        );
+    }
+
+    #[test]
+    fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
+        let mut exact = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Admitted(7),
+                ),
+                &mut exact,
+            )
+            .expect("commit exact decided Serve"),
+            DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
+        );
+        assert_eq!(exact.calls, ["serve-exact-decided"]);
+
+        let mut negative = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(
+                        "durable negative staged".to_owned(),
+                    ),
+                ),
+                &mut negative,
+            )
+            .expect("retire staged negative"),
+            DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
+        );
+        assert_eq!(negative.calls, ["retire-staged-negative"]);
+
+        let mut historical = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::HistoricalServe,
+                &mut historical,
+            )
+            .expect("route historical Serve"),
+            DecidedLaneRecoveryDrainCommitOutcome::HistoricalServe
+        );
+        assert_eq!(historical.calls, ["bind-leader-wire", "serve-history"]);
+
+        let mut volatile = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
+                &mut volatile,
+            )
+            .expect("retire non-Serve terminal traffic"),
+            DecidedLaneRecoveryDrainCommitOutcome::LeaderWireVolatile
+        );
+        assert_eq!(volatile.calls, ["bind-leader-wire", "retire-volatile"]);
+
+        let mut failed_bind = RecordingDecidedLaneCommitter::new(Some("bind-leader-wire"));
+        assert!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
+                &mut failed_bind,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            failed_bind.calls,
+            ["bind-leader-wire"],
+            "a failed bind cannot publish VolatileTerminal"
+        );
+    }
+
+    #[test]
+    fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branches() {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let subject = proposal_subject(b"decided recovery exact subject");
+        let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
+        let inbound = admitted_decided_recovery_request(&context, &request);
+        let authenticate = |request, sender: &PeerId| {
+            super::super::v2_transport::authenticate_certified_body_request(
+                &context,
+                request,
+                sender,
+                |_, _| Ok::<(), String>(()),
+            )
+            .map_err(|error| error.to_string())
+        };
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                subject,
+                authenticate,
+            ),
+            DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Authenticated { request: authenticated, .. }
+            ) if authenticated.request_hash() == HashOf::new(&request)
+        ));
+
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                subject,
+                |_, _| Err("invalid aggregate signature".to_owned()),
+            ),
+            DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Negative {
+                    request_hash,
+                    outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
+                    ..
+                }
+            ) if request_hash == HashOf::new(&request)
+        ));
+
+        let decided_subject = proposal_subject(b"decided recovery winning subject");
+        assert_ne!(decided_subject, subject);
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                decided_subject,
+                |request, sender| {
+                    super::super::v2_transport::authenticate_certified_body_request(
+                        &context,
+                        request,
+                        sender,
+                        |_, _| Ok::<(), String>(()),
+                    )
+                    .map_err(|error| error.to_string())
+                },
+            ),
+            DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Negative {
+                    request_hash,
+                    outcome:
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
+                    ..
+                }
+            ) if request_hash == HashOf::new(&request) && decided == decided_subject
+        ));
+    }
+
+    #[test]
+    fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height.saturating_sub(1),
+            view: 0,
+        };
+        let subject = proposal_subject(b"decided recovery historical subject");
+        let historical = decided_recovery_certified_request(&context, &keys[1], round, subject);
+        let historical_inbound = admitted_decided_recovery_request(&context, &historical);
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &historical_inbound,
+                context.height,
+                subject,
+                |_, _| panic!("historical classification precedes active Serve authentication"),
+            ),
+            DecidedLaneRecoveryIngressPreparation::HistoricalServe
+        ));
+
+        let peer = context.roster[0].validator.clone();
+        let non_serve = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"wrong-version recovery chunk",
+                )),
+                index: 0,
+                bytes: vec![0xA5],
+                sender: 0,
+                signature: vec![0x5A],
+            }),
+        );
+        let ordinary_non_serve =
+            InboundBlockMessage::new(BlockMessage::V2(non_serve.clone()), Some(peer.clone()));
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &ordinary_non_serve,
+                context.height,
+                subject,
+                |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
+            ),
+            DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
+        ));
+
+        let mut wrong_version = non_serve;
+        wrong_version.protocol_version = wrong_version.protocol_version.saturating_sub(1);
+        let wrong_version =
+            InboundBlockMessage::new(BlockMessage::V2(wrong_version), Some(peer.clone()));
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &wrong_version,
+                context.height,
+                subject,
+                |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
+            ),
+            DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
+        ));
     }
 
     fn leader_wire_runtime_ingress_fixture() -> (
@@ -820,93 +1315,5 @@
             services
                 .retains_reply_route_for_test(&route)
                 .expect("inspect retained sidecar route")
-        );
-    }
-
-    #[test]
-    fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
-        let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
-            mut adapter,
-            validators,
-            kura,
-            context,
-            local_validator,
-            requester,
-            request,
-        } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let mut services =
-            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-                kura,
-                context,
-                &validators,
-                local_validator,
-            );
-        services.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let reply_route = routes.mint(requester.clone());
-        let mut close = CertifiedMergeSidecarCloseV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation: request.service_generation,
-            stream_epoch: request.stream_epoch,
-            closed_through: request.semantic_sequence.get(),
-            close_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: requester.clone(),
-            responder: request.responder,
-        };
-        close.close_id = close.canonical_close_id();
-
-        assert_eq!(
-            adapter.accept_relay_message(
-                LaneRelayMessage::CertifiedMergeSidecar {
-                    sender: requester,
-                    reply_route: Some(reply_route.clone()),
-                    message: CertifiedMergeSidecarMessage::Close(close),
-                },
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted
-        );
-        assert!(matches!(
-            adapter.next_effect(),
-            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                reply_routes: Some(reply_routes),
-                message,
-                ..
-            }) if reply_routes
-                .iter()
-                .any(|route| route.same_delivery(&reply_route))
-                && matches!(
-                    message.as_ref(),
-                    CertifiedMergeSidecarMessage::CloseAck(_)
-                )
-        ));
-        let mut malformed = adapter
-            .next_effect()
-            .expect("the direct CloseAck remains lane-owned before dispatch");
-        let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
-        else {
-            unreachable!("the direct CloseAck keeps its sidecar effect kind")
-        };
-        *reply_routes = None;
-        assert!(
-            dispatch_lane_work_effect(&services, malformed)
-                .expect_err("a responder control without its return route is malformed")
-                .to_string()
-                .contains("reply-route ownership")
-        );
-
-        dispatch_lane_work_effects(&mut adapter, &services, 1)
-            .expect("dispatch the direct CloseAck through exact output");
-        assert_eq!(adapter.effect_count(), 0);
-        assert!(
-            services
-                .retains_reply_route_for_test(&reply_route)
-                .expect("inspect direct CloseAck route in worker ownership")
         );
     }

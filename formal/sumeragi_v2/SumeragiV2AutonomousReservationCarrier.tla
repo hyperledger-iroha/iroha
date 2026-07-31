@@ -154,6 +154,8 @@ VARIABLES
   \* @type: Int;
   diagnosticStageRank,
   \* @type: Bool;
+  diagnosticIdentityExact,
+  \* @type: Bool;
   diagnosticsAuthorizeState
 
 carrierVars ==
@@ -165,7 +167,8 @@ carrierVars ==
     reservationDurable, mergeCandidateExact, canonicalReexecuted>>
 
 diagnosticVars ==
-  <<durableStageRank, diagnosticStageRank, diagnosticsAuthorizeState>>
+  <<durableStageRank, diagnosticStageRank, diagnosticIdentityExact,
+    diagnosticsAuthorizeState>>
 
 recoveryVars ==
   <<recoveryStage, queueGateOpen, recoverySignerStable,
@@ -180,7 +183,8 @@ vars ==
     reservationDurable, mergeCandidateExact, canonicalReexecuted,
     recoveryStage, queueGateOpen, recoverySignerStable,
     recoveryWireLengthExact,
-    durableStageRank, diagnosticStageRank, diagnosticsAuthorizeState>>
+    durableStageRank, diagnosticStageRank, diagnosticIdentityExact,
+    diagnosticsAuthorizeState>>
 
 Init ==
   /\ ReservationConfiguration
@@ -214,6 +218,7 @@ Init ==
   /\ recoveryWireLengthExact = TRUE
   /\ durableStageRank = 0
   /\ diagnosticStageRank = 0
+  /\ diagnosticIdentityExact = TRUE
   /\ diagnosticsAuthorizeState = FALSE
 
 ReserveFifoTransaction ==
@@ -670,17 +675,20 @@ CertifyInstalledHistoricalAutonomousBundle ==
 PublishDurableStageDiagnostic ==
   /\ diagnosticStageRank < durableStageRank
   /\ diagnosticStageRank' = durableStageRank
+  /\ diagnosticIdentityExact' = TRUE
   /\ diagnosticsAuthorizeState' = FALSE
   /\ UNCHANGED <<carrierVars, durableStageRank>>
   /\ UNCHANGED recoveryVars
 
 \* ML-MUT-LIFE-05: report one stage beyond durable evidence and let that
-\* volatile projection become an authorization input.
+\* volatile projection fabricate the exact reservation-group identity and
+\* become an authorization input.
 PublishVolatileStageDiagnosticMutation ==
   /\ Mode = "VolatileStageDiagnostics"
   /\ durableStageRank < 9
   /\ diagnosticStageRank <= durableStageRank
   /\ diagnosticStageRank' = durableStageRank + 1
+  /\ diagnosticIdentityExact' = FALSE
   /\ diagnosticsAuthorizeState' = TRUE
   /\ UNCHANGED <<carrierVars, durableStageRank>>
   /\ UNCHANGED recoveryVars
@@ -876,10 +884,15 @@ MLHistoricalAllGroupsPreflight ==
 
 \* Ranks 1..9 abstract the ordered durable diagnostics chain from exact
 \* reservations through Queue finalization. Rank 0 means that no row is
-\* publishable. A decrease is permitted only when the modeled identity changes
-\* to the recreated incarnation, whose independent chain restarts at rank 1.
+\* publishable. Every published row keeps the exact durable reservation owner,
+\* provisional proposal-slot identity, FIFO group digest, and route/incarnation;
+\* a finalized proposal/descriptor identity appears only once payload evidence
+\* makes it exact. A decrease is permitted only when the modeled identity
+\* changes to the recreated incarnation, whose independent chain restarts at
+\* rank 1.
 MLStageEvidenceMonotonic ==
   /\ diagnosticStageRank <= durableStageRank
+  /\ (diagnosticStageRank = 0 \/ diagnosticIdentityExact)
   /\ ~diagnosticsAuthorizeState
 
 AutonomousReservationCarrierSafetyInvariant ==

@@ -64,9 +64,9 @@ use iroha_data_model::{
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
-            HeightContext, HeightContextId, NativeAmxApplicationManifestLeafV1, QuorumCertificate,
-            QuorumCertificateRef, SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord,
-            ValidatorPower,
+            HeightContext, HeightContextId, MAX_EXECUTED_BLOCK_WIRE_BYTES,
+            NativeAmxApplicationManifestLeafV1, QuorumCertificate, QuorumCertificateRef,
+            SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord, ValidatorPower,
             finality::{
                 V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
             },
@@ -314,7 +314,7 @@ pub(crate) const fn sumeragi_v2_validator_storage_supported() -> bool {
 }
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
-pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = MAX_EXECUTED_BLOCK_WIRE_BYTES;
 const MAX_DA_BLOCK_REWRITE_STAGE_BYTES: u64 = STRICT_INIT_MAX_BLOCK_BYTES * 2 + 1024 * 1024;
 const MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES: usize = 4_096;
 const MAX_CANONICAL_ASSOCIATION_STAGE_BYTES: u64 =
@@ -1487,6 +1487,36 @@ enum BlockNotify {
     NewBlock,
     StorageBudgetEviction,
     Shutdown,
+}
+
+/// One body-backed repair of the reverse finality-to-merge-carrier index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FinalizedMergeCarrierRepair {
+    block: Arc<SignedBlock>,
+    entry: MergeLedgerEntry,
+}
+
+/// Complete read-only startup audit of finalized merge-carrier projections.
+pub(crate) struct FinalizedMergeCarrierRepairPreflight {
+    repairs: Vec<FinalizedMergeCarrierRepair>,
+    missing_bodies: Vec<(u64, HashOf<BlockHeader>)>,
+}
+
+enum FinalizedMergeCarrierAtHeight {
+    Complete,
+    Repair(FinalizedMergeCarrierRepair),
+    MissingBody(HashOf<BlockHeader>),
+}
+
+impl FinalizedMergeCarrierRepairPreflight {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<FinalizedMergeCarrierRepair>,
+        Vec<(u64, HashOf<BlockHeader>)>,
+    ) {
+        (self.repairs, self.missing_bodies)
+    }
 }
 
 impl Kura {
@@ -8575,6 +8605,240 @@ impl Kura {
         let entry = self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
         self.ensure_prune_recovery_not_required()?;
         Ok(Some(entry))
+    }
+
+    fn preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards(
+        &self,
+        height: u64,
+        header: &BlockHeader,
+        finality: &V2FinalityArtifact,
+    ) -> Result<FinalizedMergeCarrierAtHeight> {
+        let block_hash = header.hash();
+        let block_height = NonZeroUsize::new(usize::try_from(height)?)
+            .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
+        let block = self.get_block_without_merge_sidecar(block_height);
+        let record = self.merge_carrier_record_for_block(height, block_hash)?;
+        let expected = finality.commit_qc.execution_commitment.merge_carrier;
+
+        let Some(expected) = expected else {
+            if record.is_some()
+                || block
+                    .as_deref()
+                    .and_then(Self::block_merge_reference)
+                    .is_some()
+            {
+                return Err(Error::MergeCarrierConflict(format!(
+                    "finalized block {height} has no signed merge carrier but retains carrier evidence"
+                )));
+            }
+            return Ok(FinalizedMergeCarrierAtHeight::Complete);
+        };
+        expected.validate().map_err(|error| {
+            Error::MergeCarrierConflict(format!(
+                "finalized block {height} has an invalid merge-carrier commitment: {error}"
+            ))
+        })?;
+
+        if let Some(record) = record {
+            if record.entry_hash != expected.entry_hash {
+                return Err(Error::MergeCarrierConflict(format!(
+                    "finalized block {height} carrier record differs from its signed entry hash"
+                )));
+            }
+            let _ = self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
+            return Ok(FinalizedMergeCarrierAtHeight::Complete);
+        }
+
+        let Some(block) = block else {
+            return Ok(FinalizedMergeCarrierAtHeight::MissingBody(block_hash));
+        };
+        if block.header() != *header {
+            return Err(Error::MergeCarrierConflict(format!(
+                "finalized block {height} cached body differs from retained finality"
+            )));
+        }
+        let reference = Self::block_merge_reference(&block).ok_or_else(|| {
+            Error::MergeCarrierConflict(format!(
+                "finalized block {height} signs a merge carrier but its body has no compact reference"
+            ))
+        })?;
+        if reference.entry_hash != expected.entry_hash {
+            return Err(Error::MergeCarrierConflict(format!(
+                "finalized block {height} compact reference differs from its signed merge carrier"
+            )));
+        }
+        let entry = self
+            .merge_entry_by_hash(expected.entry_hash)?
+            .ok_or_else(|| {
+                Error::MergeCarrierConflict(format!(
+                    "finalized block {height} has no full merge entry for its signed carrier"
+                ))
+            })?;
+        if !reference.matches_entry(&entry) {
+            return Err(Error::MergeCarrierConflict(format!(
+                "finalized block {height} compact reference differs from the full merge entry"
+            )));
+        }
+        let planned_record = Self::carrier_record_for_block_entry(&block, &entry)?;
+        Self::validate_merge_carrier_finality_projection(planned_record, &entry, header, finality)?;
+        self.merge_log.lock().preflight_append(&entry)?;
+        let _carrier_guard = self.merge_carrier_lock.lock();
+        if !self.preflight_merge_carrier_record_unlocked(planned_record)? {
+            return Err(Error::MergeCarrierConflict(format!(
+                "finalized block {height} carrier appeared during read-only startup preflight"
+            )));
+        }
+        Ok(FinalizedMergeCarrierAtHeight::Repair(
+            FinalizedMergeCarrierRepair { block, entry },
+        ))
+    }
+
+    /// Reverse-audit every verified finality projection through `committed_height`.
+    pub(crate) fn preflight_finalized_merge_carrier_repairs(
+        &self,
+        committed_height: u64,
+        capacity: usize,
+    ) -> Result<FinalizedMergeCarrierRepairPreflight> {
+        if capacity == 0 {
+            return Err(Error::MergeCarrierConflict(
+                "finalized merge-carrier startup preflight has zero capacity".to_owned(),
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        let durable_height = u64::try_from(self.exact_durable_blocks_count()?)?;
+        if committed_height > durable_height {
+            return Err(Error::MergeCarrierConflict(format!(
+                "State height {committed_height} exceeds durable Kura height {durable_height}"
+            )));
+        }
+        let mut repairs = Vec::new();
+        let mut missing_bodies = Vec::new();
+        let mut planned_entries = BTreeSet::new();
+        for height in 1..=committed_height {
+            let Some((header, finality, _)) =
+                self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+            else {
+                continue;
+            };
+            match self.preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards(
+                height, &header, &finality,
+            )? {
+                FinalizedMergeCarrierAtHeight::Complete => {}
+                FinalizedMergeCarrierAtHeight::MissingBody(block_hash) => {
+                    missing_bodies.push((height, block_hash));
+                }
+                FinalizedMergeCarrierAtHeight::Repair(repair) => {
+                    let entry_hash = repair.entry.canonical_hash();
+                    if !planned_entries.insert(entry_hash) {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "finalized merge entry {entry_hash} is planned for more than one carrier"
+                        )));
+                    }
+                    repairs.push(repair);
+                }
+            }
+            if repairs.len().saturating_add(missing_bodies.len()) > capacity {
+                return Err(Error::MergeCarrierConflict(format!(
+                    "finalized merge-carrier startup repair exceeds capacity {capacity}"
+                )));
+            }
+        }
+        Ok(FinalizedMergeCarrierRepairPreflight {
+            repairs,
+            missing_bodies,
+        })
+    }
+
+    /// Ensure a newly cached finalized body can reconstruct any signed missing
+    /// merge-carrier record before generic recovery retires the body need.
+    pub(crate) fn preflight_cached_finalized_merge_carrier_reconstruction(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<()> {
+        let height = block.header().height().get();
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let Some((header, finality, _)) =
+            self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+        else {
+            return Err(Error::MissingV2FinalityArtifact { height });
+        };
+        if header != block.header() {
+            return Err(Error::MergeCarrierConflict(format!(
+                "cached finalized body {height} differs from retained finality"
+            )));
+        }
+        match self.preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards(
+            height, &header, &finality,
+        )? {
+            FinalizedMergeCarrierAtHeight::Complete | FinalizedMergeCarrierAtHeight::Repair(_) => {
+                Ok(())
+            }
+            FinalizedMergeCarrierAtHeight::MissingBody(_) => Err(Error::MergeCarrierConflict(
+                format!("cached finalized body {height} is not readable after publication"),
+            )),
+        }
+    }
+
+    /// Publish an all-item-preflighted finalized merge-carrier repair set and
+    /// rebuild merge application receipts from authenticated committed entries.
+    pub(crate) fn apply_finalized_merge_carrier_repairs(
+        &self,
+        repairs: &[FinalizedMergeCarrierRepair],
+    ) -> Result<usize> {
+        if repairs.is_empty() {
+            return Ok(0);
+        }
+        let durable_count = self.exact_durable_blocks_count()?;
+        {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            for expected in repairs {
+                let height = expected.block.header().height().get();
+                let Some((header, finality, _)) = self
+                    .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+                else {
+                    return Err(Error::MissingV2FinalityArtifact { height });
+                };
+                match self.preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards(
+                    height, &header, &finality,
+                )? {
+                    FinalizedMergeCarrierAtHeight::Repair(actual) if actual == *expected => {}
+                    _ => {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "finalized merge carrier {height} changed after all-item preflight"
+                        )));
+                    }
+                }
+            }
+            for repair in repairs {
+                let _ = self.append_committed_merge_entry_for_block_if_missing(
+                    &repair.block,
+                    &repair.entry,
+                )?;
+                let height = usize::try_from(repair.block.header().height().get())?;
+                self.set_transaction_entrypoint_index_entry_with_merge(
+                    height,
+                    &repair.block,
+                    Some(&repair.entry),
+                    durable_count,
+                    true,
+                );
+                let record = Self::carrier_record_for_block_entry(&repair.block, &repair.entry)?;
+                let _ =
+                    self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
+            }
+        }
+        for repair in repairs {
+            self.persist_merge_lane_block_application_receipts_from_committed_log(&repair.entry)?;
+            self.remove_committed_pending_merge_entry_best_effort(repair.entry.canonical_hash());
+        }
+        Ok(repairs.len())
     }
 
     /// Resolve the complete committed merge entry carried at a canonical block height.
@@ -26176,6 +26440,15 @@ pub enum LaneBlockPayloadAvailability {
     EntrypointHashMismatch,
 }
 
+/// Read-only startup classification for one ordinary application receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LaneBlockApplicationReceiptRepairPreflight {
+    /// Every canonical input and result is locally available and exact.
+    Ready(LaneBlockApplicationReceiptArtifact),
+    /// The finality-authenticated result-bearing global body must be rehydrated.
+    MissingCanonicalBody,
+}
+
 /// Verified payload material recovered for a certified standalone lane block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredLaneBlockPayload {
@@ -30127,6 +30400,207 @@ impl Kura {
         self.latest_certified_lane_block_frontier_inner(lane_id, Some(authority))
     }
 
+    fn ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+    ) -> Result<()> {
+        let paths = [
+            data_path.with_extension("norito.tmp"),
+            index_path.with_extension("index.tmp"),
+            index_path.with_extension("index.prepend.tmp"),
+            Self::bound_progress_append_build_path(index_path),
+            Self::bound_progress_append_intent_path(index_path),
+        ];
+        for path in paths {
+            if self
+                .open_optional_bound_progress_file(namespace, &path)?
+                .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    format!(
+                        "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Read and authenticate one active lane's latest certified frontier
+    /// without repairing, syncing, publishing, or updating validation caches.
+    ///
+    /// The boolean reports whether the ordinary indexed slot is absent or is
+    /// an authority-permitted stale value that must be repaired from the
+    /// frontier after every startup item has passed read-only preflight.
+    pub(crate) fn preflight_latest_certified_lane_block_frontier_with_authority(
+        &self,
+        lane_id: LaneId,
+        authority: &crate::state::CertifiedLaneBlockPersistenceAuthority,
+    ) -> Result<Option<(CertifiedLaneBlockArtifact, bool)>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        if self
+            .latest_certified_frontier_storage_unknown
+            .load(Ordering::Acquire)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "latest certified lane block frontier storage is ambiguous until restart",
+            ));
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let frontier_read =
+            self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
+        let Some(frontier_read) = frontier_read else {
+            let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
+                &data_path,
+                &index_path,
+                "certified lane block pair",
+            )?;
+            let pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+            let ordinary_pair_is_nonempty = match &pair {
+                BoundProgressPair::Absent(_) => false,
+                BoundProgressPair::Present(bound) => {
+                    bound
+                        .data
+                        .metadata()
+                        .map_err(|error| Error::IO(error, data_path.clone()))?
+                        .len()
+                        != 0
+                        || bound
+                            .index
+                            .metadata()
+                            .map_err(|error| Error::IO(error, index_path.clone()))?
+                            .len()
+                            != 0
+                }
+            };
+            if ordinary_pair_is_nonempty {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "certified lane block pair is nonempty without its mandatory latest frontier",
+                ));
+            }
+            return Ok(None);
+        };
+        let artifact = &frontier_read.frontier.artifact;
+        if !authority.authorizes_proposal(&artifact.proposal) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "latest certified lane block frontier is outside its State-authenticated lifecycle",
+            ));
+        }
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            &data_path,
+            &index_path,
+            "certified lane block pair",
+        )?;
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let pair_repair_required = match &mut pair {
+            BoundProgressPair::Absent(_) => true,
+            BoundProgressPair::Present(bound) => {
+                let descriptor = &artifact.proposal.descriptor;
+                match self.read_certified_lane_block_artifact_structural_from_bound_locked(
+                    lane_id,
+                    descriptor.lane_block_height,
+                    bound,
+                ) {
+                    Some(existing) if existing == *artifact => false,
+                    Some(existing) => {
+                        let existing_is_active = self
+                            .require_active_lane_artifact(
+                                &entry,
+                                &existing.proposal.descriptor,
+                            )
+                            .is_ok();
+                        if existing_is_active
+                            && !authority.permits_slot_replacement(
+                                &existing.proposal.descriptor,
+                                descriptor,
+                            )
+                        {
+                            return Err(Self::invalid_lane_artifact_error(
+                                data_path,
+                                "certified lane block pair conflicts with its durable frontier",
+                            ));
+                        }
+                        true
+                    }
+                    None => true,
+                }
+            }
+        };
+        if let BoundProgressPair::Present(bound) = &pair
+            && !self.bound_progress_sidecar_unchanged(bound)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified lane block pair changed during read-only startup preflight",
+            ));
+        }
+        self.confirm_latest_certified_lane_block_frontier_read_locked(
+            &entry,
+            &frontier_read.snapshot,
+        )?;
+        Ok(Some((artifact.clone(), pair_repair_required)))
+    }
+
+    /// Read one exact active certified lane slot without writer recovery or
+    /// durability barriers. Any unresolved recovery artifact fails closed.
+    pub(crate) fn read_certified_lane_block_artifact_read_only(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Result<Option<CertifiedLaneBlockArtifact>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            &data_path,
+            &index_path,
+            "certified lane block pair",
+        )?;
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let artifact = match &mut pair {
+            BoundProgressPair::Absent(_) => None,
+            BoundProgressPair::Present(bound) => self
+                .read_active_certified_lane_block_artifact_from_bound_locked(
+                    &entry,
+                    lane_block_height,
+                    bound,
+                ),
+        };
+        if let BoundProgressPair::Present(bound) = &pair
+            && !self.bound_progress_sidecar_unchanged(bound)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified lane block pair changed during read-only startup lookup",
+            ));
+        }
+        Ok(artifact)
+    }
+
     fn latest_certified_lane_block_frontier_inner(
         &self,
         lane_id: LaneId,
@@ -30222,8 +30696,10 @@ impl Kura {
 
     /// Return the highest valid certified lane block accepted by `accept`.
     ///
-    /// The sidecar index is scanned in reverse and stops at the first match, so
-    /// proposal planning does not materialize the lane's complete history.
+    /// The authenticated latest frontier is tried before the bounded historical
+    /// scan. `accept` runs only after the frontier reader releases its storage
+    /// locks, so the common latest-match path avoids revalidating lane history
+    /// while holding `sidecar_lock`.
     pub(crate) fn latest_certified_lane_block_artifact_matching<F>(
         &self,
         lane_id: LaneId,
@@ -30235,6 +30711,19 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
+        let rejected_frontier = match self.latest_certified_lane_block_frontier_inner(lane_id, None)
+        {
+            Some(artifact) => {
+                if accept(&artifact) {
+                    let confirmed = self.latest_certified_lane_block_frontier_inner(lane_id, None);
+                    return (confirmed.as_ref() == Some(&artifact)
+                        && !self.prune_recovery_is_required())
+                    .then_some(artifact);
+                }
+                Some(artifact)
+            }
+            None => None,
+        };
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) =
@@ -30295,7 +30784,9 @@ impl Kura {
                 }
             }
         };
-        candidates.into_iter().find(|artifact| accept(artifact))
+        candidates
+            .into_iter()
+            .find(|artifact| rejected_frontier.as_ref() != Some(artifact) && accept(artifact))
     }
 
     /// Return the first valid certified lane block at or above `minimum_height`
@@ -34981,6 +35472,25 @@ impl Kura {
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
+        self.lane_block_predecessor_application_receipt_available_with_repair_policy(
+            proposal, true,
+        )
+    }
+
+    pub(crate) fn lane_block_predecessor_application_receipt_available_without_sidecar_repair(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.lane_block_predecessor_application_receipt_available_with_repair_policy(
+            proposal, false,
+        )
+    }
+
+    fn lane_block_predecessor_application_receipt_available_with_repair_policy(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        repair_sidecars: bool,
+    ) -> bool {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
         if descriptor.lane_block_height == 1 {
@@ -34995,9 +35505,15 @@ impl Kura {
         let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
             return false;
         };
-        let Some(receipt) =
+        let receipt = if repair_sidecars {
             self.read_lane_block_application_receipt(descriptor.lane_id, previous_height)
-        else {
+        } else {
+            self.read_lane_block_application_receipt_without_sidecar_repair(
+                descriptor.lane_id,
+                previous_height,
+            )
+        };
+        let Some(receipt) = receipt else {
             return false;
         };
         let predecessor = &receipt.proposal.descriptor;
@@ -35007,7 +35523,13 @@ impl Kura {
             && predecessor.lane_block_height == previous_height
             && predecessor.proposal_height < descriptor.proposal_height
             && predecessor.descriptor_hash == previous_descriptor_hash
-            && self.lane_block_application_receipt_available(&receipt.proposal)
+            && if repair_sidecars {
+                self.lane_block_application_receipt_available(&receipt.proposal)
+            } else {
+                self.lane_block_application_receipt_available_without_sidecar_repair(
+                    &receipt.proposal,
+                )
+            }
     }
 
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
@@ -35346,6 +35868,85 @@ impl Kura {
             &plan,
             NativeAmxParticipantApplicationPublicationMode::PreWsv,
         )
+    }
+
+    fn native_amx_manifest_leaf_matches_frontier_marker(
+        leaf: &iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestLeafV1,
+        marker: &crate::state::AppliedNativeAmxParticipantFrontierMarker,
+    ) -> bool {
+        marker.version == 2
+            && marker.lane_block_height > 0
+            && marker.previous_lane_block_height.checked_add(1) == Some(marker.lane_block_height)
+            && (marker.previous_lane_block_height == 0)
+                == marker.previous_lane_block_descriptor_hash.is_none()
+            && marker.application_block_height > 0
+            && marker.source_count > 0
+            && leaf.lane_id == marker.lane_id
+            && leaf.dataspace_id == marker.dataspace_id
+            && leaf.lane_incarnation == marker.lane_incarnation
+            && leaf.participant_height == marker.lane_block_height
+            && leaf.participant_view == marker.participant_view
+            && leaf.predecessor_height == marker.previous_lane_block_height
+            && leaf.predecessor_descriptor_hash == marker.previous_lane_block_descriptor_hash
+            && leaf.descriptor_hash == marker.lane_block_descriptor_hash
+            && leaf.proposal_hash == marker.participant_proposal_hash
+            && leaf.settlement_hash == marker.participant_settlement_hash
+            && leaf.application_block_height == marker.application_block_height
+            && leaf.application_block_hash == marker.application_block_hash
+            && u64::try_from(leaf.members.len()).ok() == Some(marker.source_count)
+    }
+
+    /// Read-only all-item preflight for State-owned Native participant repair.
+    ///
+    /// Every exact replicated frontier must occur once in the QC-authenticated
+    /// carrier manifest. The complete carrier plan, including sibling routes
+    /// not named by `markers`, is then checked against active geometry and all
+    /// existing manifest/receipt/latest-index files without publishing bytes.
+    pub(crate) fn preflight_native_amx_participant_application_evidence_repair(
+        &self,
+        block: &SignedBlock,
+        markers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+    ) -> Result<()> {
+        if markers.is_empty() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX startup repair received no State frontier markers",
+            ));
+        }
+        let _publication_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let plan = self
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                block, true,
+            )?;
+        let mut routes = BTreeSet::new();
+        for marker in markers {
+            if marker.application_block_height != plan.application_block_height
+                || marker.application_block_hash != plan.application_block_hash
+                || !routes.insert((marker.lane_id, marker.dataspace_id, marker.lane_incarnation))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX startup repair contains a conflicting carrier or duplicate route",
+                ));
+            }
+            let matches = plan
+                .artifacts
+                .iter()
+                .filter(|(manifest, _)| {
+                    Self::native_amx_manifest_leaf_matches_frontier_marker(&manifest.leaf, marker)
+                })
+                .count();
+            if matches != 1 {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX State frontier is absent from or duplicated in its authenticated carrier manifest",
+                ));
+            }
+        }
+        let _ =
+            self.preflight_native_amx_participant_application_plan_under_publication_guard(&plan)?;
+        Ok(())
     }
 
     /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
@@ -37719,6 +38320,73 @@ impl Kura {
     /// Returns `Ok(false)` while canonical execution evidence is incomplete.
     /// Exact existing bytes still reissue all durability barriers before this
     /// method reports success.
+    pub(crate) fn preflight_lane_block_application_receipt_repair(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<LaneBlockApplicationReceiptRepairPreflight> {
+        match self.recover_lane_block_application_receipt_artifact_without_sidecar_repair(proposal)
+        {
+            Ok(artifact) => Ok(LaneBlockApplicationReceiptRepairPreflight::Ready(artifact)),
+            Err(
+                availability @ (LaneBlockPayloadAvailability::MissingLaneArtifact
+                | LaneBlockPayloadAvailability::MissingProposalBlock),
+            ) => {
+                let height = usize::try_from(proposal.descriptor.proposal_height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "ordinary lane application receipt has an invalid proposal height",
+                        )
+                    })?;
+                if self.get_block_without_merge_sidecar(height).is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        format!(
+                            "ordinary lane application receipt reports {availability:?} while its canonical body is already present"
+                        ),
+                    ));
+                }
+                Ok(LaneBlockApplicationReceiptRepairPreflight::MissingCanonicalBody)
+            }
+            Err(availability) => Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!(
+                    "ordinary lane application receipt startup preflight failed: {availability:?}"
+                ),
+            )),
+        }
+    }
+
+    /// Persist a receipt which was read-only preflighted by startup repair.
+    ///
+    /// The complete canonical evidence is deliberately reconstructed again
+    /// under Kura's publication locks; the preflight token is compared only to
+    /// reject any drift between the all-item planning and first mutation.
+    pub(crate) fn persist_preflighted_lane_block_application_receipt(
+        &self,
+        expected: &LaneBlockApplicationReceiptArtifact,
+    ) -> Result<()> {
+        let actual = self
+            .recover_lane_block_application_receipt_artifact(&expected.proposal)
+            .map_err(|availability| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!(
+                        "ordinary lane application receipt changed after startup preflight: {availability:?}"
+                    ),
+                )
+            })?;
+        if actual != *expected {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "ordinary lane application receipt changed after startup preflight",
+            ));
+        }
+        self.write_lane_block_application_receipt_artifact(&actual)
+    }
+
     pub(crate) fn persist_lane_block_application_receipt_if_ready(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -38046,6 +38714,30 @@ impl Kura {
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
 
+    fn read_lane_block_application_receipt_without_sidecar_repair(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let artifact = self.read_active_lane_block_application_receipt_structural(
+            lane_id,
+            lane_block_height,
+            false,
+        )?;
+        if !self.lane_block_application_receipt_matches_available_evidence(&artifact, false) {
+            return None;
+        }
+        let confirmed = self.read_active_lane_block_application_receipt_structural(
+            lane_id,
+            lane_block_height,
+            false,
+        )?;
+        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
+    }
+
     fn read_active_lane_block_application_receipt_structural(
         &self,
         lane_id: LaneId,
@@ -38324,10 +39016,33 @@ impl Kura {
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
-        let Some(artifact) = self.read_lane_block_application_receipt(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-        ) else {
+        self.lane_block_application_receipt_available_with_repair_policy(proposal, true)
+    }
+
+    pub(crate) fn lane_block_application_receipt_available_without_sidecar_repair(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.lane_block_application_receipt_available_with_repair_policy(proposal, false)
+    }
+
+    fn lane_block_application_receipt_available_with_repair_policy(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        repair_sidecars: bool,
+    ) -> bool {
+        let artifact = if repair_sidecars {
+            self.read_lane_block_application_receipt(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+        } else {
+            self.read_lane_block_application_receipt_without_sidecar_repair(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+        };
+        let Some(artifact) = artifact else {
             return false;
         };
         if artifact.proposal != *proposal {
@@ -38339,7 +39054,14 @@ impl Kura {
         if artifact.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
             return true;
         }
-        if self.lane_block_application_receipt_conflicts_with_preflight(proposal) {
+        let conflicts = if repair_sidecars {
+            self.lane_block_application_receipt_conflicts_with_preflight(proposal)
+        } else {
+            self.lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
+                proposal,
+            )
+        };
+        if conflicts {
             iroha_logger::warn!(
                 lane = %proposal.descriptor.lane_id.as_u32(),
                 lane_block_height = proposal.descriptor.lane_block_height,
@@ -39021,6 +39743,22 @@ impl Kura {
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
 
+    pub(crate) fn read_lane_block_artifact_without_sidecar_repair(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockArtifact> {
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let artifact =
+            self.read_active_lane_block_artifact_structural(lane_id, lane_block_height, false)?;
+        let artifact = self.validate_lane_block_artifact_canonical(artifact)?;
+        let confirmed =
+            self.read_active_lane_block_artifact_structural(lane_id, lane_block_height, false)?;
+        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
+    }
+
     fn read_active_lane_block_artifact_structural(
         &self,
         lane_id: LaneId,
@@ -39211,7 +39949,6 @@ impl Kura {
 
     /// Build a non-persisted execution input candidate directly from a
     /// verified lane-owned payload for stateful routing/admission preflight.
-    #[cfg(test)]
     pub(crate) fn autonomous_lane_block_execution_input_candidate(
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
@@ -49979,6 +50716,7 @@ mod tests {
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
     include!("kura/tests/03_preflight_and_merge_entry.rs");
+    include!("kura/tests/03a_preflight_and_merge_entry_tail.rs");
     include!("kura/tests/04_merge_log_and_associations.rs");
     include!("kura/tests/05_merge_resolution_and_eviction.rs");
     include!("kura/tests/06_eviction_and_autonomous_lanes.rs");

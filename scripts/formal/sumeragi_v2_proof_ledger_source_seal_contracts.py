@@ -92,20 +92,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_worker_reply_route_cases.rs",
         "tests/v2_worker_backpressure_cases.rs",
         "tests/v2_worker_serve_unsealed_cases.rs",
-    ),
-    "crates/iroha_core/src/sumeragi/v2_runtime.rs": (
-        "tests/v2_runtime_unsealed_00.rs",
-        "tests/v2_runtime_unsealed_01.rs",
-        "tests/v2_runtime_unsealed_02.rs",
-        "tests/v2_runtime_unsealed_03.rs",
-        "tests/v2_runtime_unsealed_04.rs",
-        "tests/v2_runtime_unsealed_05.rs",
-        "tests/v2_runtime_unsealed_06.rs",
-    ),
-    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "tests/v2_runner_unsealed_00.rs",
-        "tests/v2_runner_unsealed_01.rs",
-        "tests/v2_runner_unsealed_02.rs",
+        "tests/v2_worker_serve_decision_restart_cases.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_apply.rs": (
         "tests/v2_apply_unsealed_00.rs",
@@ -439,6 +426,21 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     ),
 }
 
+_PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
+        "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
+    ),
+    "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it": (
+        "b69ec152b545fb4e705335eeaecaa5785b1736349fa1494b383f18c257aa8d18"
+    ),
+    "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum": (
+        "dc5f365edfc9bbd31d0f8f595c34673a779e85aac7dfe517316792bd2c70a235"
+    ),
+    "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
+        "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
+    ),
+}
+
 # Exact production effect-executor entry points which retain the authenticated
 # ingress carrier and latch a fail-stop restart on malformed ownership.
 _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
@@ -487,7 +489,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 806
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "1873bbd68c9736db1991842c5f34b0ff4b98460567a76649619d256d4e510700"
+    "0c1ee4be74b736dba126c0eeedd1f39ccaf6cbd6eed0e6374f158e3457f2eff5"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -1100,13 +1102,13 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
     "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
     "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
-    "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_retry_only_without_runnable_work",
+    "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
     "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
     "sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack",
     "sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset",
     "sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes",
     "sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart",
-    "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_retains_lower_terminal_family",
+    "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union",
     "sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement",
     "sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root",
     "sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment",
@@ -1501,7 +1503,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
     ),
     "V2IoCommandQueueState": (
-        "d5984aed11709061a31526159de2d21b91daff351892499e2d28d07099f0063f"
+        "e64f72be9cd74df96058c1e86ad2b59d94806aabefec83c18c85b49fe119b107"
     ),
 }
 
@@ -1519,7 +1521,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
-        "6dd2360143c820a6fdd92dbac3c0d88b0e85651cfc93b1c931d28a7ab5af2457"
+        "4b67ec1226b66a4aeb9453e0c956babe5d5a73612a43ff09e63901b47ddef235"
     ),
     "V2IoCommandQueue::try_begin_producer_episode": (
         "da3de6fd057d35073739151cff96230de08a2669e29720423d9b6b832693dbfc"
@@ -1564,7 +1566,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "aa2d628cbb2b5f54d0901f9949d3581d6188efe72a3656958e95e9e9dacbae92"
     ),
     "ProductionV2Services::drain_completions_inner": (
-        "412bd6deef3d72f2cf66d11b56c36ad6e85bbeb9f66c602a821b0d4929dd12ec"
+        "d76669b25f89b35aa41b771a85f51e398558709d4b685de5e09339d530478924"
     ),
 }
 

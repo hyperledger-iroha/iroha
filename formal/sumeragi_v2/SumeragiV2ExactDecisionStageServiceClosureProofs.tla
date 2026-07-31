@@ -11742,12 +11742,12 @@ PROOF
       <3>1. ExactDecisionTargetNeutralResidual(
                "RequestClock", node, qc, node,
                NoAsyncItem, NoAsyncItem,
-               AsyncPacket(NoAsyncItem, 0, 0))
+               AsyncPacket(NoAsyncItem, AsyncUntrustedSource, 0, 0))
                ~>
              (ExactDecisionTargetNeutralGoal(
                 "RequestClock", node, qc, node,
                 NoAsyncItem, NoAsyncItem,
-                AsyncPacket(NoAsyncItem, 0, 0))
+                AsyncPacket(NoAsyncItem, AsyncUntrustedSource, 0, 0))
               \/ asyncNow >= asyncRetransmitDeadlines[node])
         BY <1>1,
            ExactDecisionTargetNeutralResidualReachesDeadlineOrGoal

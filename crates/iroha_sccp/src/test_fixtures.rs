@@ -710,7 +710,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups(
+        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),

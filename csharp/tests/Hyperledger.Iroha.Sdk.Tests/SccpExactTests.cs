@@ -912,18 +912,16 @@ public sealed class SccpExactTests
     {
         var valid = ProofRequestObject();
         var parsed = SccpGroth16ProofRequestV1.Parse(Json(valid));
-        Assert.Fail(
-            $"ANCHOR={Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash)} STATEMENT={parsed.StatementHash} REQUEST={parsed.RequestHash}");
         Assert.Equal(SccpDestinationProofBackendV1.EvmGroth16Bn254, parsed.Backend);
         Assert.Equal(SccpNetworkV1.BscMainnet, parsed.TargetNetwork);
         Assert.Equal((ushort)4, parsed.SoraFinalityAnchor.ProtocolVersion);
         Assert.Equal(Upper(0xa2, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointContextId));
         Assert.Equal(Upper(0xa3, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointFinalityArtifactHash));
         Assert.Equal(
-            "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA",
+            "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3",
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
-        Assert.Equal("0xc4b540323ca41631f036ca1fe2c99723632d176f801ff6a6f912c597636b4f49", parsed.StatementHash);
-        Assert.Equal("0x51a5a484ea19820bd95e6e9f7c9eb83e3369d2dbc2e83b0399462cde84db1c2a", parsed.RequestHash);
+        Assert.Equal("0x01724432368d493ea5babeabdee2baeddd070e0db1b870a5d5e1898c6c48c2d4", parsed.StatementHash);
+        Assert.Equal("0x6fc7f0ee2acb1f6f2e65a411b23db54f802c316c6b2a2a5186c51952afcca4b2", parsed.RequestHash);
         var mutations = new Action<Dictionary<string, object?>>[]
         {
             value => value["allow_unready"] = true,

@@ -401,6 +401,7 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 443;
 /// Reviewed first-release advice-column profile for compact degree-16 generation.
+///
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [443];
 /// Reviewed first-release lookup-column profile for compact degree-16 generation.
 ///
@@ -426,15 +427,18 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
 ///
-/// The 128 KiB bound leaves substantial headroom for the reviewed compact
-/// profile while still rejecting unbounded or profile-incompatible proof
-/// payloads. Release promotion separately pins the candidate's measured size.
-pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 128 * 1024;
+/// The reviewed compact composite profile is preflighted at roughly 148 KiB.
+/// The 192 KiB bound leaves explicit evolution headroom while still rejecting
+/// unbounded or profile-incompatible proof payloads. Release promotion
+/// separately pins the candidate's exact transcript size.
+pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 192 * 1024;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
 ///
-/// The canonical pair owns a separate 256 KiB bound. Release promotion
-/// separately pins the candidate's measured Eq/Ep pair size beneath it.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 256 * 1024;
+/// A recursive pair carries two Step transcripts, two parent lineages, and two
+/// fixed accumulation transcripts. The 384 KiB bound admits the reviewed
+/// roughly 301 KiB recursive shape; release promotion pins its exact canonical
+/// maximum rather than the smaller initialization-pair measurement.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 * 1024;
 /// Maximum processed proving-key payload admitted by the compact V5 profile.
 ///
 /// The first-release circuit includes five authenticated Table16 SHA lanes.
@@ -11429,7 +11433,7 @@ mod kagemusha_v4_topup_provenance_tests {
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         let ordinary_writes_root = Hash::new([seed, 3]);
         let topup_anchor_root = Hash::new([seed, 4]);
-        ExecutionCommitment::new(
+        ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 1]),
             ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
             ordinary_writes_root,

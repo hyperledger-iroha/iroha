@@ -380,9 +380,11 @@ certificate round.
   manifests, startup repair/latest-index exactness, durable reservation
   ownership, route/incarnation-first merge prefixes, canonical re-execution,
   restart ownership partitioning, single-signer authenticated canonical-body
-  recovery, exact historical-context installation, Queue-gated all-group
-  reconciliation, and observer-only monotonic stage evidence derived from
-  durable State/Kura artifacts. Fifty-one `_bug.cfg` controls deliberately
+  recovery, unified read-only ordinary/Native startup evidence planning,
+  coalesced generic body recovery, bidirectional merge-carrier validation,
+  post-cache carrier reconciliation, exact historical-context installation,
+  Queue-gated all-group application/readback, and observer-only monotonic stage
+  evidence derived from durable State/Kura artifacts. Fifty-nine `_bug.cfg` controls deliberately
   weaken one boundary each and must produce the named invariant counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
   semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
@@ -403,7 +405,7 @@ certificate round.
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
   The same schema-4 ledger machine-maps every conceptual `ML-MUT-*` ID from
-  the closure ledger. `tla_counterexample` entries cover every and only the 52
+  the closure ledger. `tla_counterexample` entries cover every and only the 59
   production-refinement `_bug.cfg` files. Its separate
   `layout_only_no_transition_refinement` contract binds the accepted payload
   schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal V4, reservation
@@ -445,7 +447,7 @@ certificate round.
   in-flight mutation substitution, a weakened success marker, and a length
   override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  fifty-two exact refinement-kernel TLC mutation witnesses and the twenty
+  fifty-nine exact refinement-kernel TLC mutation witnesses and the twenty
   exact in-flight layout mutation witnesses. Apalache does not run those
   mutations: their named-counterexample contract is owned by the deterministic
   TLC runners, while the Apalache leg accepts positive `NoError` only.

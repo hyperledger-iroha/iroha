@@ -1,5 +1,200 @@
 
     #[test]
+    fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
+        let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
+            mut adapter,
+            validators,
+            kura,
+            context,
+            local_validator,
+            requester,
+            request,
+        } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                kura,
+                context,
+                &validators,
+                local_validator,
+            );
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let reply_route = routes.mint(requester.clone());
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            service_generation: request.service_generation,
+            stream_epoch: request.stream_epoch,
+            closed_through: request.semantic_sequence.get(),
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: request.responder,
+        };
+        close.close_id = close.canonical_close_id();
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: requester,
+                    reply_route: Some(reply_route.clone()),
+                    message: CertifiedMergeSidecarMessage::Close(close),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(matches!(
+            adapter.next_effect(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                message,
+                ..
+            }) if reply_routes
+                .iter()
+                .any(|route| route.same_delivery(&reply_route))
+                && matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::CloseAck(_)
+                )
+        ));
+        let mut malformed = adapter
+            .next_effect()
+            .expect("the direct CloseAck remains lane-owned before dispatch");
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
+        else {
+            unreachable!("the direct CloseAck keeps its sidecar effect kind")
+        };
+        *reply_routes = None;
+        assert!(
+            dispatch_lane_work_effect(&services, malformed)
+                .expect_err("a responder control without its return route is malformed")
+                .to_string()
+                .contains("reply-route ownership")
+        );
+
+        dispatch_lane_work_effects(&mut adapter, &services, 1)
+            .expect("dispatch the direct CloseAck through exact output");
+        assert_eq!(adapter.effect_count(), 0);
+        assert!(
+            services
+                .retains_reply_route_for_test(&reply_route)
+                .expect("inspect direct CloseAck route in worker ownership")
+        );
+    }
+
+    #[test]
+    fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
+        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut adapter = fixture.adapter;
+        let responder = fixture.request.responder.clone();
+        let second_requester = fixture
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .find(|peer| peer != &responder && peer != &fixture.requester)
+            .expect("runner prefix retry fixture has a second remote requester");
+        let mut second_request = fixture.request.clone();
+        second_request.requester = second_requester;
+        second_request.request_id = second_request.canonical_request_id();
+        let requests = [fixture.request, second_request];
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        // The shared lane fixture reserves the production test corridor for
+        // eight authenticated sources. Each capability must advertise that
+        // exact geometry even though this case exercises one source.
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+
+        for request in &requests {
+            let reply_route = routes.mint_via(request.requester.clone(), hub.clone());
+            assert_eq!(
+                adapter
+                    .accept_certified_merge_sidecar_for_test(
+                        request.requester.clone(),
+                        reply_route.clone(),
+                        request.clone(),
+                    )
+                    .expect("admit the exact Kura-backed request before closing it"),
+                V2LaneIngressOutcome::Inserted
+            );
+            let mut close = CertifiedMergeSidecarCloseV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation: request.service_generation,
+                stream_epoch: request.stream_epoch,
+                closed_through: request.semantic_sequence.get(),
+                close_id: Hash::prehashed([0; Hash::LENGTH]),
+                requester: request.requester.clone(),
+                responder: responder.clone(),
+            };
+            close.close_id = close.canonical_close_id();
+            assert_eq!(
+                adapter.accept_relay_message(
+                    LaneRelayMessage::CertifiedMergeSidecar {
+                        sender: request.requester.clone(),
+                        reply_route: Some(reply_route),
+                        message: CertifiedMergeSidecarMessage::Close(close),
+                    },
+                    0,
+                ),
+                V2LaneIngressOutcome::Inserted
+            );
+        }
+
+        let mut first_applied = Vec::new();
+        let mut calls = 0usize;
+        let error = apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
+            calls = calls.saturating_add(1);
+            if calls == 2 {
+                Err("injected exact-output close failure".to_owned())
+            } else {
+                first_applied.push(prefix.clone());
+                Ok(())
+            }
+        })
+        .expect_err("the second exact-output close fails");
+        assert!(matches!(
+            error,
+            V2RunnerError::Service(ref reason)
+                if reason == "injected exact-output close failure"
+        ));
+        assert_eq!(first_applied.len(), 1);
+
+        let mut retry_applied = Vec::new();
+        apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
+            retry_applied.push(prefix.clone());
+            Ok(())
+        })
+        .expect("retry applies the retained failed suffix");
+        assert_eq!(retry_applied.len(), 1);
+        assert_ne!(
+            retry_applied[0], first_applied[0],
+            "the already-applied prefix must not be repeated"
+        );
+        let applied_requesters = first_applied
+            .iter()
+            .chain(&retry_applied)
+            .map(|prefix| prefix.requester.clone())
+            .collect::<BTreeSet<_>>();
+        let requesters = requests
+            .into_iter()
+            .map(|request| request.requester)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            applied_requesters, requesters,
+            "the successful prefix plus the retried suffix cover the exact drained batch"
+        );
+
+        apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |_| {
+            panic!("a confirmed handoff must leave no prefix for another retry")
+        })
+        .expect("the confirmed handoff is empty");
+    }
+
+    #[test]
     fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
         let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
             mut adapter,
@@ -1003,415 +1198,3 @@
             Ok(true)
         ));
     }
-
-    #[test]
-    fn tag_roundtrip_rejects_another_height() {
-        let (context, _) = context();
-        let tag = EventTag::new(1, 3, Generation::new(7));
-        assert_eq!(round_for_tag(&context, tag).expect("round").view, 3);
-        assert!(matches!(
-            round_for_tag(&context, EventTag::new(2, 0, Generation::new(7))),
-            Err(V2RunnerError::StaleTag)
-        ));
-    }
-
-    fn proposal_owner(
-        context: &wire::HeightContext,
-        tag: EventTag,
-        lock: Option<(u64, wire::BlockSubject)>,
-        decided_subject: Option<wire::BlockSubject>,
-    ) -> LocalProposalOwner {
-        LocalProposalOwner {
-            tag,
-            locked_body: lock.map(|(view, subject)| {
-                (
-                    wire::ConsensusRound {
-                        context_id: context.id(),
-                        height: context.height,
-                        view,
-                    },
-                    subject,
-                )
-            }),
-            decided_subject,
-        }
-    }
-
-    fn proposal_subject(label: &[u8]) -> wire::BlockSubject {
-        wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
-            payload_hash: Hash::new(&[label, b" payload"].concat()),
-        }
-    }
-
-    #[test]
-    fn locked_body_recovery_is_independent_of_reproposal_gates() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(18));
-        let subject = proposal_subject(b"nonleader locked-body recovery");
-        let locked_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 3,
-        };
-        let leader = context.leader(tag.view());
-        let nonleader = if leader == 0 { 1 } else { 0 };
-        let directive =
-            LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
-        let owner = LocalProposalOwner::from(directive);
-        let expected_request = Some((tag, locked_round, subject));
-
-        for (local_validator, attempted, can_admit) in [
-            (nonleader, None, true),
-            (leader, Some(owner), true),
-            (leader, None, false),
-        ] {
-            let plan = locked_body_recovery_plan(directive, local_validator, attempted, can_admit);
-            assert_eq!(plan.request, expected_request);
-            assert!(
-                !plan.may_repropose,
-                "body recovery must survive every local reproposal gate"
-            );
-        }
-
-        let eligible = locked_body_recovery_plan(directive, leader, None, true);
-        assert_eq!(eligible.request, expected_request);
-        assert!(eligible.may_repropose);
-
-        let decided = LocalProposalDirective::for_test(
-            tag,
-            leader,
-            Some(locked_round),
-            Some(subject),
-            Some(subject),
-        );
-        assert_eq!(
-            locked_body_recovery_plan(decided, leader, None, true),
-            LockedBodyRecoveryPlan {
-                request: None,
-                may_repropose: false,
-            }
-        );
-    }
-
-    #[test]
-    fn same_tag_higher_lock_retires_all_local_proposal_owners() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(11));
-        let subject_a = proposal_subject(b"local owner A");
-        let subject_b = proposal_subject(b"local owner B");
-        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
-        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
-        let now = Instant::now();
-        let mut state = LocalProposalState {
-            attempted: Some(owner_a),
-            submitted: Some((owner_a, subject_a)),
-            heartbeat_only: Some(owner_a),
-            candidate_work_wait: Some(CandidateWorkWait {
-                owner: owner_a,
-                started_at: now,
-                next_retry: now,
-            }),
-            pending_events: Some(PendingLocalEvents {
-                owner: owner_a,
-                subject: subject_a,
-                events: Vec::new(),
-            }),
-            global_selection: None,
-        };
-
-        state.reconcile(owner_b);
-
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.heartbeat_only.is_none());
-        assert!(state.candidate_work_wait.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
-        let (context, _) = context();
-        let owner = proposal_owner(
-            &context,
-            EventTag::new(context.height, 3, Generation::new(17)),
-            None,
-            None,
-        );
-        let started_at = Instant::now();
-        let wait_bound = Duration::from_secs(2);
-        let mut state = LocalProposalState::default();
-
-        state.defer_candidate_work(owner, started_at, wait_bound);
-        assert_eq!(state.heartbeat_only, None);
-        assert!(
-            state
-                .candidate_work_wait
-                .is_some_and(|wait| wait.owner == owner && wait.started_at == started_at)
-        );
-
-        let expired_at = started_at
-            .checked_add(wait_bound)
-            .expect("fixture wait deadline is representable");
-        state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert_eq!(state.heartbeat_only, Some(owner));
-        assert!(state.candidate_work_wait.is_none());
-
-        state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert_eq!(
-            state.heartbeat_only,
-            Some(owner),
-            "repeated timeout handling must never re-arm ordinary candidate work"
-        );
-        assert!(state.candidate_work_wait.is_none());
-    }
-
-    #[test]
-    fn first_same_subject_lock_preserves_pending_local_proposal_events() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(14));
-        let subject = proposal_subject(b"first lock keeps local subject");
-        let unlocked = proposal_owner(&context, tag, None, None);
-        let locked = proposal_owner(&context, tag, Some((5, subject)), None);
-        let mut state = LocalProposalState {
-            attempted: Some(unlocked),
-            submitted: Some((unlocked, subject)),
-            pending_events: Some(PendingLocalEvents {
-                owner: unlocked,
-                subject,
-                events: Vec::new(),
-            }),
-            ..LocalProposalState::default()
-        };
-
-        state.reconcile(locked);
-
-        assert_eq!(state.attempted, Some(locked));
-        assert_eq!(state.submitted, Some((locked, subject)));
-        assert!(
-            state
-                .pending_events
-                .as_ref()
-                .is_some_and(|pending| { pending.owner == locked && pending.subject == subject })
-        );
-    }
-
-    #[test]
-    fn higher_same_subject_lock_retires_prior_origin_work() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(15));
-        let subject = proposal_subject(b"higher lock retires old origin");
-        let lower = proposal_owner(&context, tag, Some((2, subject)), None);
-        let higher = proposal_owner(&context, tag, Some((4, subject)), None);
-        let mut state = LocalProposalState {
-            attempted: Some(lower),
-            submitted: Some((lower, subject)),
-            pending_events: Some(PendingLocalEvents {
-                owner: lower,
-                subject,
-                events: Vec::new(),
-            }),
-            ..LocalProposalState::default()
-        };
-
-        assert_ne!(lower, higher);
-        state.reconcile(higher);
-
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(16));
-        let subject = proposal_subject(b"old-origin first lock");
-        let unlocked = proposal_owner(&context, tag, None, None);
-        let locked = proposal_owner(&context, tag, Some((4, subject)), None);
-        let mut state = LocalProposalState {
-            attempted: Some(unlocked),
-            submitted: Some((unlocked, subject)),
-            pending_events: Some(PendingLocalEvents {
-                owner: unlocked,
-                subject,
-                events: Vec::new(),
-            }),
-            ..LocalProposalState::default()
-        };
-
-        state.reconcile(locked);
-
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(12));
-        let subject_a = proposal_subject(b"rejected old A");
-        let subject_b = proposal_subject(b"current B");
-        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
-        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
-        let proposal_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: tag.view(),
-        };
-        let mut state = LocalProposalState {
-            submitted: Some((owner_a, subject_a)),
-            ..LocalProposalState::default()
-        };
-
-        assert_eq!(
-            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
-            LocalValidationDisposition::Ignored
-        );
-        assert_eq!(state.heartbeat_only, None);
-
-        state.submitted = Some((owner_b, subject_b));
-        assert_eq!(
-            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::RetryHeartbeat
-        );
-        assert_eq!(state.heartbeat_only, Some(owner_b));
-
-        state.submitted = Some((owner_b, subject_b));
-        assert_eq!(
-            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::FatalHeartbeat
-        );
-    }
-
-    #[test]
-    fn decision_retires_local_work_before_prepared_delivery() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 6, Generation::new(13));
-        let subject = proposal_subject(b"decided proposal");
-        let active = proposal_owner(&context, tag, Some((4, subject)), None);
-        let decided = proposal_owner(&context, tag, Some((4, subject)), Some(subject));
-        let mut state = LocalProposalState {
-            attempted: Some(active),
-            submitted: Some((active, subject)),
-            heartbeat_only: None,
-            candidate_work_wait: None,
-            pending_events: Some(PendingLocalEvents {
-                owner: active,
-                subject,
-                events: Vec::new(),
-            }),
-            global_selection: None,
-        };
-
-        assert!(state.take_prepared_events(decided, tag, subject).is_none());
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
-        let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
-            .expect("deterministic genesis key");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("height-one-resultless-projection"),
-            AccountId::new(key_pair.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "staged genesis execution".to_owned())])
-        .sign(key_pair.private_key());
-        let entrypoint = transaction.hash_as_entrypoint();
-        let mut staged =
-            SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None);
-        staged
-            .set_transaction_results(
-                Vec::new(),
-                &[entrypoint],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("attach deterministic staged genesis results");
-        assert!(staged.has_results());
-        assert!(!staged.is_resultless_proposal());
-        assert!(staged.header().result_merkle_root().is_some());
-
-        let staged_header_hash = staged.header().hash();
-        let staged_hash = staged.hash();
-        let staged_signatures = staged.signatures().cloned().collect::<Vec<_>>();
-        let staged_result_root = staged.header().result_merkle_root();
-        let staged_execution_wire = staged.encode_wire().expect("encode staged execution image");
-        let wire = canonical_height_one_proposal_wire(&staged)
-            .expect("encode canonical height-one proposal");
-        let proposal = decode_framed_signed_block(&wire).expect("decode height-one proposal");
-
-        assert!(proposal.is_resultless_proposal());
-        assert!(!proposal.has_results());
-        assert!(proposal.header().result_merkle_root().is_none());
-        assert_eq!(proposal.header().hash(), staged_header_hash);
-        assert_eq!(proposal.hash(), staged_hash);
-        assert_eq!(
-            proposal.signatures().cloned().collect::<Vec<_>>(),
-            staged_signatures
-        );
-        assert_eq!(
-            staged.header().result_merkle_root(),
-            staged_result_root,
-            "proposal projection must not mutate the staged result root"
-        );
-        assert_eq!(
-            staged
-                .encode_wire()
-                .expect("re-encode staged execution image"),
-            staged_execution_wire,
-            "proposal projection must not mutate the staged execution image"
-        );
-        assert_eq!(
-            Hash::new(&wire),
-            staged
-                .canonical_proposal_wire_hash()
-                .expect("hash canonical staged-genesis proposal"),
-        );
-    }
-
-    #[test]
-    fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
-        let (context, _) = context();
-        let key_pair = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
-            .expect("deterministic proposal key");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("locked-reproposal-exact-body"),
-            AccountId::new(key_pair.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "immutable locked body".to_owned())])
-        .sign(key_pair.private_key());
-        let block = SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None)
-            .canonical_resultless_proposal();
-        assert!(block.is_resultless_proposal());
-        let canonical_wire = block.encode_wire().expect("encode exact proposal body");
-        let locked_subject = wire::BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: Hash::new(&canonical_wire),
-        };
-        let tag = EventTag::new(context.height, 3, Generation::new(17));
-
-        let encoded = encode_exact_local_body(&context, tag, Some(locked_subject), &canonical_wire)
-            .expect("encode unchanged locked body at the reproposal round");
-        assert_eq!(
-            encoded.manifest().round,
-            round_for_tag(&context, tag).unwrap()
-        );
-        assert_eq!(encoded.manifest().subject, locked_subject);
-        let (_, chunks) = encoded.into_parts();
-        assert_eq!(chunks.concat(), canonical_wire);
-
-        let foreign_subject = proposal_subject(b"foreign locked subject");
-        assert!(matches!(
-            encode_exact_local_body(&context, tag, Some(foreign_subject), &canonical_wire,),
-            Err(V2RunnerError::LockedBodyMismatch)
-        ));
-    }
-

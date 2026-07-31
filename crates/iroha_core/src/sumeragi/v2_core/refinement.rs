@@ -2567,6 +2567,20 @@ macro_rules! production_scheduler_trace_body {
 
 macro_rules! production_ingress_identity_and_class_trace_body {
     ($projection:expr) => {{
+        let exact_ordinal_transition = $projection.ordinal_minted
+            && $projection.ordinal_source_before == $projection.physical_admission_ordinal
+            && $projection.physical_admission_ordinal < u128::MAX
+            && $projection.ordinal_source_after == $projection.physical_admission_ordinal + 1u128;
+        let exact_dormant_transition = if $projection.dormant_owner_ordinal == 0u128 {
+            $projection.dormant_reservations_after == $projection.dormant_reservations_before
+        } else {
+            $projection.ordinal_minted
+                && $projection.dormant_owner_ordinal == $projection.lifecycle_ordinal
+                && $projection.lifecycle_ordinal < $projection.physical_admission_ordinal
+                && $projection.dormant_reservations_after < u64::MAX
+                && $projection.dormant_reservations_before
+                    == $projection.dormant_reservations_after + 1u64
+        };
         $projection.incoming_height == $projection.stored_height
             && $projection.incoming_view == $projection.stored_view
             && $projection.incoming_generation == $projection.stored_generation
@@ -2576,6 +2590,48 @@ macro_rules! production_ingress_identity_and_class_trace_body {
             && $projection.queue_len_before < u64::MAX
             && $projection.queue_len_after == $projection.queue_len_before + 1u64
             && $projection.queue_len_after <= $projection.queue_capacity
+            && $projection.dormant_reservations_after <= $projection.queue_capacity
+            && $projection.queue_len_after
+                <= $projection.queue_capacity - $projection.dormant_reservations_after
+            && $projection.physical_admission_ordinal > 0u128
+            && $projection.lifecycle_ordinal > 0u128
+            && $projection.lifecycle_ordinal <= $projection.physical_admission_ordinal
+            && exact_ordinal_transition
+            && exact_dormant_transition
+    }};
+}
+
+macro_rules! production_ingress_reservation_materialization_trace_body {
+    ($projection:expr) => {{
+        let exact_dormant_transition = if $projection.dormant_owner_ordinal == 0u128 {
+            $projection.dormant_reservations_after == $projection.dormant_reservations_before
+        } else {
+            $projection.dormant_owner_ordinal == $projection.lifecycle_ordinal
+                && $projection.lifecycle_ordinal < $projection.physical_admission_ordinal
+                && $projection.dormant_reservations_after < u64::MAX
+                && $projection.dormant_reservations_before
+                    == $projection.dormant_reservations_after + 1u64
+        };
+        $projection.incoming_height == $projection.stored_height
+            && $projection.incoming_view == $projection.stored_view
+            && $projection.incoming_generation == $projection.stored_generation
+            && $projection.incoming_class == $projection.stored_class
+            && $projection.incoming_class >= 1u8
+            && $projection.incoming_class <= 3u8
+            && $projection.queue_len_before < u64::MAX
+            && $projection.queue_len_after == $projection.queue_len_before + 1u64
+            && $projection.reserved_slots_before == 1u8
+            && $projection.reserved_slots_after == 0u8
+            && $projection.queue_len_after <= $projection.queue_capacity
+            && $projection.dormant_reservations_after <= $projection.queue_capacity
+            && $projection.queue_len_after
+                <= $projection.queue_capacity - $projection.dormant_reservations_after
+            && $projection.ordinal_source_before == $projection.ordinal_source_after
+            && $projection.physical_admission_ordinal > 0u128
+            && $projection.physical_admission_ordinal < $projection.ordinal_source_before
+            && $projection.lifecycle_ordinal > 0u128
+            && $projection.lifecycle_ordinal <= $projection.physical_admission_ordinal
+            && exact_dormant_transition
     }};
 }
 
@@ -4286,7 +4342,8 @@ pub struct ProductionSchedulerTraceProjection {
     pub(crate) fifo_owed_after: bool,
 }
 
-/// Primitive identity and queue-class observation for one admitted command.
+/// Primitive identity, queue-class, ordinal, and dormant-owner observation for
+/// one newly admitted physical owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub(crate) incoming_height: u64,
@@ -4300,6 +4357,50 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub(crate) queue_len_before: u64,
     pub(crate) queue_len_after: u64,
     pub(crate) queue_capacity: u64,
+    pub(crate) ordinal_source_before: u128,
+    pub(crate) physical_admission_ordinal: u128,
+    pub(crate) lifecycle_ordinal: u128,
+    pub(crate) ordinal_source_after: u128,
+    pub(crate) dormant_reservations_before: u64,
+    pub(crate) dormant_reservations_after: u64,
+    /// Zero for an ordinary admission; otherwise the exact dormant lifecycle
+    /// owner consumed by this physical FIFO publication.
+    pub(crate) dormant_owner_ordinal: u128,
+    /// Whether this transition advances the shared ordinal source. Every
+    /// generic admission must set this; reservation materialization uses its
+    /// separate occupancy-preserving projection below.
+    pub(crate) ordinal_minted: bool,
+}
+
+/// Primitive exact-token observation for replacing one unpublished ingress
+/// reservation with its reducer-visible command. The shared ordinal source
+/// and effective occupied-slot count both remain unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionIngressReservationMaterializationTraceProjection {
+    pub(crate) incoming_height: u64,
+    pub(crate) incoming_view: u64,
+    pub(crate) incoming_generation: u64,
+    pub(crate) incoming_class: u8,
+    pub(crate) stored_height: u64,
+    pub(crate) stored_view: u64,
+    pub(crate) stored_generation: u64,
+    pub(crate) stored_class: u8,
+    /// Reducer-visible commands after conflicting proposals are retired, but
+    /// before the reserved completion is materialized.
+    pub(crate) queue_len_before: u64,
+    pub(crate) queue_len_after: u64,
+    pub(crate) reserved_slots_before: u8,
+    pub(crate) reserved_slots_after: u8,
+    pub(crate) queue_capacity: u64,
+    pub(crate) ordinal_source_before: u128,
+    pub(crate) physical_admission_ordinal: u128,
+    pub(crate) lifecycle_ordinal: u128,
+    pub(crate) ordinal_source_after: u128,
+    pub(crate) dormant_reservations_before: u64,
+    pub(crate) dormant_reservations_after: u64,
+    /// Zero for a fresh reservation; otherwise the exact dormant backing
+    /// removed when its aliased token becomes a physical command.
+    pub(crate) dormant_owner_ordinal: u128,
 }
 
 /// Total prospective state transition for one durable leader-wire admission.
@@ -6751,6 +6852,14 @@ pub(crate) const fn production_ingress_identity_and_class_trace_refines_protecte
     production_ingress_identity_and_class_trace_body!(projection)
 }
 
+/// Validate exact, occupancy-preserving materialization of one reserved
+/// ingress owner.
+pub(crate) const fn production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+) -> bool {
+    production_ingress_reservation_materialization_trace_body!(projection)
+}
+
 /// Validate one exact durable leader-wire admission before persistence.
 pub(crate) const fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
     projection: ProductionLeaderWireAdmissionTraceProjection,
@@ -6916,6 +7025,21 @@ pub(crate) fn check_production_ingress_transition(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionIngressIdentityAndClassTraceProjection>> {
     if production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check replacement of one exact unpublished reservation by its physical
+/// reducer command without minting or consuming another occupied slot.
+#[must_use]
+pub(crate) fn check_production_ingress_reservation_materialization_transition(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionIngressReservationMaterializationTraceProjection>>
+{
+    if production_ingress_reservation_materialization_refines_protected_ownership_kernel(projection)
+    {
         Some(CheckedProductionTransition { projection })
     } else {
         None

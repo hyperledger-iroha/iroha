@@ -277,8 +277,12 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
         try fixtureUInt(execution, "native_amx_application_manifest_version") == 1,
         "manifest version"
     )
+    let parsedExecution = try JSONDecoder().decode(
+        ToriiSumeragiV2ExecutionCommitment.self,
+        from: JSONSerialization.data(withJSONObject: execution)
+    )
     try require(
-        execution.keys.contains("merge_carrier") && execution["merge_carrier"] is NSNull,
+        parsedExecution.mergeCarrier != nil,
         "merge carrier"
     )
     try require(
@@ -678,6 +682,8 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 "coherent_stale_proposal_hash",
                 "coherent_stale_settlement_hash",
                 "non_canonical_validator_peer_id",
+                "execution_commitment_merge_carrier_wrong_version",
+                "execution_commitment_missing_merge_carrier_field",
             ]).isSubset(of: identifiers)
         )
 

@@ -7469,9 +7469,12 @@ class SumeragiAutonomousLaneExecution:
     lane_block_height: int
     lane_block_view: int
     proposal_height: int
-    proposal_view: int
-    proposal_hash: str
-    descriptor_hash: str
+    proposal_view: Optional[int]
+    reservation_owner_hash: str
+    proposal_identity_hash: str
+    reservation_group_hash: str
+    proposal_hash: Optional[str]
+    descriptor_hash: Optional[str]
     executable_payload_hash: Optional[str]
     source_bundle_hash: Optional[str]
     merge_entry_hash: Optional[str]
@@ -10881,13 +10884,16 @@ class _SumeragiDiagnosticsParser:
     ) -> List[SumeragiAutonomousLaneExecution]:
         allowed = {
             "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-            "lane_block_view", "proposal_height", "proposal_view", "proposal_hash",
-            "descriptor_hash", "executable_payload_hash", "source_bundle_hash",
+            "lane_block_view", "proposal_height", "proposal_view",
+            "reservation_owner_hash", "proposal_identity_hash",
+            "reservation_group_hash", "proposal_hash", "descriptor_hash",
+            "executable_payload_hash", "source_bundle_hash",
             "merge_entry_hash", "application_block_height", "application_block_hash",
             "reservation_count", "transaction_count", "highest_durable_stage",
             "stuck_reason",
         }
         optional = {
+            "proposal_view", "proposal_hash", "descriptor_hash",
             "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
             "application_block_height", "application_block_hash", "stuck_reason",
         }
@@ -10899,7 +10905,8 @@ class _SumeragiDiagnosticsParser:
             "queue_finalized", "conflict",
         }
         reasons = {
-            "awaiting_payload_availability", "awaiting_lane_certification",
+            "awaiting_executable_payload", "awaiting_payload_availability",
+            "awaiting_lane_certification",
             "certified_bundle_unavailable", "awaiting_merge_selection",
             "awaiting_global_carrier", "awaiting_application_receipt",
             "queue_finalization_unverifiable", "evidence_conflict",
@@ -10942,16 +10949,26 @@ class _SumeragiDiagnosticsParser:
             proposal_height = cls._unsigned(
                 record, "proposal_height", positive=True, prefix=context
             )
-            proposal_view = cls._unsigned(record, "proposal_view", prefix=context)
-            proposal_hash = _SumeragiV2StatusParser._nonzero_hash(
-                record.get("proposal_hash"), f"{context}.proposal_hash"
+            proposal_view = (
+                None
+                if record.get("proposal_view") is None
+                else cls._unsigned(record, "proposal_view", prefix=context)
             )
-            descriptor_hash = _SumeragiV2StatusParser._nonzero_hash(
-                record.get("descriptor_hash"), f"{context}.descriptor_hash"
+            reservation_owner_hash = _SumeragiV2StatusParser._nonzero_hash(
+                record.get("reservation_owner_hash"),
+                f"{context}.reservation_owner_hash",
+            )
+            proposal_identity_hash = _SumeragiV2StatusParser._nonzero_hash(
+                record.get("proposal_identity_hash"),
+                f"{context}.proposal_identity_hash",
+            )
+            reservation_group_hash = _SumeragiV2StatusParser._nonzero_hash(
+                record.get("reservation_group_hash"),
+                f"{context}.reservation_group_hash",
             )
             key = (
                 lane_id, dataspace_id, incarnation, lane_height, lane_view,
-                proposal_height, proposal_view, proposal_hash,
+                proposal_height, proposal_identity_hash,
             )
             if previous_key is not None and previous_key >= key:
                 raise RuntimeError(
@@ -10988,7 +11005,7 @@ class _SumeragiDiagnosticsParser:
                 raise RuntimeError(f"{context}.stuck_reason has an unknown variant")
             reason = reason_value
             expected_reasons = {
-                "reservations_durable": "awaiting_payload_availability",
+                "reservations_durable": "awaiting_executable_payload",
                 "executable_payload_durable": "awaiting_payload_availability",
                 "payload_availability_certified": "awaiting_lane_certification",
                 "lane_certified": "certified_bundle_unavailable",
@@ -11004,6 +11021,22 @@ class _SumeragiDiagnosticsParser:
                 raise RuntimeError(f"{context} stage and stuck reason disagree")
             if stage != "conflict" and reservation_count != transaction_count:
                 raise RuntimeError(f"{context} reservation and transaction counts disagree")
+            proposal_hash = optional_hash("proposal_hash")
+            descriptor_hash = optional_hash("descriptor_hash")
+            if (proposal_hash is None) != (descriptor_hash is None):
+                raise RuntimeError(
+                    f"{context} proposal and descriptor hashes must appear together"
+                )
+            if stage != "conflict" and (
+                (stage == "reservations_durable") != (proposal_hash is None)
+            ):
+                raise RuntimeError(
+                    f"{context} finalized identity disagrees with durable stage"
+                )
+            if stage == "reservations_durable" and proposal_view is not None:
+                raise RuntimeError(
+                    f"{context} proposal view disagrees with durable stage"
+                )
             payload_hash = optional_hash("executable_payload_hash")
             bundle_hash = optional_hash("source_bundle_hash")
             merge_hash = optional_hash("merge_entry_hash")
@@ -11031,7 +11064,11 @@ class _SumeragiDiagnosticsParser:
                 lane_id=lane_id, dataspace_id=dataspace_id,
                 lane_incarnation=incarnation, lane_block_height=lane_height,
                 lane_block_view=lane_view, proposal_height=proposal_height,
-                proposal_view=proposal_view, proposal_hash=proposal_hash,
+                proposal_view=proposal_view,
+                reservation_owner_hash=reservation_owner_hash,
+                proposal_identity_hash=proposal_identity_hash,
+                reservation_group_hash=reservation_group_hash,
+                proposal_hash=proposal_hash,
                 descriptor_hash=descriptor_hash,
                 executable_payload_hash=payload_hash,
                 source_bundle_hash=bundle_hash,

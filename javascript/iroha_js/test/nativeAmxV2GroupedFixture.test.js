@@ -129,7 +129,22 @@ function validateApplicationEvidence(document) {
   const execution = evidence.execution_commitment;
   const artifacts = evidence.manifest_artifacts;
   assert.equal(execution.native_amx_application_manifest_version, 1);
-  assert.equal(execution.merge_carrier, null);
+  assert.equal(
+    typeof execution.merge_carrier,
+    "object",
+    "merge carrier must be an object",
+  );
+  assert.notEqual(execution.merge_carrier, null);
+  assert.equal(Array.isArray(execution.merge_carrier), false);
+  assert.deepEqual(
+    Object.keys(execution.merge_carrier).sort(),
+    ["entry_hash", "version"],
+  );
+  assert.equal(execution.merge_carrier.version, 1);
+  assert.match(
+    execution.merge_carrier.entry_hash,
+    /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u,
+  );
   assert.equal(execution.native_amx_application_manifest_count, artifacts.length);
   assert.equal(artifacts.length, 1);
 
@@ -261,6 +276,19 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
   assert.equal(
     fixtureDocument.rust_owner,
     "iroha_data_model::block::consensus",
+  );
+  const negativeControlIds = new Set(
+    fixtureDocument.negative_controls.map((control) => control.id),
+  );
+  assert.ok(
+    negativeControlIds.has(
+      "execution_commitment_merge_carrier_wrong_version",
+    ),
+  );
+  assert.ok(
+    negativeControlIds.has(
+      "execution_commitment_missing_merge_carrier_field",
+    ),
   );
   const declarations = readFileSync(
     new URL("../index.d.ts", import.meta.url),

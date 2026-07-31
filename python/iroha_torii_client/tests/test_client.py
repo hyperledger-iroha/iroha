@@ -452,6 +452,32 @@ def _native_amx_participant_application_payload(
     }
 
 
+def _autonomous_lane_execution_payload() -> Dict[str, Any]:
+    return {
+        "lane_id": 3,
+        "dataspace_id": 8,
+        "lane_incarnation": _canonical_hash(0x65),
+        "lane_block_height": 8,
+        "lane_block_view": 1,
+        "proposal_height": 10,
+        "proposal_view": 2,
+        "reservation_owner_hash": _canonical_hash(0x66),
+        "proposal_identity_hash": _canonical_hash(0x67),
+        "reservation_group_hash": _canonical_hash(0x68),
+        "proposal_hash": _canonical_hash(0x69),
+        "descriptor_hash": _canonical_hash(0x73),
+        "executable_payload_hash": _canonical_hash(0x74),
+        "source_bundle_hash": _canonical_hash(0x75),
+        "merge_entry_hash": _canonical_hash(0x76),
+        "application_block_height": 12,
+        "application_block_hash": _canonical_hash(0x77),
+        "reservation_count": 2,
+        "transaction_count": 2,
+        "highest_durable_stage": "kura_wsv_application_receipt_durable",
+        "stuck_reason": "queue_finalization_unverifiable",
+    }
+
+
 def _lane_settlement_payload() -> Dict[str, Any]:
     return {
         "block_height": 9,
@@ -3852,6 +3878,8 @@ def test_get_sumeragi_status_requires_exact_merge_carrier_projection() -> None:
         "missing",
         "malformed",
         "wrong_version",
+        "missing_version",
+        "missing_entry_hash",
         "bad_hash",
         "unknown_field",
     ]
@@ -3869,6 +3897,12 @@ def test_get_sumeragi_status_requires_exact_merge_carrier_projection() -> None:
                 "version": 2,
                 "entry_hash": _canonical_hash(0x39),
             }
+        elif case == "missing_version":
+            candidate_commitment["merge_carrier"] = {
+                "entry_hash": _canonical_hash(0x39),
+            }
+        elif case == "missing_entry_hash":
+            candidate_commitment["merge_carrier"] = {"version": 1}
         elif case == "bad_hash":
             candidate_commitment["merge_carrier"] = {
                 "version": 1,
@@ -4482,26 +4516,14 @@ def test_get_sumeragi_diagnostics_enforces_native_application_bound_and_order() 
 
 def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None:
     payload = _sumeragi_diagnostics_payload()
-    row = {
-        "lane_id": 3, "dataspace_id": 8,
-        "lane_incarnation": _canonical_hash(0x65),
-        "lane_block_height": 8, "lane_block_view": 1,
-        "proposal_height": 10, "proposal_view": 2,
-        "proposal_hash": _canonical_hash(0x69),
-        "descriptor_hash": _canonical_hash(0x73),
-        "executable_payload_hash": _canonical_hash(0x74),
-        "source_bundle_hash": _canonical_hash(0x75),
-        "merge_entry_hash": _canonical_hash(0x76),
-        "application_block_height": 12,
-        "application_block_hash": _canonical_hash(0x77),
-        "reservation_count": 2, "transaction_count": 2,
-        "highest_durable_stage": "kura_wsv_application_receipt_durable",
-        "stuck_reason": "queue_finalization_unverifiable",
-    }
+    row = _autonomous_lane_execution_payload()
     payload["autonomous_lane_executions"] = [row]
     parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
     assert parsed.merge_entry_hash == _canonical_hash(0x76)
     assert parsed.application_block_height == 12
+    assert parsed.reservation_owner_hash == _canonical_hash(0x66)
+    assert parsed.proposal_identity_hash == _canonical_hash(0x67)
+    assert parsed.reservation_group_hash == _canonical_hash(0x68)
 
     payload["autonomous_lane_executions"] = [row, dict(row)]
     with pytest.raises(RuntimeError, match="strictly ordered"):
@@ -4517,6 +4539,141 @@ def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None
     )
     row["stuck_reason"] = "awaiting_merge_selection"
     with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash"],
+)
+def test_get_sumeragi_diagnostics_requires_provisional_identity_hashes(
+    field: str,
+) -> None:
+    for mutation in ("missing", "zero", "type", "bare-lowercase"):
+        row = _autonomous_lane_execution_payload()
+        if mutation == "missing":
+            del row[field]
+        elif mutation == "zero":
+            row[field] = "hash:" + ("00" * 32) + "#6A0A"
+        elif mutation == "type":
+            row[field] = [1] * 32
+        else:
+            row[field] = "ab" * 32
+        payload = _sumeragi_diagnostics_payload()
+        payload["autonomous_lane_executions"] = [row]
+        with pytest.raises(RuntimeError, match=field):
+            _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_enforces_reservation_only_geometry() -> None:
+    row = _autonomous_lane_execution_payload()
+    row.update(
+        highest_durable_stage="reservations_durable",
+        stuck_reason="awaiting_executable_payload",
+    )
+    for field in (
+        "proposal_view",
+        "proposal_hash",
+        "descriptor_hash",
+        "executable_payload_hash",
+        "source_bundle_hash",
+        "merge_entry_hash",
+        "application_block_height",
+        "application_block_hash",
+    ):
+        del row[field]
+    payload = _sumeragi_diagnostics_payload()
+    payload["autonomous_lane_executions"] = [row]
+    parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
+    assert parsed.proposal_hash is None
+    assert parsed.descriptor_hash is None
+    assert parsed.proposal_view is None
+    assert parsed.stuck_reason == "awaiting_executable_payload"
+
+    for field in (
+        "proposal_hash",
+        "executable_payload_hash",
+        "source_bundle_hash",
+        "merge_entry_hash",
+        "application_block_height",
+    ):
+        invalid = copy.deepcopy(row)
+        if field == "proposal_hash":
+            invalid["proposal_hash"] = _canonical_hash(0x79)
+            invalid["descriptor_hash"] = _canonical_hash(0x7A)
+        elif field == "application_block_height":
+            invalid[field] = 12
+            invalid["application_block_hash"] = _canonical_hash(0x7B)
+        else:
+            invalid[field] = _canonical_hash(0x7C)
+        payload["autonomous_lane_executions"] = [invalid]
+        with pytest.raises(RuntimeError, match="finalized identity|evidence"):
+            _get_sumeragi_diagnostics(payload)
+
+    wrong_reason = copy.deepcopy(row)
+    wrong_reason["stuck_reason"] = "awaiting_payload_availability"
+    payload["autonomous_lane_executions"] = [wrong_reason]
+    with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+    mismatched_counts = copy.deepcopy(row)
+    mismatched_counts["reservation_count"] = 1
+    payload["autonomous_lane_executions"] = [mismatched_counts]
+    with pytest.raises(RuntimeError, match="reservation and transaction counts disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+    null_view = copy.deepcopy(row)
+    null_view["proposal_view"] = None
+    payload["autonomous_lane_executions"] = [null_view]
+    assert _get_sumeragi_diagnostics(
+        payload
+    ).autonomous_lane_executions[0].proposal_view is None
+
+    present_view = copy.deepcopy(row)
+    present_view["proposal_view"] = 0
+    payload["autonomous_lane_executions"] = [present_view]
+    with pytest.raises(RuntimeError, match="proposal view disagrees"):
+        _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    for missing_field in ("proposal_hash", "descriptor_hash"):
+        row = _autonomous_lane_execution_payload()
+        del row[missing_field]
+        payload["autonomous_lane_executions"] = [row]
+        with pytest.raises(RuntimeError, match="must appear together"):
+            _get_sumeragi_diagnostics(payload)
+
+    row = _autonomous_lane_execution_payload()
+    row["proposal_hash"] = None
+    row["descriptor_hash"] = None
+    payload["autonomous_lane_executions"] = [row]
+    with pytest.raises(RuntimeError, match="finalized identity disagrees"):
+        _get_sumeragi_diagnostics(payload)
+
+    missing_view = _autonomous_lane_execution_payload()
+    del missing_view["proposal_view"]
+    payload["autonomous_lane_executions"] = [missing_view]
+    assert _get_sumeragi_diagnostics(
+        payload
+    ).autonomous_lane_executions[0].proposal_view is None
+
+    first = _autonomous_lane_execution_payload()
+    same_provisional_identity = copy.deepcopy(first)
+    same_provisional_identity["proposal_hash"] = _canonical_hash(0x7D)
+    same_provisional_identity["descriptor_hash"] = _canonical_hash(0x7E)
+    payload["autonomous_lane_executions"] = [first, same_provisional_identity]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
+        _get_sumeragi_diagnostics(payload)
+
+    first["proposal_identity_hash"] = _canonical_hash(0x90)
+    ordering_drift = copy.deepcopy(first)
+    ordering_drift["proposal_identity_hash"] = _canonical_hash(0x80)
+    ordering_drift["proposal_hash"] = _canonical_hash(0x91)
+    ordering_drift["descriptor_hash"] = _canonical_hash(0x92)
+    payload["autonomous_lane_executions"] = [first, ordering_drift]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
         _get_sumeragi_diagnostics(payload)
 
 
@@ -7037,6 +7194,14 @@ def test_offline_finality_execution_commitment_requires_exact_merge_carrier() ->
         "entry_hash": _canonical_hash(0x95),
     }
     invalid_payloads.append(wrong_version)
+    missing_version = payload()
+    missing_version["merge_carrier"] = {
+        "entry_hash": _canonical_hash(0x95),
+    }
+    invalid_payloads.append(missing_version)
+    missing_entry_hash = payload()
+    missing_entry_hash["merge_carrier"] = {"version": 1}
+    invalid_payloads.append(missing_entry_hash)
     bad_hash = payload()
     bad_hash["merge_carrier"] = {"version": 1, "entry_hash": "bad"}
     invalid_payloads.append(bad_hash)

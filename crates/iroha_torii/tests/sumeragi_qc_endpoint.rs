@@ -62,7 +62,7 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
         proposal_round: round,
         phase: GlobalPhase::Prepare,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups(
+        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"parent-state"),
             Hash::new(b"post-state"),
             Hash::new(b"writes"),

@@ -179,6 +179,27 @@ run_mutant native-conflicting-retained-pair "$NATIVE_MODULE" \
 run_mutant native-retained-predecessor-drift "$NATIVE_MODULE" \
   multilane_native_retained_predecessor_drift_bug.cfg \
   MLNativeRetainedHistoryExact
+run_mutant native-mutating-unified-startup-plan "$NATIVE_MODULE" \
+  multilane_native_mutating_unified_startup_plan_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-uncoalesced-canonical-body-needs "$NATIVE_MODULE" \
+  multilane_native_uncoalesced_canonical_body_needs_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-partial-unified-startup-preflight "$NATIVE_MODULE" \
+  multilane_native_partial_unified_startup_preflight_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-queue-before-evidence-readback "$NATIVE_MODULE" \
+  multilane_native_queue_before_evidence_readback_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-missing-reverse-merge-carrier "$NATIVE_MODULE" \
+  multilane_native_missing_reverse_merge_carrier_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-orphan-merge-carrier "$NATIVE_MODULE" \
+  multilane_native_orphan_merge_carrier_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-skip-post-cache-carrier-reconcile "$NATIVE_MODULE" \
+  multilane_native_skip_post_cache_carrier_reconcile_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
 
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier.tla"
 run_mutant autonomous-carrier-drift "$AUTONOMOUS_MODULE" \
@@ -272,4 +293,4 @@ run_mutant queue-plan-duplicate-execution "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_duplicate_execution_bug.cfg \
   MLAdmissionAtMostOnceExecution
 
-echo "[tlc] all 52 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+echo "[tlc] all 59 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

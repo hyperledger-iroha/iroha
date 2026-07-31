@@ -1137,9 +1137,9 @@ The current source-bound inventory therefore contains 806 exact tests across
 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
 `1873bbd68c9736db1991842c5f34b0ff4b98460567a76649619d256d4e510700`.
-Nine of those legs execute the separate 299-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 300 TSV lines and has SHA-256
-`d3a3ee129d21220c04b147f31b3c99d91d750af19ffda9c71253e88f37754104`.
+Nine of those legs execute the separate 302-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 303 TSV lines and has SHA-256
+`94552d20b46e0ca5bec00934d18792e902ddc05a106ae67d0a417ab4fdf13bce`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1571,7 +1571,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 806 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 299-test
+profile additionally records nine G-UNIT legs executing a separate 302-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1983,7 +1983,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 806-test production inventory, the separate 299-test G-UNIT
+their exact 806-test production inventory, the separate 302-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

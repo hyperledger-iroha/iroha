@@ -4314,7 +4314,7 @@ pub const SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX: usize = 128;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
 pub enum SumeragiAutonomousLaneExecutionStage {
-    /// Exact queue-reservation bytes are retained by the durable executable payload.
+    /// Exact Queue-owned reservation keys are fsynced before executable-payload durability.
     ReservationsDurable,
     /// The producer-authenticated executable payload is durable.
     ExecutablePayloadDurable,
@@ -4389,6 +4389,8 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
 pub enum SumeragiAutonomousLaneExecutionStuckReason {
+    /// Queue ownership is durable, but the producer-authenticated executable payload is not.
+    AwaitingExecutablePayload,
     /// The durable executable payload has no matching availability QC.
     AwaitingPayloadAvailability,
     /// Available payload bytes have no matching prepare/commit certification.
@@ -4412,6 +4414,7 @@ impl SumeragiAutonomousLaneExecutionStuckReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::AwaitingExecutablePayload => "awaiting_executable_payload",
             Self::AwaitingPayloadAvailability => "awaiting_payload_availability",
             Self::AwaitingLaneCertification => "awaiting_lane_certification",
             Self::CertifiedBundleUnavailable => "certified_bundle_unavailable",
@@ -4437,6 +4440,7 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStuckReaso
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         match parser.parse_string()?.as_str() {
+            "awaiting_executable_payload" => Ok(Self::AwaitingExecutablePayload),
             "awaiting_payload_availability" => Ok(Self::AwaitingPayloadAvailability),
             "awaiting_lane_certification" => Ok(Self::AwaitingLaneCertification),
             "certified_bundle_unavailable" => Ok(Self::CertifiedBundleUnavailable),
@@ -4479,7 +4483,10 @@ impl AutonomousLaneEvidenceGeometry {
 impl SumeragiAutonomousLaneExecutionStage {
     const fn expected_stuck_reason(self) -> Option<SumeragiAutonomousLaneExecutionStuckReason> {
         match self {
-            Self::ReservationsDurable | Self::ExecutablePayloadDurable => {
+            Self::ReservationsDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload)
+            }
+            Self::ExecutablePayloadDurable => {
                 Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability)
             }
             Self::PayloadAvailabilityCertified => {
@@ -4546,12 +4553,24 @@ pub struct SumeragiAutonomousLaneExecution {
     pub lane_block_view: u64,
     /// Global proposal height that allocated the lane-local slot.
     pub proposal_height: u64,
-    /// Global proposal view that allocated the lane-local slot.
-    pub proposal_view: u64,
-    /// Exact lane proposal identity.
-    pub proposal_hash: Hash,
-    /// Exact descriptor identity.
-    pub descriptor_hash: Hash,
+    /// Authenticated global proposal view, once a canonical payload anchor supplies it.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub proposal_view: Option<u64>,
+    /// Stable identity of the leader/session that durably owns the reservation group.
+    pub reservation_owner_hash: Hash,
+    /// Stable provisional proposal-slot identity persisted by every reservation key.
+    pub proposal_identity_hash: Hash,
+    /// Domain-separated digest of the exact FIFO-ordered reservation keys.
+    pub reservation_group_hash: Hash,
+    /// Exact finalized lane proposal identity, absent before executable-payload durability.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub proposal_hash: Option<Hash>,
+    /// Exact finalized descriptor identity, paired with `proposal_hash`.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub descriptor_hash: Option<Hash>,
     /// Producer-authenticated executable payload digest, when durable.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
@@ -4587,7 +4606,7 @@ pub struct SumeragiAutonomousLaneExecution {
 impl SumeragiAutonomousLaneExecution {
     /// Return the canonical ordering key for this row.
     #[must_use]
-    pub const fn ordering_key(&self) -> (LaneId, DataSpaceId, Hash, u64, u64, u64, u64, Hash) {
+    pub const fn ordering_key(&self) -> (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash) {
         (
             self.lane_id,
             self.dataspace_id,
@@ -4595,8 +4614,7 @@ impl SumeragiAutonomousLaneExecution {
             self.lane_block_height,
             self.lane_block_view,
             self.proposal_height,
-            self.proposal_view,
-            self.proposal_hash,
+            self.proposal_identity_hash,
         )
     }
 
@@ -4612,10 +4630,24 @@ impl SumeragiAutonomousLaneExecution {
         if self.lane_block_height == 0
             || self.proposal_height == 0
             || !nonzero(self.lane_incarnation.as_ref())
-            || !nonzero(self.proposal_hash.as_ref())
-            || !nonzero(self.descriptor_hash.as_ref())
+            || !nonzero(self.reservation_owner_hash.as_ref())
+            || !nonzero(self.proposal_identity_hash.as_ref())
+            || !nonzero(self.reservation_group_hash.as_ref())
         {
             return Err("autonomous lane execution diagnostics identity is malformed");
+        }
+        if self.proposal_hash.is_some() != self.descriptor_hash.is_some() {
+            return Err(
+                "autonomous lane execution proposal and descriptor hashes must appear together",
+            );
+        }
+        if self
+            .proposal_hash
+            .into_iter()
+            .chain(self.descriptor_hash)
+            .any(|hash| !nonzero(hash.as_ref()))
+        {
+            return Err("autonomous lane execution finalized identity is malformed");
         }
         if self.application_block_height.is_some() != self.application_block_hash.is_some() {
             return Err("autonomous lane execution carrier height and hash must appear together");
@@ -4662,6 +4694,20 @@ impl SumeragiAutonomousLaneExecution {
         }
         if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::Conflict {
             return Ok(());
+        }
+        if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::ReservationsDurable
+            && self.proposal_view.is_some()
+        {
+            return Err(
+                "autonomous lane reservation diagnostics cannot claim a global proposal view",
+            );
+        }
+        if (self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::ReservationsDurable)
+            != self.proposal_hash.is_none()
+        {
+            return Err(
+                "autonomous lane execution finalized identity disagrees with its durable stage",
+            );
         }
         let has_payload = self.executable_payload_hash.is_some();
         let has_bundle = self.source_bundle_hash.is_some();
@@ -8386,13 +8432,22 @@ mod tests {
             lane_block_height: lane_height,
             lane_block_view: 0,
             proposal_height: lane_height,
-            proposal_view: 0,
-            proposal_hash: Hash::new(
+            proposal_view: Some(0),
+            reservation_owner_hash: Hash::new(
+                format!("autonomous-diagnostics-owner-{lane}-{lane_height}").as_bytes(),
+            ),
+            proposal_identity_hash: Hash::new(
+                format!("autonomous-diagnostics-slot-{lane}-{lane_height}").as_bytes(),
+            ),
+            reservation_group_hash: Hash::new(
+                format!("autonomous-diagnostics-group-{lane}-{lane_height}").as_bytes(),
+            ),
+            proposal_hash: Some(Hash::new(
                 format!("autonomous-diagnostics-proposal-{lane}-{lane_height}").as_bytes(),
-            ),
-            descriptor_hash: Hash::new(
+            )),
+            descriptor_hash: Some(Hash::new(
                 format!("autonomous-diagnostics-descriptor-{lane}-{lane_height}").as_bytes(),
-            ),
+            )),
             executable_payload_hash: Some(Hash::new(b"autonomous-diagnostics-payload")),
             source_bundle_hash: Some(Hash::new(b"autonomous-diagnostics-bundle")),
             merge_entry_hash: None,
@@ -8561,7 +8616,172 @@ mod tests {
     }
 
     #[test]
+    fn autonomous_lane_execution_proposal_view_is_honest_at_queue_boundary() {
+        let mut reservations = autonomous_lane_execution(1, 1);
+        reservations.proposal_view = None;
+        reservations.proposal_hash = None;
+        reservations.descriptor_hash = None;
+        reservations.executable_payload_hash = None;
+        reservations.source_bundle_hash = None;
+        reservations.highest_durable_stage =
+            SumeragiAutonomousLaneExecutionStage::ReservationsDurable;
+        reservations.stuck_reason =
+            Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload);
+        reservations
+            .validate()
+            .expect("Queue-only reservation evidence has no global proposal view");
+        let encoded = norito::to_bytes(&reservations).expect("encode Queue-only row");
+        let decoded: SumeragiAutonomousLaneExecution =
+            norito::decode_from_bytes(&encoded).expect("decode Queue-only row");
+        assert_eq!(decoded, reservations);
+        decoded
+            .validate()
+            .expect("binary Queue-only row retains valid provisional identity");
+        let json = norito::json::to_value(&reservations).expect("serialize Queue-only row");
+        assert!(
+            json.get("proposal_view").is_none(),
+            "an unknown proposal view must be omitted, not synthesized as zero"
+        );
+
+        reservations.proposal_view = Some(0);
+        assert_eq!(
+            reservations.validate(),
+            Err("autonomous lane reservation diagnostics cannot claim a global proposal view")
+        );
+        let mut queue_conflict = reservations;
+        queue_conflict.proposal_view = None;
+        queue_conflict.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::Conflict;
+        queue_conflict.stuck_reason =
+            Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict);
+        queue_conflict
+            .validate()
+            .expect("a Queue-only conflict may precede finalized proposal identity");
+
+        let mut payload = autonomous_lane_execution(1, 1);
+        payload.proposal_view = None;
+        payload.source_bundle_hash = None;
+        payload.highest_durable_stage =
+            SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable;
+        payload.stuck_reason =
+            Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability);
+        payload
+            .validate()
+            .expect("a durable unanchored payload may honestly omit its proposal view");
+        payload.proposal_view = Some(0);
+        payload
+            .validate()
+            .expect("authenticated proposal view zero remains a valid exact value");
+        let json = norito::json::to_value(&payload).expect("serialize anchored payload row");
+        assert_eq!(
+            json.get("proposal_view")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_execution_stage_reasons_are_exhaustive_and_stable() {
+        use SumeragiAutonomousLaneExecutionStage as Stage;
+        use SumeragiAutonomousLaneExecutionStuckReason as Reason;
+
+        let cases = [
+            (
+                Stage::ReservationsDurable,
+                "reservations_durable",
+                Some(Reason::AwaitingExecutablePayload),
+                Some("awaiting_executable_payload"),
+            ),
+            (
+                Stage::ExecutablePayloadDurable,
+                "executable_payload_durable",
+                Some(Reason::AwaitingPayloadAvailability),
+                Some("awaiting_payload_availability"),
+            ),
+            (
+                Stage::PayloadAvailabilityCertified,
+                "payload_availability_certified",
+                Some(Reason::AwaitingLaneCertification),
+                Some("awaiting_lane_certification"),
+            ),
+            (
+                Stage::LaneCertified,
+                "lane_certified",
+                Some(Reason::CertifiedBundleUnavailable),
+                Some("certified_bundle_unavailable"),
+            ),
+            (
+                Stage::CertifiedBundleDurable,
+                "certified_bundle_durable",
+                Some(Reason::AwaitingMergeSelection),
+                Some("awaiting_merge_selection"),
+            ),
+            (
+                Stage::MergeCandidateDurable,
+                "merge_candidate_durable",
+                Some(Reason::AwaitingGlobalCarrier),
+                Some("awaiting_global_carrier"),
+            ),
+            (
+                Stage::GlobalCarrierCommitted,
+                "global_carrier_committed",
+                Some(Reason::AwaitingApplicationReceipt),
+                Some("awaiting_application_receipt"),
+            ),
+            (
+                Stage::KuraWsvApplicationReceiptDurable,
+                "kura_wsv_application_receipt_durable",
+                Some(Reason::QueueFinalizationUnverifiable),
+                Some("queue_finalization_unverifiable"),
+            ),
+            (Stage::QueueFinalized, "queue_finalized", None, None),
+            (
+                Stage::Conflict,
+                "conflict",
+                Some(Reason::EvidenceConflict),
+                Some("evidence_conflict"),
+            ),
+        ];
+        for (stage, stage_label, reason, reason_label) in cases {
+            assert_eq!(stage.as_str(), stage_label);
+            assert_eq!(stage.expected_stuck_reason(), reason);
+            assert_eq!(reason.map(Reason::as_str), reason_label);
+            let stage_json = norito::json::to_value(&stage).expect("serialize stage label");
+            assert_eq!(stage_json.as_str(), Some(stage_label));
+            let stage_roundtrip: Stage =
+                norito::json::from_value(stage_json).expect("decode stage label");
+            assert_eq!(stage_roundtrip, stage);
+            if let Some(reason) = reason {
+                let reason_json =
+                    norito::json::to_value(&reason).expect("serialize stuck-reason label");
+                assert_eq!(reason_json.as_str(), reason_label);
+                let reason_roundtrip: Reason =
+                    norito::json::from_value(reason_json).expect("decode stuck-reason label");
+                assert_eq!(reason_roundtrip, reason);
+            }
+        }
+    }
+
+    #[test]
     fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
+        let mut reservations = autonomous_lane_execution(1, 1);
+        reservations.proposal_view = None;
+        reservations.proposal_hash = None;
+        reservations.descriptor_hash = None;
+        reservations.executable_payload_hash = None;
+        reservations.source_bundle_hash = None;
+        reservations.highest_durable_stage =
+            SumeragiAutonomousLaneExecutionStage::ReservationsDurable;
+        reservations.stuck_reason =
+            Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload);
+        reservations
+            .validate()
+            .expect("reservation-only diagnostics retain an honest provisional identity");
+        reservations.proposal_hash = Some(Hash::new(b"unpaired-finalized-proposal"));
+        assert_eq!(
+            reservations.validate(),
+            Err("autonomous lane execution proposal and descriptor hashes must appear together")
+        );
+
         let mut row = autonomous_lane_execution(1, 1);
         row.transaction_count = 4_097;
         row.reservation_count = 4_097;

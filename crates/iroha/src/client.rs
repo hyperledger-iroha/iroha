@@ -31009,7 +31009,6 @@ mod tests {
             })
             .expect("norito fallback succeeds");
         assert_eq!(decoded_norito, expected_json);
-        assert_eq!(decoded_norito, expected_json);
 
         let mislabeled_json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mislabeled_json_response = Response::builder()
@@ -31079,19 +31078,22 @@ mod tests {
             lane_block_height: 1,
             lane_block_view: 0,
             proposal_height: 1,
-            proposal_view: 0,
-            proposal_hash: Hash::new(b"client-autonomous-proposal"),
-            descriptor_hash: Hash::new(b"client-autonomous-descriptor"),
+            proposal_view: Some(0),
+            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
+            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
+            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
+            proposal_hash: None,
+            descriptor_hash: None,
             executable_payload_hash: None,
             source_bundle_hash: None,
             merge_entry_hash: None,
             application_block_height: None,
             application_block_hash: None,
-            reservation_count: 0,
-            transaction_count: 0,
+            reservation_count: 1,
+            transaction_count: 1,
             highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
             stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability,
+                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
             ),
         }];
         let response = HttpResponse::builder()
@@ -31123,9 +31125,12 @@ mod tests {
             lane_block_height: 1,
             lane_block_view: 0,
             proposal_height: 1,
-            proposal_view: 0,
-            proposal_hash: Hash::new(b"client-autonomous-proposal"),
-            descriptor_hash: Hash::new(b"client-autonomous-descriptor"),
+            proposal_view: None,
+            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
+            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
+            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
+            proposal_hash: None,
+            descriptor_hash: None,
             executable_payload_hash: None,
             source_bundle_hash: None,
             merge_entry_hash: None,
@@ -31135,9 +31140,11 @@ mod tests {
             transaction_count: 1,
             highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
             stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability,
+                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
             ),
         };
+        row.validate()
+            .expect("Queue-only client fixture must honestly omit proposal view and final hashes");
         status.autonomous_lane_executions = vec![row, row];
         let response = HttpResponse::builder()
             .status(StatusCode::OK)

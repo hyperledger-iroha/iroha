@@ -1,826 +1,1173 @@
 
     #[test]
-    fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
-        let directory = TempDir::new().expect("temporary uninstalled-rebind directory");
-        let (mut runtime, context, _keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let source_tag = runtime.round_tag();
-        let fabricated = EventTag::new(
-            source_tag.height(),
-            source_tag.view() + 1,
-            Generation::new(source_tag.generation().get() + 1),
-        );
-        let manifest = runtime_manifest(&context, 0x8B);
-        runtime
-            .enqueue_body_available(source_tag, manifest.clone())
-            .expect("enqueue unique source owner");
+    fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"retired-body-context",
+            ))),
+            height: 11,
+            view: 4,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"retired-body-block")),
+            payload_hash: Hash::new(b"retired-body-payload"),
+        };
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 1,
+        };
+        let original = wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout,
+            chunk_hashes: vec![Hash::new(b"retired chunk")],
+            chunk_root: Hash::new(b"retired root"),
+        };
+        let replacement = wire::PayloadManifest {
+            round: wire::ConsensusRound {
+                view: round.view + 1,
+                ..round
+            },
+            chunk_hashes: vec![Hash::new(b"replacement chunk")],
+            chunk_root: Hash::new(b"replacement root"),
+            ..original.clone()
+        };
+        let original_tag = tag(4);
+        let replacement_tag = tag(5);
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(1, 0, 0));
 
+        ingress
+            .enqueue_canonical_body_available(original_tag, original.clone())
+            .expect("the original completion claims the sole slot");
         assert_eq!(
-            runtime
-                .rebind_body_available(source_tag, fabricated, &manifest)
-                .expect_err("an uninstalled destination tag must be rejected"),
-            "Sumeragi v2 body completion rebind target is not the installed runtime incarnation"
+            ingress.enqueue_canonical_body_available(replacement_tag, replacement.clone()),
+            Err(EnqueueError::Full)
         );
-        assert!(
-            !runtime.fail_closed,
-            "caller contract rejection is recoverable"
+        assert_eq!(
+            ingress.retire_canonical_body_available(original_tag, &original),
+            1
         );
-        assert_eq!(runtime.round_tag(), source_tag);
-        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(ingress.remaining_capacity(), 1);
+        ingress
+            .enqueue_canonical_body_available(replacement_tag, replacement.clone())
+            .expect("retirement releases the sole completion slot");
+        assert_eq!(ingress.len(), 1);
         assert!(matches!(
-            runtime.ingress.commands.front(),
+            ingress.commands.front(),
             Some(TaggedCommand {
                 tag,
-                command: AdapterCommand::BodyAvailable {
-                    manifest: queued_manifest,
-                },
+                command: AdapterCommand::BodyAvailable { manifest },
                 ..
-            }) if *tag == source_tag && queued_manifest == &manifest
+            }) if *tag == replacement_tag && manifest == &replacement
         ));
-        assert!(
-            runtime
-                .retire_body_available(source_tag, &manifest)
-                .expect("the untouched source owner remains retireable")
-        );
-        assert_eq!(runtime.queued_commands(), 0);
     }
 
     #[test]
-    fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
-        let directory = TempDir::new().expect("temporary destination-coalescing directory");
+    fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"coalesced-progress-context",
+            ))),
+            height: 7,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-progress-block")),
+            payload_hash: Hash::new(b"coalesced-progress-payload"),
+        };
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"coalesced parent state"),
+            Hash::new(b"coalesced post state"),
+            Hash::new(b"coalesced ordinary writes"),
+            1,
+            Hash::new(b"coalesced executed block wire"),
+        );
+        let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        });
+        let authenticated = || {
+            AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(payload.clone()))
+        };
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
+
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(0), CommandClass::Progress, authenticated())
+                .expect("first authenticated CommitQC owns one queue slot"),
+            tag(0)
+        );
+        let admitted_origin = ingress.commands[0].causal_origin.clone();
+        let admitted_lifecycle_ordinal = ingress.commands[0].lifecycle_ordinal;
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(1), CommandClass::Progress, authenticated())
+                .expect("equal authenticated retransmission is coalesced"),
+            tag(0),
+            "a coalesced retransmission returns the original queue owner's tag"
+        );
+        assert_eq!(ingress.len(), 1);
+        assert_eq!(ingress.commands[0].causal_origin, admitted_origin);
+        assert_eq!(
+            ingress.commands[0].lifecycle_ordinal, admitted_lifecycle_ordinal,
+            "an exact transport retry retains the first lifecycle owner"
+        );
+
+        let dispatched = ingress
+            .pop_next()
+            .expect("the sole queued CommitQC is dispatchable");
+        assert_eq!(dispatched.class, CommandClass::Progress);
+        assert!(matches!(
+            dispatched.command,
+            AdapterCommand::Authenticated(_)
+        ));
+        assert_eq!(ingress.len(), 0);
+
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(2), CommandClass::Progress, authenticated())
+                .expect("a later retransmission starts a new ownership interval"),
+            tag(2)
+        );
+        assert_eq!(ingress.len(), 1);
+        assert!(
+            !ingress.commands[0]
+                .causal_origin
+                .same_lifecycle(&admitted_origin),
+            "a later interval is not spliced into the drained causal root"
+        );
+    }
+
+    #[test]
+    fn runtime_merges_alternate_sources_for_one_semantic_request() {
+        let directory = TempDir::new().expect("temporary alternate-source runtime directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+        let message = signed_runtime_proposal(&context, &keys, 0x76);
+        let semantic_origin = PeerId::new(keys[0].public_key().clone());
+        let source_a = PeerId::new(keys[1].public_key().clone());
+        let source_b = PeerId::new(keys[2].public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(source_a.clone(), 2);
+        let route_a = routes.mint_via(semantic_origin.clone(), source_a.clone());
+        let route_b = routes.mint_via(semantic_origin.clone(), source_b.clone());
+        let ownership_a = fair_runtime_ownership_with_reply_route(
+            &message,
+            semantic_origin.clone(),
+            source_a,
+            route_a.clone(),
+        );
+        let ownership_b = fair_runtime_ownership_with_reply_route(
+            &message,
+            semantic_origin,
+            source_b,
+            route_b.clone(),
+        );
+
+        let owner_tag = runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
+            .expect("first source admits the semantic request");
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(message, ownership_b)
+                .expect("alternate source attaches to the retained request"),
+            owner_tag
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        let ownership = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("coalesced runtime command retains exact source ownership");
+        assert!(ownership.validate_exact());
+        let projection_hash = ownership.projection_hash;
+        let direct = ownership
+            .direct
+            .first()
+            .expect("proposal retains direct fair-ingress ownership");
+        assert_eq!(
+            direct
+                .current_reply_routes()
+                .expect("route-aware fair ownership")
+                .len(),
+            2
+        );
+        assert!(routes.retire(&route_a));
+        let ownership = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("queued ownership survives a normal source disconnect");
+        assert!(ownership.validate_exact());
+        assert_eq!(
+            ownership.projection_hash, projection_hash,
+            "connection liveness is not part of immutable runtime ownership identity"
+        );
+        assert!(
+            ownership
+                .direct
+                .first()
+                .and_then(FairV2IngressOwnershipEvidence::current_reply_routes)
+                .is_some_and(|owned| {
+                    owned.iter().any(|route| route.same_delivery(&route_a))
+                        && owned.iter().any(|route| route.same_delivery(&route_b))
+                }),
+            "retirement is applied only by an authoritative prune receipt"
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
+        let directory = TempDir::new().expect("temporary lifecycle-retry runtime directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+        let message = signed_runtime_proposal(&context, &keys, 0xD1);
+        let semantic_origin = PeerId::new(keys[0].public_key().clone());
+        let authenticated_via = PeerId::new(keys[1].public_key().clone());
+        let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+        let retained_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint first fair lifecycle");
+        let retry_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint later fair retry lifecycle");
+        let retained = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(&message, semantic_origin.clone(), authenticated_via.clone()),
+            retained_ordinal,
+        );
+        let retry = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(&message, semantic_origin, authenticated_via),
+            retry_ordinal,
+        );
+
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), retained)
+            .expect("first fair lifecycle enters runtime");
+        let physical_ordinal = runtime.ingress.commands[0]
+            .admission_ordinal
+            .expect("runtime admission owns one physical position");
+        let next_before_retry = lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect shared source before coalescing retry");
+        runtime
+            .enqueue_network_with_ingress_ownership(message, retry)
+            .expect("later same-semantic retry coalesces");
+
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect shared source after coalescing retry"),
+            next_before_retry,
+            "runtime coalescence cannot mint a second physical FIFO position"
+        );
+        let queued = &runtime.ingress.commands[0];
+        assert_eq!(queued.admission_ordinal, Some(physical_ordinal));
+        assert_eq!(queued.lifecycle_ordinal, Some(retained_ordinal));
+        assert_eq!(
+            queued.causal_origin.root_lifecycle_ordinal,
+            Some(retained_ordinal)
+        );
+        let ownership = queued
+            .ingress_ownership
+            .as_ref()
+            .expect("coalesced command retains exact fair ownership");
+        assert_eq!(
+            ownership.earliest_lifecycle_ordinal(),
+            Ok(Some(retained_ordinal))
+        );
+        let carrier = ownership
+            .direct
+            .first()
+            .expect("same semantic retry remains one bounded carrier");
+        assert_eq!(carrier.admission_count, 2);
+        assert_eq!(carrier.first.lifecycle_ordinal, Some(retained_ordinal));
+        assert_eq!(carrier.latest.lifecycle_ordinal, Some(retained_ordinal));
+        assert!(ownership.validate_exact());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it() {
+        let directory = TempDir::new().expect("temporary fair-to-runtime predecessor directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+        let message = signed_runtime_proposal(&context, &keys, 0xD6);
+        let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+        let fair_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint ordinary fair-ingress predecessor lifecycle");
+        let ownership = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(
+                &message,
+                PeerId::new(keys[0].public_key().clone()),
+                PeerId::new(keys[1].public_key().clone()),
+            ),
+            fair_ordinal,
+        );
+        runtime
+            .enqueue_network_with_ingress_ownership(message, ownership)
+            .expect("transfer ordinary fair predecessor into serialized runtime");
+        let serve_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint exact Serve target behind the transferred predecessor");
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime for exact predecessor comparison");
+        assert!(
+            runtime
+                .older_lifecycle_predates_exact_serve(now, serve_ordinal)
+                .expect("transferred Fair owner participates in runtime minimum"),
+            "the exact Serve target cannot prepare past the transferred predecessor"
+        );
+
+        let (_, consumed) = runtime
+            .ingress
+            .pop_next_with_ownership()
+            .expect("runtime predecessor selection remains exact")
+            .expect("ordinary Fair predecessor is ready");
+        assert_eq!(consumed.lifecycle_ordinal, fair_ordinal);
+        assert!(
+            !runtime
+                .older_lifecycle_predates_exact_serve(now, serve_ordinal)
+                .expect("recompute minimum after consuming the predecessor"),
+            "Serve becomes eligible only after the transferred lifecycle drains"
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
+        let directory = TempDir::new().expect("temporary aggregate-rebase runtime directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0xD2),
+            ));
+        let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+        let older_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint frozen older aggregate lifecycle");
+        let newer_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint later independently admissible aggregate lifecycle");
+        let newer = fair_runtime_ownership_at_lifecycle(
+            fair_network_ownership(&message, PeerId::new(keys[2].public_key().clone())),
+            newer_ordinal,
+        );
+        let older = fair_runtime_ownership_at_lifecycle(
+            fair_network_ownership(&message, PeerId::new(keys[1].public_key().clone())),
+            older_ordinal,
+        );
+
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), newer)
+            .expect("newer admissible aggregate enters runtime first");
+        assert_eq!(
+            runtime.ingress.commands[0].lifecycle_ordinal,
+            Some(newer_ordinal)
+        );
+        let physical_ordinal = runtime.ingress.commands[0].admission_ordinal;
+        let next_before_older = lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect shared source before older carrier transfer");
+        runtime
+            .enqueue_network_with_ingress_ownership(message, older)
+            .expect("older frozen aggregate carrier joins the queued envelope");
+
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect shared source after aggregate reconciliation"),
+            next_before_older,
+            "carrier reconciliation cannot mint another physical command"
+        );
+        let queued = &runtime.ingress.commands[0];
+        assert_eq!(queued.admission_ordinal, physical_ordinal);
+        assert_eq!(queued.lifecycle_ordinal, Some(older_ordinal));
+        assert_eq!(
+            queued.causal_origin.root_lifecycle_ordinal,
+            Some(older_ordinal)
+        );
+        let ownership = queued
+            .ingress_ownership
+            .as_ref()
+            .expect("aggregate command retains both fair carriers");
+        assert_eq!(ownership.direct.len(), 2);
+        assert_eq!(
+            ownership.earliest_lifecycle_ordinal(),
+            Ok(Some(older_ordinal))
+        );
+        assert!(ownership.validate_exact());
+
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before exact Serve comparison");
+        let serve_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint exact Serve barrier after both aggregate carriers");
+        assert!(
+            runtime
+                .older_lifecycle_predates_exact_serve(now, serve_ordinal)
+                .expect("compare reconciled aggregate minimum"),
+            "the later-transferred frozen carrier must become the active minimum"
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals() {
+        let unminted_directory = TempDir::new().expect("temporary unminted-fair runtime directory");
+        let (mut unminted_runtime, context, keys) =
+            authenticated_network_runtime(&unminted_directory, RuntimeQueueConfig::new(8, 2, 2));
+        let source = unminted_runtime.ingress.lifecycle_ordinals.clone();
+        let unminted_ordinal = source
+            .next_ordinal_for_test()
+            .expect("inspect unminted source position")
+            .expect("fresh source has a first ordinal");
+        let first_message = signed_runtime_proposal(&context, &keys, 0xD3);
+        let first_ownership = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(
+                &first_message,
+                PeerId::new(keys[0].public_key().clone()),
+                PeerId::new(keys[1].public_key().clone()),
+            ),
+            unminted_ordinal,
+        );
+        assert!(matches!(
+            unminted_runtime.enqueue_network_with_ingress_ownership(first_message, first_ownership),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        assert!(unminted_runtime.fail_closed);
+        assert_eq!(unminted_runtime.queued_commands(), 0);
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("unminted rejection preserves the source"),
+            Some(unminted_ordinal)
+        );
+
+        let collision_directory =
+            TempDir::new().expect("temporary fair-collision runtime directory");
+        let (mut collision_runtime, context, keys) =
+            authenticated_network_runtime(&collision_directory, RuntimeQueueConfig::new(8, 2, 2));
+        let source = collision_runtime.ingress.lifecycle_ordinals.clone();
+        let shared_ordinal = source.reserve_one().expect("mint one exact fair lifecycle");
+        let admitted_message = signed_runtime_proposal(&context, &keys, 0xD4);
+        let conflicting_message = signed_runtime_proposal(&context, &keys, 0xD5);
+        let admitted_ownership = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(
+                &admitted_message,
+                PeerId::new(keys[0].public_key().clone()),
+                PeerId::new(keys[1].public_key().clone()),
+            ),
+            shared_ordinal,
+        );
+        let conflicting_ownership = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(
+                &conflicting_message,
+                PeerId::new(keys[0].public_key().clone()),
+                PeerId::new(keys[1].public_key().clone()),
+            ),
+            shared_ordinal,
+        );
+        collision_runtime
+            .enqueue_network_with_ingress_ownership(admitted_message, admitted_ownership)
+            .expect("first exact fair lifecycle enters runtime");
+        let next_before_collision = source
+            .next_ordinal_for_test()
+            .expect("inspect source before unrelated collision");
+        assert!(matches!(
+            collision_runtime.enqueue_network_with_ingress_ownership(
+                conflicting_message,
+                conflicting_ownership,
+            ),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        assert!(collision_runtime.fail_closed);
+        assert_eq!(collision_runtime.queued_commands(), 1);
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("collision rejection preserves the physical source"),
+            next_before_collision,
+            "unrelated ordinal collision must fail before a FIFO position is minted"
+        );
+    }
+
+    #[test]
+    fn runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independent() {
+        let directory = TempDir::new().expect("temporary distinct-origin runtime directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+        let message = signed_runtime_proposal(&context, &keys, 0x77);
+        let origin_a = PeerId::new(keys[0].public_key().clone());
+        let origin_b = PeerId::new(keys[1].public_key().clone());
+        let source = PeerId::new(keys[2].public_key().clone());
+        let ownership_a = fair_runtime_ownership(&message, origin_a, source.clone());
+        let ownership_b = fair_runtime_ownership(&message, origin_b, source);
+
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
+            .expect("first semantic origin owns one runtime occurrence");
+        runtime
+            .enqueue_network_with_ingress_ownership(message, ownership_b)
+            .expect("distinct semantic origin retains an independent occurrence");
+        assert_eq!(runtime.queued_commands(), 2);
+        assert!(runtime.ingress.commands.iter().all(|queued| {
+            queued
+                .ingress_ownership
+                .as_ref()
+                .is_some_and(RuntimeIngressOwnershipEvidence::validate_exact)
+        }));
+        let mut commands = runtime.ingress.commands.iter();
+        let first = commands.next().expect("first semantic root is retained");
+        let second = commands.next().expect("second semantic root is retained");
+        assert!(
+            !first.causal_origin.same_lifecycle(&second.causal_origin),
+            "identical wire bytes from unrelated semantic origins cannot coalesce"
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
+        let directory = TempDir::new().expect("temporary Busy-deferred ownership directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
-            RuntimeQueueConfig::new(8, 1, 1),
+            RuntimeQueueConfig::new(8, 2, 2),
             Some(0),
         );
         let now = Instant::now();
         runtime
             .arm_live_clocks(now)
-            .expect("arm runtime for production dispatch");
-        runtime
-            .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8C))
-            .expect("enqueue authenticated proposal");
-        let proposal_effects = match runtime.step(now).expect("dispatch proposal") {
-            RuntimeStep::Advanced(effects) => effects,
-            RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
-        };
-        assert_eq!(
-            runtime
-                .take_last_scheduler_ownership()
-                .expect("proposal dispatch publishes exact scheduler ownership")
-                .selected,
-            RuntimeSelectedOwnerKind::Fifo
-        );
-        let (source_tag, manifest) = match proposal_effects.as_slice() {
+            .expect("arm runtime before authenticated ingress");
+        let round_tag = runtime.round_tag();
+        let timeout_effects = runtime
+            .driver
+            .timeout_elapsed(round_tag)
+            .expect("install a local signing fence")
+            .into_effects();
+        let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
             [
-                AdapterEffect::FetchBody {
+                AdapterEffect::Sign {
                     tag,
-                    manifest: Some(manifest),
-                    ..
+                    request: SignRequest::TimeoutVote(vote),
                 },
-            ] => (*tag, manifest.clone()),
-            effects => panic!("unexpected proposal effects: {effects:?}"),
+            ] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected timeout effects: {effects:?}"),
         };
 
-        runtime
-            .enqueue_body_available(source_tag, manifest.clone())
-            .expect("enqueue body reconstruction completion");
-        assert!(matches!(
-            runtime.step(now).expect("dispatch body reconstruction"),
-            RuntimeStep::Advanced(ref effects)
-                if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
-        ));
-        assert_eq!(
-            runtime
-                .take_last_scheduler_ownership()
-                .expect("body reconstruction publishes exact scheduler ownership")
-                .selected,
-            RuntimeSelectedOwnerKind::Fifo
-        );
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
+        let message = signed_runtime_proposal(&context, &keys, 0x78);
+        let semantic_origin = PeerId::new(keys[0].public_key().clone());
+        let ownership_a = fair_runtime_ownership(
+            &message,
+            semantic_origin.clone(),
+            PeerId::new(keys[1].public_key().clone()),
         );
         runtime
-            .enqueue_body_stored(
-                source_tag,
-                manifest.round,
-                manifest.subject,
-                durable.clone(),
-            )
-            .expect("enqueue durable-store completion");
+            .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
+            .expect("first source enters runtime ingress");
         assert!(matches!(
-            runtime.step(now).expect("dispatch durable-store completion"),
-            RuntimeStep::Advanced(ref effects)
-                if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
         ));
-        assert_eq!(
-            runtime
-                .take_last_scheduler_ownership()
-                .expect("durable-store completion publishes exact scheduler ownership")
-                .selected,
-            RuntimeSelectedOwnerKind::Fifo
+        let queued_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy dispatch retains its exact queue owner");
+        assert!(queued_owner.validate_exact().is_ok());
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        let admission_ordinal = *runtime
+            .deferred_ingress_ownership
+            .keys()
+            .next()
+            .expect("authenticated Busy owner has an actor-global ordinal");
+        let projection_before_alternate =
+            runtime.deferred_ingress_ownership[&admission_ordinal].projection_hash;
+
+        let ownership_b = fair_runtime_ownership(
+            &message,
+            semantic_origin,
+            PeerId::new(keys[2].public_key().clone()),
         );
-        runtime
-            .enqueue_validation_succeeded(
-                source_tag,
-                manifest.round,
-                manifest.subject,
-                ValidatedBodyReceipt::for_test(durable),
-            )
-            .expect("enqueue validation completion");
-        assert!(matches!(
-            runtime.step(now).expect("dispatch validation completion"),
-            RuntimeStep::Advanced(ref effects)
-                if matches!(effects.as_slice(), [AdapterEffect::Sign { .. }])
-        ));
         assert_eq!(
             runtime
-                .take_last_scheduler_ownership()
-                .expect("validation completion publishes exact scheduler ownership")
-                .selected,
-            RuntimeSelectedOwnerKind::Fifo
+                .enqueue_network_with_ingress_ownership(message, ownership_b)
+                .expect("alternate source attaches to the Busy owner"),
+            round_tag
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_ne!(
+            runtime.deferred_ingress_ownership[&admission_ordinal].projection_hash,
+            projection_before_alternate,
+            "alternate ownership history must change the exact runtime projection"
         );
 
-        let rebound = EventTag::new(
-            source_tag.height(),
-            source_tag.view() + 1,
-            Generation::new(source_tag.generation().get() + 1),
-        );
+        let signature = Signature::new(keys[0].private_key(), &signature_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature(signature_tag, signature)
+            .expect("enqueue the exact signing completion");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects))
+                if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
+        ));
+        assert!(runtime.take_last_scheduler_ownership().is_some());
+
+        let deferred_effects = match runtime.step(now) {
+            Ok(RuntimeStep::Advanced(effects)) => effects,
+            other => panic!("deferred owner did not receive its service turn: {other:?}"),
+        };
         assert!(
-            runtime
-                .driver
-                .body_available(source_tag, manifest.clone())
-                .expect("stage exact completion behind the signer fence")
-                .into_effects()
-                .is_empty()
+            deferred_effects.is_empty()
+                || matches!(
+                    deferred_effects.as_slice(),
+                    [AdapterEffect::FetchBody { .. }]
+                ),
+            "the timeout intent may obsolete the proposal, but no unrelated effect may replace it: {deferred_effects:?}"
         );
-        let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
-            manifest: manifest.clone(),
+        let deferred_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("deferred service hands off its exact owner");
+        let RuntimeSelectedCandidateOwnership::ExactDeferred(deferred) = &deferred_owner.candidate
+        else {
+            panic!("expected exact deferred scheduler ownership")
         };
+        assert!(
+            deferred
+                .ingress_ownership
+                .as_ref()
+                .is_some_and(RuntimeIngressOwnershipEvidence::validate_exact)
+        );
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
+        let directory = TempDir::new().expect("temporary Busy-deferred rebase directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before Busy-deferred aggregate ingress");
+        let owner_tag = runtime.round_tag();
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("install a signer fence before aggregate dispatch");
+        assert!(
+            matches!(
+                timeout.effects(),
+                [AdapterEffect::Sign {
+                    request: SignRequest::TimeoutVote(_),
+                    ..
+                }]
+            ),
+            "unexpected timeout effects: {:?}",
+            timeout.effects()
+        );
+
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0x79),
+            ));
+        let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+        let mutation_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the oldest identity-mutation carrier");
+        let older_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the older delayed aggregate carrier");
+        let newer_ordinal = lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the newer aggregate carrier admitted first");
+        let newer = fair_runtime_ownership_at_lifecycle(
+            fair_network_ownership(&message, PeerId::new(keys[2].public_key().clone())),
+            newer_ordinal,
+        );
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), newer)
+            .expect("newer aggregate carrier enters runtime before the frozen predecessor");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        let selected = runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy dispatch retains the exact queued owner");
+        assert!(selected.validate_exact().is_ok());
+        let deferred_ordinals = runtime
+            .deferred_ingress_ownership
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let [deferred_ordinal] = deferred_ordinals.as_slice() else {
+            panic!("aggregate dispatch must retain exactly one Busy-deferred owner")
+        };
+        let deferred_ordinal = *deferred_ordinal;
+        assert_eq!(
+            runtime.deferred_ingress_ownership[&deferred_ordinal].earliest_lifecycle_ordinal(),
+            Ok(Some(newer_ordinal))
+        );
+        assert_eq!(
+            runtime.deferred_lifecycle_ownership[&deferred_ordinal].lifecycle_ordinal(),
+            newer_ordinal
+        );
+
+        let older = fair_runtime_ownership_at_lifecycle(
+            fair_network_ownership(&message, PeerId::new(keys[1].public_key().clone())),
+            older_ordinal,
+        );
         assert_eq!(
             runtime
-                .driver
-                .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
-            (1, 1),
-            "the current tag owns the real Busy-deferred completion"
+                .enqueue_network_with_ingress_ownership(message.clone(), older)
+                .expect("older frozen carrier joins the exact Busy-deferred aggregate"),
+            owner_tag
         );
-        observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+        let merged = runtime
+            .deferred_ingress_ownership
+            .get(&deferred_ordinal)
+            .expect("Busy-deferred aggregate retains the merged carrier set");
+        assert_eq!(merged.direct.len(), 2);
+        assert_eq!(merged.earliest_lifecycle_ordinal(), Ok(Some(older_ordinal)));
+        assert!(merged.validate_exact());
+        let rebased_owner = runtime
+            .deferred_lifecycle_ownership
+            .get(&deferred_ordinal)
+            .expect("Busy-deferred aggregate retains its rebased lifecycle owner");
+        assert_eq!(rebased_owner.lifecycle_ordinal(), older_ordinal);
+        assert_eq!(
+            rebased_owner.causal_origin().root_lifecycle_ordinal,
+            Some(older_ordinal)
+        );
+        assert_eq!(
+            rebased_owner.causal_origin().root_ingress_identity,
+            Some(runtime_ingress_causal_origin_projection_hash(merged))
+        );
+        assert!(rebased_owner.validate_exact());
+
+        let healthy_owner = rebased_owner.clone();
+        let mutation = RuntimeIngressOwnershipEvidence::from_fair_ingress(
+            &message,
+            fair_runtime_ownership_at_lifecycle(
+                fair_network_ownership(&message, PeerId::new(keys[0].public_key().clone())),
+                mutation_ordinal,
+            ),
+        )
+        .expect("oldest aggregate carrier has exact runtime ownership");
+        assert_eq!(
+            mutation.earliest_lifecycle_ordinal(),
+            Ok(Some(mutation_ordinal))
+        );
+        let mut identity_mutated_owner = healthy_owner.clone();
+        identity_mutated_owner.causal_origin.root_ingress_identity =
+            Some(Hash::new(b"mutated Busy-deferred ingress identity"));
+        identity_mutated_owner.causal_origin.lifecycle_key =
+            runtime_candidate_causal_origin_lifecycle_key(&identity_mutated_owner.causal_origin);
+        identity_mutated_owner.causal_origin.projection_hash =
+            runtime_candidate_causal_origin_projection_hash(&identity_mutated_owner.causal_origin);
+        identity_mutated_owner.projection_hash =
+            runtime_lifecycle_owner_projection_hash(&identity_mutated_owner);
+        assert!(identity_mutated_owner.validate_exact());
+        assert_ne!(
+            identity_mutated_owner.causal_origin().root_ingress_identity,
+            healthy_owner.causal_origin().root_ingress_identity
+        );
+        runtime
+            .deferred_lifecycle_ownership
+            .insert(deferred_ordinal, identity_mutated_owner);
+        let ingress_before_rejection = runtime.deferred_ingress_ownership.clone();
+        let lifecycle_before_rejection = runtime.deferred_lifecycle_ownership.clone();
         assert_eq!(
             runtime
-                .driver
-                .rebind_deferred_body_available(source_tag, rebound, &manifest),
-            1,
-            "the seam models an exact destination owner already transferred by another path"
+                .reconcile_deferred_ingress_ownership(Some((deferred_ordinal, mutation.clone(),))),
+            Err(RuntimeIngressMergeError::IndependentOccurrence),
+            "a valid earlier carrier cannot rebase through a mutated causal ingress identity"
+        );
+        assert_eq!(
+            runtime.deferred_ingress_ownership, ingress_before_rejection,
+            "identity rejection must not partially install the earlier carrier"
+        );
+        assert_eq!(
+            runtime.deferred_lifecycle_ownership, lifecycle_before_rejection,
+            "identity rejection must not partially rewrite the deferred lifecycle owner"
+        );
+
+        runtime
+            .deferred_lifecycle_ownership
+            .insert(deferred_ordinal, healthy_owner);
+        runtime
+            .reconcile_deferred_ingress_ownership(Some((deferred_ordinal, mutation)))
+            .expect("the same earlier carrier rebases after restoring the exact identity");
+        let final_ingress = &runtime.deferred_ingress_ownership[&deferred_ordinal];
+        assert_eq!(final_ingress.direct.len(), 3);
+        assert_eq!(
+            final_ingress.earliest_lifecycle_ordinal(),
+            Ok(Some(mutation_ordinal))
+        );
+        let final_owner = &runtime.deferred_lifecycle_ownership[&deferred_ordinal];
+        assert_eq!(final_owner.lifecycle_ordinal(), mutation_ordinal);
+        assert_eq!(
+            final_owner.causal_origin().root_lifecycle_ordinal,
+            Some(mutation_ordinal)
+        );
+        assert_eq!(
+            final_owner.causal_origin().root_ingress_identity,
+            Some(runtime_ingress_causal_origin_projection_hash(final_ingress))
+        );
+        assert!(final_owner.validate_exact());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() {
+        let directory = TempDir::new().expect("temporary multi-source QC directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let certificate = signed_runtime_quorum_certificate(&context, &keys, 0xC7);
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+        );
+        let first_source = PeerId::new(keys[0].public_key().clone());
+        let second_source = PeerId::new(keys[1].public_key().clone());
+
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, first_source),
+                )
+                .expect("the first authenticated carrier owns the runtime command"),
+            owner_tag
         );
         assert_eq!(
             runtime
-                .driver
-                .deferred_body_pipeline_completion_ownership(rebound, &evidence),
-            (1, 1),
-            "the destination must be owned by the real Busy-deferred lane"
-        );
-        stage_completion_for_queue_test(
-            &mut runtime,
-            source_tag,
-            AdapterCommand::BodyAvailable {
-                manifest: manifest.clone(),
-            },
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, second_source),
+                )
+                .expect("an exact QC from another source coalesces"),
+            owner_tag
         );
         assert_eq!(runtime.queued_commands(), 1);
 
-        assert!(
-            runtime
-                .rebind_body_available(source_tag, rebound, &manifest)
-                .expect("exact destination ownership coalesces the source")
-        );
-        assert!(!runtime.fail_closed);
-        assert_eq!(runtime.queued_commands(), 0, "the source owner was retired");
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_body_pipeline_completion_ownership(rebound, &evidence),
-            (1, 1),
-            "coalescing retains exactly one destination owner"
-        );
-        assert!(
-            !runtime
-                .rebind_body_available(source_tag, rebound, &manifest)
-                .expect("an idempotent retry finds no remaining source owner")
-        );
-        let same_view_rebound = EventTag::new(
-            rebound.height(),
-            rebound.view(),
-            Generation::new(rebound.generation().get() + 1),
-        );
-        observe_enter_view_for_test(&mut runtime, rebound, same_view_rebound, &manifest);
-        assert!(
-            runtime
-                .rebind_body_available(rebound, same_view_rebound, &manifest)
-                .expect("same-view generation supersession transfers the Busy-deferred owner")
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_body_pipeline_completion_ownership(same_view_rebound, &evidence),
-            (1, 1),
-            "same-view rebinding leaves exactly one Busy-deferred destination"
-        );
-        assert!(
-            runtime
-                .retire_body_available(same_view_rebound, &manifest)
-                .expect("the unique destination owner remains retireable")
-        );
-    }
-
-    #[test]
-    fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation() {
-        {
-            let directory = TempDir::new().expect("temporary destination-conflict directory");
-            let (mut runtime, context, _keys) =
-                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-            let source_tag = runtime.round_tag();
-            let rebound = EventTag::new(
-                source_tag.height(),
-                source_tag.view() + 1,
-                Generation::new(source_tag.generation().get() + 1),
-            );
-            let manifest = runtime_manifest(&context, 0x8D);
-            observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
-            let mut conflicting = manifest.clone();
-            conflicting.chunk_hashes[0] = Hash::new(b"conflicting rebound chunk");
-            conflicting.chunk_root = Hash::new(b"conflicting rebound root");
-            runtime
-                .enqueue_body_available(source_tag, manifest.clone())
-                .expect("enqueue unique source owner");
-            runtime
-                .ingress
-                .enqueue_canonical_body_available(rebound, conflicting.clone())
-                .expect("test seam stages conflicting destination evidence");
-
-            assert_eq!(
-                runtime
-                    .rebind_body_available(source_tag, rebound, &manifest)
-                    .expect_err("conflicting destination evidence must fail closed"),
-                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
-            );
-            assert!(runtime.fail_closed);
-            assert_eq!(runtime.queued_commands(), 2);
-            assert!(runtime.ingress.commands.iter().any(|queued| matches!(
-                &queued.command,
-                AdapterCommand::BodyAvailable { manifest: queued_manifest }
-                    if queued.tag == source_tag && queued_manifest == &manifest
-            )));
-            assert!(runtime.ingress.commands.iter().any(|queued| matches!(
-                &queued.command,
-                AdapterCommand::BodyAvailable { manifest: queued_manifest }
-                    if queued.tag == rebound && queued_manifest == &conflicting
-            )));
-            assert_eq!(
-                runtime
-                    .rebind_body_available(source_tag, rebound, &manifest)
-                    .expect_err("fail-closed runtime rejects a second conflicting rebind"),
-                "Sumeragi v2 runtime is fail-closed"
-            );
-            assert_eq!(
-                runtime.enqueue_application_completed(source_tag, manifest.subject),
-                Err(EnqueueError::FailClosed)
-            );
-            assert!(matches!(
-                runtime.step(Instant::now()),
-                Err(RuntimeError::FailClosed)
-            ));
-        }
-
-        {
-            let directory = TempDir::new().expect("temporary destination-duplicate directory");
-            let (mut runtime, context, _keys) =
-                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-            let source_tag = runtime.round_tag();
-            let rebound = EventTag::new(
-                source_tag.height(),
-                source_tag.view() + 1,
-                Generation::new(source_tag.generation().get() + 1),
-            );
-            let manifest = runtime_manifest(&context, 0x8E);
-            observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
-            runtime
-                .enqueue_body_available(source_tag, manifest.clone())
-                .expect("enqueue unique source owner");
-            for _ in 0..2 {
-                runtime
-                    .ingress
-                    .enqueue_canonical_body_available(rebound, manifest.clone())
-                    .expect("test seam creates duplicate destination ownership");
-            }
-
-            assert_eq!(
-                runtime
-                    .rebind_body_available(source_tag, rebound, &manifest)
-                    .expect_err("duplicate destination ownership must fail closed"),
-                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
-            );
-            assert!(runtime.fail_closed);
-            assert_eq!(runtime.queued_commands(), 3);
-            assert_eq!(
-                runtime
-                    .ingress
-                    .commands
-                    .iter()
-                    .filter(|queued| queued.tag == source_tag)
-                    .count(),
-                1,
-                "destination preflight must retain the source owner"
-            );
-            assert_eq!(
-                runtime
-                    .ingress
-                    .commands
-                    .iter()
-                    .filter(|queued| queued.tag == rebound)
-                    .count(),
-                2,
-                "destination preflight must not mutate duplicate owners"
-            );
-            assert_eq!(
-                runtime
-                    .rebind_body_available(source_tag, rebound, &manifest)
-                    .expect_err("fail-closed runtime rejects a second duplicate rebind"),
-                "Sumeragi v2 runtime is fail-closed"
-            );
-            assert_eq!(
-                runtime.enqueue_application_completed(source_tag, manifest.subject),
-                Err(EnqueueError::FailClosed)
-            );
-            assert!(matches!(
-                runtime.step(Instant::now()),
-                Err(RuntimeError::FailClosed)
-            ));
-        }
-    }
-
-    #[test]
-    fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() {
-        {
-            let directory = TempDir::new().expect("temporary duplicate-rebind directory");
-            let (mut runtime, context, _keys) =
-                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-            let owner_tag = runtime.round_tag();
-            let manifest = runtime_manifest(&context, 0x8E);
-            for _ in 0..2 {
-                runtime
-                    .ingress
-                    .enqueue_canonical_body_available(owner_tag, manifest.clone())
-                    .expect("test seam creates duplicate ingress ownership");
-            }
-            let rebound = EventTag::new(
-                owner_tag.height(),
-                owner_tag.view() + 1,
-                Generation::new(owner_tag.generation().get() + 1),
-            );
-            observe_enter_view_for_test(&mut runtime, owner_tag, rebound, &manifest);
-
-            assert_eq!(
-                runtime
-                    .rebind_body_available(owner_tag, rebound, &manifest)
-                    .expect_err("duplicate ownership must prevent rebind"),
-                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
-            );
-            assert!(runtime.fail_closed);
-            assert_eq!(runtime.queued_commands(), 2);
-            assert!(
-                runtime
-                    .ingress
-                    .commands
-                    .iter()
-                    .all(|queued| queued.tag == owner_tag),
-                "preflight must leave every duplicate owner at its original tag"
-            );
-            assert_eq!(
-                runtime
-                    .rebind_body_available(owner_tag, rebound, &manifest)
-                    .expect_err("fail-closed runtime must reject a second rebind"),
-                "Sumeragi v2 runtime is fail-closed"
-            );
-            assert_eq!(
-                runtime.enqueue_application_completed(owner_tag, manifest.subject),
-                Err(EnqueueError::FailClosed)
-            );
-            assert!(matches!(
-                runtime.step(Instant::now()),
-                Err(RuntimeError::FailClosed)
-            ));
-        }
-
-        {
-            let directory = TempDir::new().expect("temporary duplicate-retirement directory");
-            let (mut runtime, context, _keys) =
-                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-            let owner_tag = runtime.round_tag();
-            let manifest = runtime_manifest(&context, 0x8F);
-            for _ in 0..2 {
-                runtime
-                    .ingress
-                    .enqueue_canonical_body_available(owner_tag, manifest.clone())
-                    .expect("test seam creates duplicate ingress ownership");
-            }
-
-            assert_eq!(
-                runtime
-                    .retire_body_available(owner_tag, &manifest)
-                    .expect_err("duplicate ownership must prevent retirement"),
-                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
-            );
-            assert!(runtime.fail_closed);
-            assert_eq!(
-                runtime.queued_commands(),
-                2,
-                "preflight must not mutate duplicate serialized owners"
-            );
-            assert_eq!(
-                runtime
-                    .retire_body_available(owner_tag, &manifest)
-                    .expect_err("fail-closed runtime must reject a second retirement"),
-                "Sumeragi v2 runtime is fail-closed"
-            );
-            assert_eq!(
-                runtime.enqueue_application_completed(owner_tag, manifest.subject),
-                Err(EnqueueError::FailClosed)
-            );
-            assert!(matches!(
-                runtime.step(Instant::now()),
-                Err(RuntimeError::FailClosed)
-            ));
-        }
-    }
-
-    #[test]
-    fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning() {
-        let body_directory = TempDir::new().expect("temporary body evidence directory");
-        let (mut body_runtime, context, keys) =
-            authenticated_network_runtime(&body_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = body_runtime.round_tag();
-        let proposal = signed_runtime_proposal(&context, &keys, 0x95);
-        let manifest = match &proposal.payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.manifest.clone(),
-            _ => unreachable!("fixture is a proposal"),
-        };
-        body_runtime
-            .enqueue_network(proposal)
-            .expect("enqueue the exact authenticated proposal");
-        body_runtime
-            .enqueue_body_available(owner_tag, manifest.clone())
-            .expect("enqueue the first canonical body completion");
-        assert_eq!(body_runtime.queued_commands(), 2);
-
-        let mut conflicting_manifest = manifest.clone();
-        conflicting_manifest.chunk_hashes[0] = Hash::new(b"conflicting completion chunk");
-        conflicting_manifest.chunk_root = Hash::new(b"conflicting completion root");
-        assert_eq!(
-            body_runtime.enqueue_body_available(owner_tag, conflicting_manifest),
-            Err(EnqueueError::DuplicateCompletionOwnership)
-        );
-        assert!(body_runtime.fail_closed);
-        assert_eq!(
-            body_runtime.queued_commands(),
-            2,
-            "ownership must fail before a conflicting completion prunes the exact proposal"
-        );
-        assert!(body_runtime.ingress.commands.iter().any(|queued| matches!(
-            &queued.command,
-            AdapterCommand::Authenticated(authenticated)
-                if matches!(
-                    authenticated.payload(),
-                    wire::ConsensusMessageV2Payload::Proposal(proposal)
-                        if proposal.manifest == manifest
-                )
-        )));
-        assert_eq!(
-            body_runtime.enqueue_body_available(owner_tag, manifest),
-            Err(EnqueueError::FailClosed)
-        );
-
-        let stored_directory = TempDir::new().expect("temporary durable evidence directory");
-        let (mut stored_runtime, context, _keys) =
-            authenticated_network_runtime(&stored_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = stored_runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0x96);
-        let exact_receipt = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let mut other_manifest = manifest.clone();
-        other_manifest.chunk_hashes[0] = Hash::new(b"different durable receipt chunk");
-        other_manifest.chunk_root = Hash::new(b"different durable receipt root");
-        let conflicting_receipt = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&other_manifest),
-        );
-        stage_completion_for_queue_test(
-            &mut stored_runtime,
-            owner_tag,
-            AdapterCommand::BodyStored {
-                round: manifest.round,
-                subject: manifest.subject,
-                receipt: exact_receipt,
-            },
-        );
-        assert_eq!(
-            stored_runtime.enqueue_body_stored(
-                owner_tag,
-                manifest.round,
-                manifest.subject,
-                conflicting_receipt,
-            ),
-            Err(EnqueueError::DuplicateCompletionOwnership)
-        );
-        assert!(stored_runtime.fail_closed);
-
-        let validation_directory = TempDir::new().expect("temporary validation polarity directory");
-        let (mut validation_runtime, context, _keys) =
-            authenticated_network_runtime(&validation_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = validation_runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0x97);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        stage_completion_for_queue_test(
-            &mut validation_runtime,
-            owner_tag,
-            AdapterCommand::ValidationSucceeded {
-                round: manifest.round,
-                subject: manifest.subject,
-                receipt: ValidatedBodyReceipt::for_test(durable),
-            },
-        );
-        assert_eq!(
-            validation_runtime.enqueue_validation_failed(
-                owner_tag,
-                manifest.round,
-                manifest.subject,
-            ),
-            Err(EnqueueError::DuplicateCompletionOwnership),
-            "opposite validation polarity is conflicting evidence"
-        );
-        assert!(validation_runtime.fail_closed);
-
-        let deferred_failure_directory =
-            TempDir::new().expect("temporary deferred validation-failure directory");
-        let (mut deferred_failure_runtime, context, _keys) = authenticated_network_runtime(
-            &deferred_failure_directory,
-            RuntimeQueueConfig::new(8, 1, 1),
-        );
-        let owner_tag = deferred_failure_runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0x9B);
-        deferred_failure_runtime
-            .driver
-            .defer_body_pipeline_stage_for_test(
-                owner_tag,
-                &manifest,
-                DeferredBodyPipelineStageForTest::ValidationFailed,
-            )
-            .expect("stage Busy-deferred validation failure");
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        assert_eq!(
-            deferred_failure_runtime.enqueue_validation_succeeded(
-                owner_tag,
-                manifest.round,
-                manifest.subject,
-                ValidatedBodyReceipt::for_test(durable),
-            ),
-            Err(EnqueueError::DuplicateCompletionOwnership),
-            "Busy-deferred failure cannot coalesce an incoming success"
-        );
-        assert!(deferred_failure_runtime.fail_closed);
-
-        let deferred_success_directory =
-            TempDir::new().expect("temporary deferred validation-success directory");
-        let (mut deferred_success_runtime, context, _keys) = authenticated_network_runtime(
-            &deferred_success_directory,
-            RuntimeQueueConfig::new(8, 1, 1),
-        );
-        let owner_tag = deferred_success_runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0x9C);
-        deferred_success_runtime
-            .driver
-            .defer_body_pipeline_stage_for_test(
-                owner_tag,
-                &manifest,
-                DeferredBodyPipelineStageForTest::ValidationSucceeded,
-            )
-            .expect("stage Busy-deferred validation success");
-        assert_eq!(
-            deferred_success_runtime.enqueue_validation_failed(
-                owner_tag,
-                manifest.round,
-                manifest.subject,
-            ),
-            Err(EnqueueError::DuplicateCompletionOwnership),
-            "Busy-deferred success cannot coalesce an incoming failure"
-        );
-        assert!(deferred_success_runtime.fail_closed);
-
-        let atomic_directory = TempDir::new().expect("temporary atomic validation directory");
-        let (mut atomic_runtime, context, _keys) =
-            authenticated_network_runtime(&atomic_directory, RuntimeQueueConfig::new(3, 1, 1));
-        let owner_tag = atomic_runtime.round_tag();
-        let manifests = [0x9D, 0x9E, 0x9F, 0xA0].map(|seed| runtime_manifest(&context, seed));
-        let failures = manifests
-            .iter()
-            .map(|manifest| (owner_tag, manifest.round, manifest.subject))
-            .collect::<Vec<_>>();
-        let next_ordinal_before_wrong_class = atomic_runtime.ingress.next_admission_ordinal;
-        let (wrong_tag, wrong_round, wrong_subject) = failures[0];
-        assert_eq!(
-            atomic_runtime
-                .ingress
-                .enqueue_completion_batch(vec![TaggedCommand::new(
-                    wrong_tag,
-                    CommandClass::Normal,
-                    AdapterCommand::ValidationFailed {
-                        round: wrong_round,
-                        subject: wrong_subject,
-                    },
-                    Instant::now(),
-                )]),
-            Err(EnqueueError::FailClosed),
-            "a batch API cannot relabel non-completion traffic as trusted completion work"
-        );
-        assert_eq!(atomic_runtime.queued_commands(), 0);
-        assert_eq!(
-            atomic_runtime.ingress.next_admission_ordinal, next_ordinal_before_wrong_class,
-            "rejected batch traffic cannot spend an admission ordinal"
-        );
-        assert_eq!(
-            atomic_runtime.enqueue_validation_failures_atomically(&failures),
-            Err(EnqueueError::Full)
-        );
-        assert_eq!(
-            atomic_runtime.queued_commands(),
-            0,
-            "a capacity failure cannot publish an earlier member of the batch"
-        );
-        atomic_runtime
-            .enqueue_validation_failures_atomically(&failures[..3])
-            .expect("the complete fitting batch is admitted atomically");
-        assert_eq!(atomic_runtime.queued_commands(), 3);
-        for (queued, (tag, round, subject)) in atomic_runtime
+        let retained = runtime
             .ingress
             .commands
-            .iter()
-            .zip(failures.iter().copied())
-        {
-            assert_eq!(queued.tag, tag);
-            assert!(matches!(
-                &queued.command,
-                AdapterCommand::ValidationFailed {
-                    round: queued_round,
-                    subject: queued_subject,
-                } if *queued_round == round && *queued_subject == subject
-            ));
-        }
-        atomic_runtime
-            .enqueue_validation_failures_atomically(&failures[..3])
-            .expect("exact pre-owned rows coalesce without spending capacity");
-        assert_eq!(atomic_runtime.queued_commands(), 3);
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the queued QC retains fair-ingress ownership");
+        assert!(retained.validate_exact());
+        assert_eq!(retained.direct.len(), 2);
+        assert!(retained.commit_certificate_response.is_empty());
+        assert_ne!(
+            retained.direct[0].process_local_projection_hash(),
+            retained.direct[1].process_local_projection_hash(),
+            "direct carrier projections must retain their distinct authenticated-source identities"
+        );
 
-        let conflict_directory =
-            TempDir::new().expect("temporary conflicting atomic validation directory");
-        let (mut conflict_runtime, conflict_context, _keys) =
-            authenticated_network_runtime(&conflict_directory, RuntimeQueueConfig::new(4, 1, 1));
-        let conflict_tag = conflict_runtime.round_tag();
-        let vacant = runtime_manifest(&conflict_context, 0xA1);
-        let conflicting = runtime_manifest(&conflict_context, 0xA2);
-        let durable = DurableBodyReceipt::for_test(
-            conflict_context.id(),
-            conflicting.round,
-            conflicting.subject,
-            HashOf::new(&conflicting),
+        let mut source_substituted = retained.clone();
+        let substituted_source = PeerId::from(KeyPair::random().public_key().clone());
+        source_substituted.direct[0].first.wire_key.origin = Some(substituted_source.clone());
+        source_substituted.direct[0].first.semantic_origin = Some(substituted_source.clone());
+        source_substituted.direct[0].first.authenticated_via = Some(substituted_source.clone());
+        source_substituted.direct[0].first.authenticated_source =
+            super::super::FairV2IngressSource::Validator(substituted_source.clone());
+        source_substituted.direct[0].first.semantic_owner_source =
+            super::super::FairV2IngressSource::Validator(substituted_source.clone());
+        source_substituted.direct[0].latest.wire_key.origin = Some(substituted_source.clone());
+        source_substituted.direct[0].latest.semantic_origin = Some(substituted_source.clone());
+        source_substituted.direct[0].latest.authenticated_via = Some(substituted_source.clone());
+        source_substituted.direct[0].latest.authenticated_source =
+            super::super::FairV2IngressSource::Validator(substituted_source.clone());
+        source_substituted.direct[0].latest.semantic_owner_source =
+            super::super::FairV2IngressSource::Validator(substituted_source);
+        assert!(source_substituted.direct[0].validate_exact());
+        assert!(
+            !source_substituted.validate_exact(),
+            "the retained runtime projection must reject an otherwise exact source substitution"
         );
-        stage_completion_for_queue_test(
-            &mut conflict_runtime,
-            conflict_tag,
-            AdapterCommand::ValidationSucceeded {
-                round: conflicting.round,
-                subject: conflicting.subject,
-                receipt: ValidatedBodyReceipt::for_test(durable),
-            },
+
+        let mut reordered = retained.clone();
+        reordered.direct.reverse();
+        assert!(
+            !reordered.validate_exact(),
+            "the retained runtime projection must reject carrier-order mutation"
         );
-        assert_eq!(
-            conflict_runtime.enqueue_validation_failures_atomically(&[
-                (conflict_tag, vacant.round, vacant.subject),
-                (conflict_tag, conflicting.round, conflicting.subject),
-            ]),
-            Err(EnqueueError::DuplicateCompletionOwnership)
-        );
-        assert_eq!(
-            conflict_runtime.queued_commands(),
-            1,
-            "the vacant prefix cannot become visible before a later conflict"
-        );
-        assert!(conflict_runtime.fail_closed);
+        assert!(!runtime.fail_closed);
     }
 
     #[test]
-    fn conflicting_local_and_validated_receipts_do_not_coalesce() {
-        let validation_directory =
-            TempDir::new().expect("temporary execution commitment directory");
-        let (mut validation_runtime, context, _keys) =
-            authenticated_network_runtime(&validation_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = validation_runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0x98);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
+    fn exact_authenticated_tc_from_distinct_sources_retains_one_busy_owner() {
+        let directory = TempDir::new().expect("temporary multi-source TC directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(4, 1, 1),
+            Some(0),
         );
-        let exact_validated = ValidatedBodyReceipt::for_test(durable.clone());
-        let conflicting_validated = ValidatedBodyReceipt::for_test_with_commitment(
-            durable,
-            wire::ExecutionCommitment::without_topups(
-                Hash::new(b"conflicting parent state"),
-                Hash::new(b"conflicting post state"),
-                Hash::new(b"conflicting ordinary writes"),
-                1,
-                Hash::new(b"conflicting executed body"),
-            ),
-        );
-        stage_completion_for_queue_test(
-            &mut validation_runtime,
-            owner_tag,
-            AdapterCommand::ValidationSucceeded {
-                round: manifest.round,
-                subject: manifest.subject,
-                receipt: exact_validated,
-            },
-        );
-        assert_eq!(
-            validation_runtime.enqueue_validation_succeeded(
-                owner_tag,
-                manifest.round,
-                manifest.subject,
-                conflicting_validated,
-            ),
-            Err(EnqueueError::DuplicateCompletionOwnership)
-        );
-        assert!(validation_runtime.fail_closed);
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before authenticated ingress");
+        let owner_tag = runtime.round_tag();
+        let timeout_effects = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("install a local signing fence")
+            .into_effects();
+        let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(vote),
+                },
+            ] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
 
-        let proposal_directory = TempDir::new().expect("temporary local proposal directory");
-        let (mut proposal_runtime, context, _keys) =
-            authenticated_network_runtime(&proposal_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = proposal_runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0x99);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
+        for source in &keys[..2] {
+            assert_eq!(
+                runtime
+                    .enqueue_network_with_ingress_ownership(
+                        message.clone(),
+                        fair_network_ownership(&message, PeerId::new(source.public_key().clone()),),
+                    )
+                    .expect("each authenticated TC carrier coalesces"),
+                owner_tag
+            );
+        }
+        assert_eq!(runtime.queued_commands(), 1);
+        let queued = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|command| command.ingress_ownership.as_ref())
+            .expect("the queued TC retains both fair-ingress carriers");
+        assert_eq!(queued.direct.len(), 2);
+        assert!(queued.validate_exact());
+
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        let fifo_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy TC dispatch retains its exact FIFO owner");
+        assert!(fifo_owner.validate_exact().is_ok());
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        let deferred = runtime
+            .deferred_ingress_ownership
+            .values()
+            .next()
+            .expect("the Busy TC owns one deferred ordinal");
+        assert_eq!(deferred.direct.len(), 2);
+        assert!(deferred.validate_exact());
+
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, PeerId::new(keys[2].public_key().clone()),),
+                )
+                .expect("a later authenticated carrier merges into the Busy TC"),
+            owner_tag
         );
-        let validated = ValidatedBodyReceipt::for_test(durable.clone());
-        stage_completion_for_queue_test(
-            &mut proposal_runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: manifest.clone(),
-                durable_receipt: durable,
-                validated_receipt: validated,
-            },
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime
+                .deferred_ingress_ownership
+                .values()
+                .next()
+                .expect("the Busy TC retains its merged carrier set")
+                .direct
+                .len(),
+            3
         );
 
-        let mut conflicting_manifest = manifest.clone();
-        conflicting_manifest.chunk_hashes[0] = Hash::new(b"conflicting local proposal chunk");
-        conflicting_manifest.chunk_root = Hash::new(b"conflicting local proposal root");
-        let conflicting_durable = DurableBodyReceipt::for_test(
-            context.id(),
-            conflicting_manifest.round,
-            conflicting_manifest.subject,
-            HashOf::new(&conflicting_manifest),
+        let signature = Signature::new(keys[0].private_key(), &signature_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature(signature_tag, signature)
+            .expect("enqueue the exact signing completion");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects))
+                if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
+        ));
+        assert!(runtime.take_last_scheduler_ownership().is_some());
+        assert!(matches!(runtime.step(now), Ok(RuntimeStep::Advanced(_))));
+        let deferred_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("deferred TC service hands off its exact owner");
+        assert!(deferred_owner.validate_exact().is_ok());
+        let RuntimeSelectedCandidateOwnership::ExactDeferred(deferred) = &deferred_owner.candidate
+        else {
+            panic!("expected exact deferred TC scheduler ownership")
+        };
+        assert!(
+            deferred
+                .ingress_ownership
+                .as_ref()
+                .is_some_and(|ownership| ownership.direct.len() == 3)
         );
-        let conflicting_validated = ValidatedBodyReceipt::for_test(conflicting_durable.clone());
-        assert_eq!(
-            proposal_runtime.enqueue_local_proposal(
-                owner_tag,
-                conflicting_manifest,
-                conflicting_durable,
-                conflicting_validated,
-            ),
-            Err(EnqueueError::DuplicateCompletionOwnership)
-        );
-        assert!(proposal_runtime.fail_closed);
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert!(!runtime.fail_closed);
     }
 
+    #[test]
+    fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
+        let directory = TempDir::new().expect("temporary conflicting route directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let certificate = signed_runtime_quorum_certificate(&context, &keys, 0xC8);
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+        );
+        let source = PeerId::new(keys[0].public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(source.clone());
+        let first_route = routes.mint(source.clone());
+        let conflicting_route = routes
+            .forge_equal_ordinal_different_tenure(&first_route, source.clone(), source.clone())
+            .expect("fixture owns the conflicting route authority");
+
+        assert!(matches!(
+            super::super::InboundBlockMessage::try_from_transport_with_reply_route(
+                super::super::message::BlockMessage::V2(message.clone()),
+                source.clone(),
+                source.clone(),
+                conflicting_route.clone(),
+            ),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
+        let first_ownership = fair_network_ownership_with_route(
+            &message,
+            source.clone(),
+            source.clone(),
+            first_route,
+        );
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), first_ownership.clone())
+            .expect("the first exact route owns the authenticated QC");
+        let retained_before = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the queued QC retains its first route")
+            .clone();
+
+        let mut conflicting_ownership = retained_before.direct[0].clone();
+        conflicting_ownership.attempts[0].route = conflicting_route.clone();
+        conflicting_ownership.latest.attempts_after[0].route = conflicting_route;
+        assert!(
+            !conflicting_ownership.validate_exact(),
+            "the runtime must reject a carrier whose cursor projection substitutes a forged tenure"
+        );
+        assert!(matches!(
+            runtime.enqueue_network_with_ingress_ownership(message.clone(), conflicting_ownership),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        let retained_after = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("failed merge preserves the first exact route");
+        assert_eq!(retained_after, &retained_before);
+        assert_eq!(retained_after.direct.len(), 1);
+        assert_eq!(
+            runtime.fail_closed_reason.as_deref(),
+            Some("network ingress changed its authenticated fair-queue ownership")
+        );
+    }
+
+    #[test]
+    fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
+        let directory = TempDir::new().expect("temporary carrier-capacity directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let certificate = signed_runtime_quorum_certificate(&context, &keys, 0xC9);
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+        );
+        let carrier = || {
+            let source = PeerId::from(KeyPair::random().public_key().clone());
+            fair_network_ownership(&message, source)
+        };
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), carrier())
+            .expect("the first disjoint carrier owns the authenticated QC");
+        for _ in 1..MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
+            let candidate = RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, carrier())
+                .expect("independent fair-ingress carrier is exact");
+            runtime
+                .ingress
+                .commands
+                .front_mut()
+                .and_then(|queued| queued.ingress_ownership.as_mut())
+                .expect("the queued QC retains its carrier set")
+                .merge_downstream(candidate)
+                .expect("every protocol-bounded carrier remains exact");
+        }
+        let retained = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the queued QC retains the full carrier set");
+        assert_eq!(retained.direct.len(), MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM);
+        let retained_before = retained.clone();
+        let queued_before = runtime.queued_commands();
+        let excess_carrier = carrier();
+
+        assert!(matches!(
+            runtime.enqueue_network_with_ingress_ownership(message, excess_carrier),
+            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+        ));
+        let retained_after = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("backpressure preserves the full exact carrier set");
+        assert_eq!(retained_after, &retained_before);
+        assert_eq!(
+            runtime.queued_commands(),
+            queued_before,
+            "carrier saturation must not create a duplicate runtime command"
+        );
+        assert!(retained_after.validate_exact());
+        assert!(!runtime.fail_closed);
+        assert!(runtime.fail_closed_reason.is_none());
+    }

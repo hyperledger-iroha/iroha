@@ -795,7 +795,7 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> super::super::ExecutionCommitment {
-        super::super::ExecutionCommitment::new(
+        super::super::ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),

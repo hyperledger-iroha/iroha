@@ -1686,7 +1686,7 @@ mod tests {
         }
 
         fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
-            wire_v2::ExecutionCommitment::without_topups(
+            wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
@@ -1819,7 +1819,7 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = wire_v2::ExecutionCommitment::without_topups(
+        let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"v2 evidence finality parent state"),
             Hash::new(b"v2 evidence finality post state"),
             Hash::new(b"v2 evidence finality ordinary writes"),

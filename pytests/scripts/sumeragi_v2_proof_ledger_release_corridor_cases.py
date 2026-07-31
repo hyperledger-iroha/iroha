@@ -1417,13 +1417,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
         "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
         "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
-        "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_retry_only_without_runnable_work",
+        "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
         "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
         "sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack",
         "sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset",
         "sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes",
         "sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart",
-        "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_retains_lower_terminal_family",
+        "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union",
         "sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement",
         "sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root",
         "sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment",
@@ -2362,6 +2362,32 @@ def test_ledger_validator_enforces_replay_trace_source_fidelity() -> None:
     )
 
 
+def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    for relative in module._READINESS_TOOL_SOURCE_SHA256:
+        source = ROOT_DIR / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    ci_gate = tmp_path / "ci/check_sumeragi_formal.sh"
+    source = ci_gate.read_text(encoding="utf-8")
+    ci_gate.write_text(source + "\nexit 0\n", encoding="utf-8")
+
+    errors = module._readiness_kernel_source_fidelity_errors(
+        module.FORMAL_DIR,
+        tmp_path,
+    )
+
+    assert any(
+        str(ci_gate) in error
+        and "readiness gate source must match exact reviewed SHA-256" in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("relative", "old", "new", "semantic_error"),
     (
@@ -2384,6 +2410,25 @@ def test_ledger_validator_enforces_replay_trace_source_fidelity() -> None:
             "100\tPersistDecision\t2\t-\t1\tCommit\tA\n",
             "",
             "exactly 100 actions",
+        ),
+        (
+            Path("scripts/normalize_sumeragi_v2_tlc_trace.py"),
+            "from typing import Union\n",
+            "from typing import TypeAlias\n",
+            "Python 3.9-compatible union import",
+        ),
+        (
+            Path("scripts/normalize_sumeragi_v2_tlc_trace.py"),
+            "Scalar = Union[int, str]\n",
+            "Scalar = int | str\n",
+            "Python 3.9-compatible scalar alias",
+        ),
+        (
+            Path("scripts/formal/check_sumeragi_v2_replay_trace.sh"),
+            'sumeragi_v2_tlc_assert_regular_log '
+            '"replay-decision-witness" "$tlc_log"\n',
+            "",
+            "fresh regular witness-log assertion",
         ),
     ),
 )

@@ -1727,7 +1727,7 @@ mod tests {
     }
 
     fn execution_commitment(marker: u8) -> ExecutionCommitment {
-        ExecutionCommitment::without_topups(
+        ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([marker, 1]),
             Hash::new([marker, 2]),
             Hash::new([marker, 3]),

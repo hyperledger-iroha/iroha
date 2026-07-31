@@ -5,6 +5,7 @@ package org.hyperledger.iroha.android.consensus;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
 
 import java.io.IOException;
@@ -28,6 +29,7 @@ public final class SumeragiV2WireFixtureTests {
               "proposal",
               "vote",
               "quorum_certificate",
+              "quorum_certificate_merge_carrier",
               "commit_vote_reproposal",
               "commit_quorum_certificate_reproposal",
               "timeout_vote",
@@ -99,6 +101,32 @@ public final class SumeragiV2WireFixtureTests {
       assertArrayEquals(row.name, encoded, decoded.encode());
     }
     assertEquals(EXPECTED_MESSAGE_NAMES, names);
+  }
+
+  @Test
+  public void rustMergeCarrierFixturePinsCurrentV4Shape() throws Exception {
+    SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage payload =
+        (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "quorum_certificate_merge_carrier").hex))
+                .payload;
+    SumeragiV2Wire.MergeCarrierCommitment carrier =
+        payload.value.executionCommitment.mergeCarrier;
+    assertNotNull(carrier);
+    assertEquals(1, carrier.version);
+    assertEquals(32, carrier.entryHash.bytes().length);
+
+    for (String name :
+        Arrays.asList(
+            "execution_commitment_merge_carrier_wrong_version",
+            "execution_commitment_missing_merge_carrier_field")) {
+      assertThrows(
+          name,
+          IllegalArgumentException.class,
+          () ->
+              SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                  hexBytes(fixtureRow("negative_message", name).hex)));
+    }
   }
 
   @Test

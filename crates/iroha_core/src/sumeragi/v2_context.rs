@@ -1224,7 +1224,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"context fixture parent state"),
                 Hash::new(b"context fixture post state"),
                 Hash::new(b"context fixture ordinary writes"),

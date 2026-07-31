@@ -8,7 +8,6 @@ import java.nio.file.Paths
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.int
@@ -113,6 +112,8 @@ class NativeAmxV2GroupedFixtureTest {
                     "coherent_stale_proposal_hash",
                     "coherent_stale_settlement_hash",
                     "non_canonical_validator_peer_id",
+                    "execution_commitment_merge_carrier_wrong_version",
+                    "execution_commitment_missing_merge_carrier_field",
                 ),
             ),
         )
@@ -242,7 +243,16 @@ class NativeAmxV2GroupedFixtureTest {
         val execution = evidence.objectValue("execution_commitment")
         val artifacts = evidence.arrayValue("manifest_artifacts")
         require(execution.int("native_amx_application_manifest_version") == 1)
-        require(execution.getValue("merge_carrier") is JsonNull)
+        require(execution.containsKey("merge_carrier"))
+        val rawMergeCarrier = execution.getValue("merge_carrier")
+        require(rawMergeCarrier is JsonObject)
+        val mergeCarrier = rawMergeCarrier.jsonObject
+        require(mergeCarrier.keys == setOf("version", "entry_hash"))
+        val mergeCarrierVersion = mergeCarrier.getValue("version").jsonPrimitive
+        require(!mergeCarrierVersion.isString && mergeCarrierVersion.int == 1)
+        val mergeCarrierEntryHash = mergeCarrier.getValue("entry_hash").jsonPrimitive
+        require(mergeCarrierEntryHash.isString)
+        NativeAmxV2.ConsensusHash(mergeCarrierEntryHash.content)
         require(
             execution.int("native_amx_application_manifest_count") == artifacts.size &&
                 artifacts.size == 1,

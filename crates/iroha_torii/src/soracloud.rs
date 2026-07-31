@@ -15278,6 +15278,38 @@ mod tests {
     }
 
     #[test]
+    fn signed_mutation_request_rejects_inline_signing_material() {
+        let key_pair = checked_test_keypair(0x60);
+        let request = signed_rollback_request("inline-secret-test", None, &key_pair);
+        let mut payload = norito::json::Map::new();
+        payload.insert(
+            "service_name".to_owned(),
+            norito::json::Value::from(request.payload.service_name),
+        );
+        payload.insert("target_version".to_owned(), norito::json::Value::Null);
+        let mut fields = norito::json::Map::new();
+        fields.insert("payload".to_owned(), norito::json::Value::Object(payload));
+        fields.insert(
+            "provenance".to_owned(),
+            norito::json::to_value(&request.provenance)
+                .expect("serialize valid request provenance"),
+        );
+        fields.insert(
+            "authority".to_owned(),
+            norito::json::Value::from("inline-authority-is-forbidden"),
+        );
+
+        let error =
+            norito::json::from_value::<SignedRollbackRequest>(norito::json::Value::Object(fields))
+                .expect_err("inline signing material must be rejected during decoding");
+
+        assert!(
+            error.to_string().contains("unknown field `authority`"),
+            "unexpected inline-authority rejection: {error}"
+        );
+    }
+
+    #[test]
     fn soracloud_post_requests_reject_inline_signing_fields_during_decode() {
         macro_rules! assert_rejects_inline_signing_fields {
             ($($request:ty),+ $(,)?) => {

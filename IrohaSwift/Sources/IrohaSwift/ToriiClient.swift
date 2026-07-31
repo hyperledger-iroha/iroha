@@ -13945,6 +13945,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "true",
         "var",
         "view",
+        "Amount",
     ]
     private static let reservedDeclarationIdentifiers: Set<String> = [
         "int",
@@ -13997,6 +13998,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "Amount",
     ]
     private static let retiredNumericTypeNames: Set<String> = [
         "i8",
@@ -14804,7 +14806,7 @@ public struct ToriiContractTriggerCallback: Codable, Sendable, Equatable {
     }
 
     fileprivate var isCanonical: Bool {
-        (namespace.map { isExactContractManifestString($0) } ?? true)
+        (namespace.map { isExactContractManifestString($0) && $0 != "Amount" } ?? true)
             && ToriiEntrypointValueTypeV1.isCanonicalEntrypointName(entrypoint)
     }
 
@@ -14881,6 +14883,7 @@ public struct ToriiContractTriggerDescriptor: Codable, Sendable, Equatable {
 
     private var isCanonical: Bool {
         isExactContractManifestString(id)
+            && id != "Amount"
             && isCanonicalContractManifestBase64(filterBase64)
             && (authority.map(Self.isCanonicalAuthority) ?? true)
             && callback.isCanonical
@@ -24892,6 +24895,7 @@ public enum ToriiSumeragiAutonomousLaneExecutionStage:
 public enum ToriiSumeragiAutonomousLaneExecutionStuckReason:
     String, Decodable, Sendable, Equatable
 {
+    case awaitingExecutablePayload = "awaiting_executable_payload"
     case awaitingPayloadAvailability = "awaiting_payload_availability"
     case awaitingLaneCertification = "awaiting_lane_certification"
     case certifiedBundleUnavailable = "certified_bundle_unavailable"
@@ -24909,9 +24913,12 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
     public let laneBlockHeight: UInt64
     public let laneBlockView: UInt64
     public let proposalHeight: UInt64
-    public let proposalView: UInt64
-    public let proposalHash: String
-    public let descriptorHash: String
+    public let proposalView: UInt64?
+    public let reservationOwnerHash: String
+    public let proposalIdentityHash: String
+    public let reservationGroupHash: String
+    public let proposalHash: String?
+    public let descriptorHash: String?
     public let executablePayloadHash: String?
     public let sourceBundleHash: String?
     public let mergeEntryHash: String?
@@ -24922,11 +24929,14 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
     public let highestDurableStage: ToriiSumeragiAutonomousLaneExecutionStage
     public let stuckReason: ToriiSumeragiAutonomousLaneExecutionStuckReason?
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case laneID = "lane_id", dataspaceID = "dataspace_id"
         case laneIncarnation = "lane_incarnation"
         case laneBlockHeight = "lane_block_height", laneBlockView = "lane_block_view"
         case proposalHeight = "proposal_height", proposalView = "proposal_view"
+        case reservationOwnerHash = "reservation_owner_hash"
+        case proposalIdentityHash = "proposal_identity_hash"
+        case reservationGroupHash = "reservation_group_hash"
         case proposalHash = "proposal_hash", descriptorHash = "descriptor_hash"
         case executablePayloadHash = "executable_payload_hash"
         case sourceBundleHash = "source_bundle_hash", mergeEntryHash = "merge_entry_hash"
@@ -24937,6 +24947,11 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue)),
+            context: "Autonomous lane execution diagnostics"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         laneID = try container.decode(UInt32.self, forKey: .laneID)
         dataspaceID = try container.decode(UInt64.self, forKey: .dataspaceID)
@@ -24944,9 +24959,12 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
         laneBlockHeight = try container.decode(UInt64.self, forKey: .laneBlockHeight)
         laneBlockView = try container.decode(UInt64.self, forKey: .laneBlockView)
         proposalHeight = try container.decode(UInt64.self, forKey: .proposalHeight)
-        proposalView = try container.decode(UInt64.self, forKey: .proposalView)
-        proposalHash = try container.decode(String.self, forKey: .proposalHash)
-        descriptorHash = try container.decode(String.self, forKey: .descriptorHash)
+        proposalView = try container.decodeIfPresent(UInt64.self, forKey: .proposalView)
+        reservationOwnerHash = try container.decode(String.self, forKey: .reservationOwnerHash)
+        proposalIdentityHash = try container.decode(String.self, forKey: .proposalIdentityHash)
+        reservationGroupHash = try container.decode(String.self, forKey: .reservationGroupHash)
+        proposalHash = try container.decodeIfPresent(String.self, forKey: .proposalHash)
+        descriptorHash = try container.decodeIfPresent(String.self, forKey: .descriptorHash)
         executablePayloadHash = try container.decodeIfPresent(String.self, forKey: .executablePayloadHash)
         sourceBundleHash = try container.decodeIfPresent(String.self, forKey: .sourceBundleHash)
         mergeEntryHash = try container.decodeIfPresent(String.self, forKey: .mergeEntryHash)
@@ -24960,8 +24978,12 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
         stuckReason = try container.decodeIfPresent(
             ToriiSumeragiAutonomousLaneExecutionStuckReason.self, forKey: .stuckReason
         )
-        let hashes = [laneIncarnation, proposalHash, descriptorHash]
-            + [executablePayloadHash, sourceBundleHash, mergeEntryHash, applicationBlockHash].compactMap { $0 }
+        let hashes = [
+            laneIncarnation, reservationOwnerHash, proposalIdentityHash, reservationGroupHash,
+        ] + [
+            proposalHash, descriptorHash, executablePayloadHash, sourceBundleHash,
+            mergeEntryHash, applicationBlockHash,
+        ].compactMap { $0 }
         guard hashes.allSatisfy(ToriiNativeAmxWire.isCanonicalHash),
               laneBlockHeight > 0, proposalHeight > 0,
               transactionCount > 0, transactionCount <= 4_096,
@@ -24975,7 +24997,9 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
         }
         let expectedReason: ToriiSumeragiAutonomousLaneExecutionStuckReason?
         switch highestDurableStage {
-        case .reservationsDurable, .executablePayloadDurable:
+        case .reservationsDurable:
+            expectedReason = .awaitingExecutablePayload
+        case .executablePayloadDurable:
             expectedReason = .awaitingPayloadAvailability
         case .payloadAvailabilityCertified:
             expectedReason = .awaitingLaneCertification
@@ -25004,6 +25028,25 @@ public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatab
             throw DecodingError.dataCorruptedError(
                 forKey: .reservationCount, in: container,
                 debugDescription: "Autonomous reservation and transaction counts disagree"
+            )
+        }
+        guard (proposalHash == nil) == (descriptorHash == nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .proposalHash, in: container,
+                debugDescription: "Autonomous proposal and descriptor hashes must appear together"
+            )
+        }
+        if highestDurableStage != .conflict,
+           (highestDurableStage == .reservationsDurable) != (proposalHash == nil) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .proposalHash, in: container,
+                debugDescription: "Autonomous finalized identity disagrees with durable stage"
+            )
+        }
+        if highestDurableStage == .reservationsDurable, proposalView != nil {
+            throw DecodingError.dataCorruptedError(
+                forKey: .proposalView, in: container,
+                debugDescription: "Autonomous proposal view disagrees with durable stage"
             )
         }
         guard highestDurableStage == .conflict || evidenceGeometryMatches else {
@@ -25176,10 +25219,10 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
         }
         var previousAutonomousKey: String?
         for row in autonomousLaneExecutions {
-            let key = String(format: "%010u:%020llu:%@:%020llu:%020llu:%020llu:%020llu:%@",
+            let key = String(format: "%010u:%020llu:%@:%020llu:%020llu:%020llu:%@",
                              row.laneID, row.dataspaceID, row.laneIncarnation,
                              row.laneBlockHeight, row.laneBlockView, row.proposalHeight,
-                             row.proposalView, row.proposalHash)
+                             row.proposalIdentityHash)
             guard previousAutonomousKey.map({ $0 < key }) ?? true else {
                 throw DecodingError.dataCorrupted(
                     .init(codingPath: decoder.codingPath,

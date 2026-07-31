@@ -55,6 +55,17 @@ SH
     >"${root}/state/onboarding-token"
   chmod 600 "${root}/state/onboarding-token"
 
+  cat >"${root}/state/readyz.json" <<'JSON'
+{
+  "live": true,
+  "mandatory": true,
+  "ready": true,
+  "cash_handoff_capability": "cash_handoff_v1",
+  "required_bridge_abi_version": 21,
+  "blockers": []
+}
+JSON
+
   cat >"${root}/state/offline-readiness.json" <<'JSON'
 {
   "cash_handoff_capability": "cash_handoff_v1",
@@ -375,6 +386,12 @@ if scenario == "fleet_release_changes_between_samples" and sample > 1:
 print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 PY
 )"
+elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == "https://validator-${validator_index}.test/readyz" ]]; then
+  body="$(cat "${MOCK_STATE_DIR:?}/readyz.json")"
+  if [[ "$scenario" == "fleet_readyz_not_mandatory" && "$validator_index" == "4" ]]; then
+    body="${body/\"mandatory\": true/\"mandatory\": false}"
+  fi
+  printf '%s\n' "$url" >>"${MOCK_STATE_DIR}/readyz_seen"
 elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == "https://validator-${validator_index}.test/status" ]]; then
   body="$(python3 - "$validator_height" "$scenario" <<'PY'
 import json
@@ -491,6 +508,12 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
   body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/readyz" ]]; then
+  body="$(cat "${MOCK_STATE_DIR:?}/readyz.json")"
+  if [[ "$scenario" == "public_readyz_not_mandatory" ]]; then
+    body="${body/\"mandatory\": true/\"mandatory\": false}"
+  fi
+  printf '%s\n' "$url" >>"${MOCK_STATE_DIR}/readyz_seen"
 elif [[ "$method" == "GET" && "$url" == https://taira.sora.org/v1/offline/readiness\?asset_definition_id=* ]]; then
   body="$(cat "${MOCK_STATE_DIR:?}/offline-readiness.json")"
   if [[ "$scenario" == "offline_not_ready" ]]; then
@@ -788,6 +811,8 @@ run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
 run_case initialized_timeout 'initialized notification failed with HTTP curl_error_28' 'Operation timed out'
+run_case public_readyz_not_mandatory '/readyz gate failed: mandatory is not true'
+run_case fleet_readyz_not_mandatory 'validator validator-4: /readyz gate failed: mandatory is not true'
 run_case offline_not_ready 'offline readiness gate failed: ready is not true'
 run_case offline_asset_mismatch 'offline readiness gate failed: asset_definition_id does not match the requested Digital Shekel definition'
 run_case offline_scale_mismatch 'offline readiness gate failed: asset_scale is not exact Digital Shekel scale 2'
@@ -819,6 +844,29 @@ run_invalid_canary_identity_case \
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="readyz_healthy" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --skip-write-canary \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/readyz-healthy-output.log" 2>&1; then
+  echo "healthy mandatory /readyz case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/readyz-healthy-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout checks passed.' "${root}/readyz-healthy-output.log"
+grep -qx 'https://taira.sora.org/readyz' "${root}/state/readyz_seen"
+grep -qx 'https://validator-1.test/readyz' "${root}/state/readyz_seen"
+grep -qx 'https://validator-2.test/readyz' "${root}/state/readyz_seen"
+grep -qx 'https://validator-3.test/readyz' "${root}/state/readyz_seen"
+grep -qx 'https://validator-4.test/readyz' "${root}/state/readyz_seen"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

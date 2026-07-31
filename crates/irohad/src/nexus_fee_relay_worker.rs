@@ -49,6 +49,7 @@ use iroha_data_model::{
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
         fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
     },
+    state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -545,14 +546,14 @@ impl NexusFeeRelayWorker {
     }
 
     fn verified_relay_exists(&self, envelope: &LaneRelayEnvelope) -> Result<bool> {
-        let key = Name::from_str(&envelope.relay_ref().relay_state_key())
+        let key = StatePath::from_str(&envelope.relay_ref().relay_state_key())
             .wrap_err("parse verified lane relay state key")?;
         Ok(self
             .state
             .view()
             .world()
             .smart_contract_state()
-            .get(&key)
+            .get(key.as_ref())
             .is_some())
     }
 
@@ -865,14 +866,14 @@ impl NexusFeeRelayWorker {
         &self,
         work: &DurableAllocationWork,
     ) -> Result<Option<VerifiedFeeSponsorVaultAllocation>> {
-        let key = Name::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key = StatePath::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
             &work.program_id,
             &work.asset_definition_id,
             &work.lease_id,
         ))
         .wrap_err("parse verified fee sponsor vault allocation state key")?;
         let view = self.state.view();
-        let Some(payload) = view.world().smart_contract_state().get(&key) else {
+        let Some(payload) = view.world().smart_contract_state().get(key.as_ref()) else {
             return Ok(None);
         };
         decode_verified_allocation_record(payload).map(Some)
@@ -1669,6 +1670,43 @@ mod tests {
         assert!(
             !prune_durable_worker_state(&mut durable, 2),
             "already-bounded state must not trigger another checkpoint rewrite"
+        );
+    }
+
+    #[test]
+    fn verified_worker_records_use_state_path_keys() {
+        let envelope = sample_envelope([0x40; 32]);
+        let relay_key_text = envelope.relay_ref().relay_state_key();
+        let relay_key = StatePath::from_str(&relay_key_text).expect("valid relay state path");
+        assert_eq!(relay_key.as_ref(), relay_key_text);
+
+        let allocation = sample_allocation_work(7, DurableWorkStatus::Pending);
+        let allocation_key_text = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &allocation.program_id,
+            &allocation.asset_definition_id,
+            &allocation.lease_id,
+        );
+        let allocation_key =
+            StatePath::from_str(&allocation_key_text).expect("valid allocation state path");
+        assert_eq!(allocation_key.as_ref(), allocation_key_text);
+
+        let records = BTreeMap::from([
+            (relay_key.clone(), vec![0xA5]),
+            (allocation_key.clone(), vec![0x5A]),
+        ]);
+        assert_eq!(
+            records
+                .get(&relay_key)
+                .expect("stored relay record")
+                .as_slice(),
+            &[0xA5]
+        );
+        assert_eq!(
+            records
+                .get(&allocation_key)
+                .expect("stored allocation record")
+                .as_slice(),
+            &[0x5A]
         );
     }
 

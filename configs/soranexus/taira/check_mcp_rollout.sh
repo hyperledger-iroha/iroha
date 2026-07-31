@@ -78,6 +78,8 @@ For a single public-node devex check, prefer the first-class CLI:
 
 The check fails unless:
   - GET /v1/mcp returns HTTP 200 with a capabilities payload
+  - GET /readyz reports live=true, mandatory=true, ready=true, the exact
+    ABI-21 `cash_handoff_v1` capability, and no blockers
   - GET /v1/offline/readiness returns the exact ABI-21/V4 `cash_handoff_v1`
     contract for the configured scale-2 Digital Shekel asset, five distinct
     active roles, the operator-reviewed authenticated release identity, a
@@ -1497,6 +1499,60 @@ check_sumeragi_snapshot_with_retry() {
   return 1
 }
 
+check_mandatory_readyz() {
+  local label="$1"
+  local root="$2"
+  local readiness_url
+
+  readiness_url="$(normalize_root_url "$root")/readyz"
+  echo "==> ${label}: GET ${readiness_url}" >&2
+  http_request GET "$readiness_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: /readyz failed with HTTP ${last_status}" >&2
+    sed -n '1,80p' "$last_body" >&2 || true
+    return 1
+  fi
+
+  python3 - "$label" "$last_body" <<'PY'
+import json
+import sys
+
+label, path = sys.argv[1:]
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+try:
+    with open(path, "r", encoding="utf-8") as stream:
+        payload = json.load(stream, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(f"{label}: /readyz gate failed: invalid response JSON: {error}") from error
+
+def fail(message):
+    raise SystemExit(f"{label}: /readyz gate failed: {message}")
+
+if not isinstance(payload, dict):
+    fail("response is not a JSON object")
+if payload.get("live") is not True:
+    fail("live is not true")
+if payload.get("mandatory") is not True:
+    fail("mandatory is not true")
+if payload.get("ready") is not True:
+    fail("ready is not true")
+if payload.get("cash_handoff_capability") != "cash_handoff_v1":
+    fail("cash_handoff_capability is not cash_handoff_v1")
+if payload.get("required_bridge_abi_version") != 21:
+    fail("required_bridge_abi_version is not exact ABI-21")
+if payload.get("blockers") != []:
+    fail(f"blockers are not empty: {payload.get('blockers')!r}")
+PY
+}
+
 check_offline_readiness() {
   local label="$1"
   local root="$2"
@@ -1812,6 +1868,10 @@ capture_validator_fleet_sample() {
   for idx in "${!VALIDATOR_ROOTS[@]}"; do
     label="${VALIDATOR_LABELS[$idx]}"
     root="${VALIDATOR_ROOTS[$idx]}"
+    if ! check_mandatory_readyz "validator ${label}" "$root"; then
+      rm -f "$records_file"
+      return 1
+    fi
     if ! offline_summary="$(check_offline_readiness "validator ${label}" "$root")"; then
       rm -f "$records_file"
       return 1
@@ -2195,6 +2255,7 @@ check_endpoint() {
   check_tool_input_schemas "$label"
 
   root_url="$(mcp_root_from_url "$url")"
+  check_mandatory_readyz "$label" "$root_url"
   check_offline_readiness "$label" "$root_url"
   CHECKED_LABELS+=("$label")
   CHECKED_ROOTS+=("$root_url")

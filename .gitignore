@@ -161,6 +161,10 @@ javascript/iroha_js/node_modules/
 javascript/iroha_js/dist/
 javascript/iroha_js/target-cargo/
 
+# Developer portal build artifacts
+docs/portal/.docusaurus/
+docs/portal/node_modules/
+
 # Python build artifacts
 *.pyc
 python/norito_py/build/

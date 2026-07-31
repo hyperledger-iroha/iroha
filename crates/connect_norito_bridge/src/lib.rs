@@ -16292,7 +16292,7 @@ mod kagemusha_bridge_tests {
                 height,
                 view: 0,
             };
-            let execution_commitment = ExecutionCommitment::without_topups(
+            let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"receiver-offer size fixture parent state"),
                 Hash::new(b"receiver-offer size fixture post state"),
                 ordinary_writes_root,
@@ -18829,7 +18829,7 @@ mod kagemusha_bridge_tests {
         let mut step_eq_profile = None;
         let mut step_ep_profile = None;
         let mut generated_frames = Vec::with_capacity(8);
-        let live_pair = iroha_core::zk::kagemusha_v2::generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4(
+        let generated_pair = iroha_core::zk::kagemusha_v2::generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4(
                 params.clone(),
                 params,
                 |generated_profile, kind, spool| {
@@ -18885,6 +18885,12 @@ mod kagemusha_bridge_tests {
                 },
             )
             .expect("generate and self-verify the genuine compact degree-16 Eq/Ep release");
+        let max_recursive_pair_bytes = generated_pair.max_recursive_pair_bytes;
+        let live_pair = generated_pair.initialization_pair_bytes;
+        assert!(
+            u32::try_from(live_pair.len()).is_ok_and(|bytes| bytes < max_recursive_pair_bytes),
+            "recursive release ceiling must exceed the initialization sample"
+        );
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 fixture:artifacts-generated");
         assert_eq!(generated_frames.len(), 8, "all exact release roles emitted");
         generated_frames.sort_by_key(|(parity, kind, _, _)| {
@@ -18937,8 +18943,7 @@ mod kagemusha_bridge_tests {
             asset_scale: 2,
             activation_height,
             withdrawal_height,
-            max_proof_bytes: u32::try_from(live_pair.len())
-                .expect("generated pair length fits release ceiling"),
+            max_proof_bytes: max_recursive_pair_bytes,
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -19145,7 +19150,7 @@ mod kagemusha_bridge_tests {
                     )),
                     payload_hash: Hash::new(b"production SBD acceptance parent payload"),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"production SBD acceptance parent parent state"),
                     Hash::new(b"production SBD acceptance parent post state"),
                     Hash::new(b"production SBD acceptance parent ordinary writes"),
@@ -19190,7 +19195,7 @@ mod kagemusha_bridge_tests {
             )),
             payload_hash: Hash::new(b"production SBD acceptance finalized payload"),
         };
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"production SBD acceptance parent state"),
             commitment.post_state_root,
             commitment.ordinary_writes_root,

@@ -3,7 +3,7 @@ EXTENDS FiniteSets, Naturals
 
 (***************************************************************************
 Bounded durability/publication model for control-only Native AMX participant
-application evidence.
+application evidence plus unified ordinary/Native startup repair.
 
 The storage abstraction has four participant heights. Heights 1 and 2 are
 complete standalone evidence pairs retained at startup; height 2 is named by
@@ -16,8 +16,10 @@ temporary publication and every unlink.
 The production refinement is source-bound separately to the Native signing,
 manifest/receipt validation, standalone Kura publication, descriptor-bound
 latest-pointer, prune-intent completion, startup rebuild, WSV frontier, and
-retirement entry points. The finite model does not prove that those Rust entry
-points refine this ordering.
+retirement entry points. It additionally source-binds the read-only all-group
+startup planner, generic canonical-body recovery, reverse merge-carrier pass,
+all-group preflight/application/readback, and Queue reconciliation order. The
+finite model does not prove that those Rust entry points refine this ordering.
 ***************************************************************************)
 
 CONSTANTS
@@ -35,7 +37,10 @@ NativeEvidenceModes ==
    "UnauthenticatedTempPromotion", "PuncturedRetainedHistory",
    "NonOldestPrefixPrune", "NonHighestRepairHalf",
    "MultipleRepairHalves", "ConflictingRetainedPairIdentity",
-   "RetainedPredecessorDrift"}
+   "RetainedPredecessorDrift", "MutatingUnifiedStartupPlan",
+   "UncoalescedCanonicalBodyNeeds", "PartialUnifiedStartupPreflight",
+   "QueueBeforeEvidenceReadback", "MissingReverseMergeCarrier",
+   "OrphanMergeCarrier", "SkipPostCacheCarrierReconcile"}
 
 NativeEvidencePhases ==
   {"Certified", "FinalityDurable", "ManifestTempDurable",
@@ -45,6 +50,19 @@ NativeEvidencePhases ==
 NativePruneStages ==
   {"Idle", "TempDurable", "IntentDurable",
    "ManifestUnlinked", "ReceiptUnlinked", "Completed"}
+
+UnifiedStartupRepairStages ==
+  {"Unplanned", "NeedBodies", "BodiesRecovered", "CarrierPreflighted",
+   "PlanReady", "GroupsPreflight", "EvidenceApplied",
+   "ReadBackVerified", "QueueReconciled"}
+
+OrdinaryReceiptRepairGroup == "OrdinaryReceipt"
+NativeMarkerRepairGroup == "NativeMarker"
+MergeCarrierRepairGroup == "MergeCarrier"
+UnifiedEvidenceRepairGroups ==
+  {OrdinaryReceiptRepairGroup, NativeMarkerRepairGroup,
+   MergeCarrierRepairGroup}
+UnifiedEvidenceRepairGroupCount == Cardinality(UnifiedEvidenceRepairGroups)
 
 TargetHeight == 3
 ExtraIncomingHeight == 4
@@ -193,7 +211,43 @@ VARIABLES
   \* @type: Bool;
   groupExactCover,
   \* @type: Bool;
-  groupAppliedAtomically
+  groupAppliedAtomically,
+  \* @type: Str;
+  startupRepairStage,
+  \* @type: Set(Str);
+  plannedEvidenceRepairGroups,
+  \* @type: Bool;
+  startupRepairPlanReadOnly,
+  \* @type: Int;
+  canonicalBodyNeedCount,
+  \* @type: Int;
+  canonicalBodiesRecovered,
+  \* @type: Set(Str);
+  recoveredCanonicalBodyGroups,
+  \* @type: Bool;
+  planRevalidatedAfterRecovery,
+  \* @type: Set(Str);
+  preflightedEvidenceRepairGroups,
+  \* @type: Set(Str);
+  appliedEvidenceRepairGroups,
+  \* @type: Bool;
+  evidenceRepairReadBackVerified,
+  \* @type: Bool;
+  queueGateOpen,
+  \* @type: Bool;
+  queueReservationReconciled,
+  \* @type: Bool;
+  finalityDeclaresMergeCarrier,
+  \* @type: Bool;
+  mergeCarrierRecordPresent,
+  \* @type: Bool;
+  mergeCarrierRecordExact,
+  \* @type: Bool;
+  mergeCarrierRepairPlanned,
+  \* @type: Bool;
+  bodyCachePopulated,
+  \* @type: Bool;
+  postCacheCarrierPreflighted
 
 publicationVars ==
   <<phase, finalizedHeights, manifestFiles, receiptFiles,
@@ -220,8 +274,21 @@ pruneVars ==
 
 sameRouteVars == <<sameRouteSettled, separateParticipantMarker>>
 
-claimVars ==
+sourceClaimVars ==
   <<sourceClaimRecorded, sourceClaimSessionCount, sourceClaimFieldsComplete>>
+
+startupRepairVars ==
+  <<startupRepairStage, plannedEvidenceRepairGroups,
+    startupRepairPlanReadOnly, canonicalBodyNeedCount,
+    canonicalBodiesRecovered, recoveredCanonicalBodyGroups,
+    planRevalidatedAfterRecovery, preflightedEvidenceRepairGroups,
+    appliedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+    queueGateOpen, queueReservationReconciled,
+    finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+    mergeCarrierRecordExact, mergeCarrierRepairPlanned,
+    bodyCachePopulated, postCacheCarrierPreflighted>>
+
+claimVars == <<sourceClaimVars, startupRepairVars>>
 
 admissionVars ==
   <<nativeAdmissionAttempted, activeIncarnationExact, predecessorExact,
@@ -255,7 +322,16 @@ vars ==
     sourceClaimRecorded, sourceClaimSessionCount, sourceClaimFieldsComplete,
     nativeAdmissionAttempted, activeIncarnationExact, predecessorExact,
     contiguousNextHeight, groupApplied, groupUnique, groupOrdered,
-    groupExactCover, groupAppliedAtomically>>
+    groupExactCover, groupAppliedAtomically,
+    startupRepairStage, plannedEvidenceRepairGroups,
+    startupRepairPlanReadOnly, canonicalBodyNeedCount,
+    canonicalBodiesRecovered, recoveredCanonicalBodyGroups,
+    planRevalidatedAfterRecovery, preflightedEvidenceRepairGroups,
+    appliedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+    queueGateOpen, queueReservationReconciled,
+    finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+    mergeCarrierRecordExact, mergeCarrierRepairPlanned,
+    bodyCachePopulated, postCacheCarrierPreflighted>>
 
 finalityDurable == TargetHeight \in finalizedHeights
 manifestDurable == TargetHeight \in manifestFiles
@@ -381,6 +457,24 @@ Init ==
   /\ groupOrdered = TRUE
   /\ groupExactCover = TRUE
   /\ groupAppliedAtomically = TRUE
+  /\ startupRepairStage = "Unplanned"
+  /\ plannedEvidenceRepairGroups = {}
+  /\ startupRepairPlanReadOnly = TRUE
+  /\ canonicalBodyNeedCount = 0
+  /\ canonicalBodiesRecovered = 0
+  /\ recoveredCanonicalBodyGroups = {}
+  /\ planRevalidatedAfterRecovery = FALSE
+  /\ preflightedEvidenceRepairGroups = {}
+  /\ appliedEvidenceRepairGroups = {}
+  /\ evidenceRepairReadBackVerified = FALSE
+  /\ queueGateOpen = FALSE
+  /\ queueReservationReconciled = FALSE
+  /\ finalityDeclaresMergeCarrier = (Mode # "OrphanMergeCarrier")
+  /\ mergeCarrierRecordPresent = (Mode = "OrphanMergeCarrier")
+  /\ mergeCarrierRecordExact = (Mode = "OrphanMergeCarrier")
+  /\ mergeCarrierRepairPlanned = FALSE
+  /\ bodyCachePopulated = FALSE
+  /\ postCacheCarrierPreflighted = FALSE
 
 PersistFinality ==
   /\ phase = "Certified"
@@ -977,6 +1071,7 @@ RecordSourceSessionClaim ==
   /\ sourceClaimFieldsComplete' = (Mode # "DivergentSourceClaim")
   /\ UNCHANGED publicationVars
   /\ UNCHANGED pruneVars
+  /\ UNCHANGED startupRepairVars
   /\ UNCHANGED <<sameRouteVars, admissionVars, groupVars>>
 
 AdmitNativeControl ==
@@ -999,6 +1094,196 @@ ApplyNativeGroup ==
   /\ UNCHANGED publicationVars
   /\ UNCHANGED pruneVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars>>
+
+\* Startup repair first inventories the ordinary receipt, Native marker, and
+\* reverse merge-carrier groups. In the fixed mode this step is observational:
+\* it does not publish a group, alter the Queue, or install a carrier record.
+\* The groups name the same missing canonical global carrier, so the generic
+\* recovery owner emits one coalesced body need.
+PlanUnifiedStartupEvidenceRepair ==
+  /\ startupRepairStage = "Unplanned"
+  /\ startupRepairStage' =
+       IF Mode \in {"MissingReverseMergeCarrier", "OrphanMergeCarrier"}
+       THEN "PlanReady"
+       ELSE "NeedBodies"
+  /\ plannedEvidenceRepairGroups' = UnifiedEvidenceRepairGroups
+  /\ startupRepairPlanReadOnly' = (Mode # "MutatingUnifiedStartupPlan")
+  /\ canonicalBodyNeedCount' =
+       IF Mode = "UncoalescedCanonicalBodyNeeds" THEN 2 ELSE 1
+  /\ planRevalidatedAfterRecovery' =
+       Mode \in {"MissingReverseMergeCarrier", "OrphanMergeCarrier"}
+  /\ appliedEvidenceRepairGroups' =
+       IF Mode = "MutatingUnifiedStartupPlan"
+       THEN {OrdinaryReceiptRepairGroup}
+       ELSE appliedEvidenceRepairGroups
+  /\ UNCHANGED
+       <<canonicalBodiesRecovered, recoveredCanonicalBodyGroups,
+         preflightedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+         queueGateOpen, queueReservationReconciled,
+         finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+         mergeCarrierRecordExact, mergeCarrierRepairPlanned,
+         bodyCachePopulated, postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+\* One authenticated canonical body satisfies the complete plan, including
+\* both the ordinary and Native evidence groups.
+\* The signed complete-wire length and hash are abstracted by this single
+\* successful recovery transition; transport authentication is modeled in
+\* SumeragiV2AutonomousReservationCarrier.
+RecoverSharedCanonicalBody ==
+  /\ startupRepairStage = "NeedBodies"
+  /\ canonicalBodyNeedCount > 0
+  /\ startupRepairStage' = "BodiesRecovered"
+  /\ canonicalBodiesRecovered' = 1
+  /\ recoveredCanonicalBodyGroups' = UnifiedEvidenceRepairGroups
+  /\ bodyCachePopulated' = TRUE
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, planRevalidatedAfterRecovery,
+         preflightedEvidenceRepairGroups, appliedEvidenceRepairGroups,
+         evidenceRepairReadBackVerified, queueGateOpen,
+         queueReservationReconciled, finalityDeclaresMergeCarrier,
+         mergeCarrierRecordPresent, mergeCarrierRecordExact,
+         mergeCarrierRepairPlanned, postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+\* Cache installation is followed by the reverse carrier pass. The pass
+\* preflights the exact carrier reconstruction named by finality before a
+\* recovered body need may retire; publication remains owned by the subsequent
+\* all-item application plan.
+ReconcilePostCacheMergeCarrier ==
+  /\ startupRepairStage = "BodiesRecovered"
+  /\ bodyCachePopulated
+  /\ Mode # "SkipPostCacheCarrierReconcile"
+  /\ finalityDeclaresMergeCarrier
+  /\ startupRepairStage' = "CarrierPreflighted"
+  /\ postCacheCarrierPreflighted' = TRUE
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, canonicalBodiesRecovered,
+         recoveredCanonicalBodyGroups, planRevalidatedAfterRecovery,
+         preflightedEvidenceRepairGroups, appliedEvidenceRepairGroups,
+         evidenceRepairReadBackVerified, queueGateOpen,
+         queueReservationReconciled, finalityDeclaresMergeCarrier,
+         mergeCarrierRecordPresent, mergeCarrierRecordExact,
+         mergeCarrierRepairPlanned, bodyCachePopulated>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+\* Planning is repeated after body recovery and carrier reconstruction
+\* preflight. The SkipPostCache mutation deliberately permits the old one-way
+\* behavior.
+ReplanUnifiedStartupEvidenceRepair ==
+  /\ \/ startupRepairStage = "CarrierPreflighted"
+     \/ /\ Mode = "SkipPostCacheCarrierReconcile"
+        /\ startupRepairStage = "BodiesRecovered"
+  /\ startupRepairStage' = "PlanReady"
+  /\ planRevalidatedAfterRecovery' = TRUE
+  /\ mergeCarrierRepairPlanned' =
+       (finalityDeclaresMergeCarrier /\ ~mergeCarrierRecordPresent)
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, canonicalBodiesRecovered,
+         recoveredCanonicalBodyGroups, preflightedEvidenceRepairGroups,
+         appliedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+         queueGateOpen, queueReservationReconciled,
+         finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+         mergeCarrierRecordExact, bodyCachePopulated,
+         postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+\* Every ordinary and Native group is preflighted before any durable
+\* publication. A partial prefix is never an application authorization.
+PreflightUnifiedStartupEvidenceGroups ==
+  /\ startupRepairStage = "PlanReady"
+  /\ startupRepairStage' = "GroupsPreflight"
+  /\ preflightedEvidenceRepairGroups' =
+       IF Mode = "PartialUnifiedStartupPreflight"
+       THEN {OrdinaryReceiptRepairGroup}
+       ELSE UnifiedEvidenceRepairGroups
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, canonicalBodiesRecovered,
+         recoveredCanonicalBodyGroups, planRevalidatedAfterRecovery,
+         appliedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+         queueGateOpen, queueReservationReconciled,
+         finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+         mergeCarrierRecordExact, mergeCarrierRepairPlanned,
+         bodyCachePopulated, postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+ApplyUnifiedStartupEvidenceGroups ==
+  /\ startupRepairStage = "GroupsPreflight"
+  /\ \/ preflightedEvidenceRepairGroups = UnifiedEvidenceRepairGroups
+     \/ Mode = "PartialUnifiedStartupPreflight"
+  /\ startupRepairStage' = "EvidenceApplied"
+  /\ appliedEvidenceRepairGroups' = preflightedEvidenceRepairGroups
+  /\ mergeCarrierRecordPresent' =
+       IF mergeCarrierRepairPlanned THEN TRUE ELSE mergeCarrierRecordPresent
+  /\ mergeCarrierRecordExact' =
+       IF mergeCarrierRepairPlanned THEN TRUE ELSE mergeCarrierRecordExact
+  /\ mergeCarrierRepairPlanned' = FALSE
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, canonicalBodiesRecovered,
+         recoveredCanonicalBodyGroups, planRevalidatedAfterRecovery,
+         preflightedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+         queueGateOpen, queueReservationReconciled,
+         finalityDeclaresMergeCarrier, bodyCachePopulated,
+         postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+ReadBackUnifiedStartupEvidence ==
+  /\ startupRepairStage = "EvidenceApplied"
+  /\ startupRepairStage' = "ReadBackVerified"
+  /\ evidenceRepairReadBackVerified' =
+       (appliedEvidenceRepairGroups = UnifiedEvidenceRepairGroups)
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, canonicalBodiesRecovered,
+         recoveredCanonicalBodyGroups, planRevalidatedAfterRecovery,
+         preflightedEvidenceRepairGroups, appliedEvidenceRepairGroups,
+         queueGateOpen, queueReservationReconciled,
+         finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+         mergeCarrierRecordExact, mergeCarrierRepairPlanned,
+         bodyCachePopulated, postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
+
+\* Only after exact readback may reservation reconciliation finish and expose
+\* ordinary Queue selection. The mutation reopens directly after application.
+ReconcileQueueAfterUnifiedStartupEvidence ==
+  /\ \/ /\ startupRepairStage = "ReadBackVerified"
+        /\ evidenceRepairReadBackVerified
+     \/ /\ Mode = "QueueBeforeEvidenceReadback"
+        /\ startupRepairStage = "EvidenceApplied"
+  /\ startupRepairStage' = "QueueReconciled"
+  /\ queueGateOpen' = TRUE
+  /\ queueReservationReconciled' = TRUE
+  /\ UNCHANGED
+       <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
+         canonicalBodyNeedCount, canonicalBodiesRecovered,
+         recoveredCanonicalBodyGroups, planRevalidatedAfterRecovery,
+         preflightedEvidenceRepairGroups, appliedEvidenceRepairGroups,
+         evidenceRepairReadBackVerified, finalityDeclaresMergeCarrier,
+         mergeCarrierRecordPresent, mergeCarrierRecordExact,
+         mergeCarrierRepairPlanned, bodyCachePopulated,
+         postCacheCarrierPreflighted>>
+  /\ UNCHANGED
+       <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
+         admissionVars, groupVars>>
 
 Next ==
   \/ PersistFinality
@@ -1028,6 +1313,14 @@ Next ==
   \/ RecordSourceSessionClaim
   \/ AdmitNativeControl
   \/ ApplyNativeGroup
+  \/ PlanUnifiedStartupEvidenceRepair
+  \/ RecoverSharedCanonicalBody
+  \/ ReconcilePostCacheMergeCarrier
+  \/ ReplanUnifiedStartupEvidenceRepair
+  \/ PreflightUnifiedStartupEvidenceGroups
+  \/ ApplyUnifiedStartupEvidenceGroups
+  \/ ReadBackUnifiedStartupEvidence
+  \/ ReconcileQueueAfterUnifiedStartupEvidence
 
 NativeEvidenceTypeInvariant ==
   /\ NativeEvidenceConfiguration
@@ -1089,6 +1382,24 @@ NativeEvidenceTypeInvariant ==
   /\ groupOrdered \in BOOLEAN
   /\ groupExactCover \in BOOLEAN
   /\ groupAppliedAtomically \in BOOLEAN
+  /\ startupRepairStage \in UnifiedStartupRepairStages
+  /\ plannedEvidenceRepairGroups \subseteq UnifiedEvidenceRepairGroups
+  /\ startupRepairPlanReadOnly \in BOOLEAN
+  /\ canonicalBodyNeedCount \in 0..UnifiedEvidenceRepairGroupCount
+  /\ canonicalBodiesRecovered \in 0..1
+  /\ recoveredCanonicalBodyGroups \subseteq UnifiedEvidenceRepairGroups
+  /\ planRevalidatedAfterRecovery \in BOOLEAN
+  /\ preflightedEvidenceRepairGroups \subseteq UnifiedEvidenceRepairGroups
+  /\ appliedEvidenceRepairGroups \subseteq UnifiedEvidenceRepairGroups
+  /\ evidenceRepairReadBackVerified \in BOOLEAN
+  /\ queueGateOpen \in BOOLEAN
+  /\ queueReservationReconciled \in BOOLEAN
+  /\ finalityDeclaresMergeCarrier \in BOOLEAN
+  /\ mergeCarrierRecordPresent \in BOOLEAN
+  /\ mergeCarrierRecordExact \in BOOLEAN
+  /\ mergeCarrierRepairPlanned \in BOOLEAN
+  /\ bodyCachePopulated \in BOOLEAN
+  /\ postCacheCarrierPreflighted \in BOOLEAN
 
 NativeStandaloneEvidenceInvariant ==
   /\ manifestFiles \subseteq finalizedHeights
@@ -1252,6 +1563,82 @@ MLNativeManifestAuthenticates ==
     /\ manifestLeafExact
     /\ authenticatedProofAvailable
 
+\* Planning spans both ordinary receipt and Native marker groups and remains
+\* observational. Because both groups name the same carrier, exactly one
+\* generic canonical-body need and one recovered body serve the whole plan.
+MLUnifiedStartupPlanningReadOnly ==
+  /\ startupRepairPlanReadOnly
+  /\ (startupRepairStage # "Unplanned" =>
+       plannedEvidenceRepairGroups = UnifiedEvidenceRepairGroups)
+  /\ (startupRepairStage \in
+        {"Unplanned", "NeedBodies", "BodiesRecovered",
+         "CarrierPreflighted", "PlanReady", "GroupsPreflight"} =>
+       appliedEvidenceRepairGroups = {})
+
+MLUnifiedCanonicalBodyNeedCoalesced ==
+  /\ (startupRepairStage # "Unplanned" => canonicalBodyNeedCount = 1)
+  /\ (bodyCachePopulated =>
+       /\ canonicalBodiesRecovered = 1
+       /\ recoveredCanonicalBodyGroups = UnifiedEvidenceRepairGroups)
+  /\ (~bodyCachePopulated =>
+       /\ canonicalBodiesRecovered = 0
+       /\ recoveredCanonicalBodyGroups = {})
+
+\* No group is publishable until the complete mixed ordinary/Native plan has
+\* passed read-only preflight. Application is all-or-nothing across the plan.
+MLUnifiedStartupAllGroupsPreflight ==
+  /\ (appliedEvidenceRepairGroups # {} =>
+       /\ preflightedEvidenceRepairGroups = UnifiedEvidenceRepairGroups
+       /\ appliedEvidenceRepairGroups = UnifiedEvidenceRepairGroups)
+  /\ (evidenceRepairReadBackVerified =>
+       appliedEvidenceRepairGroups = UnifiedEvidenceRepairGroups)
+
+\* Queue reconciliation and ordinary selection are one terminal publication
+\* boundary, strictly after exact evidence application and durable readback.
+MLUnifiedStartupQueueAfterReadback ==
+  /\ (queueGateOpen = queueReservationReconciled)
+  /\ (queueGateOpen =>
+       /\ startupRepairStage = "QueueReconciled"
+       /\ planRevalidatedAfterRecovery
+       /\ preflightedEvidenceRepairGroups = UnifiedEvidenceRepairGroups
+       /\ appliedEvidenceRepairGroups = UnifiedEvidenceRepairGroups
+       /\ evidenceRepairReadBackVerified)
+
+\* After re-planning, the durable carrier index is a two-way projection of
+\* finality: Some has one exact record or one exact pending repair, while None
+\* has neither. After application no pending projection may remain.
+MLMergeCarrierEvidenceBidirectional ==
+  /\ (planRevalidatedAfterRecovery =>
+       /\ (~finalityDeclaresMergeCarrier =>
+            /\ ~mergeCarrierRecordPresent
+            /\ ~mergeCarrierRepairPlanned)
+       /\ (finalityDeclaresMergeCarrier =>
+            \/ /\ mergeCarrierRecordPresent
+                  /\ mergeCarrierRecordExact
+               /\ ~mergeCarrierRepairPlanned
+            \/ /\ ~mergeCarrierRecordPresent
+                  /\ mergeCarrierRepairPlanned))
+  /\ (startupRepairStage \in
+        {"EvidenceApplied", "ReadBackVerified", "QueueReconciled"} =>
+       /\ (finalityDeclaresMergeCarrier = mergeCarrierRecordPresent)
+       /\ ~mergeCarrierRepairPlanned
+       /\ (mergeCarrierRecordPresent => mergeCarrierRecordExact))
+
+\* Installing a recovered body in the canonical cache is not the end of
+\* recovery. The reverse carrier preflight must finish before that body can
+\* make a re-planned application-evidence group Ready.
+MLPostCacheCarrierPreflighted ==
+  bodyCachePopulated /\ planRevalidatedAfterRecovery =>
+    postCacheCarrierPreflighted
+
+MLUnifiedStartupEvidenceRepairSafe ==
+  /\ MLUnifiedStartupPlanningReadOnly
+  /\ MLUnifiedCanonicalBodyNeedCoalesced
+  /\ MLUnifiedStartupAllGroupsPreflight
+  /\ MLUnifiedStartupQueueAfterReadback
+  /\ MLMergeCarrierEvidenceBidirectional
+  /\ MLPostCacheCarrierPreflighted
+
 MLNativeDurabilityPrecedesFrontier ==
   /\ NativeStandaloneEvidenceInvariant
   /\ NativeEvidenceRetentionBoundInvariant
@@ -1260,6 +1647,7 @@ MLNativeDurabilityPrecedesFrontier ==
   /\ MLNativeTempPromotionAuthenticated
   /\ MLNativeRetainedHistoryExact
   /\ MLNativePruneOldestPrefix
+  /\ MLUnifiedStartupEvidenceRepairSafe
   /\ NativePruneJournalInvariant
   /\ FrontierPublicationInvariant
   /\ (startupRepairRequired =>
@@ -1310,6 +1698,7 @@ NativeApplicationEvidenceSafetyInvariant ==
   /\ MLNativeContiguousActiveRoute
   /\ MLNativeGroupExactCover
   /\ MLNativeManifestAuthenticates
+  /\ MLUnifiedStartupEvidenceRepairSafe
   /\ MLNativeDurabilityPrecedesFrontier
   /\ MLNativeLatestIndexExact
 

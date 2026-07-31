@@ -112,7 +112,7 @@ fn fixture() -> Fixture {
             .expect("canonical bridge proposal block wire"),
     };
     let signers = vec![0, 1, 2];
-    let execution_commitment = ExecutionCommitment::without_topups(
+    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"bridge core v2 parent state"),
         Hash::new(b"bridge core v2 post state"),
         Hash::new(b"bridge core v2 ordinary writes"),

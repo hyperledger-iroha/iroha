@@ -22279,6 +22279,7 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "string",
             "enum": [
+                "awaiting_executable_payload",
                 "awaiting_payload_availability",
                 "awaiting_lane_certification",
                 "certified_bundle_unavailable",
@@ -22294,10 +22295,12 @@ fn openapi_schemas() -> Map {
         "SumeragiAutonomousLaneExecution".to_owned(),
         norito::json!({
             "type": "object",
+            "description": "Bounded autonomous-lane durability evidence. Optional values may be omitted or null; after normalization proposal_hash and descriptor_hash form an exact pair. ReservationsDurable has no authenticated proposal view, finalized identity, executable payload, source bundle, merge entry, or carrier and requires equal reservation/transaction counts. Later non-conflict stages require the finalized identity pair and may carry an authenticated proposal view when the durable payload supplies one. Rows are strictly ordered by lane_id, dataspace_id, lane_incarnation, lane_block_height, lane_block_view, proposal_height, and proposal_identity_hash.",
             "required": [
                 "lane_id", "dataspace_id", "lane_incarnation",
                 "lane_block_height", "lane_block_view", "proposal_height",
-                "proposal_view", "proposal_hash", "descriptor_hash",
+                "reservation_owner_hash", "proposal_identity_hash",
+                "reservation_group_hash",
                 "reservation_count", "transaction_count", "highest_durable_stage"
             ],
             "additionalProperties": false,
@@ -22320,17 +22323,71 @@ fn openapi_schemas() -> Map {
                     "type": "integer", "format": "uint64", "minimum": 1
                 },
                 "proposal_view": {
-                    "type": "integer", "format": "uint64", "minimum": 0
+                    "anyOf": [
+                        { "type": "integer", "format": "uint64", "minimum": 0 },
+                        { "type": "null" }
+                    ]
                 },
-                "proposal_hash": { "$ref": "#/components/schemas/Hash" },
-                "descriptor_hash": { "$ref": "#/components/schemas/Hash" },
-                "executable_payload_hash": { "$ref": "#/components/schemas/Hash" },
-                "source_bundle_hash": { "$ref": "#/components/schemas/Hash" },
-                "merge_entry_hash": { "$ref": "#/components/schemas/Hash" },
+                "reservation_owner_hash": {
+                    "allOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "not": { "pattern": "^hash:0{64}#[0-9A-F]{4}$" } }
+                    ]
+                },
+                "proposal_identity_hash": {
+                    "allOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "not": { "pattern": "^hash:0{64}#[0-9A-F]{4}$" } }
+                    ]
+                },
+                "reservation_group_hash": {
+                    "allOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "not": { "pattern": "^hash:0{64}#[0-9A-F]{4}$" } }
+                    ]
+                },
+                "proposal_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "descriptor_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "executable_payload_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "source_bundle_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "merge_entry_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
                 "application_block_height": {
-                    "type": "integer", "format": "uint64", "minimum": 1
+                    "anyOf": [
+                        { "type": "integer", "format": "uint64", "minimum": 1 },
+                        { "type": "null" }
+                    ]
                 },
-                "application_block_hash": { "$ref": "#/components/schemas/Hash" },
+                "application_block_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
                 "reservation_count": {
                     "type": "integer", "format": "uint64", "minimum": 0,
                     "maximum": 4_096
@@ -22343,9 +22400,96 @@ fn openapi_schemas() -> Map {
                     "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStage"
                 },
                 "stuck_reason": {
-                    "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStuckReason"
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStuckReason" },
+                        { "type": "null" }
+                    ]
                 }
-            }
+            },
+            "allOf": [
+                {
+                    "oneOf": [
+                        {
+                            "required": ["proposal_hash", "descriptor_hash"],
+                            "properties": {
+                                "proposal_hash": { "$ref": "#/components/schemas/Hash" },
+                                "descriptor_hash": { "$ref": "#/components/schemas/Hash" }
+                            }
+                        },
+                        {
+                            "properties": {
+                                "proposal_hash": { "type": "null" },
+                                "descriptor_hash": { "type": "null" }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "oneOf": [
+                        {
+                            "required": ["application_block_height", "application_block_hash"],
+                            "properties": {
+                                "application_block_height": {
+                                    "type": "integer", "format": "uint64", "minimum": 1
+                                },
+                                "application_block_hash": { "$ref": "#/components/schemas/Hash" }
+                            }
+                        },
+                        {
+                            "properties": {
+                                "application_block_height": { "type": "null" },
+                                "application_block_hash": { "type": "null" }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "highest_durable_stage": { "const": "reservations_durable" }
+                        }
+                    },
+                    "then": {
+                        "required": ["stuck_reason"],
+                        "properties": {
+                            "proposal_view": { "type": "null" },
+                            "proposal_hash": { "type": "null" },
+                            "descriptor_hash": { "type": "null" },
+                            "executable_payload_hash": { "type": "null" },
+                            "source_bundle_hash": { "type": "null" },
+                            "merge_entry_hash": { "type": "null" },
+                            "application_block_height": { "type": "null" },
+                            "application_block_hash": { "type": "null" },
+                            "stuck_reason": { "const": "awaiting_executable_payload" }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "highest_durable_stage": {
+                                "enum": [
+                                    "executable_payload_durable",
+                                    "payload_availability_certified",
+                                    "lane_certified",
+                                    "certified_bundle_durable",
+                                    "merge_candidate_durable",
+                                    "global_carrier_committed",
+                                    "kura_wsv_application_receipt_durable",
+                                    "queue_finalized"
+                                ]
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": ["proposal_hash", "descriptor_hash"],
+                        "properties": {
+                            "proposal_hash": { "$ref": "#/components/schemas/Hash" },
+                            "descriptor_hash": { "$ref": "#/components/schemas/Hash" }
+                        }
+                    }
+                }
+            ]
         }),
     );
     schemas.insert(
@@ -38866,13 +39010,90 @@ mod tests {
             .and_then(Value::as_object)
             .expect("autonomous execution row schema");
         assert_eq!(row.get("additionalProperties"), Some(&Value::from(false)));
-        assert_eq!(
-            row.get("required")
-                .and_then(Value::as_array)
-                .map(|required| required.contains(&Value::from("stuck_reason"))),
-            Some(false),
+        let required = row
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("autonomous execution required fields");
+        let properties = row
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("autonomous execution properties");
+        for field in [
+            "reservation_owner_hash",
+            "proposal_identity_hash",
+            "reservation_group_hash",
+        ] {
+            assert!(
+                required.contains(&Value::from(field)),
+                "{field} must be present at the Queue fsync boundary"
+            );
+        }
+        for field in ["proposal_view", "proposal_hash", "descriptor_hash"] {
+            assert!(
+                !required.contains(&Value::from(field)),
+                "{field} remains absent until the finalized proposal is durable"
+            );
+        }
+        assert!(
+            !required.contains(&Value::from("stuck_reason")),
             "stuck reason remains optional for a future independently proven terminal stage"
         );
+        assert!(
+            row.get("allOf")
+                .and_then(Value::as_array)
+                .is_some_and(|constraints| constraints.len() >= 4),
+            "autonomous row must expose identity-pair and reservation-stage constraints"
+        );
+        for payload_field in [
+            "reservation_keys",
+            "entrypoints",
+            "routing_plans",
+            "source_bundle",
+        ] {
+            assert!(
+                !properties.contains_key(payload_field),
+                "{payload_field} payload bytes must not leak through diagnostics"
+            );
+        }
+        let stages = schemas
+            .get("SumeragiAutonomousLaneExecutionStage")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("autonomous stage enum");
+        let expected_stages = [
+            "reservations_durable",
+            "executable_payload_durable",
+            "payload_availability_certified",
+            "lane_certified",
+            "certified_bundle_durable",
+            "merge_candidate_durable",
+            "global_carrier_committed",
+            "kura_wsv_application_receipt_durable",
+            "queue_finalized",
+            "conflict",
+        ]
+        .map(Value::from);
+        assert_eq!(stages.as_slice(), expected_stages.as_slice());
+        let reasons = schemas
+            .get("SumeragiAutonomousLaneExecutionStuckReason")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("autonomous stuck-reason enum");
+        let expected_reasons = [
+            "awaiting_executable_payload",
+            "awaiting_payload_availability",
+            "awaiting_lane_certification",
+            "certified_bundle_unavailable",
+            "awaiting_merge_selection",
+            "awaiting_global_carrier",
+            "awaiting_application_receipt",
+            "queue_finalization_unverifiable",
+            "evidence_conflict",
+        ]
+        .map(Value::from);
+        assert_eq!(reasons.as_slice(), expected_reasons.as_slice());
     }
 
     #[test]

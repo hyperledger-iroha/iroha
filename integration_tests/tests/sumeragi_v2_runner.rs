@@ -888,7 +888,7 @@ mod prepare_qc_split_tests {
                     block_hash: hash_of::<BlockHeader>(subject_seed),
                     payload_hash: hash(subject_seed.wrapping_add(1)),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     hash(0x30),
                     hash(0x31),
                     hash(0x32),

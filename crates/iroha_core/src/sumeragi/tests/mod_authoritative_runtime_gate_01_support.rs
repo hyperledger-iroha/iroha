@@ -324,7 +324,7 @@
                     )),
                     payload_hash: Hash::new(b"fair-v2-ingress-vote-payload"),
                 },
-                execution_commitment: wire::ExecutionCommitment::without_topups(
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"fair-v2-ingress-parent-state"),
                     Hash::new(b"fair-v2-ingress-post-state"),
                     Hash::new(b"fair-v2-ingress-writes"),
@@ -416,7 +416,7 @@
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: wire::ExecutionCommitment::new(
+            execution_commitment: wire::ExecutionCommitment::new_without_merge_carrier(
                 Hash::new(b"fair-v2-ingress-max-parent-state"),
                 post_state_root,
                 ordinary_writes_root,
@@ -467,7 +467,7 @@
             ordinary_writes_root,
             topup_anchor_root,
         );
-        let execution_commitment = wire::ExecutionCommitment::new(
+        let execution_commitment = wire::ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"fair-v2-ingress-max-proposal-parent-state"),
             post_state_root,
             ordinary_writes_root,

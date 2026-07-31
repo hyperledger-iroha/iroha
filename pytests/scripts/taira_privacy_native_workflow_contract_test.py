@@ -81,6 +81,9 @@ def test_workflow_uses_only_commit_pinned_actions_and_read_permission() -> None:
 
 def test_zero_pin_capture_and_fresh_final_rebuild_are_ordered() -> None:
     workflow = _workflow()
+    pre_capture_gates = workflow.index(
+        "Run fail-fast installer, soundness, and deterministic KAT gates"
+    )
     bootstrap = workflow.index("Build and attest the zero-pin static capture runner")
     capture = workflow.index(
         "Capture, validate, hash, and install the native fixture set"
@@ -95,7 +98,8 @@ def test_zero_pin_capture_and_fresh_final_rebuild_are_ordered() -> None:
     )
     upload = workflow.index("Upload the non-publishing native evidence archive")
     assert (
-        bootstrap
+        pre_capture_gates
+        < bootstrap
         < capture
         < installer
         < final_identity
@@ -113,6 +117,47 @@ def test_zero_pin_capture_and_fresh_final_rebuild_are_ordered() -> None:
     assert "cargo update" not in workflow
     assert "cargo generate-lockfile" not in workflow
     assert workflow.count("--locked") >= 6
+
+
+def test_pre_capture_gates_are_ordered_auditable_and_resource_bounded() -> None:
+    workflow = _workflow()
+    gates = workflow.index(
+        "Run fail-fast installer, soundness, and deterministic KAT gates"
+    )
+    bootstrap = workflow.index("Build and attest the zero-pin static capture runner")
+    block = workflow[gates:bootstrap]
+
+    installer = block.index(
+        "pytests/scripts/install_taira_privacy_native_expectations_test.py"
+    )
+    soundness = block.index(
+        "privacy_engines::zk_x509::profile::readiness_certificates::tests::"
+        "installed_soundness_pin_matches_the_current_compiled_profile"
+    )
+    kat = block.index(
+        "privacy_release_evidence::zk_x509::release_kat_tests::"
+        "positive_release_stage_is_the_sole_kat_producer"
+    )
+    assert installer < soundness < kat
+
+    for required in (
+        "PYTHONDONTWRITEBYTECODE=1",
+        "-p no:cacheprovider",
+        "--ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1",
+        'CARGO_TARGET_DIR="$bootstrap_target"',
+        'TAIRA_BOOTSTRAP_SOURCE_SHA256',
+        '"$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -',
+    ):
+        assert required in block
+    for bounded_setting in (
+        "CARGO_BUILD_JOBS=1",
+        "RAYON_NUM_THREADS=4",
+        "RUST_MIN_STACK=8388608",
+    ):
+        assert block.count(bounded_setting) >= 4
 
 
 def test_capture_installs_and_pins_the_complete_x509_resource_certificate() -> None:

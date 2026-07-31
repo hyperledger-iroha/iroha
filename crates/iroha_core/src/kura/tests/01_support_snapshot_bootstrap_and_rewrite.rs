@@ -844,7 +844,7 @@
     }
 
     fn v2_finality_fixture_execution_commitment() -> ExecutionCommitment {
-        ExecutionCommitment::new(
+        ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"kura finality parent state"),
             Hash::new(b"kura finality post state"),
             Hash::new(b"kura finality ordinary writes"),
@@ -2317,7 +2317,7 @@
 
         let conflicting = v2_finality_artifact_for_block_with_execution(
             &block,
-            ExecutionCommitment::without_topups(
+            ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"conflicting Kura finality parent state"),
                 Hash::new(b"conflicting Kura finality post state"),
                 Hash::new(b"conflicting Kura finality ordinary writes"),

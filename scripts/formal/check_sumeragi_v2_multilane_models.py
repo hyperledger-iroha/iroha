@@ -91,6 +91,7 @@ EXPECTED_CLOSURE_INVARIANTS = {
         "MLNativeTempPromotionAuthenticated",
         "MLNativeRetainedHistoryExact",
         "MLNativePruneOldestPrefix",
+        "MLUnifiedStartupEvidenceRepairSafe",
     ),
     "SumeragiV2AutonomousReservationCarrier": (
         "MLReservationSingleOwner",
@@ -1287,6 +1288,13 @@ EXPECTED_CLOSURE_MUTATIONS = {
             "multilane_native_multiple_repair_halves_bug.cfg",
             "multilane_native_conflicting_retained_pair_bug.cfg",
             "multilane_native_retained_predecessor_drift_bug.cfg",
+            "multilane_native_mutating_unified_startup_plan_bug.cfg",
+            "multilane_native_uncoalesced_canonical_body_needs_bug.cfg",
+            "multilane_native_partial_unified_startup_preflight_bug.cfg",
+            "multilane_native_queue_before_evidence_readback_bug.cfg",
+            "multilane_native_missing_reverse_merge_carrier_bug.cfg",
+            "multilane_native_orphan_merge_carrier_bug.cfg",
+            "multilane_native_skip_post_cache_carrier_reconcile_bug.cfg",
         ),
     ),
     "ML-MUT-NAT-07": (
@@ -2443,9 +2451,9 @@ def _validate_closure_mutation_ledger(
             "conceptual closure mappings must cover every and only the model "
             "mutation configs"
         )
-    if len(model_configs) != 52:
+    if len(model_configs) != 59:
         errors.append(
-            f"reviewed multilane mutation inventory must contain 52 configs, "
+            f"reviewed multilane mutation inventory must contain 59 configs, "
             f"found {len(model_configs)}"
         )
 
@@ -2681,7 +2689,7 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$NATIVE_MODULE" \\
   multilane_native_application_evidence_fixed.cfg \\
   5 \\
-  "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact\"""",
+  "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLUnifiedStartupEvidenceRepairSafe, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact\"""",
         """run_positive \\
   autonomous-reservation-carrier \\
   "$AUTONOMOUS_MODULE" \\
@@ -2726,6 +2734,13 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_native_forged_manifest_leaf_bug.cfg",
         "multilane_native_dropped_startup_repair_bug.cfg",
         "multilane_native_ambiguous_latest_index_bug.cfg",
+        "multilane_native_mutating_unified_startup_plan_bug.cfg",
+        "multilane_native_uncoalesced_canonical_body_needs_bug.cfg",
+        "multilane_native_partial_unified_startup_preflight_bug.cfg",
+        "multilane_native_queue_before_evidence_readback_bug.cfg",
+        "multilane_native_missing_reverse_merge_carrier_bug.cfg",
+        "multilane_native_orphan_merge_carrier_bug.cfg",
+        "multilane_native_skip_post_cache_carrier_reconcile_bug.cfg",
         "multilane_autonomous_carrier_drift_bug.cfg",
         "multilane_autonomous_duplicate_application_bug.cfg",
         "multilane_autonomous_release_after_apply_bug.cfg",

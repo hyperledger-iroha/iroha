@@ -334,6 +334,12 @@ pub fn validate_contract_interface(
     let mut trigger_ids = BTreeSet::new();
     for entrypoint in &contract_interface.entrypoints {
         for trigger in &entrypoint.triggers {
+            let trigger_id: &str = trigger.id.name().as_ref();
+            if !is_canonical_source_declaration_name(trigger_id, false) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "trigger ID `{trigger_id}` must be a canonical Kotodama V1 declaration identifier"
+                )));
+            }
             if !trigger_ids.insert(trigger.id.clone()) {
                 return Err(ContractArtifactError::invalid(format!(
                     "duplicate trigger `{}`",
@@ -341,11 +347,11 @@ pub fn validate_contract_interface(
                 )));
             }
             if let Some(namespace) = trigger.callback.namespace.as_deref()
-                && namespace.trim().is_empty()
+                && !is_canonical_seiyaku_name(namespace)
             {
                 return Err(ContractArtifactError::invalid(format!(
-                    "entrypoint `{}` has a trigger with an empty callback namespace",
-                    entrypoint.name
+                    "trigger `{}` callback namespace `{namespace}` must be a canonical Kotodama V1 seiyaku identifier",
+                    trigger.id
                 )));
             }
             validate_entrypoint_name(&trigger.callback.entrypoint)?;
@@ -369,14 +375,8 @@ pub fn validate_contract_interface(
     Ok(())
 }
 
-fn is_canonical_ascii_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
-
 fn is_canonical_source_identifier(name: &str) -> bool {
-    is_canonical_ascii_identifier(name) && !kotodama_lang::lexer::V1_KEYWORDS.contains(&name)
+    iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name)
 }
 
 fn is_canonical_source_declaration_name(name: &str, is_function: bool) -> bool {
@@ -1442,6 +1442,13 @@ mod tests {
             mapped,
             ivm_abi::access_hints::DYNAMIC_ACCESS_HINT_KEY_TYPES_V1
         );
+    }
+
+    #[test]
+    fn source_identifier_policy_rejects_exact_amount_only() {
+        assert!(!is_canonical_source_identifier("Amount"));
+        assert!(is_canonical_source_identifier("amount"));
+        assert!(is_canonical_source_identifier("money"));
     }
 
     #[test]

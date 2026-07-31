@@ -10550,7 +10550,7 @@ mod tests {
     }
 
     fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups(
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([byte, 3]),
             Hash::new([byte, 4]),
             Hash::new([byte, 5]),

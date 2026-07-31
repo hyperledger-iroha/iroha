@@ -42,6 +42,9 @@ use super::{
     BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
     BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
     CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME,
+    HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1,
+    HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+    HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES, HistoricalAutonomousLaneRecoveryRecordV1,
     INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME,
     LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
@@ -107,6 +110,7 @@ const LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE: usize = 2;
 const LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE: usize = 3;
 const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
     LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;
+const LANE_RETIREMENT_HISTORICAL_RECOVERY_NAMESPACES_PER_ROUTE: usize = 1;
 
 /// Bound the aggregate retirement scan without treating legitimate route
 /// multiplicity as corruption.
@@ -115,6 +119,8 @@ const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
 /// preflight, certificate, and application receipt), plus two Native evidence
 /// artifact families sharing one configured byte bound. Ordinary histories may also contain
 /// the globally bounded pending-merge depth beyond their terminal frontier.
+/// Historical autonomous recovery contributes one additional globally bounded
+/// record inventory rather than a per-route multiplier.
 /// Startup recovery may admit one entry beyond the compact Native window, but
 /// retirement runs only after startup repair and therefore accepts exactly the
 /// configured retained record count.
@@ -129,7 +135,9 @@ fn lane_retirement_aggregate_work_item_limit(
         .checked_mul(LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE)?;
     let native_per_route =
         native_retention.checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)?;
-    route_count.checked_mul(regular_per_route.checked_add(native_per_route)?)
+    route_count
+        .checked_mul(regular_per_route.checked_add(native_per_route)?)?
+        .checked_add(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
 }
 
 /// Bound one route's complete retirement artifact namespace.
@@ -137,7 +145,17 @@ fn lane_retirement_per_route_artifact_file_limit(native_retention: usize) -> Opt
     native_retention
         .checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)?
         .checked_add(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)?
-        .checked_add(LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE)
+        .checked_add(LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE)?
+        .checked_add(LANE_RETIREMENT_HISTORICAL_RECOVERY_NAMESPACES_PER_ROUTE)
+}
+
+fn accumulate_lane_retirement_historical_recovery_records(
+    current: usize,
+    additional: usize,
+) -> Option<usize> {
+    current
+        .checked_add(additional)
+        .filter(|total| *total <= HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
 }
 
 /// Return whether Native manifest and receipt windows are the same complete,
@@ -3363,6 +3381,64 @@ impl Kura {
         )
     }
 
+    /// Verify that compacted geometry can still reach the configured-primary replay floor.
+    ///
+    /// This is a read-only startup preflight. It deliberately does not finish pending GC, move
+    /// lane paths, repair markers, or rewrite the journal; callers use it before deciding that an
+    /// unusable snapshot may safely fall back to genesis-height Kura replay.
+    pub(crate) fn preflight_lane_geometry_recovery_floor_with_lineage_root(
+        &self,
+        authoritative: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        lineage_root: Hash,
+    ) -> Result<()> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let bindings = self.geometry_bindings(authoritative, incarnations, activation_heights)?;
+        let fingerprint = geometry_catalog_fingerprint(&bindings);
+        let journal = self.read_lane_geometry_journal()?;
+        let primary_binding = bindings.first().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary replay geometry has no primary binding",
+            )
+        })?;
+        if journal
+            .configured_primary_binding
+            .as_ref()
+            .is_some_and(|expected| expected != primary_binding)
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary geometry binding differs from its durable anchor",
+            ));
+        }
+        let recovery_floor = Self::lane_geometry_identity_at_applied_count(&journal, 0);
+        if recovery_floor.is_some_and(|identity| identity != (fingerprint, lineage_root)) {
+            if let Some(checkpoint) = journal.checkpoint.as_ref() {
+                return Err(self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "state snapshot at height {} is required because the configured-primary lane-geometry recovery floor was compacted",
+                        checkpoint.snapshot_height
+                    ),
+                ));
+            }
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary geometry identity does not match the retained recovery floor",
+            ));
+        }
+        Ok(())
+    }
+
     fn recover_lane_geometry_journal_with_lineage_root_inner(
         &self,
         authoritative: &LaneConfig,
@@ -3459,11 +3535,12 @@ impl Kura {
 
     /// Checkpoint recoverable lane geometry after a complete snapshot bundle is durable.
     ///
-    /// The caller must invoke this only after the snapshot data, digest, signature, Merkle
-    /// metadata, and snapshot directory entry have all been synchronized. Kura independently
-    /// joins the supplied snapshot identity to its canonical block hash and WSV checkpoint before
-    /// compacting any transition history. Archive deletion is then replayable from the compacted
-    /// journal and can never run ahead of that checkpoint.
+    /// The caller must invoke this only after the payload has passed the semantic restart reader
+    /// and the snapshot data, digest, signature, Merkle metadata, and snapshot directory entry
+    /// have all been synchronized. Kura independently joins the supplied snapshot identity to its
+    /// canonical block hash and WSV checkpoint before compacting any transition history. Archive
+    /// deletion is then replayable from the compacted journal and can never run ahead of that
+    /// checkpoint.
     ///
     /// # Errors
     /// Returns an error without deleting recovery evidence when the snapshot identity is stale,
@@ -3496,7 +3573,11 @@ impl Kura {
         )
     }
 
-    /// Checkpoint recoverable geometry against an exact retained-lineage identity.
+    /// Checkpoint restart-validated geometry against an exact retained-lineage identity.
+    ///
+    /// Callers must prove the snapshot can pass semantic restart initialization before invoking
+    /// this compaction boundary; durable bytes and canonical block/WSV identity alone are not
+    /// sufficient recovery evidence.
     pub(crate) fn checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
         &self,
         authoritative: &LaneConfig,
@@ -4278,23 +4359,8 @@ impl Kura {
                 ));
             }
         }
-        let identity_at_cursor = if desired_applied_count == 0 {
-            journal
-                .records
-                .first()
-                .map(|record| (record.previous_catalog, record.previous_lineage_root))
-                .or_else(|| {
-                    journal
-                        .checkpoint
-                        .as_ref()
-                        .map(|checkpoint| (checkpoint.catalog, checkpoint.lineage_root))
-                })
-        } else {
-            journal
-                .records
-                .get(desired_applied_count - 1)
-                .map(|record| (record.updated_catalog, record.updated_lineage_root))
-        };
+        let identity_at_cursor =
+            Self::lane_geometry_identity_at_applied_count(journal, desired_applied_count);
         if identity_at_cursor
             .is_some_and(|identity| identity != (authoritative_catalog, authoritative_lineage_root))
         {
@@ -4382,6 +4448,29 @@ impl Kura {
             )?;
         }
         Ok(())
+    }
+
+    fn lane_geometry_identity_at_applied_count(
+        journal: &LaneGeometryJournal,
+        desired_applied_count: usize,
+    ) -> Option<(Hash, Hash)> {
+        if desired_applied_count == 0 {
+            journal
+                .records
+                .first()
+                .map(|record| (record.previous_catalog, record.previous_lineage_root))
+                .or_else(|| {
+                    journal
+                        .checkpoint
+                        .as_ref()
+                        .map(|checkpoint| (checkpoint.catalog, checkpoint.lineage_root))
+                })
+        } else {
+            journal
+                .records
+                .get(desired_applied_count - 1)
+                .map(|record| (record.updated_catalog, record.updated_lineage_root))
+        }
     }
 
     fn geometry_retirement_identities(
@@ -4656,6 +4745,215 @@ impl Kura {
         Ok((manifests, receipts))
     }
 
+    /// Read and durability-attest the one bounded historical-autonomous
+    /// recovery subdirectory carried by a lane incarnation. The outer
+    /// lane-artifact snapshot accounts for the directory entry; this reader
+    /// separately accounts every immutable record and encoded byte.
+    #[allow(clippy::too_many_arguments)]
+    fn read_geometry_historical_autonomous_recovery_records(
+        &self,
+        lane_artifacts: &Path,
+        artifact_snapshot: &BoundProgressDirectorySnapshot,
+        lane_id: LaneId,
+        expected_dataspace_id: Option<DataSpaceId>,
+        expected_incarnation: Hash,
+        activation_height: u64,
+        entry_limit: usize,
+        context: &str,
+    ) -> Result<(Vec<HistoricalAutonomousLaneRecoveryRecordV1>, u64)> {
+        let raw_name = std::ffi::OsStr::new(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1);
+        let Some(snapshot) = artifact_snapshot.get(raw_name) else {
+            return Ok((Vec::new(), 0));
+        };
+        let directory = lane_artifacts.join(raw_name);
+        if snapshot.kind != BoundProgressDirectoryEntryKind::Directory {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery namespace is not a directory"),
+                ),
+                directory,
+            ));
+        }
+        let before = fs::symlink_metadata(&directory)
+            .map_err(|error| Error::IO(error, directory.clone()))?;
+        if before.file_type().is_symlink()
+            || !before.file_type().is_dir()
+            || geometry_file_identity(&before) != snapshot.identity
+            || self.canonical_sidecar_directory(&directory)?.is_none()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery directory changed or escaped Kura"),
+                ),
+                directory,
+            ));
+        }
+        let entry_limit = entry_limit.min(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS);
+        if entry_limit == 0 {
+            return Err(self.geometry_error_owned(
+                ErrorKind::InvalidData,
+                format!("{context} historical recovery record limit is zero"),
+            ));
+        }
+        let mut entries = fs::read_dir(&directory)
+            .map_err(|error| Error::IO(error, directory.clone()))?
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|error| Error::IO(error, directory.clone()))?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        let mut records = Vec::with_capacity(entries.len().min(entry_limit));
+        let mut encoded_bytes = 0_u64;
+        for entry in entries {
+            if records.len() >= entry_limit {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery record count exceeds its bound"),
+                    ),
+                    directory,
+                ));
+            }
+            let path = entry.path();
+            let name = entry.file_name().into_string().map_err(|_| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery filename is not UTF-8"),
+                    ),
+                    path.clone(),
+                )
+            })?;
+            let canonical_name = name.strip_suffix(".norito").is_some_and(|stem| {
+                stem.len() == Hash::LENGTH * 2
+                    && stem
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            });
+            if name.starts_with(".kura-sidecar-") || !canonical_name {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery namespace has an unknown entry"),
+                    ),
+                    path,
+                ));
+            }
+            let metadata =
+                fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || !Self::sidecar_is_single_link(&metadata)
+                || metadata.len() > u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)?
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "{context} historical recovery entry is linked, non-regular, or oversized"
+                        ),
+                    ),
+                    path,
+                ));
+            }
+            encoded_bytes = encoded_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery byte count overflows"),
+                )
+            })?;
+            if encoded_bytes > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery bytes exceed their hard bound"),
+                    ),
+                    directory,
+                ));
+            }
+            let record = self
+                .read_historical_autonomous_recovery_record(&path, &directory)?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!("{context} historical recovery record disappeared"),
+                        ),
+                        path.clone(),
+                    )
+                })?;
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            if descriptor.lane_id != lane_id
+                || descriptor.lane_incarnation != expected_incarnation
+                || descriptor.proposal_height <= activation_height
+                || expected_dataspace_id
+                    .is_some_and(|dataspace_id| descriptor.dataspace_id != dataspace_id)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery record has a stale lane binding"),
+                    ),
+                    path,
+                ));
+            }
+            let (retained_header, finality, _) = self
+                .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                    record.canonical_body.height,
+                )?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!("{context} historical recovery finality is unavailable"),
+                        ),
+                        path.clone(),
+                    )
+                })?;
+            if retained_header.hash() != record.canonical_body.block_hash
+                || retained_header.height().get() != record.canonical_body.height
+                || retained_header.view_change_index() != record.carrier_view
+                || finality.height != record.canonical_body.height
+                || finality.block_hash != record.canonical_body.block_hash
+                || HashOf::new(&finality) != record.canonical_body.finality_artifact_hash
+                || finality.commit_qc.execution_commitment
+                    != record.canonical_body.execution_commitment
+                || finality.height_context != record.historical_context
+                || finality.verify().is_err()
+                || finality.validate_for_header(&retained_header).is_err()
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery has conflicting retained finality"),
+                    ),
+                    path,
+                ));
+            }
+            File::open(&path)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| Error::IO(error, path))?;
+            records.push(record);
+        }
+        self.validate_historical_autonomous_recovery_inventory_collisions(&records)?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        let after = fs::symlink_metadata(&directory)
+            .map_err(|error| Error::IO(error, directory.clone()))?;
+        if after.file_type().is_symlink()
+            || !after.file_type().is_dir()
+            || geometry_file_identity(&after) != snapshot.identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery directory changed while reading"),
+                ),
+                directory,
+            ));
+        }
+        Ok((records, encoded_bytes))
+    }
+
     /// Admit first-release lane retirement only when durable work is terminal
     /// or is owned by the exact globally certified retiring incarnation.
     fn ensure_lane_retirement_admissible_locked(
@@ -4725,6 +5023,9 @@ impl Kura {
         let aggregate_artifact_file_limit = entries
             .len()
             .checked_mul(per_route_artifact_file_limit)
+            .and_then(|outer_limit| {
+                outer_limit.checked_add(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
+            })
             .ok_or_else(|| {
                 self.geometry_error(
                     ErrorKind::InvalidData,
@@ -4738,8 +5039,11 @@ impl Kura {
         let mut receipts = BTreeMap::new();
         let mut native_manifests = BTreeMap::new();
         let mut native_receipts = BTreeMap::new();
+        let mut historical_recoveries = BTreeMap::new();
         let mut artifact_files_seen = 0_usize;
         let mut work_items_seen = 0_usize;
+        let mut historical_recovery_records_seen = 0_usize;
+        let mut historical_recovery_bytes_seen = 0_u64;
         let count_work_items = |current: &mut usize, additional: usize| -> Result<()> {
             *current = current.checked_add(additional).ok_or_else(|| {
                 self.geometry_error(
@@ -4905,15 +5209,6 @@ impl Kura {
                         path,
                     ));
                 }
-                if snapshot.kind != BoundProgressDirectoryEntryKind::File {
-                    return Err(Error::IO(
-                        std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "lane retirement scan encountered a non-regular artifact",
-                        ),
-                        path,
-                    ));
-                }
                 let name = raw_name.to_str().ok_or_else(|| {
                     Error::IO(
                         std::io::Error::new(
@@ -4923,6 +5218,27 @@ impl Kura {
                         path.clone(),
                     )
                 })?;
+                if name == HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1 {
+                    if snapshot.kind != BoundProgressDirectoryEntryKind::Directory {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane retirement historical recovery namespace is not a directory",
+                            ),
+                            path,
+                        ));
+                    }
+                    continue;
+                }
+                if snapshot.kind != BoundProgressDirectoryEntryKind::File {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan encountered a non-regular artifact",
+                        ),
+                        path,
+                    ));
+                }
                 if name.ends_with(".tmp") {
                     let message = if name.starts_with("autonomous_") {
                         "lane retirement scan found an in-flight autonomous sidecar"
@@ -5030,6 +5346,70 @@ impl Kura {
             )?;
             let (active_incarnation, activation_height) =
                 self.active_lane_incarnation_marker(&entry)?;
+            let (route_historical_recoveries, historical_recovery_bytes) = self
+                .read_geometry_historical_autonomous_recovery_records(
+                    &lane_artifacts,
+                    &artifact_snapshot,
+                    storage_lane_id,
+                    Some(entry.dataspace_id),
+                    active_incarnation,
+                    activation_height,
+                    MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
+                    "lane retirement",
+                )?;
+            let expected_route_historical_recoveries = route_historical_recoveries.clone();
+            historical_recovery_bytes_seen = historical_recovery_bytes_seen
+                .checked_add(historical_recovery_bytes)
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery byte count overflows",
+                    )
+                })?;
+            if historical_recovery_bytes_seen > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery bytes exceed their aggregate bound",
+                ));
+            }
+            historical_recovery_records_seen =
+                accumulate_lane_retirement_historical_recovery_records(
+                    historical_recovery_records_seen,
+                    route_historical_recoveries.len(),
+                )
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery records exceed their aggregate bound",
+                    )
+                })?;
+            artifact_files_seen = artifact_files_seen
+                .checked_add(route_historical_recoveries.len())
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery file count overflows",
+                    )
+                })?;
+            if artifact_files_seen > aggregate_artifact_file_limit {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery files exceed the route-derived bound",
+                ));
+            }
+            count_work_items(&mut work_items_seen, route_historical_recoveries.len())?;
+            for record in route_historical_recoveries {
+                let lane_block_height = record.payload.origin_proposal.descriptor.lane_block_height;
+                if historical_recoveries
+                    .insert((storage_lane_id, lane_block_height), record)
+                    .is_some()
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement scan found duplicate historical recovery work",
+                    ));
+                }
+            }
             let autonomous_attempts = self.read_geometry_autonomous_attempt_namespace(
                 &lane_artifacts,
                 storage_lane_id,
@@ -5411,6 +5791,25 @@ impl Kura {
                 &receipt_data,
                 &receipt_index,
             )?;
+            let (confirmed_route_historical_recoveries, confirmed_historical_recovery_bytes) = self
+                .read_geometry_historical_autonomous_recovery_records(
+                    &lane_artifacts,
+                    &artifact_snapshot,
+                    storage_lane_id,
+                    Some(entry.dataspace_id),
+                    active_incarnation,
+                    activation_height,
+                    MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
+                    "lane retirement rescan",
+                )?;
+            if confirmed_route_historical_recoveries != expected_route_historical_recoveries
+                || confirmed_historical_recovery_bytes != historical_recovery_bytes
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery namespace changed during validation",
+                ));
+            }
             let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
                 &lane_artifacts_guard,
                 per_route_artifact_file_limit,
@@ -5472,6 +5871,43 @@ impl Kura {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "lane retirement execution input differs from its authenticated payload",
+                ));
+            }
+        }
+
+        for (identity, record) in &historical_recoveries {
+            let (autonomous_artifact, _, retired) = autonomous.get(identity).ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery has no durable autonomous payload",
+                )
+            })?;
+            let input = inputs.get(identity).ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery has no durable execution input",
+                )
+            })?;
+            let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                &record.payload,
+                record.payload.chain_id_hash,
+                record.payload.epoch,
+            )
+            .map_err(|availability| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "lane retirement historical recovery input is invalid: {availability:?}"
+                    ),
+                )
+            })?;
+            if *retired
+                || autonomous_artifact.executable_payload != record.payload
+                || input != &expected_input
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery differs from its payload or execution input",
                 ));
             }
         }
@@ -8265,15 +8701,6 @@ impl Kura {
                     path,
                 ));
             }
-            if snapshot.kind != BoundProgressDirectoryEntryKind::File {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane artifact archive contains a non-regular entry",
-                    ),
-                    path,
-                ));
-            }
             let name = raw_name.to_str().ok_or_else(|| {
                 Error::IO(
                     std::io::Error::new(
@@ -8283,6 +8710,27 @@ impl Kura {
                     path.clone(),
                 )
             })?;
+            if name == HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1 {
+                if snapshot.kind != BoundProgressDirectoryEntryKind::Directory {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "retired historical recovery namespace is not a directory",
+                        ),
+                        path,
+                    ));
+                }
+                continue;
+            }
+            if snapshot.kind != BoundProgressDirectoryEntryKind::File {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane artifact archive contains a non-regular entry",
+                    ),
+                    path,
+                ));
+            }
             if name.ends_with(".tmp") {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -8342,6 +8790,36 @@ impl Kura {
                 path,
             ));
         }
+        let (historical_recoveries, historical_recovery_bytes) = self
+            .read_geometry_historical_autonomous_recovery_records(
+                &lane_artifacts,
+                &artifact_snapshot,
+                binding.lane_id,
+                None,
+                binding.incarnation,
+                binding.activation_height,
+                MAX_GEOMETRY_ARCHIVE_ENTRIES,
+                "retired lane",
+            )?;
+        if artifact_snapshot
+            .len()
+            .checked_add(historical_recoveries.len())
+            .is_none_or(|count| count > MAX_GEOMETRY_ARCHIVE_ENTRIES)
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "retired lane historical recovery files exceed the archive entry bound",
+            ));
+        }
+        let historical_recoveries = historical_recoveries
+            .into_iter()
+            .map(|record| {
+                (
+                    record.payload.origin_proposal.descriptor.lane_block_height,
+                    record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let lane_bound = self.open_geometry_bound_progress_sidecar(&lane_data, &lane_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
             &lane_bound,
@@ -8532,6 +9010,7 @@ impl Kura {
                 work_heights.insert(*lane_block_height);
             }
         }
+        work_heights.extend(historical_recoveries.keys().copied());
         let mut input_bound =
             self.open_geometry_bound_progress_sidecar(&input_data, &input_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
@@ -8592,6 +9071,52 @@ impl Kura {
                         "retired lane certified artifact is malformed or incomplete",
                     )
                 })?;
+            if let Some(record) = historical_recoveries.get(&lane_block_height) {
+                let (autonomous_artifact, _, retired) =
+                    autonomous.get(&lane_block_height).ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "retired historical recovery has no autonomous payload",
+                        )
+                    })?;
+                let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                    &record.payload,
+                    record.payload.chain_id_hash,
+                    record.payload.epoch,
+                )
+                .map_err(|availability| {
+                    self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!("retired historical recovery input is invalid: {availability:?}"),
+                    )
+                })?;
+                let actual_input = self
+                    .read_geometry_execution_input_from_bound(
+                        binding.lane_id,
+                        lane_block_height,
+                        input_bound.sidecar_mut().ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "retired historical recovery has no execution-input sidecar",
+                            )
+                        })?,
+                    )
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "retired historical recovery execution input is unreadable",
+                        )
+                    })?;
+                if *retired
+                    || autonomous_artifact.executable_payload != record.payload
+                    || actual_input != expected_input
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "retired historical recovery differs from its payload or execution input",
+                    ));
+                }
+            }
             let descriptor = &certified.proposal.descriptor;
             if descriptor.lane_incarnation != binding.incarnation {
                 return Err(self.geometry_error(
@@ -8737,6 +9262,34 @@ impl Kura {
             &receipt_data,
             &receipt_index,
         )?;
+        let (confirmed_historical_recoveries, confirmed_historical_recovery_bytes) = self
+            .read_geometry_historical_autonomous_recovery_records(
+                &lane_artifacts,
+                &artifact_snapshot,
+                binding.lane_id,
+                None,
+                binding.incarnation,
+                binding.activation_height,
+                MAX_GEOMETRY_ARCHIVE_ENTRIES,
+                "retired lane rescan",
+            )?;
+        let confirmed_historical_recoveries = confirmed_historical_recoveries
+            .into_iter()
+            .map(|record| {
+                (
+                    record.payload.origin_proposal.descriptor.lane_block_height,
+                    record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        if confirmed_historical_recoveries != historical_recoveries
+            || confirmed_historical_recovery_bytes != historical_recovery_bytes
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "retired historical recovery namespace changed during release validation",
+            ));
+        }
         let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
             &lane_artifacts_guard,
             MAX_GEOMETRY_ARCHIVE_ENTRIES,
@@ -13106,7 +13659,8 @@ mod tests {
             let expected = routes
                 * (LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE
                     * (retention + V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get())
-                    + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE * retention);
+                    + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE * retention)
+                + HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
             assert_eq!(limit, expected);
             assert!(
                 limit >= diagnostic_suffix,
@@ -13138,6 +13692,7 @@ mod tests {
         for native_retention in [0_usize, 1, 4_096] {
             let expected = MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
                 + LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE
+                + LANE_RETIREMENT_HISTORICAL_RECOVERY_NAMESPACES_PER_ROUTE
                 + native_retention * LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE;
             assert_eq!(
                 lane_retirement_per_route_artifact_file_limit(native_retention),
@@ -13148,7 +13703,26 @@ mod tests {
     }
 
     #[test]
-    fn retirement_artifact_snapshot_accepts_the_exact_fixed_file_boundary() {
+    fn retirement_historical_recovery_record_bound_is_global_and_exact() {
+        assert_eq!(
+            accumulate_lane_retirement_historical_recovery_records(
+                0,
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            ),
+            Some(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS),
+        );
+        assert_eq!(
+            accumulate_lane_retirement_historical_recovery_records(
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+                1,
+            ),
+            None,
+            "the 4,097th record must fail even when it belongs to another route",
+        );
+    }
+
+    #[test]
+    fn retirement_artifact_snapshot_accepts_the_exact_fixed_namespace_boundary() {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join("retirement-fixed-file-boundary");
         let (_, configured) = retirement_test_configs();
@@ -13180,30 +13754,32 @@ mod tests {
             fs::write(artifact_dir.join(name), b"fixed retirement artifact")
                 .expect("write fixed retirement artifact");
         }
+        fs::create_dir(artifact_dir.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1))
+            .expect("create historical autonomous recovery namespace");
 
-        let directory = Kura::open_bound_progress_directory(kura.store_root(), &artifact_dir)
+        let exact_fixed_namespace_limit = LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE
+            + LANE_RETIREMENT_HISTORICAL_RECOVERY_NAMESPACES_PER_ROUTE;
+
+        let directory = Kura::open_bound_progress_directory(&kura.store_root(), &artifact_dir)
             .expect("bind exact fixed retirement namespace");
         let snapshot = kura
             .geometry_bound_progress_directory_snapshot(
                 &directory,
-                LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE,
+                exact_fixed_namespace_limit,
                 "retirement fixed artifact scan",
             )
             .expect("the exact fixed-file boundary must fit");
-        assert_eq!(
-            snapshot.len(),
-            LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE
-        );
+        assert_eq!(snapshot.len(), exact_fixed_namespace_limit);
         drop(directory);
 
         fs::write(artifact_dir.join("one-file-over-bound"), b"overflow")
             .expect("write one excess artifact");
-        let directory = Kura::open_bound_progress_directory(kura.store_root(), &artifact_dir)
+        let directory = Kura::open_bound_progress_directory(&kura.store_root(), &artifact_dir)
             .expect("rebind oversized retirement namespace");
         let error = kura
             .geometry_bound_progress_directory_snapshot(
                 &directory,
-                LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE,
+                exact_fixed_namespace_limit,
                 "retirement fixed artifact scan",
             )
             .expect_err("one file beyond the exact scanner boundary must fail");
@@ -14385,19 +14961,20 @@ mod tests {
             .root()
             .map(Hash::from)
             .expect("one-leaf Native archive manifest root");
-        let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
-            Hash::new(b"Native archive parent state"),
-            Hash::new(b"Native archive post state"),
-            Hash::new(b"Native archive ordinary writes"),
-            None,
-            0,
-            iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            manifest_root,
-            1,
-            1,
-            executed_block_wire_hash,
-        )
-        .expect("valid Native archive execution commitment");
+        let execution_commitment =
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
+                Hash::new(b"Native archive parent state"),
+                Hash::new(b"Native archive post state"),
+                Hash::new(b"Native archive ordinary writes"),
+                None,
+                0,
+                iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                manifest_root,
+                1,
+                1,
+                executed_block_wire_hash,
+            )
+            .expect("valid Native archive execution commitment");
         let finality = native_amx_archive_finality(block.as_ref(), execution_commitment);
         let _ = kura
             .store_v2_finality_artifact(&finality)
@@ -19452,6 +20029,200 @@ mod tests {
                 &fixture.initial_activations,
             )
             .expect("restart recovers checkpoint-authoritative geometry");
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_is_read_only_when_floor_is_retained() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("retain primary-to-extended transition");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish extended geometry");
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal_before = fs::read(&journal_path).expect("retained geometry journal");
+        let initial_bindings = kura
+            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
+            .expect("configured-primary bindings");
+
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &initial,
+            &initial_incarnations,
+            &initial_activations,
+            unscoped_lineage_root(&initial_bindings),
+        )
+        .expect("retained transition must preserve the configured-primary replay floor");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after replay preflight"),
+            journal_before,
+            "replay preflight must not rewrite retained geometry"
+        );
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_checks_durable_binding_without_history() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("replay-binding");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+                .expect("open authenticated configured Kura");
+        let durable_incarnation = Hash::prehashed([0x61; Hash::LENGTH]);
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            durable_incarnation,
+            baseline,
+        )
+        .expect("bind configured primary");
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let durable_incarnations = BTreeMap::from([(LaneId::SINGLE, durable_incarnation)]);
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal = kura
+            .read_lane_geometry_journal()
+            .expect("read binding-only geometry journal");
+        assert!(journal.records.is_empty());
+        assert!(journal.checkpoint.is_none());
+        assert!(journal.configured_primary_binding.is_some());
+        let journal_before = fs::read(&journal_path).expect("binding-only journal bytes");
+
+        let mismatched_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x62; Hash::LENGTH]))]);
+        let mismatched_bindings = kura
+            .geometry_bindings(&lane_config, &mismatched_incarnations, &activation_heights)
+            .expect("mismatched replay bindings");
+        let error = kura
+            .preflight_lane_geometry_recovery_floor_with_lineage_root(
+                &lane_config,
+                &mismatched_incarnations,
+                &activation_heights,
+                unscoped_lineage_root(&mismatched_bindings),
+            )
+            .expect_err("durable configured-primary binding must fail closed");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "configured-primary geometry binding differs from its durable anchor",
+        );
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after rejected binding preflight"),
+            journal_before,
+            "binding mismatch preflight must not rewrite the journal"
+        );
+
+        let durable_bindings = kura
+            .geometry_bindings(&lane_config, &durable_incarnations, &activation_heights)
+            .expect("durable replay bindings");
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &lane_config,
+            &durable_incarnations,
+            &activation_heights,
+            unscoped_lineage_root(&durable_bindings),
+        )
+        .expect("matching durable configured-primary binding remains replayable");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after matching binding preflight"),
+            journal_before,
+            "successful binding preflight must also remain read-only"
+        );
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_requires_snapshot_after_compaction() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("create geometry transition to compact");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish extended geometry");
+        let (block_hash, state_hash) = durable_geometry_snapshot_identity(&kura, 20);
+        let extended_bindings = kura
+            .geometry_bindings(&extended, &extended_incarnations, &extended_activations)
+            .expect("extended checkpoint bindings");
+        let extended_lineage_root = unscoped_lineage_root(&extended_bindings);
+        let summary = kura
+            .checkpoint_lane_geometry_with_proven_snapshot(
+                extended_bindings,
+                extended_lineage_root,
+                20,
+                Some(block_hash),
+                state_hash,
+                Vec::new(),
+            )
+            .expect("compact transition behind the extended snapshot");
+        assert_eq!(summary.compacted_transitions, 1);
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal_before = fs::read(&journal_path).expect("compacted geometry journal");
+        let initial_bindings = kura
+            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
+            .expect("configured-primary bindings");
+
+        let error = kura
+            .preflight_lane_geometry_recovery_floor_with_lineage_root(
+                &initial,
+                &initial_incarnations,
+                &initial_activations,
+                unscoped_lineage_root(&initial_bindings),
+            )
+            .expect_err("empty-state replay must not cross compacted geometry");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "state snapshot at height 20 is required because the configured-primary lane-geometry recovery floor was compacted",
+        );
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after rejected replay preflight"),
+            journal_before,
+            "rejected replay preflight must leave compacted geometry untouched"
+        );
+
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            extended_lineage_root,
+        )
+        .expect("checkpoint-authoritative geometry remains a valid recovery floor");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after checkpoint preflight"),
+            journal_before,
+            "successful checkpoint preflight must also be read-only"
+        );
     }
 
     #[test]

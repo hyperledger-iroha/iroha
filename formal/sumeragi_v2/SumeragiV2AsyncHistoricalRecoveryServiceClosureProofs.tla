@@ -738,7 +738,8 @@ HistoricalDiscoveryPacketServeIdentityCarrier(packet) ==
      THEN {[owner |-> recipient,
             request |->
               AsyncReplySemanticIdentity(
-                packet.item.kind, packet.item.envelope)]}
+                packet.item.kind, packet.item.source,
+                packet.item.envelope)]}
      ELSE {}
 
 HistoricalDiscoveryPacketCandidateInCausalLineage(packet, candidate) ==

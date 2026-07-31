@@ -173,6 +173,53 @@ fn install_globally_certified_test_reservation_journals(
     install_test_reservation_journal(queue, dir)
 }
 
+fn payload_free_diagnostic_reservation_record(
+    route: RoutingDecision,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    fifo_ordinal: u64,
+    group_seed: &[u8],
+) -> LaneQueueReservationRecordV5 {
+    let ordinal = fifo_ordinal.to_be_bytes();
+    let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+        b"payload-free-diagnostic-entrypoint",
+        &ordinal,
+    ]));
+    let routing_plan = RoutingPlan::single(route);
+    LaneQueueReservationRecordV5 {
+        version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
+        key: LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash)),
+            entrypoint_hash,
+            queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                b"payload-free-diagnostic-admission",
+                &ordinal,
+            ]),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: route.lane_id,
+            dataspace_id: route.dataspace_id,
+            lane_incarnation,
+            proposal_height,
+            lane_block_height,
+            lane_block_view: 0,
+            reservation_owner_hash: Hash::new_from_chunks(&[
+                b"payload-free-diagnostic-owner",
+                group_seed,
+            ]),
+            proposal_identity_hash: Hash::new_from_chunks(&[
+                b"payload-free-diagnostic-proposal",
+                group_seed,
+            ]),
+        },
+        enqueue_timestamp_ms: fifo_ordinal,
+        fifo_order: LaneQueueFifoOrderV5::new(fifo_ordinal)
+            .expect("diagnostic FIFO ordinal is positive"),
+    }
+}
+
 fn test_lane_reservation_plan_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("lane-queue-plans.norito")
 }
@@ -254,7 +301,7 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
 #[test]
 fn plan_admission_append_never_owns_queue_mutation_lock() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     queue
@@ -265,6 +312,10 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
         )
         .expect("install plan journal");
     let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
+    );
     let hash = transaction.hash();
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
@@ -483,15 +534,15 @@ fn global_candidate_lease_excludes_autonomous_reservation_until_exact_drop() {
 #[test]
 fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
-    push_globally_bound_lane_reservation_candidate(
-        &queue,
-        &state,
-        &dir,
-        accepted_tx_by_someone(&time_source),
+    let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
     );
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let scope = lane_reservation_scope(&state, b"diagnostic-owner", b"diagnostic-proposal");
 
     assert!(
@@ -512,11 +563,24 @@ fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
         "duplicate identities cannot prove group finalization"
     );
 
+    queue.hold_next_lane_reservation_commit_after_barrier_for_test();
     assert_eq!(
         queue
             .commit_lane_reservation(&key)
             .expect("commit diagnostic reservation"),
         LaneQueueReservationOutcome::Finalized
+    );
+    assert!(
+        !queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
+        "a durable Commit barrier must remain visible before ForgetCommit"
+    );
+    assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
+
+    assert_eq!(
+        queue
+            .commit_lane_reservation(&key)
+            .expect("retry the diagnostic reservation through ForgetCommit"),
+        LaneQueueReservationOutcome::AlreadyFinalized
     );
     assert!(
         queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
@@ -586,6 +650,339 @@ fn lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff() 
     assert!(
         !observer.join().expect("join diagnostic handoff observer"),
         "a fault published after the optimistic precheck must fail the protected snapshot closed"
+    );
+}
+
+#[test]
+fn durable_reservation_diagnostics_hash_exact_fifo_group_and_reconstruct_after_restart() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let reservation_path;
+    let active_route = [(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        state
+            .lane_incarnation_at_height(LaneId::SINGLE, 1)
+            .expect("active default-lane incarnation"),
+    )];
+    let expected;
+
+    {
+        let queue = Queue::test(config_factory(), &time_source);
+        reservation_path = install_globally_certified_test_reservation_journals(&queue, &dir);
+        for _ in 0..2 {
+            push_globally_bound_lane_reservation_candidate(
+                &queue,
+                &state,
+                &dir,
+                accepted_unique_entrypoint_tx_by_someone(&time_source),
+            );
+        }
+        let reserved = queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"durable-diagnostic-owner",
+                    b"durable-diagnostic-provisional-slot",
+                ),
+                nonzero!(2_usize),
+            )
+            .expect("reserve exact diagnostic group");
+        let ordered_keys = reserved
+            .iter()
+            .map(|reservation| *reservation.key())
+            .collect::<Vec<_>>();
+        let expected_binding =
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                .expect("reserved FIFO keys form one exact group");
+        let no_keys = Vec::<LaneQueueReservationKeyV2>::new();
+        assert_eq!(
+            lane_queue_reservation_group_binding_from_ordered_keys(no_keys.iter()),
+            Err("lane queue reservation diagnostics group must not be empty")
+        );
+        let duplicate = [ordered_keys[0], ordered_keys[0]];
+        assert_eq!(
+            lane_queue_reservation_group_binding_from_ordered_keys(duplicate.iter()),
+            Err("lane queue reservation diagnostics group contains a duplicate key")
+        );
+        let mut mixed = ordered_keys.clone();
+        mixed[1].proposal_identity_hash = Hash::new(b"mixed-diagnostic-proposal-identity");
+        assert_eq!(
+            lane_queue_reservation_group_binding_from_ordered_keys(mixed.iter()),
+            Err("lane queue reservation diagnostics group mixes proposal-slot identities")
+        );
+        let snapshot = queue
+            .lane_reservation_diagnostic_groups_bounded(&active_route, nonzero!(1_usize))
+            .expect("derive bounded Queue reservation diagnostics");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].binding, expected_binding);
+        assert_eq!(snapshot[0].binding.reservation_count, 2);
+        assert!(!snapshot[0].conflict);
+        assert_eq!(
+            snapshot[0].binding.reservation_group_hash,
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                .expect("repeat exact group hash")
+                .reservation_group_hash
+        );
+        assert_ne!(
+            snapshot[0].binding.reservation_group_hash,
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter().rev())
+                .expect("reverse group remains structurally valid")
+                .reservation_group_hash,
+            "the durable group digest must bind FIFO order"
+        );
+        expected = snapshot;
+    }
+
+    let restarted = Queue::test(config_factory(), &time_source);
+    let replay = restarted
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("replay reservation diagnostics journal after restart");
+    assert_eq!(replay.restored, 2);
+    assert_eq!(replay.awaiting_transaction_replay, 2);
+    assert!(
+        restarted.txs.is_empty(),
+        "durable reservation diagnostics must not require or materialize transaction payloads"
+    );
+    assert_eq!(
+        restarted
+            .lane_reservation_diagnostic_groups_bounded(&active_route, nonzero!(1_usize))
+            .expect("reconstruct exact reservation diagnostics from replay"),
+        expected
+    );
+}
+
+#[test]
+fn durable_reservation_group_binding_rejects_oversized_membership() {
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let incarnation = Hash::new(b"oversized-diagnostic-group-incarnation");
+    let keys = (0..=crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS)
+        .map(|index| {
+            let fifo_ordinal = u64::try_from(index)
+                .expect("diagnostic group index fits u64")
+                .saturating_add(1);
+            payload_free_diagnostic_reservation_record(
+                route,
+                incarnation,
+                1,
+                1,
+                fifo_ordinal,
+                b"oversized-diagnostic-group",
+            )
+            .key
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lane_queue_reservation_group_binding_from_ordered_keys(keys.iter()),
+        Err("lane queue reservation diagnostics group exceeds its protocol bound")
+    );
+}
+
+#[test]
+fn durable_reservation_diagnostics_are_bounded_and_report_same_slot_conflicts() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Queue::test(config_factory(), &time_source);
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let incarnation = state
+        .lane_incarnation_at_height(LaneId::SINGLE, 1)
+        .expect("active default-lane incarnation");
+    let active_route = [(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation)];
+
+    for lane_block_height in 1..=3 {
+        push_globally_bound_lane_reservation_candidate(
+            &queue,
+            &state,
+            &dir,
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
+        );
+        let mut scope = lane_reservation_scope(
+            &state,
+            format!("bounded-diagnostic-owner-{lane_block_height}").as_bytes(),
+            format!("bounded-diagnostic-slot-{lane_block_height}").as_bytes(),
+        );
+        scope.lane_block_height = lane_block_height;
+        queue
+            .reserve_transactions_for_lane(&state, scope, nonzero!(1_usize))
+            .expect("reserve bounded diagnostic group");
+    }
+    let bounded = queue
+        .lane_reservation_diagnostic_groups_bounded(&active_route, nonzero!(2_usize))
+        .expect("derive limit-plus-one bounded diagnostics");
+    assert_eq!(bounded.len(), 2, "overflow sentinel must never escape");
+    assert_eq!(
+        bounded
+            .iter()
+            .map(|summary| summary.binding.identity.lane_block_height)
+            .collect::<Vec<_>>(),
+        vec![2, 3],
+        "the deterministic bounded suffix must retain the newest groups"
+    );
+
+    for identity_seed in [b"same-slot-a".as_slice(), b"same-slot-b".as_slice()] {
+        push_globally_bound_lane_reservation_candidate(
+            &queue,
+            &state,
+            &dir,
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
+        );
+        let mut scope = lane_reservation_scope(&state, identity_seed, identity_seed);
+        scope.lane_block_height = 4;
+        queue
+            .reserve_transactions_for_lane(&state, scope, nonzero!(1_usize))
+            .expect("reserve conflicting same-slot diagnostic group");
+    }
+    let conflicts = queue
+        .lane_reservation_diagnostic_groups_bounded(&active_route, nonzero!(8_usize))
+        .expect("derive conflict-aware diagnostics");
+    let same_slot = conflicts
+        .iter()
+        .filter(|summary| summary.binding.identity.lane_block_height == 4)
+        .collect::<Vec<_>>();
+    assert_eq!(same_slot.len(), 2);
+    assert!(
+        same_slot.iter().all(|summary| summary.conflict),
+        "every durable identity claiming one lane-local slot must report conflict"
+    );
+}
+
+#[test]
+fn durable_reservation_diagnostics_fairly_bound_routes_after_payload_free_restart() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let dir = tempdir().expect("tempdir");
+    let busy_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let quiet_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+    let busy_incarnation = Hash::new(b"diagnostic-fair-busy-incarnation");
+    let quiet_incarnation = Hash::new(b"diagnostic-fair-quiet-incarnation");
+    let inactive_incarnation = Hash::new(b"diagnostic-fair-inactive-incarnation");
+
+    let writer = Queue::test(config_factory(), &time_source);
+    let reservation_path = install_test_reservation_journal(&writer, &dir);
+    let mut records = (1..=4_u64)
+        .map(|height| {
+            payload_free_diagnostic_reservation_record(
+                busy_route,
+                busy_incarnation,
+                height,
+                height,
+                height,
+                &height.to_be_bytes(),
+            )
+        })
+        .collect::<Vec<_>>();
+    records.push(payload_free_diagnostic_reservation_record(
+        quiet_route,
+        quiet_incarnation,
+        1,
+        1,
+        5,
+        b"quiet-current",
+    ));
+    records.push(payload_free_diagnostic_reservation_record(
+        quiet_route,
+        inactive_incarnation,
+        9,
+        9,
+        6,
+        b"quiet-inactive",
+    ));
+    {
+        let mut journal = writer.lane_reservation_journal.lock();
+        let journal = journal.as_mut().expect("installed reservation journal");
+        for record in records {
+            journal
+                .put_batch(vec![record])
+                .expect("persist payload-free diagnostic reservation");
+        }
+    }
+    drop(writer);
+
+    let restarted = Queue::test(config_factory(), &time_source);
+    let replay = restarted
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("replay multi-route diagnostic reservations");
+    assert_eq!(replay.restored, 6);
+    assert_eq!(replay.awaiting_transaction_replay, 6);
+    assert!(
+        restarted.txs.is_empty(),
+        "the payload-free diagnostic projection must not replay transaction bodies"
+    );
+
+    let active_routes = [
+        (
+            busy_route.lane_id,
+            busy_route.dataspace_id,
+            busy_incarnation,
+        ),
+        (
+            quiet_route.lane_id,
+            quiet_route.dataspace_id,
+            quiet_incarnation,
+        ),
+    ];
+    let fair = restarted
+        .lane_reservation_diagnostic_groups_bounded(&active_routes, nonzero!(2_usize))
+        .expect("derive a fair two-route diagnostic bound");
+    assert_eq!(fair.len(), 2);
+    assert_eq!(
+        fair.iter()
+            .map(|summary| {
+                (
+                    summary.binding.identity.lane_id,
+                    summary.binding.identity.lane_incarnation,
+                    summary.binding.identity.lane_block_height,
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (busy_route.lane_id, busy_incarnation, 4),
+            (quiet_route.lane_id, quiet_incarnation, 1),
+        ],
+        "one busy route must not hide the newest durable group of another active route"
+    );
+    assert!(
+        fair.iter()
+            .all(|summary| { summary.binding.identity.lane_incarnation != inactive_incarnation }),
+        "an inactive incarnation must never enter the active-route projection"
+    );
+    let reversed = [active_routes[1], active_routes[0]];
+    assert_eq!(
+        restarted
+            .lane_reservation_diagnostic_groups_bounded(&reversed, nonzero!(2_usize))
+            .expect("route input order must not affect diagnostics"),
+        fair
+    );
+
+    let over_limit_routes = [
+        active_routes[0],
+        active_routes[1],
+        (
+            LaneId::new(2),
+            DataSpaceId::new(8),
+            Hash::new(b"diagnostic-fair-third-incarnation"),
+        ),
+    ];
+    assert!(matches!(
+        restarted.lane_reservation_diagnostic_groups_bounded(
+            &over_limit_routes,
+            nonzero!(2_usize),
+        ),
+        Err(LaneQueueReservationError::InvalidIdentity(reason))
+            if reason.contains("route input exceeds its row bound")
+    ));
+    restarted
+        .plan_journal_durability_fault
+        .store(true, Ordering::Release);
+    assert!(
+        matches!(
+            restarted
+                .lane_reservation_diagnostic_groups_bounded(&active_routes, nonzero!(2_usize),),
+            Err(LaneQueueReservationError::DurabilityFault)
+        ),
+        "a durability fault must fail the bounded Queue projection closed"
     );
 }
 

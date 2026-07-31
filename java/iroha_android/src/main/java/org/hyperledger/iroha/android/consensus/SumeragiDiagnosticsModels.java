@@ -393,6 +393,7 @@ public final class SumeragiDiagnosticsModels {
   }
 
   public enum AutonomousLaneExecutionStuckReason {
+    AWAITING_EXECUTABLE_PAYLOAD("awaiting_executable_payload"),
     AWAITING_PAYLOAD_AVAILABILITY("awaiting_payload_availability"),
     AWAITING_LANE_CERTIFICATION("awaiting_lane_certification"),
     CERTIFIED_BUNDLE_UNAVAILABLE("certified_bundle_unavailable"),
@@ -420,6 +421,9 @@ public final class SumeragiDiagnosticsModels {
     public final BigInteger laneBlockView;
     public final BigInteger proposalHeight;
     public final BigInteger proposalView;
+    public final String reservationOwnerHash;
+    public final String proposalIdentityHash;
+    public final String reservationGroupHash;
     public final String proposalHash;
     public final String descriptorHash;
     public final String executablePayloadHash;
@@ -436,6 +440,8 @@ public final class SumeragiDiagnosticsModels {
         final long laneId, final BigInteger dataspaceId, final String laneIncarnation,
         final BigInteger laneBlockHeight, final BigInteger laneBlockView,
         final BigInteger proposalHeight, final BigInteger proposalView,
+        final String reservationOwnerHash, final String proposalIdentityHash,
+        final String reservationGroupHash,
         final String proposalHash, final String descriptorHash,
         final String executablePayloadHash, final String sourceBundleHash,
         final String mergeEntryHash, final BigInteger applicationBlockHeight,
@@ -444,8 +450,11 @@ public final class SumeragiDiagnosticsModels {
         final AutonomousLaneExecutionStuckReason stuckReason) {
       require(laneId >= 0 && laneId <= 0xffff_ffffL, "laneId out of range");
       for (final BigInteger coordinate :
-          new BigInteger[] {dataspaceId, laneBlockHeight, laneBlockView, proposalHeight, proposalView}) {
+          new BigInteger[] {dataspaceId, laneBlockHeight, laneBlockView, proposalHeight}) {
         requireUnsigned64(coordinate, "autonomous execution coordinate");
+      }
+      if (proposalView != null) {
+        requireUnsigned64(proposalView, "autonomous proposal view");
       }
       require(laneBlockHeight.signum() > 0 && proposalHeight.signum() > 0, "height must be positive");
       require(transactionCount >= 1 && transactionCount <= 4096
@@ -456,19 +465,35 @@ public final class SumeragiDiagnosticsModels {
         requireUnsigned64(applicationBlockHeight, "applicationBlockHeight");
         require(applicationBlockHeight.signum() > 0, "carrier height must be positive");
       }
-      for (final String hash : new String[] {laneIncarnation, proposalHash, descriptorHash}) {
+      for (final String hash :
+          new String[] {
+            laneIncarnation, reservationOwnerHash, proposalIdentityHash, reservationGroupHash
+          }) {
         requireCanonicalNonzeroHash(hash, "autonomous execution hash");
       }
       for (final String hash :
-          new String[] {executablePayloadHash, sourceBundleHash, mergeEntryHash, applicationBlockHash}) {
+          new String[] {
+            proposalHash, descriptorHash, executablePayloadHash, sourceBundleHash,
+            mergeEntryHash, applicationBlockHash
+          }) {
         if (hash != null) requireCanonicalNonzeroHash(hash, "autonomous optional hash");
       }
+      require((proposalHash == null) == (descriptorHash == null),
+          "proposal and descriptor hashes must appear together");
       require(highestDurableStage != null, "stage must not be null");
       require(stuckReason == expectedStuckReason(highestDurableStage),
           "stage and stuck reason disagree");
       if (highestDurableStage != AutonomousLaneExecutionStage.CONFLICT) {
         require(reservationCount == transactionCount,
             "reservation and transaction counts disagree");
+        require(
+            (highestDurableStage == AutonomousLaneExecutionStage.RESERVATIONS_DURABLE)
+                == (proposalHash == null),
+            "finalized identity disagrees with durable stage");
+        require(
+            highestDurableStage != AutonomousLaneExecutionStage.RESERVATIONS_DURABLE
+                || proposalView == null,
+            "proposal view disagrees with durable stage");
         final boolean hasPayload = executablePayloadHash != null;
         final boolean hasBundle = sourceBundleHash != null;
         final boolean hasMerge = mergeEntryHash != null;
@@ -504,7 +529,9 @@ public final class SumeragiDiagnosticsModels {
       this.laneId = laneId; this.dataspaceId = dataspaceId;
       this.laneIncarnation = laneIncarnation; this.laneBlockHeight = laneBlockHeight;
       this.laneBlockView = laneBlockView; this.proposalHeight = proposalHeight;
-      this.proposalView = proposalView; this.proposalHash = proposalHash;
+      this.proposalView = proposalView; this.reservationOwnerHash = reservationOwnerHash;
+      this.proposalIdentityHash = proposalIdentityHash;
+      this.reservationGroupHash = reservationGroupHash; this.proposalHash = proposalHash;
       this.descriptorHash = descriptorHash; this.executablePayloadHash = executablePayloadHash;
       this.sourceBundleHash = sourceBundleHash; this.mergeEntryHash = mergeEntryHash;
       this.applicationBlockHeight = applicationBlockHeight;
@@ -519,6 +546,9 @@ public final class SumeragiDiagnosticsModels {
     public BigInteger laneBlockView() { return laneBlockView; }
     public BigInteger proposalHeight() { return proposalHeight; }
     public BigInteger proposalView() { return proposalView; }
+    public String reservationOwnerHash() { return reservationOwnerHash; }
+    public String proposalIdentityHash() { return proposalIdentityHash; }
+    public String reservationGroupHash() { return reservationGroupHash; }
     public String proposalHash() { return proposalHash; }
     public String descriptorHash() { return descriptorHash; }
     public String executablePayloadHash() { return executablePayloadHash; }
@@ -536,6 +566,7 @@ public final class SumeragiDiagnosticsModels {
       final AutonomousLaneExecutionStage stage) {
     switch (stage) {
       case RESERVATIONS_DURABLE:
+        return AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD;
       case EXECUTABLE_PAYLOAD_DURABLE:
         return AutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY;
       case PAYLOAD_AVAILABILITY_CERTIFIED:
@@ -809,8 +840,7 @@ public final class SumeragiDiagnosticsModels {
     if (result == 0) result = left.laneBlockHeight.compareTo(right.laneBlockHeight);
     if (result == 0) result = left.laneBlockView.compareTo(right.laneBlockView);
     if (result == 0) result = left.proposalHeight.compareTo(right.proposalHeight);
-    if (result == 0) result = left.proposalView.compareTo(right.proposalView);
-    if (result == 0) result = left.proposalHash.compareTo(right.proposalHash);
+    if (result == 0) result = left.proposalIdentityHash.compareTo(right.proposalIdentityHash);
     return result;
   }
 

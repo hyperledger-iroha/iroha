@@ -3217,14 +3217,6 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2AsyncNetwork",
-        "AsyncDormantExactReplyRequestPacketIsRetained",
-    ): (
-        "\\A packet: "
-        "AsyncDormantExactReplyRequestPacket(packet) "
-        "=> packet \\in asyncTransport"
-    ),
-    (
-        "SumeragiV2AsyncNetwork",
         "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     ): (
         "\\A packet: "

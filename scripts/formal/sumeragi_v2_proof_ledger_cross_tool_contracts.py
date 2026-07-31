@@ -677,13 +677,19 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             let Some(checked_refinement) =
                                 refinement::check(transition)
                             else {
+                                let diagnostic = refinement::diagnose(transition);
+                                iroha_logger::error!(
+                                    event = ?audit_event,
+                                    ?diagnostic,
+                                    "Sumeragi v2 reducer rejected the transition refinement predicate"
+                                );
                                 return Err(ReducerError::RefinementViolation);
                             };
                         """,
                         mutation_boundaries=("*self = next;",),
                         brace_context=(("impl", "Reducer"),),
                         item_token_sha256=(
-                            "973c0e730c20011084928eab3fa0339fe2a6a8b25a4fa8aea891373131a89dfe"
+                            "c9f1ab80636f76db9de0ac05f8ce5ca6d121ec9ecdf46b235c551844f9263b97"
                         ),
                         token_consumptions=(
                             """
@@ -3200,6 +3206,53 @@ _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
 _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256 = (
     "ba2bba675ad645198011a24ae3c60a024cdad47caf2eb1e0acefc16467ef9994"
 )
+_CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256 = (
+    "d22e80b13a8e1223839e9f87b6db64aae115138d649a5ed754989cd55fe19468"
+)
+_CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256 = (
+    "0d89c85775aded9990deeefe79f082098629e60e348775c4820ce8a2e6667ed2"
+)
+_CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256 = (
+    "5c65b9aba0d560e58b8c85596902e53eb65b3cdcce48e474f7deb53ab493bb92"
+)
+_CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256 = (
+    "774849f95ce4344cab37cd0a8b6c53170eaf98012d268c3904b0c254ed4bc725"
+)
+_CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256 = (
+    "c68bd376597d39cc72ae3195df249c286badeb8b8275c7933b1b1c933f9bd1aa"
+)
+_CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256 = {
+    "check_production_enter_view_effective_lock_transition": (
+        "9820fc8dabfec2291a2449594f6245470ca28303a68789204a3c2ba699bcdbd7"
+    ),
+    "check_production_body_ownership_effective_lock_transition": (
+        "7a42604e801cbc2525c3020628143810f1e6b64691718427cdfc370979fe8992"
+    ),
+    "check_production_body_capacity_retirement_effective_lock_transition": (
+        "790ac268e1e3201793f0d57cc443c5b4f6ff4d2da5dd897d2b51444f7ae9701c"
+    ),
+    "check_production_body_service_effective_lock_transition": (
+        "694a844a95be5ad9236c211768c5b55393845596813cc740b2bd55331fb6827d"
+    ),
+}
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256 = (
+    "fd5b0d359c46f6f058a5ad7925d5e2aa6db215fd13e325025213679ce676f232"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_PROJECTION_SHA256 = (
+    "14e34dc3fd5650279c2bb5665f384dd831725d4863e873612d0758f726e072d2"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_MACRO_SHA256 = (
+    "16f4268fe5032a9f91c683b6d71b3c8403d71f2ac4d47e597f65043b72e48611"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_GATE_SHA256 = (
+    "f081f846a6ecba51118d404b0a628bf075098df6aa294183ea206cce244610d0"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_GATE_SHA256 = (
+    "3a3c7b1e2c1c9ac68ab20fc8022666b7d8da7825775f7f3aa4e30477d109048f"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_AUXILIARY_THEOREM_SHA256 = (
+    "67ebe84f470c8d16cc5207f20a574d778d542e52d970a6c5c57cf29ea60e7d47"
+)
 _TOTAL_GATE_THEOREM_ITEM_SHA256 = {
     "ProductionDurableIntentTraceRefinesProgressWitness": "129a6981dfcf42f154616ba6569eea2b671902267b2dfbddf4ede6add37560d0",
     "ProductionDecisionTraceRefinesRecoveryWitness": "d050e91b2250b3e9bdb5782e0544ed6950b44bfd74e9768ac959f2dea097b36b",
@@ -3316,3 +3369,274 @@ _EFFECTIVE_LOCK_PLAN_CARRIERS = {
         ),
     ),
 }
+
+
+@lru_cache(maxsize=1)
+def _verus_evidence_contract_module() -> Any:
+    """Load the independently pinned Verus evidence validator."""
+
+    path = ROOT_DIR / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
+    spec = importlib.util.spec_from_file_location(
+        "_sumeragi_v2_verus_evidence_contract", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Verus evidence contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _cross_tool_contract_errors() -> list[str]:
+    """Check the immutable 4 + 7 + 6 refinement mapping itself."""
+
+    errors: list[str] = []
+    try:
+        verus_evidence_sources = frozenset(
+            _verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
+        )
+    except (AttributeError, OSError, RuntimeError, ValueError) as error:
+        errors.append(
+            "cross-tool contract cannot load the Verus source inventory: "
+            f"{error}"
+        )
+        verus_evidence_sources = frozenset()
+    expected_ids = (
+        "effective-lock-body-acquisition-production-refinement",
+        "progress-witness-production-refinement",
+        "successor-activation-exact-recovery-production-refinement",
+    )
+    observed_ids = tuple(
+        contract.obligation_id for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    if observed_ids != expected_ids:
+        errors.append(
+            "cross-tool obligation inventory must equal the canonical three "
+            f"production seams {expected_ids!r}; found {observed_ids!r}"
+        )
+    observed_counts = tuple(
+        len(contract.claims) for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    if observed_counts != (4, 7, 6):
+        errors.append(
+            "cross-tool production claim cardinalities must equal (4, 7, 6); "
+            f"found {observed_counts!r}"
+        )
+
+    expected_premises = {
+        "effective-lock-body-acquisition-production-refinement": (
+            "ProductionEffectiveLockBodyAcquisitionRefinement"
+        ),
+        "progress-witness-production-refinement": (
+            "ProductionProgressWitnessTraceRefinement"
+        ),
+        "successor-activation-exact-recovery-production-refinement": (
+            "ProductionSuccessorAndExactRecoveryTraceRefinement"
+        ),
+    }
+    expected_ledger_bindings = {
+        "effective-lock-body-acquisition-production-refinement": (
+            "operator",
+            "/\\ ProductionEffectiveLockBodyAcquisitionRefinement "
+            "/\\ EffectiveLockAcquisitionModelObligation",
+            "BY EffectiveLockAcquisitionModelObligation "
+            "DEF EffectiveLockBodyAcquisitionProductionRefinementObligation",
+        ),
+        "progress-witness-production-refinement": (
+            "operator",
+            "/\\ ProductionProgressWitnessTraceRefinement "
+            "/\\ ProgressWitnessObligation",
+            "BY ProgressWitnessObligation "
+            "DEF ProgressWitnessProductionRefinementObligation",
+        ),
+        "successor-activation-exact-recovery-production-refinement": (
+            "operator",
+            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+            "/\\ (IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)",
+            "BY IndexedChainSpecEstablishesSuccessorActivationAndExactHistoricalRecoveryInvariant "
+            "DEF SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
+        ),
+    }
+
+    constants: list[str] = []
+    verus_theorems: list[str] = []
+    auxiliary_verus_theorems: list[str] = []
+    tla_theorems: list[str] = []
+    proof_modes: list[str] = []
+    total_gate_names: list[str] = []
+    for contract in CROSS_TOOL_REFINEMENT_CONTRACTS:
+        reviewed_target = REQUIRED_PROOF_OBLIGATION_INVENTORY.get(
+            contract.obligation_id
+        )
+        if reviewed_target != (contract.module, contract.ledger_symbol):
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} targets "
+                f"{(contract.module, contract.ledger_symbol)!r}, not reviewed "
+                f"ledger target {reviewed_target!r}"
+            )
+        expected_premise = expected_premises.get(contract.obligation_id)
+        expected_statement = (
+            None
+            if expected_premise is None
+            else f"{expected_premise} => {contract.ledger_symbol}"
+        )
+        if contract.tla_statement != expected_statement:
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} must imply its "
+                f"exact ledger theorem symbol using {expected_statement!r}; "
+                f"found {contract.tla_statement!r}"
+            )
+        expected_ledger_binding = expected_ledger_bindings.get(
+            contract.obligation_id, (None, None, None)
+        )
+        observed_ledger_binding = (
+            contract.ledger_declaration_kind,
+            contract.ledger_statement,
+            contract.tla_proof,
+        )
+        if observed_ledger_binding != expected_ledger_binding:
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} must bind the exact "
+                "reviewed ledger declaration kind, normalized definition, and bridge "
+                f"proof {expected_ledger_binding!r}; found {observed_ledger_binding!r}"
+            )
+        tla_theorems.append(contract.tla_theorem)
+        for claim in contract.claims:
+            constants.append(claim.constant)
+            verus_theorems.append(claim.verus_theorem)
+            proof_modes.append(claim.proof_mode)
+            if claim.total_gate is not None:
+                total_gate_names.append(claim.total_gate.name)
+            total_gate_names.extend(
+                kernel.total_gate.name
+                for kernel in claim.supplemental_kernels
+                if kernel.total_gate is not None
+            )
+            auxiliary_verus_theorems.extend(
+                kernel.auxiliary_verus_theorem
+                for kernel in claim.supplemental_kernels
+                if kernel.auxiliary_verus_theorem is not None
+            )
+            if not claim.production_sources:
+                errors.append(
+                    f"cross-tool claim {claim.constant} has no production sources"
+                )
+            for relative in (
+                claim.verus_source,
+                *claim.production_sources,
+                *(consumer.source for consumer in claim.linked_consumers),
+            ):
+                path = Path(relative)
+                if path.is_absolute() or ".." in path.parts:
+                    errors.append(
+                        f"cross-tool claim {claim.constant} has unsafe source path "
+                        f"{relative!r}"
+                    )
+            required_evidence_sources = (
+                claim.verus_source,
+                claim.verified_kernel_source,
+                *(call_site.source for call_site in claim.production_call_sites),
+                *(
+                    kernel.verified_kernel_source
+                    for kernel in claim.supplemental_kernels
+                ),
+                *(
+                    call_site.source
+                    for kernel in claim.supplemental_kernels
+                    for call_site in kernel.production_call_sites
+                ),
+                *(consumer.source for consumer in claim.linked_consumers),
+            )
+            missing_evidence_sources = tuple(
+                relative
+                for relative in required_evidence_sources
+                if _nonempty_string(relative)
+                and relative not in verus_evidence_sources
+            )
+            if missing_evidence_sources:
+                errors.append(
+                    f"cross-tool claim {claim.constant} has proof, kernel, or "
+                    "authoritative production call sources outside the Verus "
+                    f"evidence inventory: {missing_evidence_sources!r}"
+                )
+    for label, values, expected_count in (
+        ("TLA constants", constants, 17),
+        ("Verus theorem names", verus_theorems, 17),
+        ("TLA theorem names", tla_theorems, 3),
+    ):
+        if len(values) != expected_count or len(set(values)) != expected_count:
+            errors.append(
+                f"cross-tool {label} must contain {expected_count} unique names"
+            )
+    if tuple(proof_modes).count("legacy_requires_builder") != 4:
+        errors.append(
+            "cross-tool proof modes must retain exactly four legacy "
+            "effective-lock claims"
+        )
+    if tuple(proof_modes).count("total_checked_gate") != 13:
+        errors.append(
+            "cross-tool proof modes must contain exactly thirteen total "
+            "checked-gate claims"
+        )
+    observed_legacy_constants = tuple(
+        claim.constant
+        for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.proof_mode == "legacy_requires_builder"
+    )
+    if observed_legacy_constants != _LEGACY_EFFECTIVE_LOCK_CLAIM_CONSTANTS:
+        errors.append(
+            "cross-tool legacy mode must contain exactly the four canonical "
+            "effective-lock claims"
+        )
+    observed_total_constants = tuple(
+        claim.constant
+        for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.proof_mode == "total_checked_gate"
+    )
+    if observed_total_constants != tuple(_TOTAL_GATE_BY_CLAIM):
+        errors.append(
+            "cross-tool total checked-gate mode must contain exactly the "
+            "canonical thirteen progress/successor claims"
+        )
+    unknown_modes = tuple(
+        mode
+        for mode in proof_modes
+        if mode not in {"legacy_requires_builder", "total_checked_gate"}
+    )
+    if unknown_modes:
+        errors.append(f"cross-tool claims have unknown proof modes {unknown_modes!r}")
+    if auxiliary_verus_theorems != [
+        "production_ingress_reservation_materialization_refines_protected_ownership",
+        "production_leader_wire_admission_trace_refines_lifecycle_ownership",
+    ]:
+        errors.append(
+            "cross-tool auxiliary Verus theorem inventory must contain exactly "
+            "the reservation-materialization and durable leader-wire proofs"
+        )
+    if len(total_gate_names) != 17 or len(set(total_gate_names)) != 17:
+        errors.append(
+            "cross-tool total checked-gate inventory must contain exactly "
+            "seventeen unique gates"
+        )
+    return errors
+
+
+def _rust_parameter_names(parameters: str) -> tuple[str, ...]:
+    """Return simple named Rust parameters from one reviewed signature fragment."""
+
+    # Cross-tool kernels deliberately use a flat, named projection signature.
+    # Rejecting patterns/destructuring here keeps the source-fidelity check
+    # unambiguous and prevents a changed projection from hiding in syntax the
+    # checker does not normalize.
+    names = re.findall(
+        r"(?:^|,)\s*(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:", parameters
+    )
+    return tuple(names)
+
+
+def _normalized_rust_contract(source: str) -> str:
+    """Normalize one code-owned Rust/Verus contract to its token stream."""
+
+    return " ".join(rust_code_tokens(source))

@@ -245,7 +245,7 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         .map(Hash::from)
         .expect("non-empty Native AMX fixture manifest root");
     let manifest_leaf_count = u32::try_from(leaves.len()).expect("fixture leaf count fits u32");
-    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
+    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
         Hash::new(b"Native AMX latest-index parent state"),
         Hash::new(b"Native AMX latest-index post state"),
         Hash::new(b"Native AMX latest-index ordinary writes"),
@@ -2722,7 +2722,7 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
     let manifest =
         crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
             .expect("build canonical Native application manifest");
-    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
+    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
         Hash::new(b"Native frontier token parent state"),
         Hash::new(b"Native frontier token post state"),
         Hash::new(b"Native frontier token ordinary writes"),

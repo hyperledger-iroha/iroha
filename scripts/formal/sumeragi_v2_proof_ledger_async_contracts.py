@@ -185,7 +185,7 @@ ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
 # limit for every release shard.
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
     "SumeragiV2AsyncInstallRunnerProofs": 5_775,
-    "SumeragiV2AsyncProgressOwnershipProofs": 5_658,
+    "SumeragiV2AsyncProgressOwnershipProofs": 5_662,
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
     "SumeragiV2AsyncInstallRunnerProofs": 156,
@@ -208,34 +208,55 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncNextNodeCommandOwnsOldestLifecycleOrdinal",
     "CommandSuccessorsRetainCausalOrigin",
     "AsyncCandidateProducerSemanticHandoffUsesInheritedLifecycle",
+    "AsyncCandidateProducerContinuationSelectedLocalReplayHasReservedCapacity",
     "CandidateProducerContinuationResolutionSplitsReviewedSourceClass",
+    "ValidQcIntersectsResponsiveSignerSet",
+    "RemoteResponsiveQcSignerIsInFrozenArchiveFanout",
     "PacketForItemExactRetryRetainsRouteIdentity",
+    "PersistDecisionConvertsIncompatibleResponseBeforeRetryOrdinal",
+    "PersistDecisionPreservesPreFenceResponseUntilCheckedDrain",
     "SignProposalAtomicallyHandsProducerToSourceFanout",
     "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
     "AsyncDeferredHandoffRetainsExactSelectedLifecycle",
     "AsyncLeaderWireLifecycleSlotUniverseIsFinite",
     "AsyncLeaderWireLifecycleSlotUniverseIsRosterBounded",
     "DormantLeaderWireOwnsNoIngressSchedulerBarrier",
+    "AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal",
     "AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut",
     "AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal",
     "AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix",
     "AdmitDormantLeaderWirePreservesLogicalPotentialPredecessors",
     "AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier",
+    "DormantLeaderWirePhysicalOrdinalExhaustionPublishesNothing",
     "AsyncLeaderWireActionInertDormantHasNoExactAdmissionPacket",
     "AsyncLiveServeIngressDuplicateRetainsSchedulerOrdinal",
     "AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle",
     "AsyncUnboundChunkExactRetryCoalescesWithoutEpisodeGrowth",
     "AsyncHeldChunkReceiptTombstonesExactProducerEpisode",
+    "ExactNegativeRetryConsumesNoServeOrPhysicalOrdinal",
+    "NonAdvancingServeFamilyRetryConsumesNoFreshOrdinal",
+    "SupersededResponseRetryConvertsBeforeFreshOrdinal",
     "CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner",
     "AtomicLeaderWireAdmissionFreezesPrefixBeforeAppend",
     "DirectCommitQcCandidateHasExactImportLineage",
     "CommitCertificateResponseCandidateHasExactImportLineage",
     "CommitImportCausalSuccessorRetainsExactLineage",
+    "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationRunnerSelectionRespectsIngressCut",
+    "AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum",
+    "DormantLeaderWireOwnsNoPhysicalIngressPredecessor",
+    "AdmitDormantLeaderWireAppendsAfterExistingServeCarrier",
+    "InterruptedTipServeCarrierTerminalizesBeforePhysicalRemoval",
+    "InterruptedTipLeaderWireCarrierPublishesTypedRetirement",
     "LeaderWireIngressDrainNeverInventsRuntimeOwner",
+    "ServeWorkerDecisionSupersessionClosesWithoutStaleResponse",
     "DeferredRetransmitConsumesDriveProgramCounter",
     "AsyncServeIngressTicketExcludesLaterLocalWork",
     "AsyncLeaderWireIngressTicketExcludesLaterLocalWork",
     "AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler",
+    "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
+    "AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady",
+    "AsyncCandidateProducerContinuationReplayDispatchesOnlyExactIdentity",
     "AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake",
     "AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake",
     "LocalAdmissionAdvanceSelectsAtomicWork",
@@ -249,14 +270,22 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode",
     "AsyncLaterServeTicketInterleavesOlderLocalEpisode",
     "SameHeightRestartPreservesServeHighWatermarks",
+    "SameHeightRestartRetainsOrConvertsUnreplacedServeTombstone",
+    "SameHeightRestartDischargesTerminalReplayWaiter",
+    "SameHeightRestartDischargesEveryLocalServeLifecycle",
+    "SameHeightRestartTerminalOutcomeIsIndependentlyReconstructed",
+    "SameHeightRestartCanonicalDischargeKeysAreLifecycleStable",
+    "ExactNegativeServeRetryIsRejectedBeforeFreshOrdinal",
+    "StrictHigherViewMayReplaceNegativeServeFamily",
     "SameHeightRestartReopensActiveLeaderWireWithoutTerminalizing",
     "SameHeightRestartReopensVolatileLeaderWireTerminal",
     "SameHeightRestartRetainsDormantLeaderWireWithoutBarrier",
     "SameHeightRestartPreservesRestartStableLeaderWireTerminal",
     "SameHeightRestartReopensDurableCertifiedResponseFamily",
+    "PendingServeReceiverClosePublishesTypedTerminalWithoutDebt",
+    "MaterializedServeReceiverClosePublishesTypedTerminalWithoutDebt",
     "RuntimeLeaderWireCannotRetireMerelyFromIngressPop",
     "RetireLeaderWireLifecycleRetainsTerminalTombstone",
-    "AsyncDormantExactReplyRequestPacketIsRetained",
     "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     "AsyncRetainedCommitQcRetransmissionCreatesExactPacket",
     "AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner",
@@ -274,6 +303,10 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateDeferredHandoffRetainsSameOwner",
     "AsyncCandidateDiscardIsNotSemanticService",
     "ImportedCertificateTailCannotRetireOnLocalIncarnationChange",
+    "AsyncCandidateProducerContinuationRunnerResolutionRequiresReadyEvidence",
+    "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
+    "AsyncCandidateProducerContinuationRunnerResolutionConsumesExactStage",
+    "AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix",
     "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
     "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
     "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
@@ -283,14 +316,23 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateProducerContinuationKindPartition",
     "AsyncCandidateProducerContinuationRemovedReplayClassification",
     "LeaderWireDeliveryCandidateInheritsAdmissionSchedulerOrdinal",
-    "AsyncDormantLeaderWireReactivationConsumesNoFreshHighWatermark",
+    "AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal",
     "AsyncTargetNeutralLifecycleOwnerCarrierIsFinite",
     "AsyncTargetNeutralLifecycleEpisodeBudgetIsFiniteAndCoalesced",
     "AsyncTargetNeutralLifecycleDiscoveryStrictlyConsumesBudget",
     "AsyncTargetNeutralLifecycleBudgetOrderingIsWellFounded",
     "AsyncCandidateLifecycleReviewedTokenOwnsOneOrigin",
+    "OrdinaryIngressCarrierRetirementCompactionDoesNotIncreaseEvidence",
+    "OrdinaryIngressCarrierAdmissionPreservesConfiguredEvidenceBound",
+    "AdmitOrdinaryIngressCarrierReservesImmutableActorGlobalOrdinal",
+    "ExactOrdinaryIngressDuplicateCoalescesWithoutCarrierAllocation",
+    "OrdinaryIngressCarrierIdentityMismatchPublishesNoAdmission",
+    "LaterAcceptedOrdinaryCarrierCannotOvertakeFrozenCarrier",
+    "BusyDeferredOlderAggregateRebasesToMinimumCompatibleCarrier",
+    "BusyDeferredAggregateIdentityMutationCannotRebaseOwner",
     "AsyncControlServiceTransitionConsumesFreshLeaderWireSchedulerOrdinal",
     "AsyncControlServiceTransitionPreservesSemanticHandoffCoverage",
+    "AsyncControlServiceTransitionPreservesCandidateProducerContinuationLifecycleCoverage",
     "AsyncCandidateLifecycleReviewedBucketsPartitionRecords",
     "AsyncCandidateLifecycleDormantBucketsSeparateReplayAndService",
     "AsyncCandidateLifecycleActiveRecordsInjectIntoPhysicalOwners",
@@ -315,6 +357,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateLifecycleCarrierInjectionProvidesFreshReservations",
     "AsyncCandidateLifecycleDistinctNewRootsReceiveDistinctOwnership",
     "AsyncCandidateLifecycleHighWatermarkAdvancesByFullFreshSet",
+    "AsyncOrdinaryIngressSharedHighWatermarkAdvancesAtAcceptance",
     "AsyncServeIngressSharedHighWatermarkAdvancesByFreshTickets",
     "AsyncLeaderWireIngressHighWatermarkAdvancesByFreshAdmissions",
     "AsyncLeaderWireSharedHighWatermarkAdvancesByFreshAdmissions",
@@ -368,7 +411,10 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncControlServiceTombstoneCannotReactivate",
     "AsyncControlServiceSameHeightRecoveryRetiresVolatileOwners",
     "CertifiedResponseClaimAdmissionAllocatesExactOrdinal",
+    "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier",
+    "CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources",
     "CertifiedResponseExactRetryKeepsOneClaimOrdinal",
+    "CertifiedResponseLiveClaimCannotBeReplacedAtGst",
     "CertifiedResponseCompetingResponderCannotDoubleChargeFamily",
     "CertifiedResponseConsumedFamilyCannotRetainClaim",
     "CertifiedResponseSameHeightRecoveryReopensDurableFamily",
@@ -379,12 +425,16 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "LeaderWireLastConsumerRefinesLifecycleTransition",
     "LeaderWireTerminalRetirementRefinesLifecycleTransition",
     "LeaderWireRestartReopenRefinesLifecycleTransition",
+    "AsyncIngressPhysicalHighWatermarkIsMonotone",
+    "AsyncServeAdmissionHighWatermarkIsMonotone",
+    "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
     "AsyncFixedCorridorDeadlineActionErasureIsExact",
     "AsyncOriginalStepHasFixedCorridorDeadlineReceiptExtension",
     "AsyncServiceActivationActionsRefineAsyncNext",
     "AsyncTimeoutLifecycleDueTransitionMintsBeforeLaterAdmissions",
     "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
     "AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint",
+    "AsyncTimeoutLifecycleNewOwnershipUsesRecordedOrFreshOrdinal",
     "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
     "AsyncServeQueuedIdentityDepartureInstallsTombstone",
     "AsyncServeRetiredIdentityCannotRequeueAtGst",
@@ -410,15 +460,24 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncLeaderWireLifecycleRolloverInstanceStartsEmpty",
     "AsyncCertifiedResponseClaimRolloverInstanceStartsEmpty",
     "AsyncCandidateServiceRolloverInstanceStartsEmpty",
+    "AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision",
     "AsyncCandidateLifecycleRolloverStartsWithRootOwners",
+    "AsyncInitEstablishesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncResponsiveRestartPreservesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncCandidateDeparturePreservesProducerContinuationLocalReplayCapacity",
+    "AsyncNextPreservesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncBracketNextPreservesCandidateProducerContinuationLocalReplayCapacity",
+    "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
     "AsyncLiveSpecUsesRepresentativePeerCount",
     "AsyncFiniteLiveSpecUsesRepresentativePeerCount",
     "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
     "AsyncServeIngressSchedulerOrdinalIsTyped",
     "AsyncServeIngressSharedSchedulerInitIsEmptyAndInjected",
     "AsyncRetransmitProgramCounterIsBounded",
+    "CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling",
     "CertifiedResponseClaimsShareOutstandingRequestCharge",
     "CertifiedResponseFamilyLocalClaimsRemainPhysicallySerialized",
+    "DormantLeaderWireReactivationPublishesOneFreshPhysicalCarrier",
     "AsyncLeaderWirePotentialPredecessorUniverseIsFinite",
     "AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced",
 )
@@ -553,6 +612,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
     "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
+    "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla",
+    "SumeragiV2ServeRestartTerminalDischargeMutation.tla",
     "exact_ingress_ticket_priority_fixed.cfg",
     "exact_ingress_ticket_runtime_first_bug.cfg",
     "exact_serve_restart_tombstone_fixed.cfg",
@@ -645,10 +706,199 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "fixed_corridor_receipt_acquisition_fixed.cfg",
     "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg",
     "fixed_corridor_receipt_acquisition_global_retire_bug.cfg",
+    "ordinary_ingress_carrier_rebase_fixed.cfg",
+    "ordinary_ingress_carrier_rebase_identity_bug.cfg",
+    "ordinary_ingress_carrier_rebase_minimum_bug.cfg",
+    "serve_restart_terminal_discharge_fixed.cfg",
+    "serve_restart_terminal_discharge_body_fail_open_bug.cfg",
+    "serve_restart_terminal_discharge_crash_resume_incomplete_union_bug.cfg",
+    "serve_restart_terminal_discharge_crash_resume_order_bug.cfg",
+    "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg",
+    "serve_restart_terminal_discharge_family_coexistence_bug.cfg",
+    "serve_restart_terminal_discharge_incomplete_union_bug.cfg",
+    "serve_restart_terminal_discharge_live_decision_conversion_bug.cfg",
+    "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg",
+    "serve_restart_terminal_discharge_negative_terminal_sign_bug.cfg",
+    "serve_restart_terminal_discharge_negative_retry_ordinal_bug.cfg",
+    "serve_restart_terminal_discharge_negative_waiter_bug.cfg",
+    "serve_restart_terminal_discharge_order_bug.cfg",
+    "serve_restart_terminal_discharge_orphan_waiter_bug.cfg",
+    "serve_restart_terminal_discharge_owner_request_mismatch_bug.cfg",
+    "serve_restart_terminal_discharge_persistence_bug.cfg",
+    "serve_restart_terminal_discharge_prefence_decision_rewrite_bug.cfg",
+    "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg",
+    "serve_restart_terminal_discharge_producer_exposure_bug.cfg",
+    "serve_restart_terminal_discharge_raw_context_gate_bug.cfg",
+    "serve_restart_terminal_discharge_receiver_close_bug.cfg",
+    "serve_restart_terminal_discharge_restart_decision_conversion_bug.cfg",
+    "serve_restart_terminal_discharge_resurrection_bug.cfg",
+    "serve_restart_terminal_discharge_roster_fanout_bug.cfg",
+    "serve_restart_terminal_discharge_signer_authority_bug.cfg",
+    "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg",
 )
 LIVENESS_OWNERSHIP_MUTATION_RUNNER = (
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh"
 )
+# The V5 restart-discharge kernel has one reviewed mutant per Boolean control.
+# Keep the fixed theorem surface and every one-bit failure target explicit so
+# a resealed config cannot silently change mode, property, or deadlock status.
+SERVE_RESTART_TERMINAL_DISCHARGE_BITS = (
+    "DischargeCompleteUnion",
+    "UseCanonicalStartupOrder",
+    "ResumeCompleteUnionAfterCrash",
+    "ResumeCanonicalOrderAfterCrash",
+    "PersistTerminalBeforeAdvance",
+    "BlockProducerWhileStartupPending",
+    "RequireExactReplayBinding",
+    "RejectOrphanTerminalWaiter",
+    "RejectNegativeTerminalWaiter",
+    "RejectOwnerRequestMismatchWaiter",
+    "RejectAdmissionTerminalDuplicate",
+    "ConvertRestartResponseOnDecision",
+    "ConvertLiveResponseBeforeOrdinal",
+    "PreservePreFenceResponseUntilCheckedDrain",
+    "RejectNegativeRetryBeforeOrdinal",
+    "BlockTerminalResurrection",
+    "RequireCanonicalBodyAtStartup",
+    "PrunePredecessorFamily",
+    "TerminalizeReceiverClose",
+    "UseFullFrozenRosterFanout",
+    "RequireQcSignerResponseAuthority",
+    "EnforceRawContextGate",
+    "AvoidTerminalReplayResigning",
+    "SignOnlyResponseStartupTerminals",
+    "CompletePreparedCarrierDecisionDrain",
+)
+SERVE_RESTART_TERMINAL_DISCHARGE_FIXED_INVARIANTS = (
+    "TypeInvariant",
+    "RestartUnionDischargesEveryAdmission",
+    "RestartUnionUsesCanonicalOrder",
+    "InterruptedDischargePersistsBeforeAdvance",
+    "InterruptedRestartResumesWithoutReopening",
+    "CrashResumeDischargesEveryRemainingAdmission",
+    "CrashResumeUsesCanonicalRemainingOrder",
+    "ProducerHiddenUntilStartupDischarged",
+    "TerminalReplayIsExactAndOrdinalStable",
+    "RestartDecisionSupersessionConvertsResponseAtomically",
+    "LiveDecisionSupersessionConvertsResponseBeforeOrdinal",
+    "PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain",
+    "PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable",
+    "CorruptTerminalWaiterFailStops",
+    "OwnerRequestMismatchWaiterFailStops",
+    "DuplicateAdmissionTerminalFailsStartupAndPreservesState",
+    "NegativeRetryConsumesNoFreshOrdinal",
+    "TerminalResponseRetryUsesFreshCarrierWithoutLifecycleResurrection",
+    "MissingOrCorruptBodyFailStopsAndPreservesState",
+    "SuccessorTerminalPrunesPredecessorFamily",
+    "ReceiverClosePublishesTypedTerminalWithoutDebt",
+    "CertifiedRequestFansOutToFullFrozenRoster",
+    "OnlyFrozenQcSignersCanRespond",
+    "RawContextGateSeparatesLifecycleAuthority",
+    "TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal",
+    "UnsealedRestartResponsesSignExactlyOnce",
+)
+SERVE_RESTART_TERMINAL_DISCHARGE_MUTATIONS = {
+    "serve_restart_terminal_discharge_body_fail_open_bug.cfg": (
+        "RequireCanonicalBodyAtStartup",
+        "MissingOrCorruptBodyFailStopsAndPreservesState",
+    ),
+    "serve_restart_terminal_discharge_crash_resume_incomplete_union_bug.cfg": (
+        "ResumeCompleteUnionAfterCrash",
+        "CrashResumeDischargesEveryRemainingAdmission",
+    ),
+    "serve_restart_terminal_discharge_crash_resume_order_bug.cfg": (
+        "ResumeCanonicalOrderAfterCrash",
+        "CrashResumeUsesCanonicalRemainingOrder",
+    ),
+    "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg": (
+        "RejectAdmissionTerminalDuplicate",
+        "DuplicateAdmissionTerminalFailsStartupAndPreservesState",
+    ),
+    "serve_restart_terminal_discharge_family_coexistence_bug.cfg": (
+        "PrunePredecessorFamily",
+        "SuccessorTerminalPrunesPredecessorFamily",
+    ),
+    "serve_restart_terminal_discharge_incomplete_union_bug.cfg": (
+        "DischargeCompleteUnion",
+        "RestartUnionDischargesEveryAdmission",
+    ),
+    "serve_restart_terminal_discharge_live_decision_conversion_bug.cfg": (
+        "ConvertLiveResponseBeforeOrdinal",
+        "LiveDecisionSupersessionConvertsResponseBeforeOrdinal",
+    ),
+    "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg": (
+        "RequireExactReplayBinding",
+        "CorruptTerminalWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_negative_terminal_sign_bug.cfg": (
+        "SignOnlyResponseStartupTerminals",
+        "UnsealedRestartResponsesSignExactlyOnce",
+    ),
+    "serve_restart_terminal_discharge_negative_retry_ordinal_bug.cfg": (
+        "RejectNegativeRetryBeforeOrdinal",
+        "NegativeRetryConsumesNoFreshOrdinal",
+    ),
+    "serve_restart_terminal_discharge_negative_waiter_bug.cfg": (
+        "RejectNegativeTerminalWaiter",
+        "CorruptTerminalWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_order_bug.cfg": (
+        "UseCanonicalStartupOrder",
+        "RestartUnionUsesCanonicalOrder",
+    ),
+    "serve_restart_terminal_discharge_orphan_waiter_bug.cfg": (
+        "RejectOrphanTerminalWaiter",
+        "CorruptTerminalWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_owner_request_mismatch_bug.cfg": (
+        "RejectOwnerRequestMismatchWaiter",
+        "OwnerRequestMismatchWaiterFailStops",
+    ),
+    "serve_restart_terminal_discharge_persistence_bug.cfg": (
+        "PersistTerminalBeforeAdvance",
+        "InterruptedDischargePersistsBeforeAdvance",
+    ),
+    "serve_restart_terminal_discharge_prefence_decision_rewrite_bug.cfg": (
+        "PreservePreFenceResponseUntilCheckedDrain",
+        "PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain",
+    ),
+    "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg": (
+        "CompletePreparedCarrierDecisionDrain",
+        "PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable",
+    ),
+    "serve_restart_terminal_discharge_producer_exposure_bug.cfg": (
+        "BlockProducerWhileStartupPending",
+        "ProducerHiddenUntilStartupDischarged",
+    ),
+    "serve_restart_terminal_discharge_raw_context_gate_bug.cfg": (
+        "EnforceRawContextGate",
+        "RawContextGateSeparatesLifecycleAuthority",
+    ),
+    "serve_restart_terminal_discharge_receiver_close_bug.cfg": (
+        "TerminalizeReceiverClose",
+        "ReceiverClosePublishesTypedTerminalWithoutDebt",
+    ),
+    "serve_restart_terminal_discharge_restart_decision_conversion_bug.cfg": (
+        "ConvertRestartResponseOnDecision",
+        "RestartDecisionSupersessionConvertsResponseAtomically",
+    ),
+    "serve_restart_terminal_discharge_resurrection_bug.cfg": (
+        "BlockTerminalResurrection",
+        "TerminalResponseRetryUsesFreshCarrierWithoutLifecycleResurrection",
+    ),
+    "serve_restart_terminal_discharge_roster_fanout_bug.cfg": (
+        "UseFullFrozenRosterFanout",
+        "CertifiedRequestFansOutToFullFrozenRoster",
+    ),
+    "serve_restart_terminal_discharge_signer_authority_bug.cfg": (
+        "RequireQcSignerResponseAuthority",
+        "OnlyFrozenQcSignersCanRespond",
+    ),
+    "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg": (
+        "AvoidTerminalReplayResigning",
+        "TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal",
+    ),
+}
 SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2ServeSchedulerOrdinalMutation.tla",
     "serve_scheduler_shared_ordinal_fixed.cfg",
@@ -725,7 +975,7 @@ SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
         "cd4e26166d5fefa8422eb53db4bbe68a6304f75b73d9b1c32be9bf7a94525d39",
     ),
     (
-        "TLC status and shared terminal assertions",
+        "TLC status and shared-result-contract checker",
         "run_tlc() {",
         'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
         "9c825d3ac384408982f9130f7f7418723e727c6e0f69650d769bbe2a491d0380",
@@ -743,7 +993,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "2208d10a0a3636e919f85f4d9d611fc75c428934e03dc596732f01cf2c8fa616"
+        "e743bca57dd0ee2d975b5c3239804eefc6e8e7127006acb28ee55f7d6c668844"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_ARTIFACTS = (
@@ -783,7 +1033,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "2208d10a0a3636e919f85f4d9d611fc75c428934e03dc596732f01cf2c8fa616"
+        "e743bca57dd0ee2d975b5c3239804eefc6e8e7127006acb28ee55f7d6c668844"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "7bbc3620ad8bb0dc7bc3e3288e01c254563d54fce7b271bd05e393d938b924c0"
@@ -850,7 +1100,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "808cfababed87e4bc7d245986ab09de3549d7eb0569d11a06e7f51e47edb190b"
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
-        "2d8ce44f8a923ffa3f931e9783408183d68ed49112548793d61007229f43dec7"
+        "dd49c24d04c5a35444a7ff59e47419ada1eb7d61387cf46e761b17a38a96d1b3"
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
         "a9bad39fa0caa6761cf7fa5aee259cba9e932234a79e4401ccecc380ca072200"
@@ -898,10 +1148,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "4bf965e65183469fc3434cdf96c486c921aa5f270a192580761ab6a0e7f6d7f8"
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        "7d78fa96c8bba59b331783b753c1b20a5bc8461906fe19ab80b961600e451060"
+        "7c0839a76c10f033ad77258b2b83efdef751fe1887f052cf5b93ed0958571ade"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "50f55d47f8623eaec61d910ec56c97879041fbc346d6f6b6ed8fdb9a53d544fa"
+        "ffc150a0ee5d5dc2a087eb84695ce8fbdf61da18850a7072036208f85dd968b7"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
         "fc841bb679feaf1ded305f1ab0e39ba388e49876bcbc1e3cb39436b09be74a78"
@@ -1235,7 +1485,7 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "5fadddda7f21c5396893a17271e5bedf9ab9f43e2c6848a06abc8ffb60bd881d"
+    "61984b7520251d9c79fab256fb9353d569832497aa67bc3a4b9198dcd7003f7d"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
     "3af011606b9fd8045a51b3461dceab4e6808b536305dcbe6cebdf14c97c941ed"
@@ -1601,8 +1851,101 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "fixed_corridor_receipt_acquisition_global_retire_bug.cfg": (
         "a94a946e62230d7a656c0945737b744945e73051f812c7ece7d6c35f107a7e2a"
     ),
+    "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla": (
+        "ceb29032619c062b17357c4a963de60e1119bcdc038981689afe43e079a5f653"
+    ),
+    "ordinary_ingress_carrier_rebase_fixed.cfg": (
+        "58e1ebceef08ce1e5d8f1dc5bb34777bfd158d68e3891ba67af7bf49b5049d98"
+    ),
+    "ordinary_ingress_carrier_rebase_identity_bug.cfg": (
+        "2db01fb1de0ffce2d91b0bc1fdc737ea9b837925d298b8ea13470b6344e53e00"
+    ),
+    "ordinary_ingress_carrier_rebase_minimum_bug.cfg": (
+        "14f5911140e645af8371cc282006fea6b879968845839389b550c057e8df0cda"
+    ),
+    "SumeragiV2ServeRestartTerminalDischargeMutation.tla": (
+        "15502349b0214b15c96dbc0eb6c8b62f8e43d2059b0ca11974ffa7ceabb24a4e"
+    ),
+    "serve_restart_terminal_discharge_body_fail_open_bug.cfg": (
+        "c4ed94aa1890354d4f262da0ec9b6ea51cbb606d8527f9419c266e7ee2c21691"
+    ),
+    "serve_restart_terminal_discharge_crash_resume_incomplete_union_bug.cfg": (
+        "3058fd7a71710a7e0e3824ade7b7a6314129f231296f173a37b1a6d80621d9ac"
+    ),
+    "serve_restart_terminal_discharge_crash_resume_order_bug.cfg": (
+        "3645cd2d4083a963d56ca751d64cd0e0b1c1291d0ac005590645aa39eee2576f"
+    ),
+    "serve_restart_terminal_discharge_duplicate_outcome_bug.cfg": (
+        "b37ff1837d8d6913d68b29089f3a9264d552b9b7b7344d45d1ca1ea693c773d8"
+    ),
+    "serve_restart_terminal_discharge_family_coexistence_bug.cfg": (
+        "79f2ca284cec0a61048694783dd570a5721fc330bb1f82e381316301e3440641"
+    ),
+    "serve_restart_terminal_discharge_fixed.cfg": (
+        "0dd46a7a6ed21d470ee4160c353f8c026a6cb09a183374f56c10aee84062b030"
+    ),
+    "serve_restart_terminal_discharge_incomplete_union_bug.cfg": (
+        "f199296d65c2e14ea80837ec67aafed00ef612e6f2aa31b16cdf4e17da8d431f"
+    ),
+    "serve_restart_terminal_discharge_live_decision_conversion_bug.cfg": (
+        "7d7a6f76ee67e9edf4792f0f1d334eb6a524ca6f01840afa6f7cf484698541db"
+    ),
+    "serve_restart_terminal_discharge_mismatched_waiter_bug.cfg": (
+        "72ff08dddf37d2b196e5ba8e2b2585296f5314b0254d6104fa785f38b7cc41b6"
+    ),
+    "serve_restart_terminal_discharge_negative_retry_ordinal_bug.cfg": (
+        "16290fed1624e8ae9b76997aca7d6f52b94f96cc924ae0b8aee6d41c590a7d5d"
+    ),
+    "serve_restart_terminal_discharge_negative_terminal_sign_bug.cfg": (
+        "29a0950516f2e1bcf9df95003d239c99f17b2f9103f437d519e7553d3f924aab"
+    ),
+    "serve_restart_terminal_discharge_negative_waiter_bug.cfg": (
+        "02ad40ef2a311cba8f1cccbdc1c1ea8076c59bb2f4d0bea0f7fc060f1cff36d2"
+    ),
+    "serve_restart_terminal_discharge_order_bug.cfg": (
+        "4f6362c1ed3bc68b89b53c476a7c0796bbed078da1a0248ab2529e370e6d9368"
+    ),
+    "serve_restart_terminal_discharge_orphan_waiter_bug.cfg": (
+        "a7252a436b270213768e11a0563c4919bb9e7555a4c6ecd1fb8f44207aa71135"
+    ),
+    "serve_restart_terminal_discharge_owner_request_mismatch_bug.cfg": (
+        "e69e5926363f37ba97adbf1ed9c6d05ef3882ef2e21111acd029da7af225305c"
+    ),
+    "serve_restart_terminal_discharge_persistence_bug.cfg": (
+        "020980fdfd362c88529f2744cbeeb2f4eb59d9240b41a002ebc424b28f7b602e"
+    ),
+    "serve_restart_terminal_discharge_prefence_decision_rewrite_bug.cfg": (
+        "779e319ce87de871670bc190167582577d399f47ae617e8f351e0b8d0dd763dd"
+    ),
+    "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg": (
+        "67dcf0855c151034d87349e2fd06edbd7ee345cadd74cbf6ccacef19d72cc572"
+    ),
+    "serve_restart_terminal_discharge_producer_exposure_bug.cfg": (
+        "25290e7420eae0fd379869070bbd04a1ae6cae3380d37fbd38ed0c5106001d16"
+    ),
+    "serve_restart_terminal_discharge_raw_context_gate_bug.cfg": (
+        "52cbdb9148f195f757e58cfb659c636dbf242fc2fde75b6d340ebc752b54cb06"
+    ),
+    "serve_restart_terminal_discharge_receiver_close_bug.cfg": (
+        "9e8e9e2a4c351656da12695356a1a84843742849f0de78041f8f42930f0d7763"
+    ),
+    "serve_restart_terminal_discharge_restart_decision_conversion_bug.cfg": (
+        "f34bbfd72a45155f92189da2a0942bb92433a2e30915ba9094408a3d28046da7"
+    ),
+    "serve_restart_terminal_discharge_resurrection_bug.cfg": (
+        "9f4f926c0d184219842ffae3842c26e2b536d08ec1ed0de39d35cabb52bfc059"
+    ),
+    "serve_restart_terminal_discharge_roster_fanout_bug.cfg": (
+        "81c968a71c55a6cce65bf41439eae47509bf557a419ca1afc4fa254ae84cc40c"
+    ),
+    "serve_restart_terminal_discharge_signer_authority_bug.cfg": (
+        "2bdf01fd1ce3884f64802217a9b1b5cf3c86b2c1831964056373629bfd3875f2"
+    ),
+    "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg": (
+        "d842c8552094eff841e3c9c159399d680a50edbd63ff2c1b96ad6a3330a8f644"
+    ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "7d78fa96c8bba59b331783b753c1b20a5bc8461906fe19ab80b961600e451060"
+        "7c0839a76c10f033ad77258b2b83efdef751fe1887f052cf5b93ed0958571ade"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -1634,6 +1977,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2AdequateLeaderDeadlineAuthorityMutation*.tla",
     "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation*.tla",
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation*.tla",
+    "SumeragiV2OrdinaryIngressCarrierRebaseMutation*.tla",
+    "SumeragiV2ServeRestartTerminalDischargeMutation*.tla",
     "exact_ingress_ticket_*.cfg",
     "exact_serve_restart_tombstone_*.cfg",
     "exact_response_claim_*.cfg",
@@ -1662,6 +2007,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "adequate_leader_deadline_authority_*.cfg",
     "adequate_leader_selected_lifecycle_episode_*.cfg",
     "fixed_corridor_receipt_acquisition_*.cfg",
+    "ordinary_ingress_carrier_rebase_*.cfg",
+    "serve_restart_terminal_discharge_*.cfg",
 )
 
 # Exact source seal for the indexed successor service-activation mutation

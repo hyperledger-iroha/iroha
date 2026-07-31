@@ -58,7 +58,7 @@ run_case() {
   shift 3
   local log="${run_dir}/${label}.log"
   local actual_status
-  local expected_primary
+  local expected_diagnostic
   local primary_diagnostic_count
   set +e
   (
@@ -88,15 +88,15 @@ run_case() {
     done
   elif [[ "$expected_status" -eq 12 ]]; then
     [[ "$#" == 3 ]] || {
-      echo "${label} mutation must declare version, primary, and coverage markers" >&2
+      echo "${label} mutation must declare version, diagnostic, and coverage markers" >&2
       exit 1
     }
     grep -Fq "$1" "$log" || {
       echo "${label} missed expected version marker: $1" >&2
       exit 1
     }
-    expected_primary="Error: $2"
-    sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$expected_primary"
+    expected_diagnostic="Error: $2"
+    sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$expected_diagnostic"
     sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
     sumeragi_v2_tlc_assert_terminal "$label" "$log"
     primary_diagnostic_count="$(

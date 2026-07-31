@@ -7991,7 +7991,7 @@ pub(crate) mod valid {
         fn validate_execution_context_merge_reference(
             block: &SignedBlock,
             chain_id: &ChainId,
-            state: &impl StateReadOnly,
+            _state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
             validation_profile: &ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
@@ -8007,11 +8007,6 @@ pub(crate) mod valid {
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
-                ));
-            }
-            if !state.nexus().enabled {
-                return Err(Self::execution_context_error(
-                    "certified merge entry requires Nexus multilane mode",
                 ));
             }
             if reference.version != 1 {
@@ -18390,7 +18385,7 @@ pub(crate) mod valid {
                 view: signed.header().view_change_index(),
             };
             let execution =
-                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_topups(
+                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"artifact-bound parent state"),
                     Hash::new(b"artifact-bound post state"),
                     Hash::new(b"artifact-bound ordinary writes"),

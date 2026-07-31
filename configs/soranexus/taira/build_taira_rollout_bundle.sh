@@ -229,10 +229,10 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 case "$(uname -m)" in
-  x86_64|aarch64)
+  aarch64)
     ;;
   *)
-    echo "Taira privacy release evidence supports only native Linux x86_64 or aarch64" >&2
+    echo "Taira first-release authority requires native Linux aarch64" >&2
     exit 1
     ;;
 esac

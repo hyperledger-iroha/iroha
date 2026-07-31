@@ -1858,7 +1858,7 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"v2-safety-topic-payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"v2-safety-topic-parent-state"),
                 Hash::new(b"v2-safety-topic-post-state"),
                 Hash::new(b"v2-safety-topic-ordinary-writes"),

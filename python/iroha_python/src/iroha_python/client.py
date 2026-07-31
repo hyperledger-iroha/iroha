@@ -4551,6 +4551,7 @@ _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
         "true",
         "var",
         "view",
+        "Amount",
     }
 )
 
@@ -4606,6 +4607,7 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "Amount",
     }
 )
 
@@ -5497,6 +5499,8 @@ def _contract_trigger_descriptor(
         path,
     )
     trigger_id = _contract_required_string(value.get("id"), f"{path}.id")
+    if not _canonical_kotodama_identifier(trigger_id, declaration=True):
+        raise TypeError(f"{path}.id must be a canonical Kotodama declaration identifier")
     repeats = _contract_object(value.get("repeats"), f"{path}.repeats")
     _contract_exact_fields(
         repeats,
@@ -5538,7 +5542,11 @@ def _contract_trigger_descriptor(
     )
     namespace = callback.get("namespace")
     if namespace is not None:
-        _contract_required_string(namespace, f"{path}.callback.namespace")
+        namespace = _contract_required_string(namespace, f"{path}.callback.namespace")
+        if not _canonical_kotodama_identifier(namespace, type_declaration=True):
+            raise TypeError(
+                f"{path}.callback.namespace must be a canonical Kotodama type-declaration identifier"
+            )
     callback_entrypoint = _contract_required_string(
         callback.get("entrypoint"), f"{path}.callback.entrypoint"
     )

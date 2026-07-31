@@ -4012,7 +4012,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "asyncNextServeAdmissionOrdinal[node])) /\\ (specification => [](\\A "
         "node \\in ValidatorIds, family \\in AsyncServeLifecycleFamilies: "
         "AsyncServeLifecycleFamilyOwned(node, family) => /\\ Cardinality( "
-        "AsyncServeFamilyReservationRecords(node, family) \\cup "
+        "AsyncServeFamilyAdmissionRecords(node, family) \\cup "
         "AsyncServeFamilyTombstoneRecords(node, family)) = 1 /\\ "
         "AsyncServeFamilyOwnerIdentity(node, family) \\in "
         "AsyncServeLogicalRequestIdentities /\\ "

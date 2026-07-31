@@ -15,11 +15,13 @@ use iroha_data_model::{
         },
         consensus_v2::{
             ConsensusRound, ExecutionCommitment, HeightContext, HeightContextId,
+            MERGE_CARRIER_COMMITMENT_VERSION_V1, MergeCarrierCommitmentV1,
             NATIVE_AMX_APPLICATION_MANIFEST_VERSION, NativeAmxApplicationManifestLeafV1,
             NativeAmxApplicationManifestMemberV1,
         },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneId, compute_settlement_hash},
     peer::PeerId,
     transaction::{TransactionEntrypoint, TransactionResult},
@@ -520,18 +522,24 @@ fn application_evidence(
     {
         return Err("generated Native AMX manifest proof does not verify".into());
     }
-    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
-        Hash::new(b"native-amx-v2-grouped-fixture-parent-state"),
-        Hash::new(b"native-amx-v2-grouped-fixture-post-state"),
-        Hash::new(b"native-amx-v2-grouped-fixture-ordinary-writes"),
-        None,
-        0,
-        NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-        manifest_root,
-        APPLICATION_MANIFEST_LEAF_COUNT,
-        executed_block_wire_len(),
-        executed_block_wire_hash(),
-    )?;
+    let execution_commitment =
+        ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
+            Hash::new(b"native-amx-v2-grouped-fixture-parent-state"),
+            Hash::new(b"native-amx-v2-grouped-fixture-post-state"),
+            Hash::new(b"native-amx-v2-grouped-fixture-ordinary-writes"),
+            None,
+            0,
+            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            manifest_root,
+            APPLICATION_MANIFEST_LEAF_COUNT,
+            Some(MergeCarrierCommitmentV1::new(
+                HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+                    b"native-amx-v2-grouped-fixture-merge-carrier",
+                )),
+            )),
+            executed_block_wire_len(),
+            executed_block_wire_hash(),
+        )?;
     let carrier_entrypoint_hashes = context
         .entrypoints
         .iter()
@@ -1367,6 +1375,24 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
                 &format!("{same_route_descriptor}/accepted_transaction_hashes/0"),
                 Some(foreign_entrypoint.clone()),
             ),
+        ),
+        evidence_control(
+            "execution_commitment_merge_carrier_wrong_version",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/execution_commitment/merge_carrier/version",
+                Some(norito::json!(
+                    MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1)
+                )),
+            )],
+        ),
+        evidence_control(
+            "execution_commitment_missing_merge_carrier_field",
+            vec![mutation(
+                "remove",
+                "/golden/application_evidence/execution_commitment/merge_carrier",
+                None,
+            )],
         ),
         evidence_control(
             "stale_participant_application_incarnation",

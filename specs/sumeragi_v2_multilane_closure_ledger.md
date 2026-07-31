@@ -356,6 +356,20 @@ promote a valid lone publication temporary, remove a byte-identical temporary
 beside its stable file, or reject malformed, oversized, conflicting, or
 ambiguous temporary state.
 
+The startup owner plans ordinary certified lane receipts and Native frontier
+markers together through `plan_lane_application_evidence_repair`, without
+publishing either class. Owners naming the same canonical carrier coalesce
+into one `CanonicalExecutedBlockNeedV1`; after authenticated body recovery the
+complete plan is rebuilt. `apply_lane_application_evidence_repair` repeats
+every ordinary and Native preflight before its first write, publishes every
+exact item, and performs authoritative readback while the Queue startup gate
+remains closed. Only then may lane-reservation ownership reconciliation run.
+The carrier index is validated in both directions: finality `Some(carrier)`
+has one exact carrier record, finality `None` has none, and caching a recovered
+body preflights reverse carrier reconstruction before retiring the body need.
+The rebuilt all-item plan then persists and revalidates that carrier record
+before evidence readback and Queue reconciliation.
+
 **Focused and adversarial tests.** Inject a crash before/after finality,
 manifest, receipt, latest pointer, frontier, and body-retention release. Cover
 body eviction, missing/corrupt checkpoint or finality, forged manifest proof,
@@ -372,7 +386,15 @@ each restart must finish idempotently without deleting the exact latest pair.
 manifest, immutable receipt, exact-latest pointer, and replicated frontier.
 Mutation `ML-MUT-NAT-06` reorders any two boundaries or drops idempotent
 repair; the model must expose an unverifiable frontier or lost durable
-application.
+application. Its unified-startup controls are
+`multilane_native_mutating_unified_startup_plan_bug.cfg`,
+`multilane_native_uncoalesced_canonical_body_needs_bug.cfg`,
+`multilane_native_partial_unified_startup_preflight_bug.cfg`,
+`multilane_native_queue_before_evidence_readback_bug.cfg`,
+`multilane_native_missing_reverse_merge_carrier_bug.cfg`,
+`multilane_native_orphan_merge_carrier_bug.cfg`, and
+`multilane_native_skip_post_cache_carrier_reconcile_bug.cfg`; each must violate
+`MLUnifiedStartupEvidenceRepairSafe`.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
 

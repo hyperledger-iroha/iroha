@@ -1,5 +1,520 @@
 
     #[test]
+    fn tag_roundtrip_rejects_another_height() {
+        let (context, _) = context();
+        let tag = EventTag::new(1, 3, Generation::new(7));
+        assert_eq!(round_for_tag(&context, tag).expect("round").view, 3);
+        assert!(matches!(
+            round_for_tag(&context, EventTag::new(2, 0, Generation::new(7))),
+            Err(V2RunnerError::StaleTag)
+        ));
+    }
+
+    fn proposal_owner(
+        context: &wire::HeightContext,
+        tag: EventTag,
+        lock: Option<(u64, wire::BlockSubject)>,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> LocalProposalOwner {
+        LocalProposalOwner {
+            tag,
+            locked_body: lock.map(|(view, subject)| {
+                (
+                    wire::ConsensusRound {
+                        context_id: context.id(),
+                        height: context.height,
+                        view,
+                    },
+                    subject,
+                )
+            }),
+            decided_subject,
+        }
+    }
+
+    fn proposal_subject(label: &[u8]) -> wire::BlockSubject {
+        wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
+            payload_hash: Hash::new(&[label, b" payload"].concat()),
+        }
+    }
+
+    #[test]
+    fn locked_body_recovery_is_independent_of_reproposal_gates() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(18));
+        let subject = proposal_subject(b"nonleader locked-body recovery");
+        let locked_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let leader = context.leader(tag.view());
+        let nonleader = if leader == 0 { 1 } else { 0 };
+        let directive =
+            LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
+        let owner = LocalProposalOwner::from(directive);
+        let expected_request = Some((tag, locked_round, subject));
+
+        for (local_validator, attempted, can_admit) in [
+            (nonleader, None, true),
+            (leader, Some(owner), true),
+            (leader, None, false),
+        ] {
+            let plan = locked_body_recovery_plan(directive, local_validator, attempted, can_admit);
+            assert_eq!(plan.request, expected_request);
+            assert!(
+                !plan.may_repropose,
+                "body recovery must survive every local reproposal gate"
+            );
+        }
+
+        let eligible = locked_body_recovery_plan(directive, leader, None, true);
+        assert_eq!(eligible.request, expected_request);
+        assert!(eligible.may_repropose);
+
+        let decided = LocalProposalDirective::for_test(
+            tag,
+            leader,
+            Some(locked_round),
+            Some(subject),
+            Some(subject),
+        );
+        assert_eq!(
+            locked_body_recovery_plan(decided, leader, None, true),
+            LockedBodyRecoveryPlan {
+                request: None,
+                may_repropose: false,
+            }
+        );
+    }
+
+    #[test]
+    fn same_tag_higher_lock_retires_all_local_proposal_owners() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(11));
+        let subject_a = proposal_subject(b"local owner A");
+        let subject_b = proposal_subject(b"local owner B");
+        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
+        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
+        let now = Instant::now();
+        let mut state = LocalProposalState {
+            attempted: Some(owner_a),
+            submitted: Some((owner_a, subject_a)),
+            heartbeat_only: Some(owner_a),
+            candidate_work_wait: Some(CandidateWorkWait {
+                owner: owner_a,
+                started_at: now,
+                next_retry: now,
+            }),
+            pending_events: Some(PendingLocalEvents {
+                owner: owner_a,
+                subject: subject_a,
+                events: Vec::new(),
+            }),
+            global_selection: None,
+        };
+
+        state.reconcile(owner_b);
+
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.heartbeat_only.is_none());
+        assert!(state.candidate_work_wait.is_none());
+        assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
+        let (context, _) = context();
+        let owner = proposal_owner(
+            &context,
+            EventTag::new(context.height, 3, Generation::new(17)),
+            None,
+            None,
+        );
+        let started_at = Instant::now();
+        let wait_bound = Duration::from_secs(2);
+        let mut state = LocalProposalState::default();
+
+        state.defer_candidate_work(owner, started_at, wait_bound);
+        assert_eq!(state.heartbeat_only, None);
+        assert!(
+            state
+                .candidate_work_wait
+                .is_some_and(|wait| wait.owner == owner && wait.started_at == started_at)
+        );
+
+        let expired_at = started_at
+            .checked_add(wait_bound)
+            .expect("fixture wait deadline is representable");
+        state.defer_candidate_work(owner, expired_at, wait_bound);
+        assert_eq!(state.heartbeat_only, Some(owner));
+        assert!(state.candidate_work_wait.is_none());
+
+        state.defer_candidate_work(owner, expired_at, wait_bound);
+        assert_eq!(
+            state.heartbeat_only,
+            Some(owner),
+            "repeated timeout handling must never re-arm ordinary candidate work"
+        );
+        assert!(state.candidate_work_wait.is_none());
+    }
+
+    #[test]
+    fn first_same_subject_lock_preserves_pending_local_proposal_events() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(14));
+        let subject = proposal_subject(b"first lock keeps local subject");
+        let unlocked = proposal_owner(&context, tag, None, None);
+        let locked = proposal_owner(&context, tag, Some((5, subject)), None);
+        let mut state = LocalProposalState {
+            attempted: Some(unlocked),
+            submitted: Some((unlocked, subject)),
+            pending_events: Some(PendingLocalEvents {
+                owner: unlocked,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+
+        state.reconcile(locked);
+
+        assert_eq!(state.attempted, Some(locked));
+        assert_eq!(state.submitted, Some((locked, subject)));
+        assert!(
+            state
+                .pending_events
+                .as_ref()
+                .is_some_and(|pending| { pending.owner == locked && pending.subject == subject })
+        );
+    }
+
+    #[test]
+    fn higher_same_subject_lock_retires_prior_origin_work() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(15));
+        let subject = proposal_subject(b"higher lock retires old origin");
+        let lower = proposal_owner(&context, tag, Some((2, subject)), None);
+        let higher = proposal_owner(&context, tag, Some((4, subject)), None);
+        let mut state = LocalProposalState {
+            attempted: Some(lower),
+            submitted: Some((lower, subject)),
+            pending_events: Some(PendingLocalEvents {
+                owner: lower,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+
+        assert_ne!(lower, higher);
+        state.reconcile(higher);
+
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(16));
+        let subject = proposal_subject(b"old-origin first lock");
+        let unlocked = proposal_owner(&context, tag, None, None);
+        let locked = proposal_owner(&context, tag, Some((4, subject)), None);
+        let mut state = LocalProposalState {
+            attempted: Some(unlocked),
+            submitted: Some((unlocked, subject)),
+            pending_events: Some(PendingLocalEvents {
+                owner: unlocked,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+
+        state.reconcile(locked);
+
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(12));
+        let subject_a = proposal_subject(b"rejected old A");
+        let subject_b = proposal_subject(b"current B");
+        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
+        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
+        let proposal_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: tag.view(),
+        };
+        let mut state = LocalProposalState {
+            submitted: Some((owner_a, subject_a)),
+            ..LocalProposalState::default()
+        };
+
+        assert_eq!(
+            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
+            LocalValidationDisposition::Ignored
+        );
+        assert_eq!(state.heartbeat_only, None);
+
+        state.submitted = Some((owner_b, subject_b));
+        assert_eq!(
+            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
+            LocalValidationDisposition::RetryHeartbeat
+        );
+        assert_eq!(state.heartbeat_only, Some(owner_b));
+
+        state.submitted = Some((owner_b, subject_b));
+        assert_eq!(
+            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
+            LocalValidationDisposition::FatalHeartbeat
+        );
+    }
+
+    #[test]
+    fn decision_retires_local_work_before_prepared_delivery() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 6, Generation::new(13));
+        let subject = proposal_subject(b"decided proposal");
+        let active = proposal_owner(&context, tag, Some((4, subject)), None);
+        let decided = proposal_owner(&context, tag, Some((4, subject)), Some(subject));
+        let mut state = LocalProposalState {
+            attempted: Some(active),
+            submitted: Some((active, subject)),
+            heartbeat_only: None,
+            candidate_work_wait: None,
+            pending_events: Some(PendingLocalEvents {
+                owner: active,
+                subject,
+                events: Vec::new(),
+            }),
+            global_selection: None,
+        };
+
+        assert!(state.take_prepared_events(decided, tag, subject).is_none());
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
+        let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("deterministic genesis key");
+        let transaction = TransactionBuilder::new(
+            ChainId::from("height-one-resultless-projection"),
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "staged genesis execution".to_owned())])
+        .sign(key_pair.private_key());
+        let entrypoint = transaction.hash_as_entrypoint();
+        let mut staged =
+            SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None);
+        staged
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach deterministic staged genesis results");
+        assert!(staged.has_results());
+        assert!(!staged.is_resultless_proposal());
+        assert!(staged.header().result_merkle_root().is_some());
+
+        let staged_header_hash = staged.header().hash();
+        let staged_hash = staged.hash();
+        let staged_signatures = staged.signatures().cloned().collect::<Vec<_>>();
+        let staged_result_root = staged.header().result_merkle_root();
+        let staged_execution_wire = staged.encode_wire().expect("encode staged execution image");
+        let wire = canonical_height_one_proposal_wire(&staged)
+            .expect("encode canonical height-one proposal");
+        let proposal = decode_framed_signed_block(&wire).expect("decode height-one proposal");
+
+        assert!(proposal.is_resultless_proposal());
+        assert!(!proposal.has_results());
+        assert!(proposal.header().result_merkle_root().is_none());
+        assert_eq!(proposal.header().hash(), staged_header_hash);
+        assert_eq!(proposal.hash(), staged_hash);
+        assert_eq!(
+            proposal.signatures().cloned().collect::<Vec<_>>(),
+            staged_signatures
+        );
+        assert_eq!(
+            staged.header().result_merkle_root(),
+            staged_result_root,
+            "proposal projection must not mutate the staged result root"
+        );
+        assert_eq!(
+            staged
+                .encode_wire()
+                .expect("re-encode staged execution image"),
+            staged_execution_wire,
+            "proposal projection must not mutate the staged execution image"
+        );
+        assert_eq!(
+            Hash::new(&wire),
+            staged
+                .canonical_proposal_wire_hash()
+                .expect("hash canonical staged-genesis proposal"),
+        );
+    }
+
+    #[test]
+    fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
+        let (context, _) = context();
+        let key_pair = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
+            .expect("deterministic proposal key");
+        let transaction = TransactionBuilder::new(
+            ChainId::from("locked-reproposal-exact-body"),
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "immutable locked body".to_owned())])
+        .sign(key_pair.private_key());
+        let block = SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None)
+            .canonical_resultless_proposal();
+        assert!(block.is_resultless_proposal());
+        let canonical_wire = block.encode_wire().expect("encode exact proposal body");
+        let locked_subject = wire::BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let tag = EventTag::new(context.height, 3, Generation::new(17));
+
+        let encoded = encode_exact_local_body(&context, tag, Some(locked_subject), &canonical_wire)
+            .expect("encode unchanged locked body at the reproposal round");
+        assert_eq!(
+            encoded.manifest().round,
+            round_for_tag(&context, tag).unwrap()
+        );
+        assert_eq!(encoded.manifest().subject, locked_subject);
+        let (_, chunks) = encoded.into_parts();
+        assert_eq!(chunks.concat(), canonical_wire);
+
+        let foreign_subject = proposal_subject(b"foreign locked subject");
+        assert!(matches!(
+            encode_exact_local_body(&context, tag, Some(foreign_subject), &canonical_wire,),
+            Err(V2RunnerError::LockedBodyMismatch)
+        ));
+    }
+
+    #[test]
+    fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 3, Generation::new(9));
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: tag.view(),
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
+            payload_hash: Hash::new(b"replayed proposal payload"),
+        };
+        let manifest =
+            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
+                .expect("fixture manifest");
+        let proposal = wire::Proposal {
+            round,
+            proposer: context.leader(round.view),
+            subject,
+            manifest,
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        let effects = [
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+            )),
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(proposal),
+            },
+        ];
+
+        let replayed = replayed_proposal_sign(&effects).expect("extract exact replay owner");
+        assert_eq!(
+            replayed,
+            ReplayedProposalSign {
+                tag,
+                round,
+                subject,
+            }
+        );
+        assert_eq!(replayed_proposal_sign(&effects[..1]), None);
+        assert_eq!(replayed_proposal_sign(&[]), None);
+
+        let directive = |locked_subject: Option<wire::BlockSubject>,
+                         decided_subject: Option<wire::BlockSubject>| {
+            LocalProposalDirective::for_test(
+                tag,
+                context.leader(tag.view()),
+                locked_subject.map(|_| wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 1,
+                }),
+                locked_subject,
+                decided_subject,
+            )
+        };
+        let unlocked = directive(None, None);
+        assert_eq!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
+            Some(LocalProposalOwner::from(unlocked))
+        );
+
+        let exact_lock = directive(Some(subject), None);
+        assert_eq!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), exact_lock).attempted,
+            Some(LocalProposalOwner::from(exact_lock)),
+            "the exact replayed subject owns current locked-body work"
+        );
+
+        let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
+                .attempted
+                .is_none(),
+            "an equal-tag proposal for another subject cannot reserve the current lock owner"
+        );
+
+        let mismatched_round = ReplayedProposalSign {
+            round: wire::ConsensusRound { view: 2, ..round },
+            ..replayed
+        };
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
+                .attempted
+                .is_none(),
+            "the replayed proposal round must match its reducer tag"
+        );
+
+        let decided = directive(Some(subject), Some(subject));
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), decided)
+                .attempted
+                .is_none(),
+            "a decision retires every replayed proposal reservation"
+        );
+    }
+
+    #[test]
     fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         assert_eq!(
             outer_ingress_turns(3).collect::<Vec<_>>(),
@@ -45,7 +560,7 @@
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"terminal ingress parent state"),
                 Hash::new(b"terminal ingress post state"),
                 Hash::new(b"terminal ingress writes"),
@@ -637,6 +1152,106 @@
 
         assert!(!output_guard.restart_required());
         assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let calls = RefCell::new(Vec::new());
+        let served = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || Ok(Some(())),
+            |(), _permit| {
+                calls.borrow_mut().push("post");
+                Ok(())
+            },
+        );
+        let posted = finalize_bound_block_sync_serve(
+            served,
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        )
+        .expect("posted response owns its bound runtime receipt");
+        assert_eq!(posted, BoundBlockSyncServeOutcome::Posted);
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["post"],
+            "posted exact output, not VolatileTerminal, owns the runtime receipt"
+        );
+        calls.borrow_mut().clear();
+
+        let served = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || Ok::<Option<()>, V2BlockSyncError>(None),
+            |(), _permit| {
+                calls.borrow_mut().push("unexpected-post");
+                Ok(())
+            },
+        );
+        let no_response = finalize_bound_block_sync_serve(
+            served,
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        )
+        .expect("no-response history retires through VolatileTerminal");
+        assert_eq!(no_response, BoundBlockSyncServeOutcome::VolatileNoResponse);
+        assert_eq!(calls.borrow().as_slice(), ["volatile"]);
+        calls.borrow_mut().clear();
+
+        let served = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || {
+                Err::<Option<()>, _>(V2BlockSyncError::Wire(
+                    wire::ValidationError::WrongHeightContext,
+                ))
+            },
+            |(), _permit| {
+                calls.borrow_mut().push("unexpected-post");
+                Ok(())
+            },
+        );
+        let remote_rejection = finalize_bound_block_sync_serve(
+            served,
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        )
+        .expect("remote rejection retires through VolatileTerminal");
+        assert_eq!(
+            remote_rejection,
+            BoundBlockSyncServeOutcome::VolatileRemoteRejection
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["volatile", "remote-rejection"],
+            "runtime retirement precedes nonfatal rejection observation"
+        );
+        calls.borrow_mut().clear();
+
+        let fatal = finalize_bound_block_sync_serve(
+            Err(V2BlockSyncError::RestartRequired),
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        );
+        assert!(matches!(
+            fatal,
+            Err(V2RunnerError::BlockSync(V2BlockSyncError::RestartRequired))
+        ));
+        assert!(
+            calls.borrow().is_empty(),
+            "fatal service failure leaves the durable Runtime owner for restart recovery"
+        );
     }
 
     #[test]

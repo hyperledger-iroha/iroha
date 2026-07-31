@@ -46,7 +46,7 @@ use iroha_data_model::{
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
     let ordinary_writes_root = Hash::new([seed, 3]);
     let topup_anchor_root = Hash::new([seed, 4]);
-    ExecutionCommitment::new(
+    ExecutionCommitment::new_without_merge_carrier(
         Hash::new([seed, 1]),
         ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
         ordinary_writes_root,

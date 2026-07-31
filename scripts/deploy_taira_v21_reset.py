@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """Deploy one authenticated four-validator Taira v21 fresh-reset cohort.
 
-Without ``--apply`` this command is strictly read-only: it authenticates the
-binary, supervisor, reset bundle, current four-job launchd cohort, disk
-headroom, and a read-only directory fsync barrier.  An explicitly authorized
-reset of an already-degraded testnet may use ``--allow-absent-old-child`` only
-when an exact loaded old supervisor has neither a PID file nor any child
-process.  ``--apply`` additionally requires root, installs content-addressed
-root-owned code, has that exact binary fully qualify the catalog once and
-publish its immutable root-owned seal, then validates all four configs through
-the sealed fast path before mutating the old cohort.  It replaces all four
-LaunchDaemons as one cohort, proves mandatory offline readiness and advancing
-consensus, and proves one supervised child can restart without replacing its
-supervisor.  Any failed rollout removes only a seal whose returned identity it
-owns and restores the old release/cohort.  If the writer publishes a seal but
-fails before returning its identity, the controller preserves that unattributed
-seal and its installed release for explicit operator recovery.
+Without ``--apply`` this command is strictly read-only: it verifies one signed
+archive-only rollout admission, binds that archive's receipt to the binary,
+supervisor, reset manifest, and exact four configs, then authenticates the
+current launchd cohort, disk headroom, and a read-only directory fsync barrier.
+An explicitly authorized reset of an already-degraded testnet may use
+``--allow-absent-old-child`` only when an exact loaded old supervisor has
+neither a PID file nor any child process.  ``--apply`` additionally requires
+root, re-verifies admission under the deployment lock, atomically consumes its
+receipt in the canonical protected replay ledger, and installs
+content-addressed root-owned code.  That exact binary fully qualifies the
+catalog once and publishes its immutable root-owned seal, then validates all
+four configs through the sealed fast path before mutating the old cohort.  The
+receipt consumption is restored if deployment never reaches that first cohort
+mutation.  The rollout replaces all four LaunchDaemons as one cohort, proves
+mandatory offline readiness and advancing consensus, and proves one supervised
+child can restart without replacing its supervisor.  Any failed rollout
+removes only a seal whose returned identity it owns and restores the old
+release/cohort.  If the writer publishes a seal but fails before returning its
+identity, the controller preserves that unattributed seal and its installed
+release for explicit operator recovery.
 
 The controller never prints config contents, process command lines, HTTP
 bodies, or other runtime signing material.
@@ -46,6 +51,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, NoReturn, Optional, Sequence
+
+try:
+    from scripts import taira_rollout_admission as rollout_admission
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    import taira_rollout_admission as rollout_admission
 
 PEER_COUNT = 4
 CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
@@ -129,6 +141,8 @@ INSTALL_ROOT = Path("/Library/SORA/Taira")
 LAUNCH_DAEMONS = Path("/Library/LaunchDaemons")
 DEFAULT_SUPERVISOR_PYTHON = Path("/usr/bin/python3")
 DEPLOYMENT_LOCK = INSTALL_ROOT / "deploy-v21.lock"
+ADMISSION_REPLAY_LEDGER = INSTALL_ROOT / "rollout-admission-replay-v1.json"
+ADMISSION_REPLAY_LEDGER_MODE = 0o644
 MACOS_ACL_INSPECTOR = Path("/bin/ls")
 MACOS_ACL_CLEARER = Path("/bin/chmod")
 MACOS_ACL_COMMAND_TIMEOUT_SECONDS = 5
@@ -156,18 +170,22 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def require_sha256(value: str, label: str) -> str:
+def require_sha256(value: object, label: str) -> str:
     """Require a lowercase SHA-256 literal."""
 
-    if SHA256_RE.fullmatch(value) is None:
+    if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256 digest")
     return value
 
 
-def require_commit(value: str, label: str = "expected source commit") -> str:
+def require_commit(value: object, label: str = "expected source commit") -> str:
     """Require one full nonzero lowercase Git object id."""
 
-    if COMMIT_RE.fullmatch(value) is None or value == "0" * 40:
+    if (
+        not isinstance(value, str)
+        or COMMIT_RE.fullmatch(value) is None
+        or value == "0" * 40
+    ):
         fail(f"{label} must be one full nonzero lowercase Git object id")
     return value
 
@@ -796,7 +814,7 @@ class BundlePlan:
 
 @dataclasses.dataclass(frozen=True)
 class ReleasePlan:
-    """Operator-pinned release identity and its single-copy cutover seal."""
+    """Receipt-bound release identity and its single-copy cutover seal."""
 
     source_root: Path
     installed_root: Path
@@ -817,12 +835,21 @@ def validate_release(
     manifest: dict[str, Any],
     owner_uid: int,
     owner_gid: int,
-    *,
-    expected_manifest_sha256: str,
-    expected_policy_sha256: str,
-    expected_attestation_sha256: str,
 ) -> ReleasePlan:
-    """Authenticate the exact operator-pinned single-release Kagemusha catalog."""
+    """Authenticate the exact reset-manifest-bound Kagemusha catalog."""
+
+    manifest_sha256 = require_sha256(
+        manifest.get("kagemusha_manifest_sha256"),
+        "reset manifest Kagemusha manifest SHA-256",
+    )
+    policy_sha256 = require_sha256(
+        manifest.get("kagemusha_release_policy_sha256"),
+        "reset manifest Kagemusha release policy SHA-256",
+    )
+    attestation_sha256 = require_sha256(
+        manifest.get("kagemusha_release_attestation_sha256"),
+        "reset manifest Kagemusha release attestation SHA-256",
+    )
 
     root = bundle / "kagemusha"
     require_exact_names(
@@ -831,10 +858,7 @@ def validate_release(
         "Kagemusha root",
     )
     policy_sha, _ = sha256_regular(root / RELEASE_POLICY_FILE_NAME, 64 * 1024)
-    if (
-        policy_sha != manifest.get("kagemusha_release_policy_sha256")
-        or policy_sha != expected_policy_sha256
-    ):
+    if policy_sha != policy_sha256:
         fail("Kagemusha release policy does not match the reset manifest")
     catalog = root / RELEASE_CATALOG_DIRECTORY_NAME
     releases = list(catalog.iterdir())
@@ -857,8 +881,7 @@ def validate_release(
     )
     if (
         manifest_norito_sha != release.name
-        or manifest_norito_sha != manifest.get("kagemusha_manifest_sha256")
-        or manifest_norito_sha != expected_manifest_sha256
+        or manifest_norito_sha != manifest_sha256
     ):
         fail("Kagemusha manifest identity is not content-addressed")
     digest_body, _ = read_regular(release / "manifest.norito.sha256", 65)
@@ -885,8 +908,7 @@ def validate_release(
         or isinstance(max_proof_bytes, bool)
         or max_proof_bytes <= 0
         or release_json.get("release_attestation_sha256") != attestation_sha
-        or attestation_sha != expected_attestation_sha256
-        or manifest.get("kagemusha_release_attestation_sha256") != attestation_sha
+        or attestation_sha != attestation_sha256
     ):
         fail("Kagemusha release manifest is not the exact Taira ABI-21/V4 release")
     actual_tree, tree_seals = release_tree_snapshot(root, owner_uid, owner_gid)
@@ -1056,11 +1078,9 @@ def validate_operator_release_identity(raw: bytes, release: ReleasePlan) -> None
 def validate_bundle(
     bundle: Path,
     *,
+    expected_reset_manifest_sha256: str,
     expected_binary_sha256: str,
     expected_source_commit: str,
-    expected_kagemusha_manifest_sha256: str,
-    expected_kagemusha_release_policy_sha256: str,
-    expected_kagemusha_release_attestation_sha256: str,
     minimum_free_bytes: int,
     maximum_fsync_latency_ms: int,
 ) -> BundlePlan:
@@ -1087,6 +1107,8 @@ def validate_bundle(
     manifest_raw, manifest_info = read_regular(manifest_path, MAX_MANIFEST_BYTES)
     manifest = parse_json_bytes(manifest_raw, "reset manifest")
     manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+    if manifest_sha256 != expected_reset_manifest_sha256:
+        fail("reset manifest does not match the verified admission receipt")
     if (
         manifest.get("schema") != "taira-exact2f-reset-bundle"
         or manifest.get("peer_count") != PEER_COUNT
@@ -1102,9 +1124,9 @@ def validate_bundle(
     ):
         fail("reset manifest is not the exact bounded Taira v21 projection")
     if manifest.get("source_commit") != expected_source_commit:
-        fail("reset manifest source commit does not match --expected-source-commit")
+        fail("reset manifest source commit does not match verified admission")
     if manifest.get("irohad_sha256") != expected_binary_sha256:
-        fail("reset manifest binary does not match --expected-binary-sha256")
+        fail("reset manifest binary does not match the verified admission receipt")
     _, signed_genesis_info = require_manifest_hash(
         manifest,
         "signed_genesis_sha256",
@@ -1132,9 +1154,6 @@ def validate_bundle(
         manifest,
         owner_uid,
         owner_gid,
-        expected_manifest_sha256=expected_kagemusha_manifest_sha256,
-        expected_policy_sha256=expected_kagemusha_release_policy_sha256,
-        expected_attestation_sha256=expected_kagemusha_release_attestation_sha256,
     )
     validate_operator_release_identity(operator_raw, release)
     if (
@@ -1276,6 +1295,28 @@ def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_res
 
 
 @dataclasses.dataclass(frozen=True)
+class AdmissionPlan:
+    """One complete archive verification bound to immutable deployment bytes."""
+
+    archive: Path
+    archive_state: rollout_admission.StableFile
+    authority_dir: Path
+    replay_ledger: Path
+    receipt_id: str
+    archive_sha256: str
+    source_commit: str
+    cargo_lock_sha256: str
+    workspace_source_manifest_sha256: str
+    reset_manifest_sha256: str
+    binary_sha256: str
+    supervisor_sha256: str
+    validator_config_sha256: tuple[tuple[str, str], ...]
+    restart_generation: str
+    signer_fingerprint_sha256: str
+    release_manifest_verifier_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
 class SourcePlan:
     """Authenticated release binary and supervisor source identities."""
 
@@ -1328,14 +1369,18 @@ def validate_supervisor_python(path: Path) -> Path:
     return python
 
 
-def validate_sources(args: argparse.Namespace, bundle: BundlePlan) -> SourcePlan:
+def validate_sources(
+    args: argparse.Namespace,
+    bundle: BundlePlan,
+    admission: AdmissionPlan,
+) -> SourcePlan:
     """Authenticate root binary and owner-private supervisor without executing either."""
 
     binary = canonical_path(args.binary, "validator binary")
     require_root_controlled_file(binary, executable=True)
     binary_sha, _ = sha256_regular(binary, MAX_BINARY_BYTES)
-    if binary_sha != args.expected_binary_sha256:
-        fail("validator binary does not match --expected-binary-sha256")
+    if binary_sha != admission.binary_sha256:
+        fail("validator binary does not match the verified admission receipt")
 
     supervisor = canonical_path(args.supervisor, "supervisor source")
     supervisor_info = supervisor.lstat()
@@ -1349,8 +1394,8 @@ def validate_sources(args: argparse.Namespace, bundle: BundlePlan) -> SourcePlan
     ):
         fail("supervisor source is not an owner-private runtime-user file")
     supervisor_sha, _ = sha256_regular(supervisor, 4 * 1024 * 1024)
-    if supervisor_sha != args.expected_supervisor_sha256:
-        fail("supervisor source does not match --expected-supervisor-sha256")
+    if supervisor_sha != admission.supervisor_sha256:
+        fail("supervisor source does not match the verified admission receipt")
 
     python = validate_supervisor_python(args.supervisor_python)
     return SourcePlan(
@@ -1360,6 +1405,227 @@ def validate_sources(args: argparse.Namespace, bundle: BundlePlan) -> SourcePlan
         supervisor_sha256=supervisor_sha,
         python=python,
     )
+
+
+def _stable_admission_file(
+    path: Path, label: str
+) -> rollout_admission.StableFile:
+    """Capture one verifier-library stable file identity with a local error."""
+
+    try:
+        return rollout_admission.stable_hash_path(path)
+    except rollout_admission.ReleaseArtifactError as error:
+        raise DeploymentError(f"cannot stably read {label}: {error}") from error
+
+
+def require_protected_replay_ledger(
+    path: Path,
+) -> rollout_admission.ReplayLedgerSnapshot:
+    """Require the sole canonical root-controlled deployment replay ledger."""
+
+    if path != ADMISSION_REPLAY_LEDGER:
+        fail("deployment admission must use the canonical replay-ledger path")
+    ledger = canonical_path(path, "deployment admission replay ledger")
+    info = require_root_controlled_file(ledger, executable=False)
+    if (
+        info.st_uid != 0
+        or info.st_gid != 0
+        or stat.S_IMODE(info.st_mode) != ADMISSION_REPLAY_LEDGER_MODE
+    ):
+        fail("deployment admission replay ledger must be exact root:wheel 0644")
+    try:
+        snapshot = rollout_admission.load_replay_ledger(ledger)
+    except (
+        rollout_admission.ReleaseArtifactError,
+        rollout_admission.TairaRolloutAdmissionError,
+    ) as error:
+        raise DeploymentError(
+            f"invalid deployment admission replay ledger: {error}"
+        ) from error
+    after = require_root_controlled_file(ledger, executable=False)
+    if (
+        metadata_identity(after) != metadata_identity(info)
+        or _stable_admission_file(ledger, "deployment admission replay ledger")
+        != snapshot.file
+    ):
+        fail("deployment admission replay ledger changed during validation")
+    return snapshot
+
+
+def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
+    """Run the archive-only verifier with every independent trust input."""
+
+    archive = canonical_path(args.admission_archive, "admission archive")
+    authority_dir = canonical_path(
+        args.admission_authority_dir, "admission authority directory"
+    )
+    verifier = canonical_path(
+        args.release_manifest_verifier, "release-manifest verifier"
+    )
+    ledger = ADMISSION_REPLAY_LEDGER
+    require_protected_replay_ledger(ledger)
+    before_archive = _stable_admission_file(archive, "admission archive")
+    source = rollout_admission.SourceIdentity(
+        commit=args.expected_source_commit,
+        cargo_lock_sha256=args.expected_cargo_lock_sha256,
+        workspace_source_manifest_sha256=(
+            args.expected_workspace_source_manifest_sha256
+        ),
+    )
+    try:
+        result = rollout_admission.verify_admission(
+            archive_path=archive,
+            authority_dir=authority_dir,
+            expected_source=source,
+            expected_receipt_id=args.expected_receipt_id,
+            replay_ledger_path=ledger,
+            trusted_signing_fingerprint=args.trusted_signing_fingerprint,
+            release_manifest_verifier_path=verifier,
+            trusted_release_manifest_verifier_sha256=(
+                args.trusted_release_manifest_verifier_sha256
+            ),
+        )
+    except (
+        OSError,
+        ValueError,
+        rollout_admission.ReleaseArtifactError,
+        rollout_admission.ReleaseManifestSignatureError,
+        rollout_admission.TairaRolloutAdmissionError,
+        rollout_admission.tarfile.TarError,
+    ) as error:
+        raise DeploymentError(
+            f"rollout admission verification failed: {error}"
+        ) from error
+    after_archive = _stable_admission_file(archive, "admission archive")
+    if before_archive != after_archive:
+        fail("admission archive was substituted around verification")
+
+    expected_fields = {
+        "archive_sha256",
+        "deployment_performed",
+        "linux_authority_manifest_sha256",
+        "macos_end_block_hash",
+        "macos_end_height",
+        "peer_count",
+        "receipt_id",
+        "release_manifest_sha256",
+        "release_manifest_verifier_sha256",
+        "reset_manifest_sha256",
+        "restart_generation",
+        "schema",
+        "schema_version",
+        "signer_fingerprint_sha256",
+        "source",
+        "supervisor_sha256",
+        "validator_binary_sha256",
+        "validator_config_sha256",
+        "verified",
+    }
+    if set(result) != expected_fields:
+        fail("rollout admission verifier returned a non-canonical result shape")
+    if (
+        result["verified"] is not True
+        or result["deployment_performed"] is not False
+        or result["schema"] != rollout_admission.VERIFICATION_SCHEMA
+        or result["schema_version"] != rollout_admission.VERIFICATION_SCHEMA_VERSION
+        or result["peer_count"] != PEER_COUNT
+        or result["receipt_id"] != args.expected_receipt_id
+        or result["archive_sha256"] != before_archive.sha256
+        or result["source"] != source.as_dict()
+        or result["signer_fingerprint_sha256"]
+        != args.trusted_signing_fingerprint
+        or result["release_manifest_verifier_sha256"]
+        != args.trusted_release_manifest_verifier_sha256
+    ):
+        fail("rollout admission verifier result does not match trusted inputs")
+
+    raw_configs = result["validator_config_sha256"]
+    if not isinstance(raw_configs, dict) or set(raw_configs) != set(SLUGS):
+        fail("rollout admission did not bind the exact four validator configs")
+    config_digests = tuple(
+        (slug, require_sha256(raw_configs[slug], f"verified {slug} config SHA-256"))
+        for slug in SLUGS
+    )
+    return AdmissionPlan(
+        archive=archive,
+        archive_state=before_archive,
+        authority_dir=authority_dir,
+        replay_ledger=ledger,
+        receipt_id=require_sha256(result["receipt_id"], "verified receipt ID"),
+        archive_sha256=require_sha256(
+            result["archive_sha256"], "verified archive SHA-256"
+        ),
+        source_commit=args.expected_source_commit,
+        cargo_lock_sha256=args.expected_cargo_lock_sha256,
+        workspace_source_manifest_sha256=(
+            args.expected_workspace_source_manifest_sha256
+        ),
+        reset_manifest_sha256=require_sha256(
+            result["reset_manifest_sha256"],
+            "verified reset manifest SHA-256",
+        ),
+        binary_sha256=require_sha256(
+            result["validator_binary_sha256"],
+            "verified validator binary SHA-256",
+        ),
+        supervisor_sha256=require_sha256(
+            result["supervisor_sha256"], "verified supervisor SHA-256"
+        ),
+        validator_config_sha256=config_digests,
+        restart_generation=require_sha256(
+            result["restart_generation"], "verified restart generation"
+        ),
+        signer_fingerprint_sha256=args.trusted_signing_fingerprint,
+        release_manifest_verifier_sha256=(
+            args.trusted_release_manifest_verifier_sha256
+        ),
+    )
+
+
+def require_admission_archive_unchanged(admission: AdmissionPlan) -> None:
+    """Reject archive replacement or byte changes after successful verification."""
+
+    if (
+        _stable_admission_file(admission.archive, "admission archive")
+        != admission.archive_state
+    ):
+        fail("verified admission archive was substituted before rollout")
+
+
+def require_inputs_match_admission(
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    admission: AdmissionPlan,
+) -> None:
+    """Bind every deployable byte identity to the verified signed receipt."""
+
+    if (
+        bundle.manifest_sha256 != admission.reset_manifest_sha256
+        or sources.binary_sha256 != admission.binary_sha256
+        or sources.supervisor_sha256 != admission.supervisor_sha256
+        or bundle.manifest.get("source_commit") != admission.source_commit
+        or tuple((peer.slug, peer.config_sha256) for peer in bundle.peers)
+        != admission.validator_config_sha256
+    ):
+        fail("deployment inputs do not match the verified admission receipt")
+
+
+def require_admission_bound_inputs_unchanged(
+    bundle: BundlePlan,
+    sources: SourcePlan,
+    admission: AdmissionPlan,
+) -> None:
+    """Recheck receipt-bound mutable sources under the deployment lock."""
+
+    require_bundle_runtime_unchanged(bundle)
+    binary_sha256, _ = sha256_regular(sources.binary, MAX_BINARY_BYTES)
+    supervisor_sha256, _ = sha256_regular(sources.supervisor, 4 * 1024 * 1024)
+    if (
+        binary_sha256 != admission.binary_sha256
+        or supervisor_sha256 != admission.supervisor_sha256
+    ):
+        fail("receipt-bound binary or supervisor changed after admission")
+    require_inputs_match_admission(bundle, sources, admission)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1954,6 +2220,115 @@ def atomic_replace_owned(
             os.close(descriptor)
         if temporary_created:
             temporary.unlink(missing_ok=True)
+
+
+@dataclasses.dataclass
+class AdmissionReceiptConsumption:
+    """One protected receipt publication awaiting the irreversible cutover."""
+
+    admission: AdmissionPlan
+    prior_payload: bytes
+    consumed_payload: bytes
+    rollout_started: bool = False
+
+    def mark_rollout_started(self) -> None:
+        """Commit replay consumption immediately before the first cohort change."""
+
+        if self.rollout_started:
+            fail("deployment rollout start was marked more than once")
+        require_admission_archive_unchanged(self.admission)
+        published = require_protected_replay_ledger(self.admission.replay_ledger)
+        if published.payload != self.consumed_payload:
+            fail("consumed admission receipt changed before rollout start")
+        self.rollout_started = True
+
+
+def _restore_unstarted_receipt_consumption(
+    transaction: AdmissionReceiptConsumption,
+) -> None:
+    """Restore the exact prior ledger if this transaction still owns its update."""
+
+    current = require_protected_replay_ledger(transaction.admission.replay_ledger)
+    if current.payload == transaction.prior_payload:
+        return
+    if current.payload != transaction.consumed_payload:
+        fail(
+            "admission replay ledger changed outside this unstarted deployment; "
+            "automatic restoration is unsafe"
+        )
+    atomic_replace_owned(
+        transaction.admission.replay_ledger,
+        transaction.prior_payload,
+        mode=ADMISSION_REPLAY_LEDGER_MODE,
+        uid=0,
+        gid=0,
+    )
+    restored = require_protected_replay_ledger(transaction.admission.replay_ledger)
+    if restored.payload != transaction.prior_payload:
+        fail("admission replay ledger restoration did not persist exact prior bytes")
+
+
+@contextlib.contextmanager
+def consume_admission_receipt(
+    admission: AdmissionPlan,
+) -> Any:
+    """Atomically consume one receipt, restoring it until rollout begins."""
+
+    require_admission_archive_unchanged(admission)
+    prior = require_protected_replay_ledger(admission.replay_ledger)
+    if admission.receipt_id in prior.consumed_receipt_ids:
+        fail("verified admission receipt was already consumed under deployment lock")
+    consumed_ids = sorted((*prior.consumed_receipt_ids, admission.receipt_id))
+    try:
+        consumed_payload = rollout_admission.canonical_replay_ledger_bytes(
+            consumed_ids
+        )
+    except rollout_admission.TairaRolloutAdmissionError as error:
+        raise DeploymentError(
+            f"cannot encode admission replay ledger: {error}"
+        ) from error
+    if len(consumed_payload) > rollout_admission.MAX_JSON_BYTES:
+        fail("admission replay ledger has no capacity for another receipt")
+    transaction = AdmissionReceiptConsumption(
+        admission=admission,
+        prior_payload=prior.payload,
+        consumed_payload=consumed_payload,
+    )
+    try:
+        atomic_replace_owned(
+            admission.replay_ledger,
+            consumed_payload,
+            mode=ADMISSION_REPLAY_LEDGER_MODE,
+            uid=0,
+            gid=0,
+        )
+        published = require_protected_replay_ledger(admission.replay_ledger)
+        if (
+            published.payload != consumed_payload
+            or published.consumed_receipt_ids != tuple(consumed_ids)
+        ):
+            fail("admission receipt consumption was not published atomically")
+        yield transaction
+        if not transaction.rollout_started:
+            fail("deployment returned without beginning its admitted rollout")
+        committed = require_protected_replay_ledger(admission.replay_ledger)
+        if committed.payload != consumed_payload:
+            fail("consumed admission receipt changed during rollout")
+    except BaseException as deployment_error:
+        if not transaction.rollout_started:
+            try:
+                _restore_unstarted_receipt_consumption(transaction)
+            except BaseException as rollback_error:
+                combined = DeploymentError(
+                    "deployment did not begin and admission receipt rollback failed"
+                )
+                if hasattr(combined, "add_note"):
+                    combined.add_note(
+                        "deployment failure: "
+                        f"{type(deployment_error).__name__}: {deployment_error}"
+                    )
+                raise combined from rollback_error
+        raise
 
 
 def render_plist(
@@ -3399,6 +3774,7 @@ def apply_reset(
     sources: SourcePlan,
     old_cohort: Sequence[PlistSnapshot],
     *,
+    rollout_starter: Callable[[], None],
     ops: Optional[SystemOps] = None,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
@@ -3551,9 +3927,19 @@ def apply_reset(
                 )
             verify_restored_snapshot(snapshot, ops)
         cutover_identity_checker(bundle)
-        cohort_mutated = True
-        # Stop the entire old cohort before publishing or starting any new job.
-        for snapshot in old_cohort:
+        # Close the asynchronous-signal window between durable replay
+        # consumption and the first external cohort mutation.  Once the first
+        # bootout is attempted, its side effects cannot be proven absent, so
+        # rollback and replay protection must both remain committed.
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, guarded_signals)
+        try:
+            rollout_starter()
+            cohort_mutated = True
+            ops.bootout(old_cohort[0].path.stem)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        # Stop the rest of the old cohort before publishing any new job.
+        for snapshot in old_cohort[1:]:
             ops.bootout(snapshot.path.stem)
         for snapshot in old_cohort:
             if ops.launchd_print(snapshot.path.stem) is not None:
@@ -3721,27 +4107,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--expected-binary-sha256", required=True)
     parser.add_argument("--supervisor", type=Path, required=True)
-    parser.add_argument("--expected-supervisor-sha256", required=True)
-    parser.add_argument(
-        "--restart-generation",
-        required=True,
-        help=(
-            "fresh lowercase SHA-256 generation token; changing it explicitly "
-            "clears a prior identity-matched terminal-unhealthy latch"
-        ),
-    )
+    parser.add_argument("--admission-archive", type=Path, required=True)
+    parser.add_argument("--admission-authority-dir", type=Path, required=True)
     parser.add_argument(
         "--supervisor-python",
         type=Path,
         default=DEFAULT_SUPERVISOR_PYTHON,
     )
     parser.add_argument("--expected-source-commit", required=True)
-    parser.add_argument("--expected-kagemusha-manifest-sha256", required=True)
-    parser.add_argument("--expected-kagemusha-release-policy-sha256", required=True)
+    parser.add_argument("--expected-cargo-lock-sha256", required=True)
     parser.add_argument(
-        "--expected-kagemusha-release-attestation-sha256", required=True
+        "--expected-workspace-source-manifest-sha256", required=True
+    )
+    parser.add_argument("--expected-receipt-id", required=True)
+    parser.add_argument("--trusted-signing-fingerprint", required=True)
+    parser.add_argument("--release-manifest-verifier", type=Path, required=True)
+    parser.add_argument(
+        "--trusted-release-manifest-verifier-sha256", required=True
     )
     parser.add_argument(
         "--health-timeout-seconds",
@@ -3774,28 +4157,24 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_arguments(args: argparse.Namespace) -> None:
     """Validate scalar inputs before reading deployment paths."""
 
-    args.expected_binary_sha256 = require_sha256(
-        args.expected_binary_sha256, "expected binary SHA-256"
-    )
-    args.expected_supervisor_sha256 = require_sha256(
-        args.expected_supervisor_sha256, "expected supervisor SHA-256"
-    )
-    args.restart_generation = require_sha256(
-        args.restart_generation, "restart generation"
-    )
-    args.expected_kagemusha_manifest_sha256 = require_sha256(
-        args.expected_kagemusha_manifest_sha256,
-        "expected Kagemusha manifest SHA-256",
-    )
-    args.expected_kagemusha_release_policy_sha256 = require_sha256(
-        args.expected_kagemusha_release_policy_sha256,
-        "expected Kagemusha release policy SHA-256",
-    )
-    args.expected_kagemusha_release_attestation_sha256 = require_sha256(
-        args.expected_kagemusha_release_attestation_sha256,
-        "expected Kagemusha release attestation SHA-256",
-    )
     args.expected_source_commit = require_commit(args.expected_source_commit)
+    args.expected_cargo_lock_sha256 = require_sha256(
+        args.expected_cargo_lock_sha256, "expected Cargo.lock SHA-256"
+    )
+    args.expected_workspace_source_manifest_sha256 = require_sha256(
+        args.expected_workspace_source_manifest_sha256,
+        "expected workspace source manifest SHA-256",
+    )
+    args.expected_receipt_id = require_sha256(
+        args.expected_receipt_id, "expected receipt ID"
+    )
+    args.trusted_signing_fingerprint = require_sha256(
+        args.trusted_signing_fingerprint, "trusted signing fingerprint"
+    )
+    args.trusted_release_manifest_verifier_sha256 = require_sha256(
+        args.trusted_release_manifest_verifier_sha256,
+        "trusted release-manifest verifier SHA-256",
+    )
     if args.health_timeout_seconds <= 0:
         fail("--health-timeout-seconds must be positive")
     if args.minimum_free_bytes < DEFAULT_MINIMUM_FREE_BYTES:
@@ -3812,28 +4191,29 @@ def execute(
     validate_arguments(args)
     if args.apply and os.geteuid() != 0:
         fail("--apply requires root; no changes were made")
+    admission = verify_deployment_admission(args)
     bundle = validate_bundle(
         args.bundle,
-        expected_binary_sha256=args.expected_binary_sha256,
-        expected_source_commit=args.expected_source_commit,
-        expected_kagemusha_manifest_sha256=args.expected_kagemusha_manifest_sha256,
-        expected_kagemusha_release_policy_sha256=(
-            args.expected_kagemusha_release_policy_sha256
-        ),
-        expected_kagemusha_release_attestation_sha256=(
-            args.expected_kagemusha_release_attestation_sha256
-        ),
+        expected_reset_manifest_sha256=admission.reset_manifest_sha256,
+        expected_binary_sha256=admission.binary_sha256,
+        expected_source_commit=admission.source_commit,
         minimum_free_bytes=args.minimum_free_bytes,
         maximum_fsync_latency_ms=args.maximum_fsync_latency_ms,
     )
-    sources = validate_sources(args, bundle)
+    sources = validate_sources(args, bundle, admission)
+    require_inputs_match_admission(bundle, sources, admission)
+    args.restart_generation = admission.restart_generation
     system_ops = ops or SystemOps()
     if not args.apply:
         old_cohort = capture_old_cohort(
             system_ops,
             allow_absent_child=args.allow_absent_old_child,
         )
+        require_admission_archive_unchanged(admission)
         return {
+            "admission_archive_sha256": admission.archive_sha256,
+            "admission_receipt_consumed": False,
+            "admission_receipt_id": admission.receipt_id,
             "applied": False,
             "absent_old_children": sorted(
                 snapshot.path.stem
@@ -3846,7 +4226,7 @@ def execute(
             "free_bytes": bundle.free_bytes,
             "fsync_latency_ms": round(bundle.fsync_latency_ms, 3),
             "mandatory_offline": True,
-            "mode": "read-only-dry-run",
+            "mode": "verified-read-only-dry-run",
             "peer_count": PEER_COUNT,
             "qualification_seal": str(
                 qualification_seal_path(bundle.release.tree_sha256)
@@ -3860,11 +4240,32 @@ def execute(
             "supervisor_sha256": sources.supervisor_sha256,
         }
     with exclusive_deployment_lock():
+        locked_admission = verify_deployment_admission(args)
+        if locked_admission != admission:
+            fail("verified admission identity changed before the deployment lock")
+        require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         old_cohort = capture_old_cohort(
             system_ops,
             allow_absent_child=args.allow_absent_old_child,
         )
-        return apply_reset(args, bundle, sources, old_cohort, ops=system_ops)
+        require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
+        with consume_admission_receipt(locked_admission) as consumption:
+            report = apply_reset(
+                args,
+                bundle,
+                sources,
+                old_cohort,
+                rollout_starter=consumption.mark_rollout_started,
+                ops=system_ops,
+            )
+        report.update(
+            {
+                "admission_archive_sha256": locked_admission.archive_sha256,
+                "admission_receipt_consumed": True,
+                "admission_receipt_id": locked_admission.receipt_id,
+            }
+        )
+        return report
 
 
 def main(argv: Optional[list[str]] = None) -> int:

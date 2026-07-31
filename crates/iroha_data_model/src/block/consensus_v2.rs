@@ -55,6 +55,13 @@ pub const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
 pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 /// Maximum block-local Kagemusha top-up anchors authenticated by one execution commitment.
 pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
+/// Consensus-wide upper bound for the canonical result-bearing block wire.
+///
+/// This is the protocol authority shared by execution-commitment admission and
+/// durable canonical-block storage. It deliberately matches the first-release
+/// Kura hard limit; runtime configuration may select a lower bound but must
+/// never admit a larger consensus value.
+pub const MAX_EXECUTED_BLOCK_WIRE_BYTES: u64 = 256 * 1024 * 1024;
 const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-state-root";
 /// Canonical Native AMX application-manifest wire version.
 pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
@@ -984,9 +991,10 @@ pub struct ExecutionCommitment {
 }
 
 impl ExecutionCommitment {
-    /// Construct a transition that contains no Kagemusha top-up anchors.
+    /// Construct a transition that contains neither Kagemusha top-up anchors
+    /// nor a compact merge carrier.
     #[must_use]
-    pub fn without_topups(
+    pub fn without_topups_or_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
@@ -1008,14 +1016,14 @@ impl ExecutionCommitment {
         }
     }
 
-    /// Construct a commitment and enforce its canonical top-up projection.
+    /// Construct a carrier-free commitment and enforce its canonical top-up projection.
     ///
     /// # Errors
     ///
     /// Returns an error when root presence disagrees with the count, the
     /// bounded top-up count is exceeded, or the combined post-state root is
     /// not the canonical hash of the advertised top-up projection.
-    pub fn new(
+    pub fn new_without_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
@@ -1024,7 +1032,7 @@ impl ExecutionCommitment {
         executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
-        Self::new_with_native_amx_application_manifest(
+        Self::new_with_native_amx_application_manifest_without_merge_carrier(
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
@@ -1038,7 +1046,7 @@ impl ExecutionCommitment {
         )
     }
 
-    /// Construct a commitment with an explicit Native AMX application manifest.
+    /// Construct a carrier-free commitment with an explicit Native AMX application manifest.
     ///
     /// # Errors
     ///
@@ -1048,7 +1056,7 @@ impl ExecutionCommitment {
         clippy::too_many_arguments,
         reason = "the constructor mirrors the current clean-break execution-commitment wire"
     )]
-    pub fn new_with_native_amx_application_manifest(
+    pub fn new_with_native_amx_application_manifest_without_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
@@ -1124,7 +1132,9 @@ impl ExecutionCommitment {
     /// incorrect, or the Native AMX manifest version or empty-root convention
     /// is non-canonical.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.executed_block_wire_len == 0 {
+        if self.executed_block_wire_len == 0
+            || self.executed_block_wire_len > MAX_EXECUTED_BLOCK_WIRE_BYTES
+        {
             return Err(ValidationError::InvalidExecutedBlockWireLength);
         }
         if let Some(merge_carrier) = self.merge_carrier {
@@ -3842,7 +3852,7 @@ pub enum ValidationError {
     MissingSignature,
     /// Execution commitment count/root presence is not canonical.
     InvalidExecutionCommitment,
-    /// The result-bearing block wire commitment declares a zero byte length.
+    /// The result-bearing block wire commitment declares a zero or oversized byte length.
     InvalidExecutedBlockWireLength,
     /// The advertised Kagemusha top-up count exceeds the consensus bound.
     TooManyKagemushaTopupAnchors,
@@ -4011,7 +4021,10 @@ impl fmt::Display for ValidationError {
                 f.write_str("execution commitment top-up count/root presence is inconsistent")
             }
             Self::InvalidExecutedBlockWireLength => {
-                f.write_str("execution commitment block wire length must be non-zero")
+                write!(
+                    f,
+                    "execution commitment block wire length must be between 1 and {MAX_EXECUTED_BLOCK_WIRE_BYTES} bytes"
+                )
             }
             Self::TooManyKagemushaTopupAnchors => {
                 f.write_str("execution commitment exceeds the Kagemusha top-up anchor limit")
@@ -4298,9 +4311,16 @@ mod tests {
         let topup = Hash::new(b"topup tree");
         let executed = Hash::new(b"executed block wire");
         let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
-        let canonical =
-            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2, 1, executed)
-                .expect("canonical top-up commitment");
+        let canonical = ExecutionCommitment::new_without_merge_carrier(
+            parent,
+            post,
+            ordinary,
+            Some(topup),
+            2,
+            1,
+            executed,
+        )
+        .expect("canonical top-up commitment");
         assert_eq!(canonical.validate(), Ok(()));
         assert_eq!(canonical.executed_block_wire_hash, executed);
 
@@ -4312,7 +4332,7 @@ mod tests {
         );
 
         assert_eq!(
-            ExecutionCommitment::new(
+            ExecutionCommitment::new_without_merge_carrier(
                 parent,
                 Hash::new(b"wrong"),
                 ordinary,
@@ -4324,11 +4344,19 @@ mod tests {
             Err(ValidationError::ExecutionCommitmentPostRootMismatch)
         );
         assert_eq!(
-            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0, 1, executed),
+            ExecutionCommitment::new_without_merge_carrier(
+                parent,
+                post,
+                ordinary,
+                Some(topup),
+                0,
+                1,
+                executed,
+            ),
             Err(ValidationError::InvalidExecutionCommitment)
         );
         assert_eq!(
-            ExecutionCommitment::new(
+            ExecutionCommitment::new_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -4385,7 +4413,9 @@ mod tests {
         let ordinary = Hash::new(b"native manifest ordinary");
         let executed = Hash::new(b"native manifest executed wire");
         let root = Hash::new(b"native manifest non-empty root");
-        let empty = ExecutionCommitment::without_topups(parent, post, ordinary, 1, executed);
+        let empty = ExecutionCommitment::without_topups_or_merge_carrier(
+            parent, post, ordinary, 1, executed,
+        );
         assert_eq!(
             empty.native_amx_application_manifest_root,
             native_amx_application_manifest_empty_root()
@@ -4396,6 +4426,21 @@ mod tests {
         zero_wire_len.executed_block_wire_len = 0;
         assert_eq!(
             zero_wire_len.validate(),
+            Err(ValidationError::InvalidExecutedBlockWireLength)
+        );
+        let mut maximum_wire_len = empty;
+        maximum_wire_len.executed_block_wire_len = MAX_EXECUTED_BLOCK_WIRE_BYTES;
+        assert_eq!(maximum_wire_len.validate(), Ok(()));
+        let mut oversized_wire_len = empty;
+        oversized_wire_len.executed_block_wire_len = MAX_EXECUTED_BLOCK_WIRE_BYTES + 1;
+        assert_eq!(
+            oversized_wire_len.validate(),
+            Err(ValidationError::InvalidExecutedBlockWireLength)
+        );
+        let mut unrepresentable_wire_len = empty;
+        unrepresentable_wire_len.executed_block_wire_len = u64::MAX;
+        assert_eq!(
+            unrepresentable_wire_len.validate(),
             Err(ValidationError::InvalidExecutedBlockWireLength)
         );
         let legacy = LegacyExecutionCommitment {
@@ -4447,19 +4492,20 @@ mod tests {
             ExecutionCommitment::decode_all(&mut pre_wire_length_cursor).is_err(),
             "the pre-wire-length execution commitment must not decode implicitly"
         );
-        let canonical = ExecutionCommitment::new_with_native_amx_application_manifest(
-            parent,
-            post,
-            ordinary,
-            None,
-            0,
-            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            root,
-            1,
-            1,
-            executed,
-        )
-        .expect("canonical Native AMX manifest commitment");
+        let canonical =
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
+                parent,
+                post,
+                ordinary,
+                None,
+                0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                root,
+                1,
+                1,
+                executed,
+            )
+            .expect("canonical Native AMX manifest commitment");
         assert_eq!(canonical.validate(), Ok(()));
 
         let entry_hash = HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
@@ -4496,7 +4542,7 @@ mod tests {
         );
 
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest(
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -4511,7 +4557,7 @@ mod tests {
             Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
         );
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest(
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -4526,7 +4572,7 @@ mod tests {
             Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
         );
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest(
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -4698,7 +4744,7 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
-        ExecutionCommitment::new(
+        ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
