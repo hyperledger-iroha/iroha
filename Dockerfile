@@ -23,7 +23,7 @@ ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="irohad iroha kagami"
+ARG BINARIES="irohad iroha kagami attachment_sanitizer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VALIDATOR_LOCK_SHA256=""
@@ -158,9 +158,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             command -v readelf >/dev/null || { echo "readelf is required to authenticate the static Taira privacy runner" >&2; exit 1; }; \
             ! readelf -lW /outbin/taira_privacy_release_runner | grep -Fq ' INTERP ' || { echo "Taira privacy runner must not contain PT_INTERP" >&2; exit 1; }; \
             ! readelf -dW /outbin/taira_privacy_release_runner | grep -Fq '(NEEDED)' || { echo "Taira privacy runner must not contain DT_NEEDED" >&2; exit 1; }; \
-            test -f /app/fixtures/privacy/exact12_v1.tsv && test ! -L /app/fixtures/privacy/exact12_v1.tsv || { echo "Taira exact12 matrix is missing or not regular" >&2; exit 1; }; \
-            test -f /app/fixtures/privacy/native_release_expectations_v1.norito && test ! -L /app/fixtures/privacy/native_release_expectations_v1.norito || { echo "Taira native privacy Norito expectations are missing or not regular" >&2; exit 1; }; \
-            test -f /app/fixtures/privacy/native_release_expectations_v1.json && test ! -L /app/fixtures/privacy/native_release_expectations_v1.json || { echo "Taira native privacy JSON expectations are missing or not regular" >&2; exit 1; }; \
+            test -s /app/fixtures/privacy/exact12_v1.tsv && test ! -L /app/fixtures/privacy/exact12_v1.tsv && test "$(stat -c '%h' /app/fixtures/privacy/exact12_v1.tsv)" = 1 || { echo "Taira exact12 matrix is missing or not one singly linked regular file" >&2; exit 1; }; \
+            test -s /app/fixtures/privacy/native_release_expectations_v1.norito && test ! -L /app/fixtures/privacy/native_release_expectations_v1.norito && test "$(stat -c '%h' /app/fixtures/privacy/native_release_expectations_v1.norito)" = 1 || { echo "Taira native privacy Norito expectations are missing or not one singly linked regular file" >&2; exit 1; }; \
+            test -s /app/fixtures/privacy/native_release_expectations_v1.json && test ! -L /app/fixtures/privacy/native_release_expectations_v1.json && test "$(stat -c '%h' /app/fixtures/privacy/native_release_expectations_v1.json)" = 1 || { echo "Taira native privacy JSON expectations are missing or not one singly linked regular file" >&2; exit 1; }; \
+            test -s /app/fixtures/privacy/zk_x509_native_resource_v1.norito && test ! -L /app/fixtures/privacy/zk_x509_native_resource_v1.norito && test "$(stat -c '%h' /app/fixtures/privacy/zk_x509_native_resource_v1.norito)" = 1 || { echo "Taira X.509 native-resource Norito certificate is missing or not one singly linked regular file" >&2; exit 1; }; \
+            test -s /app/fixtures/privacy/zk_x509_native_resource_v1.json && test ! -L /app/fixtures/privacy/zk_x509_native_resource_v1.json && test "$(stat -c '%h' /app/fixtures/privacy/zk_x509_native_resource_v1.json)" = 1 || { echo "Taira X.509 native-resource JSON certificate is missing or not one singly linked regular file" >&2; exit 1; }; \
             mkdir -p /outprovenance/privacy-native; \
             /outbin/taira_privacy_release_runner generate \
                 --build-profile release \
@@ -168,6 +170,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 --exact12-matrix /app/fixtures/privacy/exact12_v1.tsv \
                 --expectations-norito /app/fixtures/privacy/native_release_expectations_v1.norito \
                 --expectations-json /app/fixtures/privacy/native_release_expectations_v1.json \
+                --x509-resource-norito /app/fixtures/privacy/zk_x509_native_resource_v1.norito \
+                --x509-resource-json /app/fixtures/privacy/zk_x509_native_resource_v1.json \
                 --cargo-lock /outprovenance/Cargo.lock \
                 --validator-binary /outbin/irohad \
                 --command-manifest-norito-out /outprovenance/privacy-native/command-manifest-v1.norito \
@@ -179,8 +183,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             cp /app/fixtures/privacy/exact12_v1.tsv /outprovenance/privacy-native/exact12-v1.tsv; \
             cp /app/fixtures/privacy/native_release_expectations_v1.norito /outprovenance/privacy-native/expectations-v1.norito; \
             cp /app/fixtures/privacy/native_release_expectations_v1.json /outprovenance/privacy-native/expectations-v1.json; \
+            cp /app/fixtures/privacy/zk_x509_native_resource_v1.norito /outprovenance/privacy-native/zk-x509-resource-v1.norito; \
+            cp /app/fixtures/privacy/zk_x509_native_resource_v1.json /outprovenance/privacy-native/zk-x509-resource-v1.json; \
             printf '%s\n' "${workspace_source_manifest_before}" > /outprovenance/privacy-native/workspace-source-manifest.sha256; \
             for evidence_path in \
+                /outprovenance/privacy-native/exact12-v1.tsv \
+                /outprovenance/privacy-native/expectations-v1.norito \
+                /outprovenance/privacy-native/expectations-v1.json \
+                /outprovenance/privacy-native/zk-x509-resource-v1.norito \
+                /outprovenance/privacy-native/zk-x509-resource-v1.json \
                 /outprovenance/privacy-native/command-manifest-v1.norito \
                 /outprovenance/privacy-native/command-manifest-v1.json \
                 /outprovenance/privacy-native/stage-artifacts-v1.norito \
@@ -195,6 +206,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 --exact12-matrix /outprovenance/privacy-native/exact12-v1.tsv \
                 --expectations-norito /outprovenance/privacy-native/expectations-v1.norito \
                 --expectations-json /outprovenance/privacy-native/expectations-v1.json \
+                --x509-resource-norito /outprovenance/privacy-native/zk-x509-resource-v1.norito \
+                --x509-resource-json /outprovenance/privacy-native/zk-x509-resource-v1.json \
                 --cargo-lock /outprovenance/Cargo.lock \
                 --validator-binary /outbin/irohad \
                 --command-manifest-norito /outprovenance/privacy-native/command-manifest-v1.norito \
@@ -246,6 +259,7 @@ RUN <<EOT
   if [ "$IROHA_RELEASE_PREPROVISIONED_BASES" = "1" ]; then
     command -v curl >/dev/null
     command -v jq >/dev/null
+    command -v bwrap >/dev/null
     test -f /etc/ssl/certs/ca-certificates.crt
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       command -v qemu-img >/dev/null
@@ -255,7 +269,7 @@ RUN <<EOT
     fi
   else
     apt-get update -y
-    apt-get install -y curl ca-certificates jq
+    apt-get install -y curl ca-certificates jq bubblewrap
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
     fi
@@ -314,6 +328,8 @@ RUN set -eu; \
       --exact12-matrix /opt/iroha/provenance/privacy-native/exact12-v1.tsv \
       --expectations-norito /opt/iroha/provenance/privacy-native/expectations-v1.norito \
       --expectations-json /opt/iroha/provenance/privacy-native/expectations-v1.json \
+      --x509-resource-norito /opt/iroha/provenance/privacy-native/zk-x509-resource-v1.norito \
+      --x509-resource-json /opt/iroha/provenance/privacy-native/zk-x509-resource-v1.json \
       --cargo-lock /opt/iroha/provenance/Cargo.lock \
       --validator-binary /usr/local/bin/irohad \
       --command-manifest-norito /opt/iroha/provenance/privacy-native/command-manifest-v1.norito \

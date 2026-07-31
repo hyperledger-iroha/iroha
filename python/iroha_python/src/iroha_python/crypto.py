@@ -112,6 +112,7 @@ __all__ = [
     "TransactionExecutableEntry",
     "PrivacyBootleLanternPresentationActionBuildResultV1",
     "PrivacyJindoActionBuildResultV1",
+    "PrivacyNativeActionBuildResultV1",
     "PrivacyVeRangeActionBuildResultV1",
     "PrivacyVegaActionPreparationV1",
     "PrivacyVegaActionBuildResultV1",
@@ -150,6 +151,7 @@ __all__ = [
     "committed_transaction_carrier_block_hash",
     "verify_committed_transaction_inclusion",
     "hash_blake2b_32",
+    "decode_zk_vk_transaction_payload",
     "public_key_multihash",
     "private_key_multihash",
     "parse_public_key_multihash",
@@ -182,8 +184,6 @@ __all__ = [
     "buildConfidentialUnshieldProofV3",
     "build_confidential_unshield_proof_v3_with_paths",
     "buildConfidentialUnshieldProofV3WithPaths",
-    "build_confidential_asset_hidden_transfer_proof_v1",
-    "buildConfidentialAssetHiddenTransferProofV1",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
@@ -191,6 +191,7 @@ __all__ = [
     "privacy_capabilities_v1",
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
+    "signed_transaction_envelope_from_versioned_v1",
     "privacy_vega_device_authentication_digest_v1",
     "inspect_signed_privacy_zk_ace_transfer_action_v1",
     "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
@@ -199,6 +200,11 @@ __all__ = [
     "inspect_signed_privacy_vega_action_v1",
     "inspect_signed_privacy_zk_ams_batch_admission_action_v1",
     "inspect_signed_privacy_zk_ams_provision_account_action_v1",
+    "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
+    "inspect_signed_privacy_orchard_note_action_v1",
+    "inspect_signed_privacy_fcmp_membership_payment_action_v1",
+    "inspect_signed_privacy_ivm_private_note_action_v1",
+    "inspect_signed_privacy_pq_masp_note_action_v1",
     "sm2_fixture_from_seed",
 ]
 
@@ -367,6 +373,7 @@ if TYPE_CHECKING:
 
     PrivacyBootleLanternPresentationActionBuildResultV1: TypeAlias = Any
     PrivacyJindoActionBuildResultV1: TypeAlias = Any
+    PrivacyNativeActionBuildResultV1: TypeAlias = Any
     PrivacyVeRangeActionBuildResultV1: TypeAlias = Any
     PrivacyVegaActionPreparationV1: TypeAlias = Any
     PrivacyVegaActionBuildResultV1: TypeAlias = Any
@@ -483,6 +490,7 @@ else:
         _crypto.PrivacyBootleLanternPresentationActionBuildResultV1
     )
     PrivacyJindoActionBuildResultV1 = _crypto.PrivacyJindoActionBuildResultV1
+    PrivacyNativeActionBuildResultV1 = _crypto.PrivacyNativeActionBuildResultV1
     PrivacyVeRangeActionBuildResultV1 = _crypto.PrivacyVeRangeActionBuildResultV1
     PrivacyVegaActionPreparationV1 = _crypto.PrivacyVegaActionPreparationV1
     PrivacyVegaActionBuildResultV1 = _crypto.PrivacyVegaActionBuildResultV1
@@ -624,6 +632,25 @@ def decode_transaction_receipt_json(payload: bytes) -> str:
     """Decode a Norito-framed transaction receipt into a JSON string."""
 
     return _crypto.decode_transaction_receipt_json(payload)
+
+
+def decode_zk_vk_transaction_payload(
+    payload: bytes,
+    expected_chain_id: str,
+    expected_authority: str,
+    operation: str,
+) -> Mapping[str, Any]:
+    """Decode and bind one canonical unsigned VK registry transaction."""
+
+    decoded = _crypto.decode_zk_vk_transaction_payload(
+        payload,
+        expected_chain_id,
+        expected_authority,
+        operation,
+    )
+    if not isinstance(decoded, Mapping):
+        raise RuntimeError("native VK transaction decoder returned a malformed payload")
+    return decoded
 
 
 def _normalize_bytes(value: Any, name: str, *, expected_len: Optional[int] = None) -> bytes:
@@ -1674,42 +1701,6 @@ def build_confidential_unshield_proof_v3_with_paths(
     return _confidential_native_result(result, "confidential unshield v3 path prover")
 
 
-def build_confidential_asset_hidden_transfer_proof_v1(
-    *,
-    chain_id: str,
-    pool_id: str,
-    asset_set_root: bytes | bytearray | memoryview | str,
-    input_commitments: Iterable[bytes | bytearray | memoryview | str],
-    nullifiers: Iterable[bytes | bytearray | memoryview | str],
-    output_commitments: Iterable[bytes | bytearray | memoryview | str],
-    root_hint: bytes | bytearray | memoryview | str,
-    verifying_key: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Build an asset-hidden transfer v1 proof envelope with the native Halo2 prover."""
-
-    if not hasattr(_crypto, "build_confidential_asset_hidden_transfer_proof_v1"):
-        raise RuntimeError(
-            "iroha_python._crypto is missing asset-hidden transfer v1 prover support; rebuild the extension"
-        )
-    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
-        verifying_key,
-        "verifying_key",
-    )
-    result = _crypto.build_confidential_asset_hidden_transfer_proof_v1(
-        str(chain_id),
-        str(pool_id),
-        asset_set_root,
-        list(input_commitments),
-        list(nullifiers),
-        list(output_commitments),
-        root_hint,
-        vk_backend,
-        vk_circuit_id,
-        vk_bytes,
-    )
-    return _confidential_native_result(result, "asset-hidden transfer v1 prover")
-
-
 computeConfidentialRootV2 = compute_confidential_root_v2
 deriveConfidentialNextZeroPathV2 = derive_confidential_next_zero_path_v2
 deriveConfidentialDiversifierV2 = derive_confidential_diversifier_v2
@@ -1719,11 +1710,6 @@ buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
 buildConfidentialTransferProofV2WithPaths = build_confidential_transfer_proof_v2_with_paths
 buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
 buildConfidentialUnshieldProofV3WithPaths = build_confidential_unshield_proof_v3_with_paths
-buildConfidentialAssetHiddenTransferProofV1 = (
-    build_confidential_asset_hidden_transfer_proof_v1
-)
-
-
 def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:
     """Build the canonical active confidential transfer v2 verifier-key payload."""
 
@@ -1993,6 +1979,32 @@ def canonical_signed_transaction_hash_v1(
     return result
 
 
+def signed_transaction_envelope_from_versioned_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> SignedTransactionEnvelope:
+    """Reconstruct the authenticated public envelope from one exact signed wire."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.signed_transaction_envelope_from_versioned_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "signed_transaction_envelope_from_versioned_v1; rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed transaction") from None
+    if not isinstance(result, SignedTransactionEnvelope):
+        raise RuntimeError("native signed transaction envelope returned an invalid result")
+    return result
+
+
 def privacy_vega_device_authentication_digest_v1(
     chain_id: str,
     canonical_genesis_hash: bytes | bytearray | memoryview,
@@ -2256,3 +2268,93 @@ def inspect_signed_privacy_bootle_lantern_presentation_action_v1(
             "native Bootle/Lantern presentation inspection returned an invalid result"
         )
     return result
+
+
+def _inspect_signed_privacy_native_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    *,
+    entrypoint: str,
+    protocol_label: str,
+) -> dict[str, Any]:
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        inspector = getattr(_crypto, entrypoint)
+    except AttributeError as exc:
+        raise RuntimeError(
+            f"iroha_python._crypto is missing {entrypoint}; rebuild the extension"
+        ) from exc
+    try:
+        result = inspector(bytes(signed_transaction_versioned))
+    except Exception:
+        raise ValueError(
+            f"invalid canonical signed {protocol_label} action"
+        ) from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            f"native {protocol_label} action inspection returned an invalid result"
+        )
+    return result
+
+
+def inspect_signed_privacy_anonymous_pgc_payment_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact Anonymous-PGC payment action."""
+
+    return _inspect_signed_privacy_native_action_v1(
+        signed_transaction_versioned,
+        entrypoint="inspect_signed_privacy_anonymous_pgc_payment_action_v1",
+        protocol_label="Anonymous-PGC",
+    )
+
+
+def inspect_signed_privacy_orchard_note_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact Orchard note action."""
+
+    return _inspect_signed_privacy_native_action_v1(
+        signed_transaction_versioned,
+        entrypoint="inspect_signed_privacy_orchard_note_action_v1",
+        protocol_label="Orchard",
+    )
+
+
+def inspect_signed_privacy_fcmp_membership_payment_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact FCMP++ membership payment."""
+
+    return _inspect_signed_privacy_native_action_v1(
+        signed_transaction_versioned,
+        entrypoint="inspect_signed_privacy_fcmp_membership_payment_action_v1",
+        protocol_label="FCMP++",
+    )
+
+
+def inspect_signed_privacy_ivm_private_note_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact private-IVM note action."""
+
+    return _inspect_signed_privacy_native_action_v1(
+        signed_transaction_versioned,
+        entrypoint="inspect_signed_privacy_ivm_private_note_action_v1",
+        protocol_label="private-IVM",
+    )
+
+
+def inspect_signed_privacy_pq_masp_note_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact PQ-MASP note action."""
+
+    return _inspect_signed_privacy_native_action_v1(
+        signed_transaction_versioned,
+        entrypoint="inspect_signed_privacy_pq_masp_note_action_v1",
+        protocol_label="PQ-MASP",
+    )

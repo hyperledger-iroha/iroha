@@ -40,7 +40,6 @@ mod model {
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TimeEventFilter(pub ExecutionTime);

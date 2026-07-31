@@ -42,7 +42,7 @@ use iroha_data_model::{
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
-        pin_intent::DaPinIntentWithLocation,
+        pin_intent::DaPinIntentProof,
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
@@ -107,8 +107,9 @@ use crate::{
     config::Config,
     crypto::{HashOf, KeyPair},
     da::{
-        DaCommitmentListResponse, DaCommitmentProofRequest, DaCommitmentProofResponse,
-        DaCommitmentVerifyResponse, DaIngestParams, DaManifestBundle, DaManifestPersistedPaths,
+        DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
+        DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams, DaManifestBundle,
+        DaManifestPersistedPaths, DaPinIntentListRequest, DaPinIntentListResponse,
         DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaProofArtifactMetadata, DaProofConfig,
         PDP_COMMITMENT_HEADER, build_car_plan_from_manifest, build_da_request,
         decode_pdp_commitment_header, generate_da_proof_artifact, generate_da_proof_summary,
@@ -151,6 +152,7 @@ const CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES: usize =
     CONTRACT_CODE_ARTIFACT_MAX_BYTES.div_ceil(3) * 4;
 const CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES: usize =
     CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES + 128;
+const ZK_VK_DRAFT_MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES: usize =
     iroha_sccp::SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1;
 const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES: usize =
@@ -4163,6 +4165,18 @@ pub struct ZkProverReportsFilter<'a> {
     pub messages_only: Option<bool>,
 }
 
+/// Unsigned verifying-key registry transaction returned for local signing.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ZkVkTransactionDraft {
+    /// Always `false`; Torii has not submitted this transaction.
+    pub submitted: bool,
+    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
+    pub transaction_payload_b64: String,
+    /// Exact transaction-payload prehash encoded as padded base64.
+    pub signing_message_b64: String,
+}
+
 impl ZkProverReportsFilter<'_> {
     fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(true) = self.ok_only {
@@ -4274,19 +4288,6 @@ fn validate_zk_proofs_filter(filter: &ZkProofsFilter<'_>) -> Result<()> {
     Ok(())
 }
 
-fn validate_zk_verify_or_submit_json(value: &norito::json::Value, context: &str) -> Result<()> {
-    let object = require_json_object(value, context)?;
-    let backend = require_json_backend_field(object, "backend", &format!("{context}.backend"))?;
-    validate_optional_json_vk_ref(object, context, Some(backend))?;
-    validate_optional_json_backend_object(
-        object,
-        "proof",
-        &format!("{context}.proof"),
-        Some(backend),
-    )?;
-    Ok(())
-}
-
 fn validate_zk_ivm_json(value: &norito::json::Value, context: &str) -> Result<()> {
     let object = require_json_object(value, context)?;
     require_json_vk_ref(object, context, None)?;
@@ -4298,11 +4299,38 @@ fn validate_zk_vk_submission_json(
     context: &str,
     require_gas_schedule_id: bool,
 ) -> Result<()> {
+    const FIELDS: [&str; 17] = [
+        "authority",
+        "backend",
+        "name",
+        "version",
+        "circuit_id",
+        "public_inputs_schema_hash_hex",
+        "curve",
+        "gas_schedule_id",
+        "vk_len",
+        "max_proof_bytes",
+        "metadata_uri_cid",
+        "vk_bytes_cid",
+        "activation_height",
+        "withdraw_height",
+        "commitment_hex",
+        "vk_bytes",
+        "status",
+    ];
+
     let object = require_json_object(value, context)?;
+    if let Some(field) = object
+        .keys()
+        .find(|field| !FIELDS.contains(&field.as_str()))
+    {
+        return Err(eyre!("{context} contains unknown field {field}"));
+    }
     let backend = require_json_backend_field(object, "backend", &format!("{context}.backend"))?;
     require_json_vk_name_field(object, "name", &format!("{context}.name"))?;
-    require_json_non_empty_string_field(object, "authority", &format!("{context}.authority"))?;
-    require_json_non_empty_string_field(object, "private_key", &format!("{context}.private_key"))?;
+    let authority =
+        require_json_non_empty_string_field(object, "authority", &format!("{context}.authority"))?;
+    ensure_canonical_i105_account_id(authority, &format!("{context}.authority"))?;
     require_json_positive_u32_field(object, "version", &format!("{context}.version"))?;
     require_json_non_empty_string_field(object, "circuit_id", &format!("{context}.circuit_id"))?;
     require_json_hex32_field(
@@ -4343,6 +4371,244 @@ fn validate_zk_vk_submission_json(
     validate_optional_json_height_range(object, context)?;
     validate_optional_json_vk_submission_bytes(object, backend, context)?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ZkVkDraftOperation {
+    Register,
+    Update,
+}
+
+fn decode_canonical_zk_vk_base64(
+    value: &str,
+    max_decoded_bytes: usize,
+    context: &str,
+) -> Result<Vec<u8>> {
+    let max_encoded_bytes = max_decoded_bytes.div_ceil(3).saturating_mul(4);
+    if value.len() > max_encoded_bytes {
+        return Err(eyre!("{context} exceeds its decoded byte limit"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .wrap_err_with(|| format!("{context} must be canonical padded base64"))?;
+    if bytes.is_empty()
+        || bytes.len() > max_decoded_bytes
+        || base64::engine::general_purpose::STANDARD.encode(&bytes) != value
+    {
+        return Err(eyre!("{context} must be non-empty canonical padded base64"));
+    }
+    Ok(bytes)
+}
+
+fn decode_zk_vk_hex32(value: &str, context: &str) -> Result<[u8; 32]> {
+    let normalized = normalize_hex32_lower(value, context)?;
+    let bytes = hex::decode(normalized).wrap_err_with(|| format!("decode {context}"))?;
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(&bytes);
+    Ok(output)
+}
+
+fn expected_zk_vk_record_from_request(
+    request: &norito::json::Value,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus,
+        proof::{VerifyingKeyBox, VerifyingKeyRecord},
+    };
+
+    let object = require_json_object(request, "verifying-key draft request")?;
+    let backend =
+        require_json_backend_field(object, "backend", "verifying-key draft request.backend")?;
+    let version =
+        require_json_positive_u32_field(object, "version", "verifying-key draft request.version")?;
+    let circuit_id = require_json_non_empty_string_field(
+        object,
+        "circuit_id",
+        "verifying-key draft request.circuit_id",
+    )?;
+    let schema_hash = decode_zk_vk_hex32(
+        require_json_non_empty_string_field(
+            object,
+            "public_inputs_schema_hash_hex",
+            "verifying-key draft request.public_inputs_schema_hash_hex",
+        )?,
+        "verifying-key draft request.public_inputs_schema_hash_hex",
+    )?;
+    let backend_tag = iroha_data_model::zk::verifier_backend_registry_tag_v1(backend)
+        .ok_or_else(|| eyre!("verifying-key draft request uses an unsupported backend"))?;
+    let vk_bytes = validate_optional_json_base64_bytes_field(
+        object,
+        "vk_bytes",
+        "verifying-key draft request.vk_bytes",
+    )?;
+    let commitment = match (
+        vk_bytes.as_ref(),
+        object
+            .get("commitment_hex")
+            .and_then(norito::json::Value::as_str),
+    ) {
+        (Some(bytes), _) => decode_zk_vk_hex32(
+            &zk_vk_commitment_hex(backend, bytes)?,
+            "verifying-key draft computed commitment",
+        )?,
+        (None, Some(commitment)) => {
+            decode_zk_vk_hex32(commitment, "verifying-key draft request.commitment_hex")?
+        }
+        (None, None) => {
+            return Err(eyre!(
+                "verifying-key draft request must provide commitment material"
+            ));
+        }
+    };
+    let vk_len = if let Some(bytes) = vk_bytes.as_ref() {
+        u32::try_from(bytes.len()).wrap_err("verifying-key draft key length exceeds u32")?
+    } else {
+        validate_optional_json_positive_u32_field(
+            object,
+            "vk_len",
+            "verifying-key draft request.vk_len",
+        )?
+        .ok_or_else(|| eyre!("verifying-key draft request.vk_len is required"))?
+    };
+    let mut record = VerifyingKeyRecord::new_with_owner(
+        version,
+        circuit_id,
+        None,
+        "core",
+        backend_tag,
+        object
+            .get("curve")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or("unknown"),
+        schema_hash,
+        commitment,
+    );
+    record.vk_len = vk_len;
+    record.max_proof_bytes = validate_optional_json_u32_field(
+        object,
+        "max_proof_bytes",
+        "verifying-key draft request.max_proof_bytes",
+    )?
+    .unwrap_or(0);
+    record.gas_schedule_id = object
+        .get("gas_schedule_id")
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned);
+    record.metadata_uri_cid = object
+        .get("metadata_uri_cid")
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned);
+    record.vk_bytes_cid = object
+        .get("vk_bytes_cid")
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned);
+    record.activation_height = object
+        .get("activation_height")
+        .and_then(norito::json::Value::as_u64);
+    record.withdraw_height = object
+        .get("withdraw_height")
+        .and_then(norito::json::Value::as_u64);
+    record.key = vk_bytes.map(|bytes| VerifyingKeyBox::new(backend.into(), bytes));
+    record.status = match object.get("status").and_then(norito::json::Value::as_str) {
+        None | Some("Active") => ConfidentialStatus::Active,
+        Some("Proposed") => ConfidentialStatus::Proposed,
+        Some("Withdrawn") => ConfidentialStatus::Withdrawn,
+        Some(status) => {
+            return Err(eyre!(
+                "verifying-key draft request uses invalid status {status}"
+            ));
+        }
+    };
+    Ok(record)
+}
+
+fn decode_zk_vk_transaction_draft(
+    body: &[u8],
+    request: &norito::json::Value,
+    expected_chain: &ChainId,
+    operation: ZkVkDraftOperation,
+) -> Result<ZkVkTransactionDraft> {
+    let draft: ZkVkTransactionDraft = norito::json::from_slice(body)
+        .wrap_err("decode verifying-key transaction draft response")?;
+    if draft.submitted {
+        return Err(eyre!(
+            "verifying-key transaction draft must not claim server submission"
+        ));
+    }
+
+    let payload_bytes = decode_canonical_zk_vk_base64(
+        &draft.transaction_payload_b64,
+        ZK_VK_DRAFT_MAX_TRANSACTION_PAYLOAD_BYTES,
+        "verifying-key draft transaction_payload_b64",
+    )?;
+    let builder = TransactionBuilder::decode_payload(&payload_bytes)
+        .wrap_err("decode canonical verifying-key transaction payload")?;
+    let signing_message = decode_canonical_zk_vk_base64(
+        &draft.signing_message_b64,
+        Hash::LENGTH,
+        "verifying-key draft signing_message_b64",
+    )?;
+    if signing_message.as_slice() != HashOf::new(builder.payload()).as_ref() {
+        return Err(eyre!(
+            "verifying-key draft signing_message_b64 does not match the transaction payload"
+        ));
+    }
+
+    let object = require_json_object(request, "verifying-key draft request")?;
+    let authority = parse_canonical_i105_account_id(
+        require_json_non_empty_string_field(
+            object,
+            "authority",
+            "verifying-key draft request.authority",
+        )?,
+        "verifying-key draft request.authority",
+    )?;
+    if builder.payload().chain != *expected_chain || builder.payload().authority != authority {
+        return Err(eyre!(
+            "verifying-key draft transaction payload changed the requested chain or authority"
+        ));
+    }
+
+    let backend =
+        require_json_backend_field(object, "backend", "verifying-key draft request.backend")?;
+    let name = require_json_vk_name_field(object, "name", "verifying-key draft request.name")?;
+    let expected_record = expected_zk_vk_record_from_request(request)?;
+    let iroha_data_model::transaction::Executable::Instructions(instructions) =
+        &builder.payload().instructions
+    else {
+        return Err(eyre!(
+            "verifying-key draft transaction payload must contain native instructions"
+        ));
+    };
+    if instructions.len() != 1 {
+        return Err(eyre!(
+            "verifying-key draft transaction payload must contain exactly one instruction"
+        ));
+    }
+    let id_matches = match operation {
+        ZkVkDraftOperation::Register => instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::verifying_keys::RegisterVerifyingKey>()
+            .is_some_and(|instruction| {
+                instruction.id.backend.as_str() == backend
+                    && instruction.id.name == name
+                    && instruction.record == expected_record
+            }),
+        ZkVkDraftOperation::Update => instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::verifying_keys::UpdateVerifyingKey>()
+            .is_some_and(|instruction| {
+                instruction.id.backend.as_str() == backend
+                    && instruction.id.name == name
+                    && instruction.record == expected_record
+            }),
+    };
+    if !id_matches {
+        return Err(eyre!(
+            "verifying-key draft transaction payload does not contain the requested registry operation"
+        ));
+    }
+    Ok(draft)
 }
 
 fn require_json_object<'a>(
@@ -10138,79 +10404,6 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_zk_verify_json_rejects_unsupported_backend_shapes_before_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{\"ok\":true}");
-
-        for req in [
-            norito::json!({ "backend": "groth16/bls12-377", "proof": { "bytes": [1, 2, 3] } }),
-            norito::json!({
-                "backend": "halo2/ipa",
-                "vk_ref": { "backend": "mock/dev", "name": "vk_main" },
-                "proof": { "bytes": [1, 2, 3] },
-            }),
-            norito::json!({
-                "backend": "halo2/ipa",
-                "vk_ref": { "backend": "stark/fri", "name": "vk_main" },
-                "proof": { "bytes": [1, 2, 3] },
-            }),
-            norito::json!({
-                "backend": "halo2/ipa",
-                "proof": { "backend": "mock/dev", "bytes": [1, 2, 3] },
-            }),
-            norito::json!({
-                "backend": "halo2/ipa",
-                "proof": { "backend": "stark/fri", "bytes": [1, 2, 3] },
-            }),
-        ] {
-            let err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_verify_json(&req)
-                    .expect_err("unsupported verify JSON backend must be rejected")
-            });
-            let message = err.to_string();
-            assert!(
-                message.contains("exact supported verifier-registry label")
-                    || message.contains("must match"),
-                "unexpected verify JSON error: {message}"
-            );
-        }
-
-        assert!(
-            snapshots.lock().expect("lock snapshot store").is_empty(),
-            "rejected verify JSON must not be sent"
-        );
-    }
-
-    #[test]
-    fn post_zk_submit_proof_json_rejects_unsupported_backend_before_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{\"ok\":true,\"id\":\"abc\"}");
-        let req = norito::json!({
-            "backend": "stark/fri/miden",
-            "proof": { "bytes": [1, 2, 3] },
-        });
-
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client
-                .post_zk_submit_proof_json(&req)
-                .expect_err("unsupported submit-proof JSON backend must be rejected")
-        });
-
-        assert!(
-            err.to_string()
-                .contains("exact supported verifier-registry label"),
-            "unexpected submit-proof JSON error: {err}"
-        );
-        assert!(
-            snapshots.lock().expect("lock snapshot store").is_empty(),
-            "rejected submit-proof JSON must not be sent"
-        );
-    }
-
-    #[test]
     fn post_zk_ivm_json_rejects_bad_vk_ref_before_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -10249,7 +10442,10 @@ mod evidence_http_tests {
         );
     }
 
-    fn vk_submission_json(overrides: &[(&str, norito::json::Value)]) -> norito::json::Value {
+    fn vk_submission_json(
+        authority: &AccountId,
+        overrides: &[(&str, norito::json::Value)],
+    ) -> norito::json::Value {
         use base64::Engine as _;
 
         let backend = "halo2/ipa";
@@ -10257,10 +10453,9 @@ mod evidence_http_tests {
         let mut object = norito::json::Map::new();
         object.insert("backend".into(), norito::json::Value::from(backend));
         object.insert("name".into(), norito::json::Value::from("vk_main"));
-        object.insert("authority".into(), norito::json::Value::from("alice"));
         object.insert(
-            "private_key".into(),
-            norito::json::Value::from("ed25519:deadbeef"),
+            "authority".into(),
+            norito::json::Value::from(authority.to_string()),
         );
         object.insert("version".into(), norito::json::Value::from(1u64));
         object.insert("circuit_id".into(), norito::json::Value::from("transfer"));
@@ -10291,25 +10486,97 @@ mod evidence_http_tests {
         norito::json::Value::Object(object)
     }
 
-    #[test]
-    fn post_zk_vk_register_update_post_complete_payloads() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = empty_response(StatusCode::ACCEPTED);
-        let register_req = vk_submission_json(&[]);
-        let update_req = vk_submission_json(&[
-            ("version", norito::json::Value::from(2u64)),
-            ("status", norito::json::Value::from("Withdrawn")),
-            ("gas_schedule_id", norito::json::Value::Null),
-        ]);
+    fn vk_transaction_draft_response(
+        chain: &ChainId,
+        authority: &AccountId,
+        request: &norito::json::Value,
+        operation: ZkVkDraftOperation,
+    ) -> HttpResponse<Vec<u8>> {
+        use iroha_data_model::{
+            isi::verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey},
+            proof::VerifyingKeyId,
+            transaction::FeePaymentIntent,
+        };
 
-        with_mock_http(respond_with(&snapshots, response), || {
-            client
+        let id = VerifyingKeyId::new("halo2/ipa", "vk_main");
+        let record =
+            expected_zk_vk_record_from_request(request).expect("build expected VK draft record");
+        let instruction = match operation {
+            ZkVkDraftOperation::Register => {
+                InstructionBox::from(RegisterVerifyingKey { id, record })
+            }
+            ZkVkDraftOperation::Update => InstructionBox::from(UpdateVerifyingKey { id, record }),
+        };
+        let builder = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(instruction));
+        let value = norito::json!({
+            "submitted": false,
+            "transaction_payload_b64": base64::engine::general_purpose::STANDARD
+                .encode(builder.encode_payload()),
+            "signing_message_b64": base64::engine::general_purpose::STANDARD
+                .encode(HashOf::new(builder.payload()).as_ref()),
+        });
+        json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&value).expect("encode VK draft response"),
+        )
+    }
+
+    #[test]
+    fn post_zk_vk_register_update_return_validated_local_signing_drafts() {
+        let client = client_with_base_url(base_url());
+        let authority = client.account.clone();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let register_req = vk_submission_json(&authority, &[]);
+        let update_req = vk_submission_json(
+            &authority,
+            &[
+                ("version", norito::json::Value::from(2u64)),
+                ("status", norito::json::Value::from("Withdrawn")),
+                ("gas_schedule_id", norito::json::Value::Null),
+            ],
+        );
+        let register_response = vk_transaction_draft_response(
+            &client.chain,
+            &authority,
+            &register_req,
+            ZkVkDraftOperation::Register,
+        );
+        let update_response = vk_transaction_draft_response(
+            &client.chain,
+            &authority,
+            &update_req,
+            ZkVkDraftOperation::Update,
+        );
+
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let response = match snapshot.url.path() {
+                    "/v1/zk/vk/register" => register_response.clone(),
+                    "/v1/zk/vk/update" => update_response.clone(),
+                    path => return Err(eyre!("unexpected VK draft request path: {path}")),
+                };
+                snapshots
+                    .lock()
+                    .expect("lock snapshot store")
+                    .push(snapshot);
+                Ok(response)
+            }
+        };
+        with_mock_http(responder, || {
+            let register_draft = client
                 .post_zk_vk_register(&register_req)
                 .expect("post register vk");
-            client
+            let update_draft = client
                 .post_zk_vk_update(&update_req)
                 .expect("post update vk");
+            assert!(!register_draft.submitted);
+            assert!(!update_draft.submitted);
         });
 
         let store = snapshots.lock().expect("lock snapshot store");
@@ -10322,6 +10589,7 @@ mod evidence_http_tests {
             register_body["public_inputs_schema_hash_hex"].as_str(),
             Some("aa".repeat(32).as_str())
         );
+        assert!(register_body.get("private_key").is_none());
         assert_eq!(register_body["status"].as_str(), Some("Active"));
         assert_eq!(store[1].method, HttpMethod::POST);
         assert_eq!(store[1].url.as_str(), "http://mock.local/v1/zk/vk/update");
@@ -10332,18 +10600,64 @@ mod evidence_http_tests {
     }
 
     #[test]
+    fn post_zk_vk_register_rejects_response_not_bound_to_payload() {
+        use base64::Engine as _;
+
+        let client = client_with_base_url(base_url());
+        let authority = client.account.clone();
+        let request = vk_submission_json(&authority, &[]);
+        let valid_response = vk_transaction_draft_response(
+            &client.chain,
+            &authority,
+            &request,
+            ZkVkDraftOperation::Register,
+        );
+        let mut response_body: Value =
+            norito::json::from_slice(valid_response.body()).expect("decode valid VK draft");
+        response_body["signing_message_b64"] =
+            norito::json::Value::from(base64::engine::general_purpose::STANDARD.encode([0_u8; 32]));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_body).expect("encode mismatched VK draft"),
+        );
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let error = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_zk_vk_register(&request)
+                .expect_err("mismatched signing message must be rejected")
+        });
+
+        assert!(
+            error.to_string().contains("does not match"),
+            "unexpected draft validation error: {error}"
+        );
+        assert_eq!(snapshots.lock().expect("lock snapshot store").len(), 1);
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn post_zk_vk_register_update_reject_malformed_inputs_before_request() {
         let client = client_with_base_url(base_url());
+        let authority = client.account.clone();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = empty_response(StatusCode::ACCEPTED);
+        let response = empty_response(StatusCode::OK);
 
         for req in [
-            vk_submission_json(&[("backend", norito::json::Value::from("mock/dev"))]),
-            vk_submission_json(&[("backend", norito::json::Value::from("halo2/ipa/orchard"))]),
-            vk_submission_json(&[("name", norito::json::Value::from("   "))]),
-            vk_submission_json(&[("name", norito::json::Value::from("scope:vk"))]),
-            vk_submission_json(&[("backend", norito::json::Value::from(7u64))]),
+            vk_submission_json(
+                &authority,
+                &[("backend", norito::json::Value::from("mock/dev"))],
+            ),
+            vk_submission_json(
+                &authority,
+                &[("backend", norito::json::Value::from("halo2/ipa/orchard"))],
+            ),
+            vk_submission_json(&authority, &[("name", norito::json::Value::from("   "))]),
+            vk_submission_json(
+                &authority,
+                &[("name", norito::json::Value::from("scope:vk"))],
+            ),
+            vk_submission_json(&authority, &[("backend", norito::json::Value::from(7u64))]),
             norito::json!({ "name": "vk_main" }),
         ] {
             let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
@@ -10370,15 +10684,20 @@ mod evidence_http_tests {
         }
 
         for req in [
-            vk_submission_json(&[("authority", norito::json::Value::Null)]),
-            vk_submission_json(&[("authority", norito::json::Value::from("   "))]),
-            vk_submission_json(&[("private_key", norito::json::Value::Null)]),
-            vk_submission_json(&[("private_key", norito::json::Value::from("   "))]),
+            vk_submission_json(&authority, &[("authority", norito::json::Value::Null)]),
+            vk_submission_json(
+                &authority,
+                &[("authority", norito::json::Value::from("   "))],
+            ),
+            vk_submission_json(
+                &authority,
+                &[("private_key", norito::json::Value::from("ed25519:retired"))],
+            ),
         ] {
             let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
                 client
                     .post_zk_vk_register(&req)
-                    .expect_err("VK register JSON without signing fields must be rejected")
+                    .expect_err("VK register JSON with invalid identity fields must be rejected")
             });
             assert!(
                 register_err.to_string().contains("authority")
@@ -10389,7 +10708,7 @@ mod evidence_http_tests {
             let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
                 client
                     .post_zk_vk_update(&req)
-                    .expect_err("VK update JSON without signing fields must be rejected")
+                    .expect_err("VK update JSON with invalid identity fields must be rejected")
             });
             assert!(
                 update_err.to_string().contains("authority")
@@ -10400,55 +10719,73 @@ mod evidence_http_tests {
 
         for (req, expected) in [
             (
-                vk_submission_json(&[("version", norito::json::Value::from(0u64))]),
+                vk_submission_json(&authority, &[("version", norito::json::Value::from(0u64))]),
                 "version",
             ),
             (
-                vk_submission_json(&[(
-                    "public_inputs_schema_hash_hex",
-                    norito::json::Value::from("abc"),
-                )]),
+                vk_submission_json(
+                    &authority,
+                    &[(
+                        "public_inputs_schema_hash_hex",
+                        norito::json::Value::from("abc"),
+                    )],
+                ),
                 "public_inputs_schema_hash_hex",
             ),
             (
-                vk_submission_json(&[("gas_schedule_id", norito::json::Value::from("   "))]),
+                vk_submission_json(
+                    &authority,
+                    &[("gas_schedule_id", norito::json::Value::from("   "))],
+                ),
                 "gas_schedule_id",
             ),
             (
-                vk_submission_json(&[("max_proof_bytes", norito::json::Value::from(u64::MAX))]),
+                vk_submission_json(
+                    &authority,
+                    &[("max_proof_bytes", norito::json::Value::from(u64::MAX))],
+                ),
                 "max_proof_bytes",
             ),
             (
-                vk_submission_json(&[("status", norito::json::Value::from("retired"))]),
+                vk_submission_json(
+                    &authority,
+                    &[("status", norito::json::Value::from("retired"))],
+                ),
                 "status",
             ),
             (
-                vk_submission_json(&[
-                    ("activation_height", norito::json::Value::from(8u64)),
-                    ("withdraw_height", norito::json::Value::from(7u64)),
-                ]),
+                vk_submission_json(
+                    &authority,
+                    &[
+                        ("activation_height", norito::json::Value::from(8u64)),
+                        ("withdraw_height", norito::json::Value::from(7u64)),
+                    ],
+                ),
                 "withdraw_height",
             ),
             (
-                vk_submission_json(&[("vk_bytes", norito::json::Value::from(""))]),
+                vk_submission_json(&authority, &[("vk_bytes", norito::json::Value::from(""))]),
                 "vk_bytes",
             ),
             (
-                vk_submission_json(&[("vk_len", norito::json::Value::from(99u64))]),
+                vk_submission_json(&authority, &[("vk_len", norito::json::Value::from(99u64))]),
                 "vk_len",
             ),
             (
-                vk_submission_json(&[(
-                    "commitment_hex",
-                    norito::json::Value::from("00".repeat(32)),
-                )]),
+                vk_submission_json(
+                    &authority,
+                    &[("commitment_hex", norito::json::Value::from("00".repeat(32)))],
+                ),
                 "commitment_hex",
             ),
             (
-                vk_submission_json(&[
-                    ("vk_bytes", norito::json::Value::Null),
-                    ("commitment_hex", norito::json::Value::Null),
-                ]),
+                vk_submission_json(
+                    &authority,
+                    &[
+                        ("vk_bytes", norito::json::Value::Null),
+                        ("commitment_hex", norito::json::Value::Null),
+                    ],
+                ),
                 "commitment_hex",
             ),
         ] {
@@ -15424,53 +15761,6 @@ impl Client {
         Ok(resp.into_body())
     }
 
-    /// Convenience: POST a ZK verification request to `/v1/zk/verify` with a
-    /// Norito-encoded `OpenVerifyEnvelope` in the body.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_verify_norito(&self, body: &[u8]) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/verify");
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", "application/x-norito")
-            .body(body.to_vec())
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to verify (norito) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// Convenience: POST a ZK verification request to `/v1/zk/verify` with a
-    /// JSON DTO describing the proof and verifying key.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_verify_json(&self, value: &norito::json::Value) -> Result<norito::json::Value> {
-        validate_zk_verify_or_submit_json(value, "zk verify json")?;
-        let url = join_torii_url(&self.torii_url, "v1/zk/verify");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(body),
-        )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to verify (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
     /// Canonical-account-signed POST `/v1/aliases/setup/plan`.
     ///
     /// The endpoint is read-only: the request contains only declarative setup
@@ -16997,7 +17287,7 @@ impl Client {
     /// Returns an error if the request is rejected or the response cannot be decoded.
     pub fn list_da_commitments(
         &self,
-        request: &DaCommitmentProofRequest,
+        request: &DaCommitmentListRequest,
     ) -> Result<DaCommitmentListResponse> {
         let body =
             norito::json::to_vec(request).wrap_err("failed to encode DA commitments request")?;
@@ -17087,8 +17377,8 @@ impl Client {
     /// Returns an error if the request is rejected or the response cannot be decoded.
     pub fn list_da_pin_intents(
         &self,
-        request: &DaPinIntentQueryRequest,
-    ) -> Result<Vec<DaPinIntentWithLocation>> {
+        request: &DaPinIntentListRequest,
+    ) -> Result<DaPinIntentListResponse> {
         let body =
             norito::json::to_vec(request).wrap_err("failed to encode DA pin intent request")?;
         let url = join_torii_url(&self.torii_url, "v1/da/pin-intents");
@@ -17118,7 +17408,7 @@ impl Client {
     pub fn prove_da_pin_intent(
         &self,
         request: &DaPinIntentQueryRequest,
-    ) -> Result<Option<DaPinIntentWithLocation>> {
+    ) -> Result<Option<DaPinIntentProof>> {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode DA pin intent proof request")?;
         let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/prove");
@@ -17147,7 +17437,7 @@ impl Client {
     /// Returns an error if the request is rejected or the response cannot be decoded.
     pub fn verify_da_pin_intent(
         &self,
-        proof: &DaPinIntentWithLocation,
+        proof: &DaPinIntentProof,
     ) -> Result<DaPinIntentVerifyResponse> {
         let body = norito::json::to_vec(proof).wrap_err("failed to encode DA pin intent proof")?;
         let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/verify");
@@ -19200,57 +19490,6 @@ impl Client {
         )
         .await
         .map_err(SorafsFetchError::from)
-    }
-
-    /// Convenience: POST a ZK submit-proof request to `/v1/zk/submit-proof` with a
-    /// Norito-encoded envelope in the body. Returns JSON response with `{ ok, id }`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_submit_proof_norito(&self, body: &[u8]) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/submit-proof");
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", "application/x-norito")
-            .body(body.to_vec())
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to submit-proof (norito) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// Convenience: POST a ZK submit-proof request to `/v1/zk/submit-proof` with a
-    /// JSON DTO describing the proof and verifying key. Returns JSON response with `{ ok, id }`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_submit_proof_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        validate_zk_verify_or_submit_json(value, "zk submit-proof json")?;
-        let url = join_torii_url(&self.torii_url, "v1/zk/submit-proof");
-        let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?;
-        let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to submit-proof (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
     }
 
     /// Convenience: POST a ZK verify-batch request to `/v1/zk/verify-batch` with a
@@ -21957,10 +22196,16 @@ impl Client {
             .ok_or_else(|| eyre!("invalid delete response"))
     }
 
-    /// Convenience: POST `/v1/zk/vk/register` with a JSON DTO body.
+    /// Prepare a verifying-key registration transaction for local signing.
+    ///
+    /// The request must not contain a private key. The returned canonical
+    /// payload can be signed locally and submitted through the ordinary signed
+    /// transaction endpoint.
+    ///
     /// # Errors
-    /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
-    pub fn post_zk_vk_register(&self, value: &norito::json::Value) -> Result<()> {
+    /// Returns an error if the request is malformed, the HTTP request fails,
+    /// or Torii returns an invalid or request-mismatched draft.
+    pub fn post_zk_vk_register(&self, value: &norito::json::Value) -> Result<ZkVkTransactionDraft> {
         validate_zk_vk_submission_json(value, "zk vk register json", true)?;
         let url = join_torii_url(&self.torii_url, "v1/zk/vk/register");
         let body = norito::json::to_vec(value)?;
@@ -21970,20 +22215,31 @@ impl Client {
             .body(body)
             .build()?;
         let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::ACCEPTED {
+        if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to register VK with HTTP status: {}. {}",
+                "Failed to prepare VK registration with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(())
+        decode_zk_vk_transaction_draft(
+            resp.body(),
+            value,
+            &self.chain,
+            ZkVkDraftOperation::Register,
+        )
     }
 
-    /// Convenience: POST `/v1/zk/vk/update` with a JSON DTO body.
+    /// Prepare a verifying-key update transaction for local signing.
+    ///
+    /// The request must not contain a private key. The returned canonical
+    /// payload can be signed locally and submitted through the ordinary signed
+    /// transaction endpoint.
+    ///
     /// # Errors
-    /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
-    pub fn post_zk_vk_update(&self, value: &norito::json::Value) -> Result<()> {
+    /// Returns an error if the request is malformed, the HTTP request fails,
+    /// or Torii returns an invalid or request-mismatched draft.
+    pub fn post_zk_vk_update(&self, value: &norito::json::Value) -> Result<ZkVkTransactionDraft> {
         validate_zk_vk_submission_json(value, "zk vk update json", false)?;
         let url = join_torii_url(&self.torii_url, "v1/zk/vk/update");
         let body = norito::json::to_vec(value)?;
@@ -21993,14 +22249,14 @@ impl Client {
             .body(body)
             .build()?;
         let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::ACCEPTED {
+        if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to update VK with HTTP status: {}. {}",
+                "Failed to prepare VK update with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(())
+        decode_zk_vk_transaction_draft(resp.body(), value, &self.chain, ZkVkDraftOperation::Update)
     }
 
     /// Convenience: GET `/v1/zk/vk` as JSON Value.
@@ -24151,9 +24407,6 @@ mod url_join_tests {
             "halo2/pasta/vote-bool-commit-merkle2",
             "halo2/ipa/vote-bool-commit-merkle8",
             "halo2/ipa:vote-bool-commit-merkle16",
-            "halo2/pasta/asset-hidden-transfer-public-test",
-            "halo2/ipa/asset-hidden-transfer-public-test",
-            "halo2/ipa:asset-hidden-transfer-public-test",
             "mock/dev",
         ] {
             assert!(
@@ -24751,7 +25004,9 @@ mod tests {
             },
             ingest::DaStripeLayout,
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
-            pin_intent::{DaPinIntent, DaPinIntentWithLocation},
+            pin_intent::{
+                DaPinIntent, DaPinIntentBundle, DaPinIntentProof, DaPinIntentWithLocation,
+            },
             types::{
                 BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
                 ExtraMetadata, RetentionPolicy, StorageTicketId,
@@ -28118,16 +28373,14 @@ mod tests {
     fn list_da_commitments_posts_query() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let request = DaCommitmentProofRequest {
-            manifest_hash: Some(ManifestDigest::new([0x10; 32])),
-            lane_id: Some(7),
-            epoch: Some(9),
-            sequence: Some(11),
-            pagination: Some(Pagination::new(std::num::NonZeroU64::new(3), 1)),
+        let request = DaCommitmentListRequest {
+            limit: std::num::NonZeroU64::new(3),
+            cursor: None,
         };
         let expected = DaCommitmentListResponse {
             policies: sample_da_proof_policy_bundle(),
             commitments: vec![sample_da_commitment_with_location()],
+            next_cursor: None,
         };
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -28146,12 +28399,9 @@ mod tests {
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
         assert_eq!(store[0].url.path(), "/v1/da/commitments");
-        let posted: DaCommitmentProofRequest =
+        let posted: DaCommitmentListRequest =
             norito::json::from_slice(&store[0].body).expect("decode posted request");
-        assert_eq!(posted.manifest_hash, request.manifest_hash);
-        assert_eq!(posted.lane_id, request.lane_id);
-        assert_eq!(posted.epoch, request.epoch);
-        assert_eq!(posted.sequence, request.sequence);
+        assert_eq!(posted, request);
     }
 
     #[test]
@@ -28163,7 +28413,6 @@ mod tests {
             lane_id: None,
             epoch: None,
             sequence: None,
-            pagination: None,
         };
         let expected = Some(DaCommitmentProofResponse {
             policies: sample_da_proof_policy_bundle(),
@@ -28224,16 +28473,14 @@ mod tests {
     fn list_da_pin_intents_posts_query() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let request = DaPinIntentQueryRequest {
-            manifest_hash: Some(ManifestDigest::new([0x30; 32])),
-            storage_ticket: Some(StorageTicketId::new([0x31; 32])),
-            alias: Some("videos/demo".to_owned()),
-            lane_id: Some(4),
-            epoch: Some(6),
-            sequence: Some(8),
-            pagination: Some(Pagination::new(std::num::NonZeroU64::new(5), 0)),
+        let request = DaPinIntentListRequest {
+            limit: std::num::NonZeroU64::new(5),
+            cursor: None,
         };
-        let expected = vec![sample_da_pin_intent_with_location()];
+        let expected = DaPinIntentListResponse {
+            intents: vec![sample_da_pin_intent_with_location()],
+            next_cursor: None,
+        };
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -28251,10 +28498,9 @@ mod tests {
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
         assert_eq!(store[0].url.path(), "/v1/da/pin-intents");
-        let posted: DaPinIntentQueryRequest =
+        let posted: DaPinIntentListRequest =
             norito::json::from_slice(&store[0].body).expect("decode posted pin query");
-        assert_eq!(posted.storage_ticket, request.storage_ticket);
-        assert_eq!(posted.alias, request.alias);
+        assert_eq!(posted, request);
     }
 
     #[test]
@@ -28268,9 +28514,8 @@ mod tests {
             lane_id: None,
             epoch: None,
             sequence: None,
-            pagination: None,
         };
-        let expected = Some(sample_da_pin_intent_with_location());
+        let expected = Some(sample_da_pin_intent_proof());
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -28294,8 +28539,11 @@ mod tests {
     fn verify_da_pin_intent_posts_proof() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proof = sample_da_pin_intent_with_location();
-        let expected = DaPinIntentVerifyResponse { valid: true };
+        let proof = sample_da_pin_intent_proof();
+        let expected = DaPinIntentVerifyResponse {
+            valid: true,
+            error: None,
+        };
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -28313,7 +28561,7 @@ mod tests {
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
         assert_eq!(store[0].url.path(), "/v1/da/pin-intents/verify");
-        let posted: DaPinIntentWithLocation =
+        let posted: DaPinIntentProof =
             norito::json::from_slice(&store[0].body).expect("decode posted pin proof");
         assert_eq!(posted, proof);
     }
@@ -33806,7 +34054,6 @@ mod tests {
             manifest_hash: ManifestDigest::new([0x62; 32]),
             proof_scheme: DaProofScheme::MerkleSha256,
             chunk_root: Hash::prehashed([0x63; Hash::LENGTH]),
-            kzg_commitment: None,
             proof_digest: None,
             retention_class: RetentionPolicy::default(),
             storage_ticket: StorageTicketId::new([0x64; 32]),
@@ -33854,6 +34101,20 @@ mod tests {
                 block_height: 10,
                 index_in_bundle: 0,
             },
+        }
+    }
+
+    fn sample_da_pin_intent_proof() -> DaPinIntentProof {
+        let located = sample_da_pin_intent_with_location();
+        DaPinIntentProof {
+            intent: located.intent,
+            location: located.location,
+            bundle_hash: HashOf::<DaPinIntentBundle>::from_untyped_unchecked(Hash::prehashed(
+                [0x72; Hash::LENGTH],
+            )),
+            bundle_len: 1,
+            root: Hash::prehashed([0x73; Hash::LENGTH]),
+            path: Vec::new(),
         }
     }
 

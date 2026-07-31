@@ -16,5 +16,5 @@ Artifacts:
   digest, parity flag).
 - `chunks/` — `chunk_{index:05}.bin` payload slices (data + parity).
 - `payload.bin` — contiguous reconstructed payload used by round-trip tests.
-- `commitment_bundle.{json,norito.hex}` — sample commitment bundle with a
-  deterministic KZG commitment for docs/tests.
+- `commitment_bundle.{json,norito.hex}` — sample V1 Merkle commitment bundle
+  for docs/tests.

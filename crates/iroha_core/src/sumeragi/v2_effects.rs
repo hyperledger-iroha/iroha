@@ -10346,6 +10346,7 @@ mod tests {
                 roster: roster.clone(),
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1_048_576,
@@ -10492,6 +10493,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"production transport nexus/amx context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1_048_576,
@@ -20645,6 +20647,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"serialized rebind nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1_048_576,

@@ -631,8 +631,8 @@ pub(crate) mod v2_context_store;
 pub(crate) mod v2_core;
 pub use v2_context::{
     GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
-    signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
-    validate_signed_genesis_v2_authority,
+    signed_genesis_voting_peers, staged_genesis_execution_policy_hash,
+    staged_genesis_nexus_amx_context_hash, validate_signed_genesis_v2_authority,
 };
 pub use v2_core::{
     CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,
@@ -2402,7 +2402,7 @@ fn fair_v2_ingress_required_proposal_bytes(
 fn fair_v2_ingress_network_message_bytes_from_block_message(
     block_message_bytes: usize,
 ) -> Option<usize> {
-    let align = core::mem::align_of::<norito::core::Archived<BlockMessage>>();
+    let align = norito::core::archived_payload_align::<BlockMessage>();
     let padding = if align <= 1 {
         0
     } else {

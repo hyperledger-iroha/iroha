@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` עושה שימוש חוזר בנקודת 48 בתים הקיימת בשימוש תחת
-  `iroha_crypto::kzg`. נתיבי מרקל משאירים אותו ריק; נתיבי `kzg_bls12_381` עכשיו
-  לקבל מחויבות BLAKE3-XOF דטרמיניסטית הנגזרת משורש ה-chunk ו
-  כרטיס אחסון כך ש-hashs לחסום יישארו יציבים ללא מוכיח חיצוני.
-- `proof_scheme` נגזר מקטלוג הנתיבים; נתיבי מרקל דוחים KZG תועה
-  מטענים בעוד נתיבים `kzg_bls12_381` דורשים התחייבויות KZG שאינן אפס.
-- `proof_digest` צופה שילוב DA-5 PDP/PoTR כך שרשומה זהה
-  מונה את לוח הזמנים של הדגימה המשמש לשמירה על כתמים חיים.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 סיומת כותרת חסום
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`; חבילות מחויבות מקדימות את סמני הקבלה (מודר
    מ-Kura בהפעלה מחדש) וגזום ערכי סליל מעופשים כדי לחייב את צמיחת הדיסק.
 
-הרכבת בלוקים ו-`BlockCreated` מאמתים מחדש כל התחייבות כנגד
-קטלוג הנתיבים: נתיבי מרקל דוחים התחייבויות תועה של KZG, נתיבי KZG דורשים א
-מחויבות לא-אפס KZG ואי-אפס `chunk_root`, ונתיבים לא ידועים הם
-ירד. נקודת הקצה `/v1/da/commitments/verify` של Torii משקפת את אותו מגן,
-וצריבה עכשיו משחיל את המחויבות KZG הדטרמיניסטית לכל
-`kzg_bls12_381` מתעד כך שחבילות תואמות מדיניות מגיעות להרכבת בלוקים.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 גופי המניפסט המתוארים בתוכנית בליעת DA-2 משמשים כמקור
 אמת לצרור המחויבות. מבחן Torii
@@ -210,9 +199,7 @@ WSV מאחסנת התחייבויות במשפחת עמודים ייעודית �
 
 ## שאלות פתוחות
 
-1. **ברירת המחדל של KZG לעומת מרקל** - האם כתמים קטנים צריכים תמיד לדלג על התחייבויות KZG ל
-   להקטין את גודל הבלוק? הצעה: השאר את `kzg_commitment` אופציונלי ושער דרך
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **פערים ברצף** — האם אנו מאפשרים נתיבים לא בסדר? התוכנית הנוכחית דוחה פערים
    אלא אם הממשל מחליף את `allow_sequence_skips` לשידור חירום חוזר.
 3. **מטמון קליינט קל** — צוות SDK ביקש מטמון SQLite קל משקל עבור

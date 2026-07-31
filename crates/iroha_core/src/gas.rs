@@ -450,13 +450,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
-    if let Some(transfer) = any.downcast_ref::<dm_isi::zk::AssetHiddenZkTransfer>() {
-        return gas_for_proof_attachment(
-            &transfer.proof,
-            transfer.inputs.len(),
-            transfer.outputs.len(),
-        );
-    }
     if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV4>() {
         return gas_for_recursive_kagemusha_topup_v4(topup);
     }
@@ -504,13 +497,6 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
         return zk_gas_per_commitment();
     }
     if let Some(transfer) = any.downcast_ref::<dm_isi::zk::ZkTransfer>() {
-        return gas_for_proof_attachment(
-            &transfer.proof,
-            transfer.inputs.len(),
-            transfer.outputs.len(),
-        );
-    }
-    if let Some(transfer) = any.downcast_ref::<dm_isi::zk::AssetHiddenZkTransfer>() {
         return gas_for_proof_attachment(
             &transfer.proof,
             transfer.inputs.len(),

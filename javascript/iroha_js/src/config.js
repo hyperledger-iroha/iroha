@@ -487,7 +487,7 @@ export {
  *     embeddedSignaturePolicy: string | null;
  *     signer: { accountId: string; privateKey?: string | null } | null;
  *     accountAliases: Array<{ iban: string; accountId: string }>;
- *     currencyAssets: Array<{ currency: string; assetDefinition: string }>;
+ *     currencyAssets: Array<{ currency: string; assetDefinition: string; maxAmount: string }>;
  *   } | null;
  *   connect: {
  *     enabled: boolean;
@@ -611,10 +611,11 @@ function normalizeIsoBridgeConfig(section) {
           }
           const currency = requireString(obj.currency);
           const assetDefinition = requireString(obj.asset_definition);
-          if (!currency || !assetDefinition) {
+          const maxAmount = requireString(obj.max_amount);
+          if (!currency || !assetDefinition || !maxAmount) {
             return null;
           }
-          return { currency, assetDefinition };
+          return { currency, assetDefinition, maxAmount };
         })
         .filter(Boolean)
     : [];

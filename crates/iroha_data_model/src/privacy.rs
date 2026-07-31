@@ -508,7 +508,7 @@ macro_rules! define_privacy_digest {
             IntoSchema,
         )]
         #[repr(transparent)]
-        #[norito(transparent, decode_from_slice)]
+        #[norito(decode_from_slice)]
         #[cfg_attr(
             feature = "json",
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -803,7 +803,7 @@ macro_rules! define_ristretto255_encoding {
             IntoSchema,
         )]
         #[repr(transparent)]
-        #[norito(transparent, decode_from_slice)]
+        #[norito(decode_from_slice)]
         #[cfg_attr(
             feature = "json",
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

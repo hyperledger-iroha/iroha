@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reutiliza el punto de 48 bytes existente utilizado en
-  `iroha_crypto::kzg`. Los carriles Merkle lo dejan vacío; Carriles `kzg_bls12_381` ahora
-  recibir un compromiso BLAKE3-XOF determinista derivado de la raíz del fragmento y
-  ticket de almacenamiento para que los hashes de bloque se mantengan estables sin un probador externo.
-- `proof_scheme` se deriva del catálogo de carriles; Merkle Lanes rechaza KZG perdido
-  cargas útiles, mientras que los carriles `kzg_bls12_381` requieren compromisos KZG distintos de cero.
-- `proof_digest` anticipa la integración DA-5 PDP/PoTR, por lo que se obtendrá el mismo registro
-  enumera el programa de muestreo utilizado para mantener vivos los blobs.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Extensión del encabezado del bloque
 
@@ -126,12 +120,7 @@ hasta que Torii pase paquetes reales.
    `SignedBlockWire`; los paquetes comprometidos hacen avanzar los cursores de recibo (hidratados
    de Kura al reiniciar) y podar las entradas de spool obsoletas para limitar el crecimiento del disco.
 
-El ensamblaje del bloque y la ingesta de `BlockCreated` revalidan cada compromiso contra
-el catálogo de carriles: los carriles Merkle rechazan los compromisos extraviados de KZG, los carriles KZG requieren un
-compromiso KZG distinto de cero y `chunk_root` distinto de cero, y carriles desconocidos son
-cayó. El punto final `/v1/da/commitments/verify` de Torii refleja la misma protección,
-e ingerir ahora entrelaza el compromiso determinista de KZG en cada
-Registro `kzg_bls12_381` para que los paquetes que cumplen con la política lleguen al ensamblaje del bloque.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 Los accesorios manifiestos descritos en el plan de ingesta DA-2 también sirven como fuente de
 verdad para el paquete de compromiso. La prueba Torii
@@ -210,9 +199,7 @@ permitiendo que los nodos de recuperación reconstruyan el índice rápidamente 
 
 ## Preguntas abiertas
 
-1. **Valores predeterminados de KZG frente a Merkle**: ¿deben los pequeños blobs omitir siempre los compromisos de KZG?
-   ¿Reducir el tamaño del bloque? Propuesta: mantener `kzg_commitment` opcional y puerta vía
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Brechos en la secuencia**: ¿permitimos carriles fuera de orden? El plan actual rechaza las lagunas
    a menos que el gobierno cambie `allow_sequence_skips` para reproducción de emergencia.
 3. **Caché de cliente liviano**: el equipo del SDK solicitó un caché SQLite liviano para

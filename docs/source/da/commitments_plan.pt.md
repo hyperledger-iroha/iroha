@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reutiliza o ponto existente de 48 bytes usado em
-  `iroha_crypto::kzg`. As pistas Merkle deixam-no vazio; Pistas `kzg_bls12_381` agora
-  receber um compromisso determinístico BLAKE3-XOF derivado da raiz do pedaço e
-  tíquete de armazenamento para que os hashes de bloco permaneçam estáveis sem um provador externo.
-- `proof_scheme` é derivado do catálogo de pistas; Pistas Merkle rejeitam KZG perdido
-  cargas úteis, enquanto as pistas `kzg_bls12_381` exigem compromissos KZG diferentes de zero.
-- `proof_digest` antecipa a integração DA-5 PDP/PoTR para o mesmo registro
-  enumera o cronograma de amostragem usado para manter os blobs ativos.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Extensão do cabeçalho do bloco
 
@@ -126,12 +120,7 @@ até que Torii encadeie pacotes reais.
    `SignedBlockWire`; pacotes comprometidos avançam os cursores de recebimento (hidratados
    do Kura na reinicialização) e remover entradas de spool obsoletas para limitar o crescimento do disco.
 
-A montagem do bloco e a ingestão `BlockCreated` revalidam cada compromisso em relação
-o catálogo de pistas: as pistas Merkle rejeitam compromissos perdidos da KZG, as pistas KZG exigem um
-compromisso KZG diferente de zero e `chunk_root` diferente de zero, e faixas desconhecidas são
-caiu. O endpoint `/v1/da/commitments/verify` do Torii espelha a mesma proteção,
-e ingerir agora envolve o compromisso determinístico da KZG em cada
-Registro `kzg_bls12_381` para que pacotes configuráveis em conformidade com a política alcancem a montagem do bloco.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 Os acessórios de manifesto descritos no plano de ingestão DA-2 também funcionam como fonte de
 verdade para o empacotador de compromisso. O teste Torii
@@ -210,9 +199,7 @@ permitindo que os nós de atualização reconstruam o índice rapidamente a part
 
 ## Perguntas abertas
 
-1. **Padrões KZG vs Merkle** – As pequenas bolhas devem sempre ignorar os compromissos KZG para
-   reduzir o tamanho do bloco? Proposta: manter `kzg_commitment` opcional e gate via
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Lacunas na sequência** — Permitimos faixas fora de ordem? Plano atual rejeita lacunas
    a menos que a governança alterne `allow_sequence_skips` para reprodução de emergência.
 3. **Cache de cliente leve** — A equipe do SDK solicitou um cache SQLite leve para

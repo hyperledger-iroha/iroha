@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` は、以下で使用される既存の 48 バイト ポイントを再利用します。
-  `iroha_crypto::kzg`。マークルレーンは空のままにします。現在 `kzg_bls12_381` レーン
-  チャンク ルートから派生した決定論的な BLAKE3-XOF コミットメントを受け取り、
-  ストレージ チケットにより、外部証明者なしでもブロック ハッシュが安定した状態に保たれます。
-- `proof_scheme` はレーン カタログから派生します。マークルレーンは迷走KZGを拒否します
-  `kzg_bls12_381` レーンではゼロ以外の KZG コミットメントが必要です。
-- `proof_digest` は DA-5 PDP/PoTR 統合を予期しているため、同じレコード
-  BLOB をライブ状態に保つために使用されるサンプリング スケジュールを列挙します。
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 ブロックヘッダー拡張
 
@@ -126,12 +120,7 @@ Torii が実際のバンドルを通過するまで。
    `SignedBlockWire`;コミットされたバンドルは受信カーソルを進めます (ハイドレートされた)
    再起動時に Kura から）、ディスクの増加に合わせて古いスプール エントリを削除します。
 
-ブロック アセンブリと `BlockCreated` 取り込みにより、各コミットメントが再検証されます。
-レーンカタログ: マークルレーンは漂遊 KZG コミットメントを拒否し、KZG レーンは
-ゼロ以外の KZG コミットメントとゼロ以外の `chunk_root`、および不明なレーンは
-落とした。 Torii の `/v1/da/commitments/verify` エンドポイントは同じガードをミラーリングします。
-そして、決定論的な KZG コミットメントをすべてのスレッドに取り込みます。
-`kzg_bls12_381` レコードにより、ポリシーに準拠したバンドルがブロック アセンブリに到達します。
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 取り込み計画で説明されているマニフェスト フィクスチャは、ソースとしても機能します。
 コミットメントバンドラーにとっての真実。 Torii テスト
@@ -210,9 +199,7 @@ WSV は、`manifest_hash` をキーとする専用の列ファミリーにコミ
 
 ## 未解決の質問
 
-1. **KZG とマークルのデフォルト** — 小さな BLOB は常に KZG コミットメントをスキップすべきか
-   ブロックサイズを減らすには？提案: `kzg_commitment` をオプションのままにし、ゲート経由でゲートする
-   `iroha_config::da.enable_kzg`。
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **シーケンス ギャップ** — 順序が乱れたレーンは許可されますか?現在の計画はギャップを拒否します
    ガバナンスが緊急再生用に `allow_sequence_skips` を切り替えない限り。
 3. **ライトクライアント キャッシュ** — SDK チームは、軽量の SQLite キャッシュをリクエストしました。

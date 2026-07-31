@@ -51,6 +51,7 @@ tasks.test {
             .file("fixtures/sumeragi_v2/native_amx_v2_grouped.json"),
     )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/zk/verifying_key_record_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")

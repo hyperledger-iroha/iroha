@@ -156,8 +156,9 @@ The `--guard-directory` flag now expects a Norito-encoded
 - `version` — schema version (currently `2`).
 - `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
   metadata that must match every embedded certificate.
-- `validation_phase` — certificate policy gate (`1` = allow single Ed25519 signature,
-  `2` = prefer dual signatures, `3` = require dual signatures).
+- `validation_phase` — signed certificate-policy metadata. The first release
+  accepts only `3` (require both Ed25519 and ML-DSA-65); values `1` and `2` are
+  structural-inspection inputs only and are rejected for runtime use.
 - `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
   Fingerprints are computed as
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
@@ -166,8 +167,8 @@ The `--guard-directory` flag now expects a Norito-encoded
   signatures.
 
 The CLI verifies every bundle against the declared issuer keys before merging
-the directory. Runtime authentication also requires the independently
-distributed exact snapshot digest and enforces
+the directory. Runtime authentication also requires validation phase `3`, the
+independently distributed exact snapshot digest, and
 `valid_after_unix <= now < valid_until_unix`; embedded issuer keys alone prove
 only self-consistency. SRCv2 decoding rejects oversized containers before
 allocation (16 endpoints, 8 tags per endpoint, 2 handshake suites, 2,048 URL

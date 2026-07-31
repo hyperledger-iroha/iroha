@@ -61,8 +61,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
     InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
-    InstructionRegistry::register_slice::<zk::RegisterAssetHiddenZkPool>,
-    InstructionRegistry::register_slice::<zk::AssetHiddenZkTransfer>,
     InstructionRegistry::register_slice::<asset_alias::SetAssetDefinitionBalancePolicy>,
     InstructionRegistry::register_slice::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
@@ -1092,10 +1090,10 @@ mod tests {
 
         #[cfg(feature = "governance")]
         const EXPECTED_SHA256: &str =
-            "50e4ce8cce8a62e0a54d738abe03a48354de9e399ee9402ada49cacaf61a41c0";
+            "1518b1d9e92d209775b4b69cae9bf6f0e7c5d3d7831e85a7cc7d225cb36e16cc";
         #[cfg(not(feature = "governance"))]
         const EXPECTED_SHA256: &str =
-            "377305e0ace3812406b05a9369147a8fe06996e87009dffb6f0683c54cd06240";
+            "42e59919cc050a446d0d8655a167a9e3edaaa549ee14746474406b7ccbcd93c8";
 
         let mut wire_ids = wire_ids::ALL
             .iter()

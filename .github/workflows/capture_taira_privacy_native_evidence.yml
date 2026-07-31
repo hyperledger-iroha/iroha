@@ -1,0 +1,1053 @@
+name: Capture Taira native privacy expectations and evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Lowercase full Iroha commit containing this workflow
+        required: true
+        type: string
+      validator_release_ref:
+        description: Exact 40-character DPN commit containing the reviewed source bundle and Cargo.lock
+        required: true
+        type: string
+      expected_validator_source_tree_sha256:
+        description: Reviewed DPN validator source-tree SHA-256 before expectation installation
+        required: true
+        type: string
+      expected_cargo_lock_sha256:
+        description: Reviewed SHA-256 of the DPN Cargo.lock
+        required: true
+        type: string
+      expected_exact12_sha256:
+        description: Reviewed SHA-256 of fixtures/privacy/exact12_v1.tsv
+        required: true
+        type: string
+      elapsed_ceiling_ms:
+        description: Reviewed generic per-stage wall-clock ceiling in canonical decimal milliseconds
+        required: true
+        type: string
+      peak_rss_ceiling_bytes:
+        description: Reviewed generic per-stage peak-RSS ceiling in canonical decimal bytes
+        required: true
+        type: string
+      address_space_ceiling_bytes:
+        description: Reviewed generic per-stage address-space ceiling in canonical decimal bytes
+        required: true
+        type: string
+
+concurrency:
+  group: taira-privacy-native-capture-${{ inputs.expected_commit }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: "1"
+  CARGO_ENCODED_RUSTFLAGS: ""
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: ""
+  RUST_TOOLCHAIN: "1.93.1"
+  TAIRA_INPUT_ADDRESS_SPACE_CEILING_BYTES: ${{ inputs.address_space_ceiling_bytes }}
+  TAIRA_INPUT_ELAPSED_CEILING_MS: ${{ inputs.elapsed_ceiling_ms }}
+  TAIRA_INPUT_EXACT12_SHA256: ${{ inputs.expected_exact12_sha256 }}
+  TAIRA_INPUT_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+  TAIRA_INPUT_LOCK_SHA256: ${{ inputs.expected_cargo_lock_sha256 }}
+  TAIRA_INPUT_PEAK_RSS_CEILING_BYTES: ${{ inputs.peak_rss_ceiling_bytes }}
+  TAIRA_INPUT_SOURCE_TREE_SHA256: ${{ inputs.expected_validator_source_tree_sha256 }}
+  TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+
+jobs:
+  capture:
+    name: Native ARM64 expectation capture and final evidence
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - numeric-v1-release-calibration
+      - numeric-v1-slowest-supported-tier
+      - aws-graviton3
+      - c7g-4xlarge
+    timeout-minutes: 360
+    steps:
+      - name: Validate immutable dispatch pins
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -Eeuo pipefail
+          require_sha256() {
+            local label="$1"
+            local value="$2"
+            if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "$label must be exactly 64 lowercase hexadecimal characters" >&2
+              exit 1
+            fi
+          }
+          require_commit() {
+            local label="$1"
+            local value="$2"
+            if [[ ! "$value" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$label must be one lowercase full Git commit" >&2
+              exit 1
+            fi
+          }
+          require_decimal() {
+            local label="$1"
+            local value="$2"
+            if [[ ! "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then
+              echo "$label must be canonical unsigned decimal" >&2
+              exit 1
+            fi
+          }
+
+          require_commit expected_commit "$TAIRA_INPUT_EXPECTED_COMMIT"
+          require_commit validator_release_ref "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          require_sha256 expected_validator_source_tree_sha256 \
+            "$TAIRA_INPUT_SOURCE_TREE_SHA256"
+          require_sha256 expected_cargo_lock_sha256 "$TAIRA_INPUT_LOCK_SHA256"
+          require_sha256 expected_exact12_sha256 "$TAIRA_INPUT_EXACT12_SHA256"
+          require_decimal elapsed_ceiling_ms "$TAIRA_INPUT_ELAPSED_CEILING_MS"
+          require_decimal peak_rss_ceiling_bytes \
+            "$TAIRA_INPUT_PEAK_RSS_CEILING_BYTES"
+          require_decimal address_space_ceiling_bytes \
+            "$TAIRA_INPUT_ADDRESS_SPACE_CEILING_BYTES"
+
+          if [[ "$TAIRA_INPUT_EXPECTED_COMMIT" != "$GITHUB_SHA" ]]; then
+            echo "expected_commit must equal the workflow source commit $GITHUB_SHA" >&2
+            exit 1
+          fi
+          if [[ "$WORKFLOW_SHA" != "$TAIRA_INPUT_EXPECTED_COMMIT" ]]; then
+            echo "workflow definition SHA does not equal expected_commit" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          clean: true
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.expected_commit }}
+
+      - name: Reconstruct the reviewed DPN source and install its exact lock
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test "$(git rev-parse HEAD)" = "$TAIRA_INPUT_EXPECTED_COMMIT"
+          if [[ -e Cargo.lock || -L Cargo.lock ]]; then
+            echo "Cargo.lock unexpectedly exists before reviewed lock installation" >&2
+            exit 1
+          fi
+
+          release_root="$(mktemp -d "${RUNNER_TEMP}/taira-privacy-dpn-source.XXXXXXXXXX")"
+          source_bundle="$release_root/source-bundle"
+          mkdir "$source_bundle"
+          base_url="https://raw.githubusercontent.com/soramitsu/dpn-api-rust/${TAIRA_INPUT_VALIDATOR_RELEASE_REF}"
+          curl_args=(
+            --proto '=https'
+            --tlsv1.2
+            --fail
+            --silent
+            --show-error
+            --location
+            --retry 3
+          )
+          curl "${curl_args[@]}" \
+            --output "$release_root/iroha_source_bundle.py" \
+            "$base_url/scripts/iroha_source_bundle.py"
+          for component in \
+            provenance.json \
+            tracked.patch \
+            untracked.tar \
+            untracked.manifest.json \
+            source.manifest.json; do
+            curl "${curl_args[@]}" \
+              --output "$source_bundle/$component" \
+              "$base_url/ops/iroha/taira-validator-source/$component"
+          done
+          curl "${curl_args[@]}" \
+            --output "$release_root/Cargo.lock" \
+            "$base_url/ops/iroha/taira-validator.Cargo.lock"
+
+          for release_input in \
+            "$release_root/iroha_source_bundle.py" \
+            "$release_root/Cargo.lock" \
+            "$source_bundle/provenance.json" \
+            "$source_bundle/tracked.patch" \
+            "$source_bundle/untracked.tar" \
+            "$source_bundle/untracked.manifest.json" \
+            "$source_bundle/source.manifest.json"; do
+            if [[ ! -f "$release_input" || -L "$release_input" ]] \
+              || [[ "$(stat -c '%h' "$release_input")" != "1" ]]; then
+              echo "DPN release input is not a singly linked regular file: $release_input" >&2
+              exit 1
+            fi
+          done
+          printf '%s  %s\n' \
+            "$TAIRA_INPUT_LOCK_SHA256" \
+            "$release_root/Cargo.lock" \
+            | sha256sum -c -
+
+          observed_source_tree="$(
+            python3 -I -S - "$source_bundle/provenance.json" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              payload = json.load(stream)
+          value = payload.get("source_tree_sha256")
+          if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+              raise SystemExit("DPN source provenance has no canonical source_tree_sha256")
+          print(value)
+          PY
+          )"
+          test "$observed_source_tree" = "$TAIRA_INPUT_SOURCE_TREE_SHA256"
+
+          python3 -I -S - "$release_root/Cargo.lock" Cargo.lock <<'PY'
+          import os
+          import sys
+
+          source_path, destination_path = sys.argv[1:]
+          flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          source = os.open(source_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+          destination = os.open(destination_path, flags, 0o600)
+          try:
+              while chunk := os.read(source, 1024 * 1024):
+                  view = memoryview(chunk)
+                  while view:
+                      written = os.write(destination, view)
+                      view = view[written:]
+              os.fsync(destination)
+          finally:
+              os.close(source)
+              os.close(destination)
+          PY
+          python3 -I -S "$release_root/iroha_source_bundle.py" reconstruct \
+            --repo "$GITHUB_WORKSPACE" \
+            --bundle-dir "$source_bundle"
+          test "$(git rev-parse HEAD)" = "$TAIRA_INPUT_EXPECTED_COMMIT"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+
+          {
+            echo "TAIRA_DPN_RELEASE_ROOT=$release_root"
+            echo "TAIRA_DPN_SOURCE_BUNDLE=$source_bundle"
+          } >>"$GITHUB_ENV"
+
+      - name: Allocate a canonical evidence root
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          evidence_root="$(
+            mktemp -d "${RUNNER_TEMP}/taira-privacy-native-evidence.XXXXXXXXXX"
+          )"
+          evidence_root="$(cd "$evidence_root" && pwd -P)"
+          mkdir -p \
+            "$evidence_root/bin" \
+            "$evidence_root/provenance/privacy-native" \
+            "$evidence_root/provenance/source-bundle"
+          echo "TAIRA_EVIDENCE_ROOT=$evidence_root" >>"$GITHUB_ENV"
+
+      - name: Enforce native Graviton3 kernel and resource prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          x509_environment="$TAIRA_EVIDENCE_ROOT/provenance/x509-resource-environment.json"
+          bash ci/check_taira_privacy_native_host.sh \
+            --metadata-out "$TAIRA_EVIDENCE_ROOT/provenance/native-host.json" \
+            --x509-environment-out "$x509_environment"
+          echo "TAIRA_X509_RESOURCE_ENVIRONMENT=$x509_environment" >>"$GITHUB_ENV"
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1
+
+      - name: Freeze and verify the pre-capture source identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          rustc -Vv >"$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
+          cargo -Vv >"$TAIRA_EVIDENCE_ROOT/provenance/cargo.txt"
+          cc --version >"$TAIRA_EVIDENCE_ROOT/provenance/cc.txt"
+          ld --version >"$TAIRA_EVIDENCE_ROOT/provenance/ld.txt"
+          readelf --version >"$TAIRA_EVIDENCE_ROOT/provenance/readelf.txt"
+          getconf GNU_LIBC_VERSION \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/libc.txt"
+          grep -Fx 'release: 1.93.1' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
+          grep -Fx \
+            'commit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
+          grep -Fx 'commit-date: 2026-02-11' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
+          grep -Fx 'host: aarch64-unknown-linux-gnu' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
+          for one_shot_fixture in \
+            fixtures/privacy/native_release_expectations_v1.norito \
+            fixtures/privacy/native_release_expectations_v1.json \
+            fixtures/privacy/zk_x509_native_resource_v1.norito \
+            fixtures/privacy/zk_x509_native_resource_v1.json; do
+            if [[ -e "$one_shot_fixture" || -L "$one_shot_fixture" ]]; then
+              echo "one-shot native fixture already exists: $one_shot_fixture" >&2
+              exit 1
+            fi
+          done
+          python3 -I -S - <<'PY'
+          from pathlib import Path
+
+          profile = Path(
+              "crates/iroha_core/src/privacy_engines/zk_x509/profile.rs"
+          ).read_text(encoding="utf-8")
+          profile_declarations = (
+              (
+                  "ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1",
+                  "pub(crate) const "
+                  "ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1: u32 = 0;",
+              ),
+              (
+                  "ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1",
+                  "pub(crate) const "
+                  "ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1: "
+                  "[u8; 32] = [0; 32];",
+              ),
+              (
+                  "ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1",
+                  "pub(crate) const "
+                  "ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1: "
+                  "[u8; 32] = [0; 32];",
+              ),
+              (
+                  "ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1",
+                  "pub(crate) const "
+                  "ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1: "
+                  "[u8; 32] = [0; 32];",
+              ),
+          )
+          for name, declaration in profile_declarations:
+              if profile.count(declaration) != 1:
+                  raise SystemExit(f"{name} is not in the unique all-zero bootstrap state")
+
+          readiness = Path(
+              "crates/iroha_core/src/privacy_engines/zk_x509/"
+              "profile/readiness_certificates.rs"
+          ).read_text(encoding="utf-8")
+          for name in (
+              "ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1",
+              "ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1",
+              "ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1",
+              "ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1",
+              "ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1",
+              "ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1",
+          ):
+              declaration = f"pub(crate) const {name}: u64 = 0;"
+              if readiness.count(declaration) != 1:
+                  raise SystemExit(f"{name} is not in the unique all-zero bootstrap state")
+          digest_name = "ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1"
+          digest_declaration = (
+              f"pub(crate) const {digest_name}: [u8; 32] = [0; 32];"
+          )
+          if readiness.count(digest_declaration) != 1:
+              raise SystemExit(
+                  f"{digest_name} is not in the unique all-zero bootstrap state"
+              )
+          PY
+
+          printf '%s  %s\n' \
+            "$TAIRA_INPUT_EXACT12_SHA256" \
+            fixtures/privacy/exact12_v1.tsv \
+            | sha256sum -c -
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          bootstrap_source_sha="$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )"
+          if [[ ! "$bootstrap_source_sha" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "pre-capture workspace source identity is not canonical" >&2
+            exit 1
+          fi
+          printf '%s\n' "$bootstrap_source_sha" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/source-before-expectations.sha256"
+          printf '%s\n' "$TAIRA_INPUT_SOURCE_TREE_SHA256" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/dpn-source-tree.sha256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/cargo-lock.sha256"
+          printf '%s  %s\n' \
+            "$TAIRA_INPUT_EXACT12_SHA256" \
+            fixtures/privacy/exact12_v1.tsv \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/exact12.sha256"
+          install -m 0444 \
+            crates/iroha_core/src/privacy_engines/zk_x509/profile.rs \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-profile.before.rs"
+          install -m 0444 \
+            crates/iroha_core/src/privacy_engines/zk_x509/profile/readiness_certificates.rs \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-readiness-certificates.before.rs"
+          echo "TAIRA_BOOTSTRAP_SOURCE_SHA256=$bootstrap_source_sha" >>"$GITHUB_ENV"
+
+      - name: Build and attest the zero-pin static capture runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          bootstrap_target="$(
+            mktemp -d "${RUNNER_TEMP}/taira-privacy-bootstrap-target.XXXXXXXXXX"
+          )"
+          bootstrap_target="$(cd "$bootstrap_target" && pwd -P)"
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 cargo rustc --locked --release -p iroha_test_network --bin taira_privacy_release_runner --features privacy-release-evidence -- -C target-feature=+crt-static' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-build-command.txt"
+          CARGO_TARGET_DIR="$bootstrap_target" \
+            CARGO_BUILD_JOBS=1 \
+            cargo rustc \
+              --locked \
+              --release \
+              -p iroha_test_network \
+              --bin taira_privacy_release_runner \
+              --features privacy-release-evidence \
+              -- \
+              -C target-feature=+crt-static \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-build.log"
+          bootstrap_runner="$bootstrap_target/release/taira_privacy_release_runner"
+          if [[ ! -x "$bootstrap_runner" || -L "$bootstrap_runner" ]] \
+            || [[ "$(stat -c '%h' "$bootstrap_runner")" != "1" ]]; then
+            echo "bootstrap runner is not a singly linked executable regular file" >&2
+            exit 1
+          fi
+          readelf --program-headers --wide "$bootstrap_runner" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.program-headers.txt"
+          readelf --dynamic --wide "$bootstrap_runner" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.dynamic.txt"
+          if grep -E '(^|[[:space:]])INTERP([[:space:]]|$)' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.program-headers.txt"; then
+            echo "bootstrap privacy runner contains PT_INTERP" >&2
+            exit 1
+          fi
+          if grep -E '\(NEEDED\)' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.dynamic.txt"; then
+            echo "bootstrap privacy runner contains DT_NEEDED" >&2
+            exit 1
+          fi
+          if grep -E \
+            '(^|[[:space:]])(LOAD|GNU_STACK).*(RWE|R[[:space:]]+W[[:space:]]+E)' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.program-headers.txt"; then
+            echo "bootstrap privacy runner contains a writable executable segment" >&2
+            exit 1
+          fi
+          install -m 0444 "$bootstrap_runner" \
+            "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.elf"
+          cmp "$bootstrap_runner" \
+            "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.elf"
+          bootstrap_runner_sha="$(
+            sha256sum \
+              "$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.elf" \
+              | awk '{print $1}'
+          )"
+          if [[ ! "$bootstrap_runner_sha" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "bootstrap runner SHA-256 is not canonical" >&2
+            exit 1
+          fi
+          printf '%s  %s\n' \
+            "$bootstrap_runner_sha" \
+            provenance/bootstrap-runner.elf \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-runner.sha256"
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_BOOTSTRAP_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          {
+            echo "TAIRA_BOOTSTRAP_RUNNER=$bootstrap_runner"
+            echo "TAIRA_BOOTSTRAP_TARGET=$bootstrap_target"
+          } >>"$GITHUB_ENV"
+
+      - name: Capture, validate, hash, and install the native fixture set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          capture_root="$(
+            mktemp -d "${RUNNER_TEMP}/taira-privacy-expectations.XXXXXXXXXX"
+          )"
+          capture_root="$(cd "$capture_root" && pwd -P)"
+          captured_norito="$capture_root/native_release_expectations_v1.norito"
+          captured_json="$capture_root/native_release_expectations_v1.json"
+          captured_resource_norito="$capture_root/zk_x509_native_resource_v1.norito"
+          captured_resource_json="$capture_root/zk_x509_native_resource_v1.json"
+          printf '%s\n' \
+            'taira_privacy_release_runner capture-expectations --exact12-matrix fixtures/privacy/exact12_v1.tsv --expectations-norito-out <capture>/native_release_expectations_v1.norito --expectations-json-out <capture>/native_release_expectations_v1.json --x509-resource-host-metadata provenance/x509-resource-environment.json --x509-resource-norito-out <capture>/zk_x509_native_resource_v1.norito --x509-resource-json-out <capture>/zk_x509_native_resource_v1.json --elapsed-ceiling-ms <reviewed> --peak-rss-ceiling-bytes <reviewed> --address-space-ceiling-bytes <reviewed>' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/capture-command.txt"
+          "$TAIRA_BOOTSTRAP_RUNNER" capture-expectations \
+            --exact12-matrix "$GITHUB_WORKSPACE/fixtures/privacy/exact12_v1.tsv" \
+            --expectations-norito-out "$captured_norito" \
+            --expectations-json-out "$captured_json" \
+            --x509-resource-host-metadata "$TAIRA_X509_RESOURCE_ENVIRONMENT" \
+            --x509-resource-norito-out "$captured_resource_norito" \
+            --x509-resource-json-out "$captured_resource_json" \
+            --elapsed-ceiling-ms "$TAIRA_INPUT_ELAPSED_CEILING_MS" \
+            --peak-rss-ceiling-bytes "$TAIRA_INPUT_PEAK_RSS_CEILING_BYTES" \
+            --address-space-ceiling-bytes "$TAIRA_INPUT_ADDRESS_SPACE_CEILING_BYTES" \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/capture.log"
+          for captured in \
+            "$captured_norito" \
+            "$captured_json" \
+            "$captured_resource_norito" \
+            "$captured_resource_json"; do
+            if [[ ! -s "$captured" || -L "$captured" ]] \
+              || [[ "$(stat -c '%h' "$captured")" != "1" ]]; then
+              echo "capture did not emit one singly linked regular artifact: $captured" >&2
+              exit 1
+            fi
+          done
+          sha256sum \
+            "$captured_norito" \
+            "$captured_json" \
+            "$captured_resource_norito" \
+            "$captured_resource_json" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/captured-native-fixtures.sha256"
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_BOOTSTRAP_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+
+          python3 -I -S scripts/install_taira_privacy_native_expectations.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --captured-norito "$captured_norito" \
+            --captured-json "$captured_json" \
+            --captured-x509-resource-norito "$captured_resource_norito" \
+            --captured-x509-resource-json "$captured_resource_json" \
+            --manifest-out \
+              "$TAIRA_EVIDENCE_ROOT/provenance/expectation-installation.json"
+          cmp "$captured_norito" \
+            fixtures/privacy/native_release_expectations_v1.norito
+          cmp "$captured_json" \
+            fixtures/privacy/native_release_expectations_v1.json
+          cmp "$captured_resource_norito" \
+            fixtures/privacy/zk_x509_native_resource_v1.norito
+          cmp "$captured_resource_json" \
+            fixtures/privacy/zk_x509_native_resource_v1.json
+
+          final_source_sha="$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE" \
+              --write-path-list \
+                "$TAIRA_EVIDENCE_ROOT/provenance/workspace-source-paths-v1.bin"
+          )"
+          if [[ ! "$final_source_sha" =~ ^[0-9a-f]{64}$ ]] \
+            || [[ "$final_source_sha" = "$TAIRA_BOOTSTRAP_SOURCE_SHA256" ]]; then
+            echo "expectation installation did not establish a new source identity" >&2
+            exit 1
+          fi
+          printf '%s\n' "$final_source_sha" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/workspace-source-manifest.sha256"
+          sha256sum fixtures/privacy/native_release_expectations_v1.norito \
+            fixtures/privacy/native_release_expectations_v1.json \
+            fixtures/privacy/zk_x509_native_resource_v1.norito \
+            fixtures/privacy/zk_x509_native_resource_v1.json \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/installed-native-fixtures.sha256"
+          install -m 0444 \
+            crates/iroha_core/src/privacy_engines/zk_x509/profile.rs \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-profile.after.rs"
+          install -m 0444 \
+            crates/iroha_core/src/privacy_engines/zk_x509/profile/readiness_certificates.rs \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-readiness-certificates.after.rs"
+          pins_patch="$TAIRA_EVIDENCE_ROOT/provenance/native-capture-pins.patch"
+          if diff -u \
+            --label zk-x509-profile.before.rs \
+            --label zk-x509-profile.after.rs \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-profile.before.rs" \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-profile.after.rs" \
+            >"$pins_patch"; then
+            echo "expectation installation did not change the X509 profile" >&2
+            exit 1
+          else
+            diff_status="$?"
+            if [[ "$diff_status" != "1" ]]; then
+              echo "cannot render the exact expectation-pin patch" >&2
+              exit "$diff_status"
+            fi
+          fi
+          if diff -u \
+            --label zk-x509-readiness-certificates.before.rs \
+            --label zk-x509-readiness-certificates.after.rs \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-readiness-certificates.before.rs" \
+            "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-readiness-certificates.after.rs" \
+            >>"$pins_patch"; then
+            echo "installation did not change the X509 resource certificate pins" >&2
+            exit 1
+          else
+            diff_status="$?"
+            if [[ "$diff_status" != "1" ]]; then
+              echo "cannot render the exact resource-certificate pin patch" >&2
+              exit "$diff_status"
+            fi
+          fi
+          test -s "$pins_patch"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          echo "TAIRA_FINAL_SOURCE_SHA256=$final_source_sha" >>"$GITHUB_ENV"
+
+      - name: Verify feature separation and build fresh final binaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          final_target="$(
+            mktemp -d "${RUNNER_TEMP}/taira-privacy-final-target.XXXXXXXXXX"
+          )"
+          final_target="$(cd "$final_target" && pwd -P)"
+          validator_features="embedded-soracloud-runtime,zk-stark"
+          CARGO_TARGET_DIR="$final_target" \
+            cargo tree \
+              --locked \
+              -e features,no-dev \
+              -p irohad \
+              --features "$validator_features" \
+              -i iroha_core \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/irohad-iroha-core-feature-tree.txt"
+          if grep -F 'privacy-release-evidence' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/irohad-iroha-core-feature-tree.txt"; then
+            echo "irohad feature graph contains privacy-release-evidence" >&2
+            exit 1
+          fi
+          grep -F 'irohad feature "zk-stark"' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/irohad-iroha-core-feature-tree.txt"
+          grep -F 'iroha_core feature "zk-stark"' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/irohad-iroha-core-feature-tree.txt"
+
+          CARGO_TARGET_DIR="$final_target" \
+            cargo tree \
+              --locked \
+              -e features,no-dev \
+              -p iroha_test_network \
+              --features privacy-release-evidence \
+              -i iroha_core \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/runner-iroha-core-feature-tree.txt"
+          grep -F 'iroha_test_network feature "privacy-release-evidence"' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/runner-iroha-core-feature-tree.txt"
+          grep -F 'iroha_core feature "privacy-release-evidence"' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/runner-iroha-core-feature-tree.txt"
+
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=4 RUST_MIN_STACK=8388608 cargo test --locked --release -p iroha_core --lib --features privacy-release-evidence <post-install-x509-filter> -- --test-threads=1' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/post-install-x509-test-command.txt"
+          post_install_x509_filters=(
+            privacy_engines::zk_x509::profile
+            privacy_release_evidence::zk_x509::resource_certificate_tests
+            privacy_profiles::tests::zk_x509_compiled_activation_is_complete_and_immutable
+          )
+          post_install_x509_log_index=0
+          for post_install_x509_filter in "${post_install_x509_filters[@]}"; do
+            post_install_x509_log_index=$((post_install_x509_log_index + 1))
+            CARGO_TARGET_DIR="$final_target" \
+              CARGO_BUILD_JOBS=1 \
+              RAYON_NUM_THREADS=4 \
+              RUST_MIN_STACK=8388608 \
+              cargo test \
+                --locked \
+                --release \
+                -p iroha_core \
+                --lib \
+                --features privacy-release-evidence \
+                "$post_install_x509_filter" \
+                -- \
+                --test-threads=1 \
+              2>&1 | tee \
+                "$TAIRA_EVIDENCE_ROOT/provenance/post-install-x509-${post_install_x509_log_index}.log"
+          done
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=4 RUST_MIN_STACK=8388608 cargo test --locked --release -p iroha_test_network --bin taira_privacy_release_runner --features privacy-release-evidence -- --test-threads=1' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/post-install-runner-test-command.txt"
+          CARGO_TARGET_DIR="$final_target" \
+            CARGO_BUILD_JOBS=1 \
+            RAYON_NUM_THREADS=4 \
+            RUST_MIN_STACK=8388608 \
+            cargo test \
+              --locked \
+              --release \
+              -p iroha_test_network \
+              --bin taira_privacy_release_runner \
+              --features privacy-release-evidence \
+              -- \
+              --test-threads=1 \
+            2>&1 | tee \
+              "$TAIRA_EVIDENCE_ROOT/provenance/post-install-runner-tests.log"
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_FINAL_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 cargo build --locked --release -p irohad --bin irohad --features embedded-soracloud-runtime,zk-stark' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/final-irohad-build-command.txt"
+          CARGO_TARGET_DIR="$final_target" \
+            CARGO_BUILD_JOBS=1 \
+            cargo build \
+              --locked \
+              --release \
+              -p irohad \
+              --bin irohad \
+              --features "$validator_features" \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/final-irohad-build.log"
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 cargo rustc --locked --release -p iroha_test_network --bin taira_privacy_release_runner --features privacy-release-evidence -- -C target-feature=+crt-static' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/final-runner-build-command.txt"
+          CARGO_TARGET_DIR="$final_target" \
+            CARGO_BUILD_JOBS=1 \
+            cargo rustc \
+              --locked \
+              --release \
+              -p iroha_test_network \
+              --bin taira_privacy_release_runner \
+              --features privacy-release-evidence \
+              -- \
+              -C target-feature=+crt-static \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/final-runner-build.log"
+
+          final_runner="$final_target/release/taira_privacy_release_runner"
+          final_irohad="$final_target/release/irohad"
+          for binary in "$final_runner" "$final_irohad"; do
+            if [[ ! -x "$binary" || -L "$binary" ]] \
+              || [[ "$(stat -c '%h' "$binary")" != "1" ]]; then
+              echo "final binary is not a singly linked executable regular file: $binary" >&2
+              exit 1
+            fi
+          done
+          readelf --program-headers --wide "$final_runner" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/final-runner.program-headers.txt"
+          readelf --dynamic --wide "$final_runner" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/final-runner.dynamic.txt"
+          if grep -E '(^|[[:space:]])INTERP([[:space:]]|$)' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/final-runner.program-headers.txt"; then
+            echo "final privacy runner contains PT_INTERP" >&2
+            exit 1
+          fi
+          if grep -E '\(NEEDED\)' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/final-runner.dynamic.txt"; then
+            echo "final privacy runner contains DT_NEEDED" >&2
+            exit 1
+          fi
+          if grep -E \
+            '(^|[[:space:]])(LOAD|GNU_STACK).*(RWE|R[[:space:]]+W[[:space:]]+E)' \
+            "$TAIRA_EVIDENCE_ROOT/provenance/final-runner.program-headers.txt"; then
+            echo "final privacy runner contains a writable executable segment" >&2
+            exit 1
+          fi
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_FINAL_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          {
+            echo "TAIRA_FINAL_IROHAD=$final_irohad"
+            echo "TAIRA_FINAL_RUNNER=$final_runner"
+            echo "TAIRA_FINAL_TARGET=$final_target"
+          } >>"$GITHUB_ENV"
+
+      - name: Generate, verify, and independently reverify the final bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          native_dir="$TAIRA_EVIDENCE_ROOT/provenance/privacy-native"
+          command_norito="$native_dir/command-manifest-v1.norito"
+          command_json="$native_dir/command-manifest-v1.json"
+          stages_norito="$native_dir/stage-artifacts-v1.norito"
+          stages_json="$native_dir/stage-artifacts-v1.json"
+          receipt_norito="$native_dir/receipt-v1.norito"
+          receipt_json="$native_dir/receipt-v1.json"
+          common_args=(
+            --build-profile release
+            --source-sha256 "$TAIRA_FINAL_SOURCE_SHA256"
+            --exact12-matrix "$GITHUB_WORKSPACE/fixtures/privacy/exact12_v1.tsv"
+            --expectations-norito \
+              "$GITHUB_WORKSPACE/fixtures/privacy/native_release_expectations_v1.norito"
+            --expectations-json \
+              "$GITHUB_WORKSPACE/fixtures/privacy/native_release_expectations_v1.json"
+            --x509-resource-norito \
+              "$GITHUB_WORKSPACE/fixtures/privacy/zk_x509_native_resource_v1.norito"
+            --x509-resource-json \
+              "$GITHUB_WORKSPACE/fixtures/privacy/zk_x509_native_resource_v1.json"
+            --cargo-lock "$GITHUB_WORKSPACE/Cargo.lock"
+            --validator-binary "$TAIRA_FINAL_IROHAD"
+          )
+          "$TAIRA_FINAL_RUNNER" generate \
+            "${common_args[@]}" \
+            --command-manifest-norito-out "$command_norito" \
+            --command-manifest-json-out "$command_json" \
+            --stage-artifacts-norito-out "$stages_norito" \
+            --stage-artifacts-json-out "$stages_json" \
+            --receipt-norito-out "$receipt_norito" \
+            --receipt-json-out "$receipt_json" \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/generate.log"
+          for output in \
+            "$command_norito" \
+            "$command_json" \
+            "$stages_norito" \
+            "$stages_json" \
+            "$receipt_norito" \
+            "$receipt_json"; do
+            if [[ ! -s "$output" || -L "$output" ]] \
+              || [[ "$(stat -c '%h' "$output")" != "1" ]]; then
+              echo "runner did not emit one singly linked regular artifact: $output" >&2
+              exit 1
+            fi
+          done
+          "$TAIRA_FINAL_RUNNER" verify \
+            "${common_args[@]}" \
+            --command-manifest-norito "$command_norito" \
+            --command-manifest-json "$command_json" \
+            --stage-artifacts-norito "$stages_norito" \
+            --stage-artifacts-json "$stages_json" \
+            --receipt-norito "$receipt_norito" \
+            --receipt-json "$receipt_json" \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/verify.log"
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_FINAL_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+
+          install -m 0555 "$TAIRA_FINAL_RUNNER" \
+            "$TAIRA_EVIDENCE_ROOT/bin/taira_privacy_release_runner"
+          install -m 0555 "$TAIRA_FINAL_IROHAD" \
+            "$TAIRA_EVIDENCE_ROOT/bin/irohad"
+          install -m 0444 Cargo.lock \
+            "$TAIRA_EVIDENCE_ROOT/provenance/Cargo.lock"
+          install -m 0444 fixtures/privacy/exact12_v1.tsv \
+            "$native_dir/exact12-v1.tsv"
+          install -m 0444 \
+            fixtures/privacy/native_release_expectations_v1.norito \
+            "$native_dir/expectations-v1.norito"
+          install -m 0444 \
+            fixtures/privacy/native_release_expectations_v1.json \
+            "$native_dir/expectations-v1.json"
+          install -m 0444 \
+            fixtures/privacy/zk_x509_native_resource_v1.norito \
+            "$native_dir/zk-x509-resource-v1.norito"
+          install -m 0444 \
+            fixtures/privacy/zk_x509_native_resource_v1.json \
+            "$native_dir/zk-x509-resource-v1.json"
+
+          bundled_common_args=(
+            --build-profile release
+            --source-sha256 "$TAIRA_FINAL_SOURCE_SHA256"
+            --exact12-matrix "$native_dir/exact12-v1.tsv"
+            --expectations-norito "$native_dir/expectations-v1.norito"
+            --expectations-json "$native_dir/expectations-v1.json"
+            --x509-resource-norito "$native_dir/zk-x509-resource-v1.norito"
+            --x509-resource-json "$native_dir/zk-x509-resource-v1.json"
+            --cargo-lock "$TAIRA_EVIDENCE_ROOT/provenance/Cargo.lock"
+            --validator-binary "$TAIRA_EVIDENCE_ROOT/bin/irohad"
+          )
+          "$TAIRA_EVIDENCE_ROOT/bin/taira_privacy_release_runner" verify \
+            "${bundled_common_args[@]}" \
+            --command-manifest-norito "$command_norito" \
+            --command-manifest-json "$command_json" \
+            --stage-artifacts-norito "$stages_norito" \
+            --stage-artifacts-json "$stages_json" \
+            --receipt-norito "$receipt_norito" \
+            --receipt-json "$receipt_json" \
+            2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/bundled-verify.log"
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_FINAL_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+
+      - name: Package complete provenance
+        id: package
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          for component in \
+            provenance.json \
+            tracked.patch \
+            untracked.tar \
+            untracked.manifest.json \
+            source.manifest.json; do
+            install -m 0444 \
+              "$TAIRA_DPN_SOURCE_BUNDLE/$component" \
+              "$TAIRA_EVIDENCE_ROOT/provenance/source-bundle/$component"
+          done
+          install -m 0444 "$TAIRA_DPN_RELEASE_ROOT/iroha_source_bundle.py" \
+            "$TAIRA_EVIDENCE_ROOT/provenance/source-bundle/iroha_source_bundle.py"
+
+          python3 -I -S - "$TAIRA_EVIDENCE_ROOT" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path(sys.argv[1])
+
+          def digest(path: Path) -> str:
+              hasher = hashlib.sha256()
+              with path.open("rb") as source:
+                  while chunk := source.read(1024 * 1024):
+                      hasher.update(chunk)
+              return hasher.hexdigest()
+
+          def required_sha(name: str) -> str:
+              value = os.environ[name]
+              if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                  raise SystemExit(f"{name} is not a canonical SHA-256")
+              return value
+
+          def write_create_new(path: Path, encoded: bytes) -> None:
+              flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+              if hasattr(os, "O_NOFOLLOW"):
+                  flags |= os.O_NOFOLLOW
+              descriptor = os.open(path, flags, 0o600)
+              try:
+                  with os.fdopen(descriptor, "wb") as stream:
+                      stream.write(encoded)
+                      stream.flush()
+                      os.fsync(stream.fileno())
+              except BaseException:
+                  path.unlink(missing_ok=True)
+                  raise
+
+          invocation = {
+              "schema": "iroha.taira.privacy-native-evidence-invocation.v1",
+              "repository": os.environ["REPOSITORY"],
+              "workflow_ref": os.environ["WORKFLOW_REF"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "source_commit": os.environ["TAIRA_INPUT_EXPECTED_COMMIT"],
+              "dpn_validator_release_ref": os.environ[
+                  "TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+              ],
+              "dpn_source_tree_sha256": required_sha(
+                  "TAIRA_INPUT_SOURCE_TREE_SHA256"
+              ),
+              "cargo_lock_sha256": required_sha("TAIRA_INPUT_LOCK_SHA256"),
+              "exact12_sha256": required_sha("TAIRA_INPUT_EXACT12_SHA256"),
+              "workspace_source_manifest_before_expectations_sha256": required_sha(
+                  "TAIRA_BOOTSTRAP_SOURCE_SHA256"
+              ),
+              "workspace_source_manifest_final_sha256": required_sha(
+                  "TAIRA_FINAL_SOURCE_SHA256"
+              ),
+              "generic_capture_ceilings": {
+                  "elapsed_millis": os.environ["TAIRA_INPUT_ELAPSED_CEILING_MS"],
+                  "peak_rss_bytes": os.environ[
+                      "TAIRA_INPUT_PEAK_RSS_CEILING_BYTES"
+                  ],
+                  "address_space_bytes": os.environ[
+                      "TAIRA_INPUT_ADDRESS_SPACE_CEILING_BYTES"
+                  ],
+              },
+              "expectations_norito_sha256": digest(
+                  root / "provenance/privacy-native/expectations-v1.norito"
+              ),
+              "expectations_json_sha256": digest(
+                  root / "provenance/privacy-native/expectations-v1.json"
+              ),
+              "x509_resource_norito_sha256": digest(
+                  root / "provenance/privacy-native/zk-x509-resource-v1.norito"
+              ),
+              "x509_resource_json_sha256": digest(
+                  root / "provenance/privacy-native/zk-x509-resource-v1.json"
+              ),
+              "bootstrap_runner_sha256": digest(
+                  root / "provenance/bootstrap-runner.elf"
+              ),
+              "runner_sha256": digest(
+                  root / "bin/taira_privacy_release_runner"
+              ),
+              "irohad_sha256": digest(root / "bin/irohad"),
+              "generate_passed": True,
+              "verify_passed": True,
+              "bundled_verify_passed": True,
+              "published": False,
+              "deployed": False,
+          }
+          write_create_new(
+              root / "provenance/invocation.json",
+              (
+                  json.dumps(invocation, indent=2, sort_keys=True) + "\n"
+              ).encode("utf-8"),
+          )
+
+          links = [path for path in root.rglob("*") if path.is_symlink()]
+          if links:
+              raise SystemExit(
+                  "provenance contains forbidden symlinks: "
+                  + ", ".join(str(path) for path in links)
+              )
+          files = sorted(
+              path
+              for path in root.rglob("*")
+              if path.is_file() and path.name != "SHA256SUMS"
+          )
+          if not files:
+              raise SystemExit("native privacy provenance is empty")
+          for path in files:
+              metadata = path.stat()
+              if metadata.st_nlink != 1:
+                  raise SystemExit(
+                      f"provenance file is multiply linked: {path}"
+                  )
+          checksum_path = root / "provenance/SHA256SUMS"
+          write_create_new(
+              checksum_path,
+              "".join(
+                  f"{digest(path)}  {path.relative_to(root).as_posix()}\n"
+                  for path in files
+              ).encode("utf-8"),
+          )
+          PY
+
+          (
+            cd "$TAIRA_EVIDENCE_ROOT"
+            sha256sum -c provenance/SHA256SUMS
+          )
+          bundle_base="taira-privacy-native-${TAIRA_INPUT_EXPECTED_COMMIT}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          archive_root="$(
+            mktemp -d "${RUNNER_TEMP}/taira-privacy-native-archive.XXXXXXXXXX"
+          )"
+          archive_root="$(cd "$archive_root" && pwd -P)"
+          bundle="$archive_root/${bundle_base}.tar.gz"
+          checksum="${bundle}.sha256"
+          if [[ -e "$bundle" || -L "$bundle" \
+            || -e "$checksum" || -L "$checksum" ]]; then
+            echo "native evidence archive output already exists" >&2
+            exit 1
+          fi
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$TAIRA_EVIDENCE_ROOT" \
+            -czf "$bundle" \
+            .
+          bundle_sha="$(sha256sum "$bundle" | awk '{print $1}')"
+          printf '%s  %s\n' "$bundle_sha" "$(basename "$bundle")" >"$checksum"
+          echo "bundle=$bundle" >>"$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >>"$GITHUB_OUTPUT"
+
+      - name: Upload the non-publishing native evidence archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-privacy-native-${{ inputs.expected_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.package.outputs.bundle }}
+            ${{ steps.package.outputs.checksum }}
+          compression-level: 0
+          if-no-files-found: error

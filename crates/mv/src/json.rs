@@ -406,11 +406,13 @@ where
             return Err(json::Error::Message("expected object for `blocks`".into()));
         };
 
-        let mut entries = Vec::with_capacity(map.len());
+        let mut entries = BTreeMap::new();
         for (key_str, raw_value) in map.into_iter() {
             let key = self.kseed.parse_key(&key_str)?;
-            let value = self.vseed.parse_value(raw_value.clone())?;
-            entries.push((key, value));
+            let value = self.vseed.parse_value(raw_value)?;
+            if entries.insert(key, value).is_some() {
+                return Err(json::Error::DuplicateField { field: key_str });
+            }
         }
         Ok(BptreeMap::from_iter(entries))
     }

@@ -13,9 +13,9 @@
 //! per-slot equality is also enforced; correctness therefore does not depend
 //! on a probabilistic permutation argument.
 //!
-//! This module remains inactive until the aggregate zk-X509 proof commits the
-//! arithmetic trace and all 128 window traces before sampling these
-//! challenges.
+//! The aggregate zk-X509 proof commits the arithmetic trace and all 128 window
+//! traces before sampling these challenges; this bus has no standalone
+//! activation path.
 
 use thiserror::Error;
 
@@ -31,8 +31,8 @@ use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 
-/// Stable descriptor for the inactive first-release scalar-bit copy bus.
-pub(crate) const ZK_X509_P256_SCALAR_BIT_BUS_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-scalar-bit-bus-v2-incompatible:two-verifier-fixed-scalars-u1-then-u2:64-big-endian-four-bit-windows-per-scalar:pointwise-map-to-little-endian-c-limb-bits:scalar-field-c-operations-distinct:deterministic-bit-equality:four-post-arithmetic-and-window-commitment-products:scalar-window-bit-value-tuples:three-factors-per-physical-row:one-canonical-inactive-factor:256-row-canonical-padding:aggregate-base6:aux32:verifier-fixed16:constraints67-degree3:source-side-terminal-binding-required:activation=false";
+/// Stable descriptor for the aggregate-only first-release scalar-bit copy bus.
+pub(crate) const ZK_X509_P256_SCALAR_BIT_BUS_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-scalar-bit-bus-v2-incompatible:two-verifier-fixed-scalars-u1-then-u2:64-big-endian-four-bit-windows-per-scalar:pointwise-map-to-little-endian-c-limb-bits:scalar-field-c-operations-distinct:deterministic-bit-equality:four-post-arithmetic-and-window-commitment-products:scalar-window-bit-value-tuples:three-factors-per-physical-row:one-canonical-inactive-factor:256-row-canonical-padding:aggregate-base6:aux32:verifier-fixed16:constraints67-degree3:source-side-terminal-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
 /// Independent tuple-product lanes.
 pub(crate) const P256_SCALAR_BIT_BUS_LANES_V1: usize = 4;
@@ -2576,8 +2576,10 @@ mod tests {
         );
         assert!(
             ZK_X509_P256_SCALAR_BIT_BUS_DESCRIPTOR_V1
-                .windows(b"source-side-terminal-binding-required".len())
-                .any(|window| window == b"source-side-terminal-binding-required"),
+                .windows(b"source-side-terminal-binding=complete-via-p256-aggregate-adapter".len())
+                .any(|window| {
+                    window == b"source-side-terminal-binding=complete-via-p256-aggregate-adapter"
+                }),
         );
     }
 

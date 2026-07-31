@@ -149,9 +149,12 @@ publication and issuer rotation:
 - `soranet-directory build --config snapshots/mainnet.json --out out/guard_snapshot.norito`
   verifies every SRCv2 certificate bundle against the supplied issuer keys,
   enforces directory hash/validity invariants, and emits a Norito-encoded
-  `GuardDirectorySnapshotV2`. The JSON config accepts issuer lists (Ed25519 +
-  optional ML-DSA) and bundle paths. The builder prints the domain-separated
-  BLAKE3 digest of the exact snapshot bytes alongside fingerprint metadata.
+  `GuardDirectorySnapshotV2`. The JSON config requires both Ed25519 and
+  ML-DSA-65 issuer keys and bundle paths. The builder always emits the
+  first-release Phase 3 policy and rejects any certificate missing either
+  signature; there is no configuration downgrade. The builder prints the
+  domain-separated BLAKE3 digest of the exact snapshot bytes alongside
+  fingerprint metadata.
   Governance must distribute that snapshot digest through a channel independent
   of the snapshot host; relay and client runtimes fail closed unless the
   configured digest matches.
@@ -176,6 +179,8 @@ publication and issuer rotation:
   fingerprint, signatures, and optional key material stored on disk. The command
   writes Ed25519/ML-DSA secrets to `--keys-out` so the governance committee can
   enrol the new issuer in hardware security modules before activation.
+  Rotation rejects snapshots carrying a pre-release single/prefer-dual policy
+  instead of preserving a weaker validation phase.
 - `soranet-directory inspect --snapshot guard_snapshot.norito` renders snapshot
   metadata (exact snapshot digest, fingerprints, validity windows, relay stats)
   to simplify guard directory audits. This is structural inspection against

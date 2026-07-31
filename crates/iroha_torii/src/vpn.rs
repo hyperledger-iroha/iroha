@@ -1390,9 +1390,9 @@ pub(crate) async fn handle_create_vpn_quote(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Response, Error> {
+    let account_id = require_signed_request(&app, headers, method, uri, body)?;
     let request: VpnQuoteCreateRequestDto = norito::json::from_slice(body)
         .map_err(|err| conversion_error(format!("invalid vpn quote create payload: {err}")))?;
-    let account_id = require_signed_request(&app, headers, method, uri, body)?;
     let dto = app.kiso.get_dto().await?;
     let profile = build_profile(&dto);
     if !profile.available {
@@ -1470,9 +1470,9 @@ pub(crate) async fn handle_create_vpn_session(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Response, Error> {
+    let account_id = require_signed_request(&app, headers, method, uri, body)?;
     let request: VpnSessionCreateRequestDto = norito::json::from_slice(body)
         .map_err(|err| conversion_error(format!("invalid vpn session create payload: {err}")))?;
-    let account_id = require_signed_request(&app, headers, method, uri, body)?;
     let dto = app.kiso.get_dto().await?;
     let profile = build_profile(&dto);
     if !profile.available {
@@ -1653,9 +1653,9 @@ pub(crate) async fn handle_submit_vpn_receipt(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Response, Error> {
+    let signed_account = require_signed_request(&app, headers, method, uri, body)?;
     let request: VpnReceiptSubmitRequestDto = norito::json::from_slice(body)
         .map_err(|err| conversion_error(format!("invalid vpn receipt payload: {err}")))?;
-    let signed_account = require_signed_request(&app, headers, method, uri, body)?;
     let relay_receipt: VpnSessionReceiptV1 =
         decode_norito_hex(&request.relay_receipt_hex, "relay_receipt_hex")?;
     let voucher: VpnUsageVoucherV1 =
@@ -2393,7 +2393,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vpn_request_handlers_reject_unknown_json_fields_before_auth() {
+    async fn vpn_request_handlers_reject_unknown_json_fields_after_auth() {
         fn assert_unknown_field(error: Error, payload_label: &str) {
             let message = format!("{error:?}");
             assert!(
@@ -2406,62 +2406,79 @@ mod tests {
             );
         }
 
-        let account = checked_vpn_account(0x5C);
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = checked_vpn_ed25519_keypair(0x5C);
+        let account = account_id_for(&key_pair);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let method = Method::POST;
-        let headers = HeaderMap::new();
 
         let quote_uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
-        let quote_error = handle_create_vpn_quote(
-            app.clone(),
-            &method,
-            &quote_uri,
-            &headers,
-            br#"{"metering_public_key_hex":"","unexpected":true}"#,
-        )
-        .await
-        .expect_err("unknown quote field must fail before auth");
+        let quote_body = br#"{"metering_public_key_hex":"","unexpected":true}"#;
+        let quote_headers =
+            signed_app_headers(&account, &key_pair, &method, &quote_uri, quote_body);
+        let quote_error =
+            handle_create_vpn_quote(app.clone(), &method, &quote_uri, &quote_headers, quote_body)
+                .await
+                .expect_err("unknown quote field must fail after auth");
         assert_unknown_field(quote_error, "invalid vpn quote create payload");
 
         let session_uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let session_body =
+            br#"{"quote_id":"","payment_tx_hash":"","metering_public_key_hex":"","unexpected":true}"#;
+        let session_headers =
+            signed_app_headers(&account, &key_pair, &method, &session_uri, session_body);
         let session_error = handle_create_vpn_session(
             app.clone(),
             &method,
             &session_uri,
-            &headers,
-            br#"{"quote_id":"","payment_tx_hash":"","metering_public_key_hex":"","unexpected":true}"#,
+            &session_headers,
+            session_body,
         )
         .await
-        .expect_err("unknown session field must fail before auth");
+        .expect_err("unknown session field must fail after auth");
         assert_unknown_field(session_error, "invalid vpn session create payload");
 
         let receipt_uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
-        let receipt_error = handle_submit_vpn_receipt(
-            app,
-            &method,
-            &receipt_uri,
-            &headers,
-            br#"{"relay_receipt_hex":"","client_voucher_hex":"","unexpected":true}"#,
-        )
-        .await
-        .expect_err("unknown receipt field must fail before auth");
+        let receipt_body = br#"{"relay_receipt_hex":"","client_voucher_hex":"","unexpected":true}"#;
+        let receipt_headers =
+            signed_app_headers(&account, &key_pair, &method, &receipt_uri, receipt_body);
+        let receipt_error =
+            handle_submit_vpn_receipt(app, &method, &receipt_uri, &receipt_headers, receipt_body)
+                .await
+                .expect_err("unknown receipt field must fail after auth");
         assert_unknown_field(receipt_error, "invalid vpn receipt payload");
     }
 
     #[tokio::test]
-    async fn create_vpn_quote_rejects_malformed_json_payload_before_auth() {
+    async fn vpn_write_handlers_authenticate_before_parsing_malformed_json() {
         let account = checked_vpn_account(0x5C);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let method = Method::POST;
-        let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
         let headers = HeaderMap::new();
         let body = b"{not valid json";
 
-        let error = handle_create_vpn_quote(app, &method, &uri, &headers, body)
+        let quote_uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
+        let quote_error = handle_create_vpn_quote(app.clone(), &method, &quote_uri, &headers, body)
             .await
-            .expect_err("malformed quote json must fail before auth");
+            .expect_err("missing quote authentication must win over malformed JSON");
 
-        assert!(format!("{error:?}").contains("invalid vpn quote create payload"));
+        let session_uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let session_error =
+            handle_create_vpn_session(app.clone(), &method, &session_uri, &headers, body)
+                .await
+                .expect_err("missing session authentication must win over malformed JSON");
+
+        let receipt_uri: Uri = "/v1/vpn/receipts".parse().expect("receipt uri");
+        let receipt_error = handle_submit_vpn_receipt(app, &method, &receipt_uri, &headers, body)
+            .await
+            .expect_err("missing receipt authentication must win over malformed JSON");
+
+        for error in [quote_error, session_error, receipt_error] {
+            assert!(
+                format!("{error:?}").contains("signed account headers are required"),
+                "authentication must precede JSON parsing: {error:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2484,22 +2501,6 @@ mod tests {
             .expect_err("bad metering key must fail");
 
         assert!(format!("{error:?}").contains("metering_public_key_hex"));
-    }
-
-    #[tokio::test]
-    async fn create_vpn_session_rejects_malformed_json_payload_before_auth() {
-        let account = checked_vpn_account(0x5E);
-        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
-        let method = Method::POST;
-        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
-        let headers = HeaderMap::new();
-        let body = b"{not valid json";
-
-        let error = handle_create_vpn_session(app, &method, &uri, &headers, body)
-            .await
-            .expect_err("malformed session json must fail before auth");
-
-        assert!(format!("{error:?}").contains("invalid vpn session create payload"));
     }
 
     #[tokio::test]
@@ -3704,23 +3705,6 @@ mod tests {
             "client_voucher_hex is not valid Norito",
         )
         .await;
-    }
-
-    #[tokio::test]
-    async fn submit_vpn_receipt_rejects_malformed_json_payload_before_auth() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let account = checked_vpn_account(0x7C);
-        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
-        let method = Method::POST;
-        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
-        let headers = HeaderMap::new();
-        let body = b"{not valid json";
-
-        let error = handle_submit_vpn_receipt(app, &method, &uri, &headers, body)
-            .await
-            .expect_err("malformed json must fail before receipt decoding");
-
-        assert!(format!("{error:?}").contains("invalid vpn receipt payload"));
     }
 
     #[tokio::test]

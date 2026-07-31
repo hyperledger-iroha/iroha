@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` གིས་ ད་ལྟོ་ལག་ལེན་འཐབ་ཡོད་པའི་ ༤༨ བཱའིཊི་ས་ཚིགས་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན།
-  `iroha_crypto::kzg`. Merkle lanes གིས་སྟོངམ་སྦེ་བཞགཔ་ཨིན། ད་ལྟ་`kzg_bls12_381` ལམ།
-  ཆུང་ཆུང་རྩ་དང་ ལས་བྱུང་བའི་ གཏན་འབེབས་ BLAKE3-XOF ཁས་བླངས་ དང་།
-  བསག་བཞག་གི་ཤོག་འཛིན་འདི་ ཕྱིའི་དཔེ་རིས་མེད་པར་ ཧ་ཤེ་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་སྡོད།
-- `proof_scheme` འདི་ ལམ་གྱི་ཐོ་གཞུང་ལས་ འབྱུང་ཡོདཔ་ཨིན། Merkle lanes གིས་ ཐང་ཆེན་ KZG ལུ་བཀག་ཆ་འབད་ཡོདཔ།
-  `kzg_bls12_381` ལམ་ཚུ་ལུ་ ཀེ་ཛེ་ཇི་མེན་པའི་ཁས་བླངས་ཚུ་དགོཔ་ཨིན།
-- `proof_digest` DA-5 PDP/PoTR མཉམ་བསྡོམས་ཚོད་དཔག་འབདཝ་ལས་ དྲན་ཐོ་གཅིག་པ་དེ་ཨིན།
-  བརྡ་རྟགས་ཚུ་ ཐད་རི་བ་རི་སྦེ་བཞག་ནི་གི་དོན་ལུ་ དཔེ་ཚད་ཀྱི་ལས་རིམ་འདི་ གྲངས་སུ་བཙུགས་དོ་ཡོདཔ་ཨིན།
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### ༡.༢ སྡེབ་ཚན་མགོ་ཡིག་རྒྱ་བསྐྱེད་པ།
 
@@ -126,12 +120,7 @@ b to Torii ཐགསཔ་ཚུ་ ངོ་མ་སྦེ་ བསྡམས�
    `SignedBlockWire`; བད་ཀན་གྱི་བང་སྒྲིག བྱུང་འཛིན་འོད་རྟགས་ (ཆུ་བཏང་ཡོད།
    ཀུ་ར་ལས་ ལོག་འགོ་བཙུགས་པའི་སྐབས་) དང་) དང་ པྲུན་གྱི་ ཕོརཔ་གི་ཐོ་བཀོད་ཚུ་ ཌིཀསི་འཕེལ་རྒྱས་འགྱོཝ་ཨིན།
 
-བཀག་ཆ་བསྡུ་སྒྲིག་དང་ Norito བཙུགས་མི་འདི་གིས་ ཁས་བླངས་རེ་རེ་ལུ་ ཁས་བླངས་རེ་རེ་ལུ་ བདེན་བཤད་འབདཝ་ཨིན།
-ལམ་གྱི་ཐོ་གཞུང་: མར་ཀལ་གྱི་ལམ་གྱིས་ ཀེ་ཛེ་ཇི་ཁས་བླངས་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ཀེ་ཛེ་ཇི་ལམ་ཚུ་ དགོཔ་ཨིན།
-ཀླད་ཀོར་མེད་པའི་ཀེ་ཛེ་ཇི་ཁས་བླངས་དང་ ཀླད་ཀོར་མིན་པའི་ `chunk_root` དང་མ་ཤེས་པའི་ལམ་ནི།
-འབུད་ནི། Torii’s `/v1/da/commitments/verify` མཐའ་མའི་མེ་ལོང་འདི་ བཀག་འཛིན་གཅིག་པའི་མེ་ལོང་།
-ད་ལྟ་ བླངས་ཏེ་ ད་ལྟ་ གཏན་འབེབས་ ཀེ་ཛེ་ཇི་ ཁས་བླངས་ རེ་རེ་བཞིན་ ནང་ ཐག་གཅོད་འབདཝ་ཨིན།
-`kzg_bls12_381` དྲན་ཐོ་ དེ་འབདཝ་ལས་ སྲིད་བྱུས་-བསྟར་སྤྱོད་འབད་མི་ བཱན་ཌི་ཚུ་ སྡེབ་ཚན་ཚོགས་སྡེ་ལུ་ལྷོདཔ་ཨིན།
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་ཚུ་ འཆར་གཞི་འདི་ འབྱུང་ཁུངས་སྦེ་ གཉིས་ལྡབ་སྦེ་ གཉིས་ལྡབ་སྦེ་ གཉིས་ལྡབ་སྦེ་ འབདཝ་ཨིན།
 བདེན་པ་དམ་ཚིག་བརྩམས་པའི་དོན་ལུ་ཨིན། Torii བརྟག་དཔྱད།
@@ -210,9 +199,7 @@ WSV གིས་ `manifest_hash` གིས་ ལྡེ་མིག་བརྐ�
 
 ## དྲི་བ་ཁ་ཕྱེ།
 
-1. **KZG vs Merkle freectis** — བླམ་ཆུང་ཆུང་ཚུ་གིས་ དུས་རྒྱུན་དུ་ KZG ཁས་བླངས་ཚུ་ ལུ་ མ་བཏང་དགོ།
-   སྡེབ་ཚན་གྱི་ཚད་འདི་མར་ཕབ་འབད? གྲོས་འཆར་: `kzg_commitment` གདམ་ཁའི་ཅན་དང་ བརྒྱུད་དེ་སྒོ་བསྡམས།
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Sequence fives** — ང་བཅས་ཀྱིས་ གོ་རིམ་མེད་པའི་ལམ་ཚུ་ འབད་བཅུག་དོ་ག? ད་ལྟའི་འཆར་གཞི་གིས་ བར་སྟོང་ཚུ་ ཆ་མེད་བཏངམ་ཨིན།
    གློ་བུར་གྱི་བསྐྱར་རྩེད་ཀྱི་དོན་ལུ་ `allow_sequence_skips` ལུ་ སོར་བསྒྱུར་མ་འབད་བ་ཅིན།
 3. **Light-client འདྲ་མཛོད་** — SDK སྡེ་ཚན་གྱིས་ ལྗིད་ཚད་མར་ཕབ་ཀྱི་ SQLite འདྲ་མཛོད་ཅིག་ 2 for for 20

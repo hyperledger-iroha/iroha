@@ -7,7 +7,7 @@ fn schedule_hash_matches_expected_digest() {
     let digest = ivm::gas::schedule_hash();
     // Blake2b-32 over the canonical opcode/host/numeric schedule descriptor,
     // with the LSB set per `iroha_crypto::Hash`.
-    let expected = hex!("9c8a345eed5f6a1c24f6c7528eb2964a0c8dc494ed61614d6a103de42a368691");
+    let expected = hex!("d583955ec535a24606f90d619461b9cb63c3c39aa4434c72d96690a71a593a8b");
     assert_eq!(digest.as_ref(), &expected);
 }
 

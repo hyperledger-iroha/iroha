@@ -210,6 +210,31 @@ impl PqMaspInputWitnessV1 {
     pub const fn authentication_path(&self) -> &[[u8; 32]; PQ_MASP_TREE_DEPTH_V1] {
         &self.authentication_path
     }
+
+    /// Derive the public commitment opened by this input witness.
+    pub fn commitment_v1(
+        &self,
+        statement: &PqMaspStarkStatementV1,
+    ) -> Result<PrivacyCommitmentV1, PqMaspRelationErrorV1> {
+        derive_pq_masp_note_commitment_v1(statement, &self.note)
+    }
+
+    /// Derive the stable public nullifier for this input and pool.
+    ///
+    /// The nullifier secret remains encapsulated by the redacted witness and
+    /// is never returned to wallet adapters.
+    pub fn nullifier_v1(
+        &self,
+        statement: &PqMaspStarkStatementV1,
+    ) -> Result<PrivacyNullifierV1, PqMaspRelationErrorV1> {
+        let commitment = self.commitment_v1(statement)?;
+        derive_pq_masp_nullifier_v1(
+            statement,
+            &self.nullifier_secret,
+            self.note.rho(),
+            commitment,
+        )
+    }
 }
 
 impl fmt::Debug for PqMaspInputWitnessV1 {

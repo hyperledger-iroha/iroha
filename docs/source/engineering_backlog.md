@@ -9532,9 +9532,10 @@ redistributable schemas, and official trust/revocation bundles.
     and `cargo clippy -p iroha_torii --no-default-features --features connect --all-targets -- -D warnings`.
     App-only route helpers, proof-record reads, hosted HTTP proxy fallbacks,
     integration tests, the attachment sanitizer binary, and hot-path bench now
-    sit behind `app_api`/required-feature gates, while core ZK roots, verify,
-    submit-proof, and vote-tally DTOs and handlers remain exported without
-    `app_api`.
+    sit behind `app_api`/required-feature gates, while core ZK roots and
+    vote-tally DTOs and handlers remain exported without `app_api`. The
+    pre-release decode-only `verify` and `submit-proof` routes were subsequently
+    removed because they could be mistaken for authoritative proof acceptance.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - P2P session claims, hashed token storage, focused Rust checks, JavaScript

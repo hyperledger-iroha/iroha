@@ -104,8 +104,7 @@ expected = (
     b"target_abi=CPython-abi3-3.9\n"
     b"shared=true\n"
     b"build_flags=\n"
-    b"suppress_build_script_link_lines=false\n"
-    b"pointer_width=64"
+    b"suppress_build_script_link_lines=false"
 )
 target = Path(sys.argv[1])
 path = Path(sys.argv[2])

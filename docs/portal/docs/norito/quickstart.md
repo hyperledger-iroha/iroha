@@ -15,6 +15,7 @@ From the repository root:
 ```sh
 cargo build -p ivm --bin koto
 cargo build -p iroha_cli --bin iroha
+cargo build -p iroha_kagami --bin kagami
 export PATH="$PWD/target/debug:$PATH"
 ```
 
@@ -85,12 +86,18 @@ V1 has no implicit `main` or source-order dispatch.
 The repository includes a Docker Compose development bundle:
 
 ```sh
+kagami keys --out-dir target/quickstart/genesis-keys
+
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/quickstart/genesis-keys/public.key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/quickstart/genesis-keys/private.key"
 docker compose -f defaults/docker-compose.single.yml up --build
 ```
 
 Keep it running while using the commands below. Release and integration
 validation uses representative four-validator networks; this single-node
-bundle is only a local authoring convenience.
+bundle is only a local authoring convenience. The Compose file contains no
+genesis signing secret and refuses to evaluate unless both runtime key-file
+paths are set; never commit the generated private file.
 
 ## 5. Deploy and call
 

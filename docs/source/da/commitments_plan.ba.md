@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` 2012 йылда ҡулланылған ғәмәлдәге 48-байтлы нөктәне ҡабаттан файҙалана.
-  `iroha_crypto::kzg`. Меркл һыҙаттары уны буш ҡалдыра; Norito һыҙаттары хәҙер
-  детерминистик BLAKE3-XOF йөкләмәһен алыу өсөн алынған өлөшө тамыр һәм
-  һаҡлау билет шулай блок хештар тотороҡло ҡала тышҡы иҫбатлаусыһыҙ.
-- `proof_scheme` һыҙат каталогынан алынған; Меркл һыҙаттары кире ҡағыу КЗГ-ны кире ҡаға.
-  файҙалы йөктәр, ә `kzg_bls12_381` һыҙаттары нульдән тыш КЗГ йөкләмәләрен талап итә.
-- `proof_digest` DA-5 PDP/PoTR интеграцияһын күҙаллай, шуға күрә шул уҡ яҙма
-  блобтарҙы тура эфирҙа тотоу өсөн ҡулланылған үлсәүҙәр графигын иҫәпкә ала.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Блок башлыҡ оҙайтыу
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`; ҡылған өйөмдәр квитанция курсорҙарын алға ебәрә (гидрат
    Ҡуранан перезапуск өҫтөндә) һәм өҙөү иҫке катушка яҙмалары диск үҫеше бәйләнгән.
 
-Блок йыйыу һәм `BlockCreated` ингестия ҡаршы һәр йөкләмәне раҫлай ҡаршы .
-һыҙат каталогы: Меркл һыҙаттары кире ҡағыу страдать KZG йөкләмәләр, KZG һыҙаттары талап итә
-нуль булмаған КЗГ йөкләмәһе һәм нуль булмаған `chunk_root`, ә билдәһеҙ һыҙаттар.
-ташлаған. Norito’s `/v1/da/commitments/verify` ос нөктәһе шул уҡ һаҡсы көҙгө,
-һәм хәҙер ептәр ептәре детерминистик КЗГ йөкләмәһен һәр береһе
-`kzg_bls12_381` рекорд шулай сәйәсәткә ярашлы өйөмдәр блок йыйыу етә.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 ингест планында һүрәтләнгән асыҡ ҡоролмалар икеләтә сығанаҡ булараҡ
 хәҡиҡәт өсөн йөкләмә өйөмө. Torii тесты
@@ -210,9 +199,7 @@ WSV һаҡлау йөкләмәләрен махсус рубрика ғаилә
 
 ## Асыҡ һорауҙар .
 
-1. **КЗГ vs Меркл ғәҙәттәгесә ** — Әгәр ҙә бәләкәй генә таптар һәр ваҡыт KZG йөкләмәләрен үткәрергә тейеш.
-   блок күләмен кәметергә? Тәҡдим: `kzg_commitment` опциональ һәм ҡапҡа аша һаҡлау
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Эҙмә-эҙлеклелек айырмаһы** — Беҙ рөхсәт итеү тыш-заказдан һыҙаттар? Ағымдағы план етешһеҙлектәрҙе кире ҡаға.
    әгәр идара итеү `allow_sequence_skips` ғәҙәттән тыш реплей өсөн үҙгәртергә.
 3. **Яҡтылыҡ-клиент кэш** — SDK командаһы өсөн еңел SQLite кэш һораған .

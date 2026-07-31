@@ -17,6 +17,8 @@ PRIVACY_RELEASE_RUNNER_BIN="taira_privacy_release_runner"
 PRIVACY_EXACT12_MATRIX="${REPO_ROOT}/fixtures/privacy/exact12_v1.tsv"
 PRIVACY_EXPECTATIONS_NORITO="${REPO_ROOT}/fixtures/privacy/native_release_expectations_v1.norito"
 PRIVACY_EXPECTATIONS_JSON="${REPO_ROOT}/fixtures/privacy/native_release_expectations_v1.json"
+PRIVACY_X509_RESOURCE_NORITO="${REPO_ROOT}/fixtures/privacy/zk_x509_native_resource_v1.norito"
+PRIVACY_X509_RESOURCE_JSON="${REPO_ROOT}/fixtures/privacy/zk_x509_native_resource_v1.json"
 WORKSPACE_SOURCE_MANIFEST_SCRIPT="${REPO_ROOT}/scripts/compute_workspace_source_manifest.py"
 TAIRA_RELEASE_AUTHORITY_SCRIPT="${REPO_ROOT}/scripts/taira_release_authority.py"
 RELEASE_ARTIFACT_CONTRACT_SCRIPT="${REPO_ROOT}/scripts/release_artifact_contract.py"
@@ -54,7 +56,8 @@ The bundle contains:
   - `sorafs_manifest_builder` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the feature-separated `taira_privacy_release_runner`
   - authoritative native-privacy receipt, command-manifest, stage-artifact,
-    and frozen-expectation Norito files with deterministic JSON projections
+    frozen-expectation, and X.509 native-resource-certificate Norito files
+    with deterministic JSON projections
   - the checked-in `configs/soranexus/taira/` operator bundle
   - `scripts/render_taira_validator_bundle.py`
   - `scripts/render_taira_edge_nginx_conf.py`
@@ -219,6 +222,23 @@ if [[ "$PROFILE" == "release" ]]; then
   require_canonical_release_digest \
     "Taira trusted native release-manifest verifier SHA-256" \
     "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+fi
+
+if [[ "$(uname -s)" != "Linux" ]]; then
+  echo "Taira privacy release evidence must be built natively on Linux" >&2
+  exit 1
+fi
+case "$(uname -m)" in
+  x86_64|aarch64)
+    ;;
+  *)
+    echo "Taira privacy release evidence supports only native Linux x86_64 or aarch64" >&2
+    exit 1
+    ;;
+esac
+if ! command -v readelf >/dev/null 2>&1; then
+  echo "readelf is required to attest the static Taira privacy release runner" >&2
+  exit 1
 fi
 
 python3 - "${SCRIPT_DIR}/config.toml" <<'PY'
@@ -428,8 +448,11 @@ for release_input in \
   "$RELEASE_CHECKSUM_WRITER" \
   "$PRIVACY_EXACT12_MATRIX" \
   "$PRIVACY_EXPECTATIONS_NORITO" \
-  "$PRIVACY_EXPECTATIONS_JSON"; do
-  if [[ ! -f "$release_input" || -L "$release_input" ]]; then
+  "$PRIVACY_EXPECTATIONS_JSON" \
+  "$PRIVACY_X509_RESOURCE_NORITO" \
+  "$PRIVACY_X509_RESOURCE_JSON"; do
+  if [[ ! -s "$release_input" || -L "$release_input" ]] \
+    || [[ "$(stat -c '%h' "$release_input")" != "1" ]]; then
     echo "native privacy release input is missing or not a regular file: $release_input" >&2
     exit 1
   fi
@@ -531,7 +554,7 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
   )
 
   privacy_runner_build_args=(
-    build
+    rustc
     --locked
     -p "$PRIVACY_RELEASE_RUNNER_PACKAGE"
     --bin "$PRIVACY_RELEASE_RUNNER_BIN"
@@ -540,6 +563,7 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
   if [[ "$PROFILE" == "release" ]]; then
     privacy_runner_build_args+=(--release)
   fi
+  privacy_runner_build_args+=(-- -C target-feature=+crt-static)
   (
     cd "$REPO_ROOT"
     cargo "${privacy_runner_build_args[@]}"
@@ -564,6 +588,18 @@ for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder "$PRI
   fi
 done
 
+privacy_runner_path="${binary_dir}/${PRIVACY_RELEASE_RUNNER_BIN}"
+if readelf --program-headers --wide "$privacy_runner_path" \
+  | grep -E '(^|[[:space:]])INTERP([[:space:]]|$)' >/dev/null; then
+  echo "Taira privacy release runner must not contain a PT_INTERP segment" >&2
+  exit 1
+fi
+if readelf --dynamic --wide "$privacy_runner_path" \
+  | grep -E '\(NEEDED\)' >/dev/null; then
+  echo "Taira privacy release runner must not contain DT_NEEDED entries" >&2
+  exit 1
+fi
+
 privacy_evidence_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/taira-privacy-native-release.XXXXXX")"
 trap 'rm -rf -- "$privacy_evidence_tmp_dir"' EXIT
 privacy_command_manifest_norito_tmp="${privacy_evidence_tmp_dir}/command-manifest-v1.norito"
@@ -572,13 +608,14 @@ privacy_stage_artifacts_norito_tmp="${privacy_evidence_tmp_dir}/stage-artifacts-
 privacy_stage_artifacts_json_tmp="${privacy_evidence_tmp_dir}/stage-artifacts-v1.json"
 privacy_receipt_norito_tmp="${privacy_evidence_tmp_dir}/receipt-v1.norito"
 privacy_receipt_json_tmp="${privacy_evidence_tmp_dir}/receipt-v1.json"
-privacy_runner_path="${binary_dir}/${PRIVACY_RELEASE_RUNNER_BIN}"
 privacy_runner_common_args=(
   --build-profile "$PROFILE"
   --source-sha256 "$workspace_source_manifest_sha256"
   --exact12-matrix "$PRIVACY_EXACT12_MATRIX"
   --expectations-norito "$PRIVACY_EXPECTATIONS_NORITO"
   --expectations-json "$PRIVACY_EXPECTATIONS_JSON"
+  --x509-resource-norito "$PRIVACY_X509_RESOURCE_NORITO"
+  --x509-resource-json "$PRIVACY_X509_RESOURCE_JSON"
   --cargo-lock "$validator_lock_path"
   --validator-binary "${binary_dir}/irohad"
 )
@@ -642,6 +679,8 @@ privacy_command_manifest_norito_relative_path="${privacy_native_relative_dir}/co
 privacy_command_manifest_json_relative_path="${privacy_native_relative_dir}/command-manifest-v1.json"
 privacy_expectations_norito_relative_path="${privacy_native_relative_dir}/expectations-v1.norito"
 privacy_expectations_json_relative_path="${privacy_native_relative_dir}/expectations-v1.json"
+privacy_x509_resource_norito_relative_path="${privacy_native_relative_dir}/zk-x509-resource-v1.norito"
+privacy_x509_resource_json_relative_path="${privacy_native_relative_dir}/zk-x509-resource-v1.json"
 privacy_exact12_matrix_relative_path="${privacy_native_relative_dir}/exact12-v1.tsv"
 privacy_workspace_source_manifest_relative_path="${privacy_native_relative_dir}/workspace-source-manifest.sha256"
 cp "$privacy_receipt_norito_tmp" "${bundle_dir}/${privacy_release_norito_relative_path}"
@@ -652,6 +691,8 @@ cp "$privacy_command_manifest_norito_tmp" "${bundle_dir}/${privacy_command_manif
 cp "$privacy_command_manifest_json_tmp" "${bundle_dir}/${privacy_command_manifest_json_relative_path}"
 cp "$PRIVACY_EXPECTATIONS_NORITO" "${bundle_dir}/${privacy_expectations_norito_relative_path}"
 cp "$PRIVACY_EXPECTATIONS_JSON" "${bundle_dir}/${privacy_expectations_json_relative_path}"
+cp "$PRIVACY_X509_RESOURCE_NORITO" "${bundle_dir}/${privacy_x509_resource_norito_relative_path}"
+cp "$PRIVACY_X509_RESOURCE_JSON" "${bundle_dir}/${privacy_x509_resource_json_relative_path}"
 cp "$PRIVACY_EXACT12_MATRIX" "${bundle_dir}/${privacy_exact12_matrix_relative_path}"
 printf '%s\n' "$workspace_source_manifest_sha256" \
   >"${bundle_dir}/${privacy_workspace_source_manifest_relative_path}"
@@ -664,6 +705,8 @@ privacy_command_manifest_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_c
 privacy_command_manifest_json_sha256="$(sha256_file "${bundle_dir}/${privacy_command_manifest_json_relative_path}")"
 privacy_expectations_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_expectations_norito_relative_path}")"
 privacy_expectations_json_sha256="$(sha256_file "${bundle_dir}/${privacy_expectations_json_relative_path}")"
+privacy_x509_resource_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_x509_resource_norito_relative_path}")"
+privacy_x509_resource_json_sha256="$(sha256_file "${bundle_dir}/${privacy_x509_resource_json_relative_path}")"
 privacy_exact12_matrix_sha256="$(sha256_file "${bundle_dir}/${privacy_exact12_matrix_relative_path}")"
 privacy_workspace_source_manifest_file_sha256="$(sha256_file "${bundle_dir}/${privacy_workspace_source_manifest_relative_path}")"
 validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/irohad")"
@@ -675,6 +718,8 @@ bundled_privacy_runner_common_args=(
   --exact12-matrix "${bundle_dir}/${privacy_exact12_matrix_relative_path}"
   --expectations-norito "${bundle_dir}/${privacy_expectations_norito_relative_path}"
   --expectations-json "${bundle_dir}/${privacy_expectations_json_relative_path}"
+  --x509-resource-norito "${bundle_dir}/${privacy_x509_resource_norito_relative_path}"
+  --x509-resource-json "${bundle_dir}/${privacy_x509_resource_json_relative_path}"
   --cargo-lock "${bundle_dir}/provenance/Cargo.lock"
   --validator-binary "${bundle_dir}/bin/irohad"
 )
@@ -743,6 +788,10 @@ PRIVACY_EXPECTATIONS_NORITO_PATH="$privacy_expectations_norito_relative_path" \
 PRIVACY_EXPECTATIONS_NORITO_SHA256="$privacy_expectations_norito_sha256" \
 PRIVACY_EXPECTATIONS_JSON_PATH="$privacy_expectations_json_relative_path" \
 PRIVACY_EXPECTATIONS_JSON_SHA256="$privacy_expectations_json_sha256" \
+PRIVACY_X509_RESOURCE_NORITO_PATH="$privacy_x509_resource_norito_relative_path" \
+PRIVACY_X509_RESOURCE_NORITO_SHA256="$privacy_x509_resource_norito_sha256" \
+PRIVACY_X509_RESOURCE_JSON_PATH="$privacy_x509_resource_json_relative_path" \
+PRIVACY_X509_RESOURCE_JSON_SHA256="$privacy_x509_resource_json_sha256" \
 PRIVACY_EXACT12_MATRIX_PATH="$privacy_exact12_matrix_relative_path" \
 PRIVACY_EXACT12_MATRIX_SHA256="$privacy_exact12_matrix_sha256" \
 PRIVACY_WORKSPACE_SOURCE_MANIFEST_PATH="$privacy_workspace_source_manifest_relative_path" \
@@ -767,6 +816,8 @@ digest_names = (
     "PRIVACY_COMMAND_MANIFEST_JSON_SHA256",
     "PRIVACY_EXPECTATIONS_NORITO_SHA256",
     "PRIVACY_EXPECTATIONS_JSON_SHA256",
+    "PRIVACY_X509_RESOURCE_NORITO_SHA256",
+    "PRIVACY_X509_RESOURCE_JSON_SHA256",
     "PRIVACY_EXACT12_MATRIX_SHA256",
     "PRIVACY_WORKSPACE_SOURCE_MANIFEST_FILE_SHA256",
     "VALIDATOR_BINARY_SHA256",
@@ -868,6 +919,9 @@ payload = {
             **evidence_pair("PRIVACY_EXPECTATIONS"),
             "peak_rss_and_elapsed_ceilings_enforced": True,
         },
+        "x509_native_resource_certificate": evidence_pair(
+            "PRIVACY_X509_RESOURCE"
+        ),
         "exact12_matrix": {
             "path": os.environ["PRIVACY_EXACT12_MATRIX_PATH"],
             "sha256": os.environ["PRIVACY_EXACT12_MATRIX_SHA256"],

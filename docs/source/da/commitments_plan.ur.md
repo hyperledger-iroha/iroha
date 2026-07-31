@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` موجودہ 48 بائٹ پوائنٹ کے تحت استعمال ہونے والے موجودہ 48 بائٹ پوائنٹ کو دوبارہ استعمال کرتا ہے
-  `iroha_crypto::kzg`۔ مرکل لین اسے خالی چھوڑ دیتے ہیں۔ `kzg_bls12_381` لین اب
-  ایک جڑ سے حاصل کی جانے والی ایک عین مطابق بلیک 3-XOF وابستگی حاصل کریں اور
-  اسٹوریج کا ٹکٹ لہذا بلاک ہیش بیرونی پروور کے بغیر مستحکم رہیں۔
-- `proof_scheme` لین کیٹلاگ سے ماخوذ ہے۔ مرکل لینس آوارہ کے زیڈ جی کو مسترد کرتے ہیں
-  پے لوڈ جبکہ `kzg_bls12_381` لینوں کو غیر صفر KZG وعدوں کی ضرورت ہوتی ہے۔
-- `proof_digest` DA-5 PDP/POTR انضمام کی توقع کرتا ہے لہذا وہی ریکارڈ
-  بلابز کو براہ راست رکھنے کے لئے استعمال ہونے والے نمونے لینے کا شیڈول گنتی ہے۔
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 بلاک ہیڈر توسیع
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire` ؛ ارتکاب شدہ بنڈل رسید کرسروں کو آگے بڑھاتے ہیں (ہائیڈریٹڈ
    کُورا سے دوبارہ شروع ہونے والے) اور باسی باسی اسپل اندراجات کو ڈسک کی ترقی کا پابند کریں۔
 
-بلاک اسمبلی اور `BlockCreated` ingestion ہر عزم کے خلاف دوبارہ توثیق کرتے ہیں
-لین کیٹلاگ: مرکل لینس آوارہ کے زیڈ جی کے وعدوں کو مسترد کرتے ہیں ، کے زیڈ جی لین کی ضرورت ہوتی ہے
-غیر صفر KZG عزم اور غیر صفر `chunk_root` ، اور نامعلوم لین ہیں
-گرا دیا Torii کا `/v1/da/commitments/verify` اختتامی نقطہ اسی گارڈ کو آئینہ دیتا ہے ،
-اور اب انجیر کرنے سے ہر ایک میں عزم کے زیڈ جی کے عزم کو دھاگہ کرتا ہے
-`kzg_bls12_381` ریکارڈ لہذا پالیسی کے مطابق بنڈل بلاک اسمبلی تک پہنچ جاتے ہیں۔
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 ingest پلان میں بیان کردہ ظاہر فکسچر
 عزم بنڈلر کے لئے سچائی۔ Torii ٹیسٹ
@@ -210,9 +199,7 @@ Torii تین اختتامی نکات کو بے نقاب کرتا ہے:| روٹ |
 
 ## سوالات کھولیں
 
-1.
-   بلاک سائز کو کم کریں؟ تجویز: `kzg_commitment` اختیاری اور گیٹ کے ذریعے رکھیں
-   `iroha_config::da.enable_kzg`۔
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. ** تسلسل کے فرق **-کیا ہم آؤٹ آف آرڈر لین کی اجازت دیتے ہیں؟ موجودہ منصوبہ خلا کو مسترد کرتا ہے
    جب تک گورننس ایمرجنسی ری پلے کے لئے `allow_sequence_skips` کو ٹوگل نہیں کرتا ہے۔
 3.

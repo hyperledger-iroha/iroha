@@ -1415,7 +1415,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
 }
 
 #[test]
-fn stark_governance_submit_rejects_synthetic_air_proof() {
+fn create_election_rejects_generic_stark_vote_role_labels() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
@@ -1430,17 +1430,12 @@ fn stark_governance_submit_rejects_synthetic_air_proof() {
         block::BlockHeader,
         confidential::ConfidentialStatus,
         domain::Domain,
-        isi::{
-            Grant, verifying_keys,
-            zk::{CreateElection, SubmitBallot},
-        },
+        isi::{Grant, verifying_keys, zk::CreateElection},
         permission::Permission,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+        proof::{VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
-    use iroha_executor_data_model::permission::governance::{
-        CanManageParliament, CanSubmitGovernanceBallot,
-    };
+    use iroha_executor_data_model::permission::governance::CanManageParliament;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
 
@@ -1483,13 +1478,6 @@ fn stark_governance_submit_rejects_synthetic_air_proof() {
     Grant::account_permission(perm_parliament, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanManageParliament");
-    let perm_ballot: Permission = CanSubmitGovernanceBallot {
-        referendum_id: election_id.clone(),
-    }
-    .into();
-    Grant::account_permission(perm_ballot, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant CanSubmitGovernanceBallot");
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id, STARK_HASH_SHA256_V1);
     let ballot_vk_hash = iroha_core::zk::hash_vk(&ballot_vk_box);
@@ -1537,7 +1525,7 @@ fn stark_governance_submit_rejects_synthetic_air_proof() {
     .expect("register tally vk");
 
     let eligible_root = [0x22; 32];
-    CreateElection {
+    let err = CreateElection {
         election_id: election_id.clone(),
         options: 2,
         eligible_root,
@@ -1548,36 +1536,11 @@ fn stark_governance_submit_rejects_synthetic_air_proof() {
         domain_tag: nullifier_domain.to_string(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("create election");
-
-    let commit = [0x11; 32];
-    let ballot_columns = vec![vec![commit], vec![eligible_root]];
-    let ballot_proof_bytes = build_stark_open_verify_envelope_bytes_for_columns(
-        backend,
-        ballot_circuit_id,
-        ballot_vk_hash,
-        &ballot_schema,
-        ballot_columns,
-    );
-    let ballot_attachment = ProofAttachment::new_ref(
-        backend.to_string(),
-        ProofBox::new(backend.to_string(), ballot_proof_bytes),
-        ballot_vk_id,
-    );
-    let nullifier =
-        derive_ballot_nullifier_for_test(nullifier_domain, &state.chain_id, &election_id, &commit);
-    let err = SubmitBallot {
-        election_id: election_id.clone(),
-        ciphertext: commit.to_vec(),
-        ballot_proof: ballot_attachment,
-        nullifier,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("synthetic STARK ballot must be rejected");
+    .expect_err("generic STARK Binding AIR must not be admitted as a ballot circuit");
     let err_text = format!("{err:?}");
     assert!(
-        err_text.contains("invalid ballot proof"),
-        "unexpected ballot rejection: {err:?}"
+        err_text.contains("ballot verifying key circuit mismatch"),
+        "unexpected generic STARK vote-role rejection: {err:?}"
     );
 }
 
@@ -1704,7 +1667,7 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
 }
 
 #[test]
-fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
+fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
@@ -1817,10 +1780,10 @@ fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
         domain_tag: "gov:ballot:v1".to_owned(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect_err("create election must reject wrong STARK tally role");
+    .expect_err("create election must reject the generic STARK ballot role");
     let err_text = format!("{err:?}");
     assert!(
-        err_text.contains("tally verifying key circuit mismatch"),
+        err_text.contains("ballot verifying key circuit mismatch"),
         "unexpected error: {err:?}"
     );
 }

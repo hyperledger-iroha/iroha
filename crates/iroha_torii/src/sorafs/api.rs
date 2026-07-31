@@ -284,8 +284,6 @@ const HEADER_SORA_PROOF: &str = "sora-proof";
 const HEADER_SORA_MANIFEST_ENVELOPE: &str = "x-sorafs-manifest-envelope";
 const HEADER_SORA_CID: &str = "sora-cid";
 const HEADER_SORA_REGION: &str = "x-sorafs-region";
-const HEADER_SORA_POLICY_TAGS: &str = "x-sorafs-policy-tags";
-const HEADER_SORA_MODERATION_SLUGS: &str = "x-sorafs-moderation-slugs";
 const HEADER_SORA_CACHE_TTL: &str = "x-sorafs-cache-ttl";
 const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
@@ -1744,14 +1742,50 @@ mod cache_tests {
     }
 
     #[test]
-    fn parse_policy_tags_header_splits_values() {
+    fn gateway_region_requires_trusted_proxy_and_canonicalizes_country_code() {
         let mut headers = HeaderMap::new();
         headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_POLICY_TAGS),
-            HeaderValue::from_static("alpha, beta , ,"),
+            header::HeaderName::from_static(HEADER_SORA_REGION),
+            HeaderValue::from_static(" us "),
         );
-        let tags = parse_policy_tags_header(&headers, HEADER_SORA_POLICY_TAGS);
-        assert_eq!(tags, vec!["alpha".to_string(), "beta".to_string()]);
+        let remote = SocketAddr::from(([127, 0, 0, 1], 8080));
+        assert_eq!(
+            parse_trusted_gateway_region(&headers, remote, &[]),
+            None,
+            "direct clients cannot assert a serving region"
+        );
+        let trusted = crate::limits::parse_cidrs(&["127.0.0.0/8".to_owned()]);
+        assert_eq!(
+            parse_trusted_gateway_region(&headers, remote, &trusted).as_deref(),
+            Some("US")
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_REGION),
+            HeaderValue::from_static("unbounded-region"),
+        );
+        assert_eq!(
+            parse_trusted_gateway_region(&headers, remote, &trusted),
+            None
+        );
+    }
+
+    #[test]
+    fn gateway_fingerprint_ignores_request_controlled_client_label() {
+        let remote = SocketAddr::from(([198, 51, 100, 7], 8080));
+        let mut first = HeaderMap::new();
+        first.insert(
+            header::HeaderName::from_static(HEADER_SORA_CLIENT),
+            HeaderValue::from_static("victim"),
+        );
+        let mut second = HeaderMap::new();
+        second.insert(
+            header::HeaderName::from_static(HEADER_SORA_CLIENT),
+            HeaderValue::from_static("attacker-rotated"),
+        );
+        assert_eq!(
+            gateway_client_fingerprint(remote, &first, &[]),
+            gateway_client_fingerprint(remote, &second, &[])
+        );
     }
 
     #[test]
@@ -6305,7 +6339,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_block(
     headers: HeaderMap,
     Path(block_cid_hex): Path<String>,
 ) -> Response {
-    let cid_hex = match normalize_governance_dag_lookup_hex(&block_cid_hex, "block_cid_hex") {
+    let cid_hex = match normalize_governance_dag_cid_hex(&block_cid_hex, "block_cid_hex") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -6324,7 +6358,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_node(
     headers: HeaderMap,
     Path(node_cid_hex): Path<String>,
 ) -> Response {
-    let cid_hex = match normalize_governance_dag_lookup_hex(&node_cid_hex, "node_cid_hex") {
+    let cid_hex = match normalize_governance_dag_cid_hex(&node_cid_hex, "node_cid_hex") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -6640,7 +6674,7 @@ fn governance_dag_lookup_response(
     schema: &str,
     raw_cid_hex: &str,
 ) -> Response {
-    let cid_hex = match normalize_governance_dag_lookup_hex(raw_cid_hex, query) {
+    let cid_hex = match normalize_governance_dag_cid_hex(raw_cid_hex, query) {
         Ok(cid_hex) => cid_hex,
         Err(response) => return response,
     };
@@ -6709,6 +6743,17 @@ fn normalize_governance_dag_lookup_hex(raw: &str, field: &str) -> Result<String,
         )
     })?;
     Ok(trimmed.to_ascii_lowercase())
+}
+
+fn normalize_governance_dag_cid_hex(raw: &str, field: &str) -> Result<String, Response> {
+    let cid_hex = normalize_governance_dag_lookup_hex(raw, field)?;
+    if cid_hex.len() != 64 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must encode one 32-byte governance DAG CID"),
+        ));
+    }
+    Ok(cid_hex)
 }
 
 fn governance_dag_mirror_lookup_block(
@@ -22034,28 +22079,35 @@ pub(crate) async fn handle_get_sorafs_capacity_state(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-
-    let world = state.state.world_view();
-    let snapshot = collect_snapshot(&world);
-
-    let snapshot = match snapshot {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            error!(?err, "failed to collect capacity registry snapshot");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to collect capacity registry snapshot",
-            );
-        }
+    let permit = match crate::acquire_query_admission(state.as_ref(), true).await {
+        Ok(permit) => permit,
+        Err(error) => return error.into_response(),
     };
+    let projection = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        iroha_core::panic_hook::with_hook_suppressed(|| {
+            let world = state.state.world_view();
+            let snapshot =
+                collect_snapshot(&world, limit).map_err(|error| format!("registry: {error}"))?;
+            snapshot_to_json(snapshot, limit).map_err(|error| format!("json: {error}"))
+        })
+    })
+    .await;
 
-    match snapshot_to_json(snapshot, limit) {
-        Ok(value) => JsonBody(value).into_response(),
-        Err(err) => {
-            error!(?err, "failed to serialize capacity registry snapshot");
+    match projection {
+        Ok(Ok(value)) => JsonBody(value).into_response(),
+        Ok(Err(error)) => {
+            error!(%error, "failed to project capacity registry snapshot");
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to serialize capacity registry snapshot",
+                "failed to project capacity registry snapshot",
+            )
+        }
+        Err(error) => {
+            error!(?error, "capacity registry projection worker failed");
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "capacity registry projection worker is unavailable",
             )
         }
     }
@@ -22618,11 +22670,7 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         if let Value::Object(mut map) = value {
             let lineage = snapshot.lineage_for(manifest.digest_hex());
             map.insert("lineage".into(), lineage_to_json(&lineage));
-            if let Some(alias) = snapshot
-                .aliases
-                .iter()
-                .find(|alias| alias.manifest_digest_hex() == manifest.digest_hex())
-            {
+            if let Some(alias) = snapshot.alias_by_manifest_digest(manifest.digest_hex()) {
                 let governance = manifest.governance_summary();
                 match prepare_alias_presentation(
                     alias,
@@ -25302,12 +25350,15 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
     if req.length == 0 {
         return json_error(StatusCode::BAD_REQUEST, "length must be greater than zero");
     }
-    if req.length > usize::MAX as u64 {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "requested length exceeds supported range",
-        );
-    }
+    let length = match usize::try_from(req.length) {
+        Ok(length) => length,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "requested length exceeds supported range",
+            );
+        }
+    };
 
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
@@ -25361,7 +25412,6 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
         }
     }
 
-    let length = req.length as usize;
     let data = match state
         .sorafs_node
         .read_payload_range(&storage_manifest_id, req.offset, length)
@@ -26272,21 +26322,6 @@ fn validate_manifest_envelope_signature(entry: &Value, message: &[u8]) -> bool {
     signature.verify(&public_key, message).is_ok()
 }
 
-fn parse_policy_tags_header(headers: &HeaderMap, name: &str) -> Vec<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|tag| !tag.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
 fn parse_cache_control_max_age(value: &str) -> Option<u64> {
     value.split(',').find_map(|directive| {
         let trimmed = directive.trim();
@@ -26311,13 +26346,20 @@ fn parse_cache_ttl(headers: &HeaderMap) -> Option<u64> {
         .and_then(parse_cache_control_max_age)
 }
 
-fn parse_gateway_region(headers: &HeaderMap) -> Option<String> {
+fn parse_trusted_gateway_region(
+    headers: &HeaderMap,
+    remote: SocketAddr,
+    trusted_proxies: &[crate::limits::IpNet],
+) -> Option<String> {
+    if !crate::limits::cidr_contains(trusted_proxies, remote.ip()) {
+        return None;
+    }
     headers
         .get(HEADER_SORA_REGION)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .filter(|value| value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        .map(str::to_ascii_uppercase)
 }
 
 #[derive(Debug)]
@@ -26488,18 +26530,7 @@ fn gateway_client_fingerprint(
     let effective_ip =
         crate::limits::ingress_remote_ip(headers, Some(remote.ip()), trusted_proxies)
             .unwrap_or_else(|| remote.ip());
-    let mut identifier = effective_ip.to_string();
-    if let Some(client_header) = headers
-        .get(HEADER_SORA_CLIENT)
-        .and_then(|value| value.to_str().ok())
-    {
-        let trimmed = client_header.trim();
-        if !trimmed.is_empty() {
-            identifier.push('|');
-            identifier.push_str(trimmed);
-        }
-    }
-    ClientFingerprint::from_identifier(&identifier)
+    ClientFingerprint::from_identifier(&effective_ip.to_string())
 }
 
 #[allow(clippy::result_large_err)]
@@ -26533,26 +26564,17 @@ fn enforce_gateway_policy_for_request(
     if let Some(host) = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
+        .and_then(normalize_host_header)
     {
-        context = context.with_canonical_host(host.to_string());
+        context = context.with_canonical_host(host);
     }
 
-    if let Some(region) = parse_gateway_region(headers) {
+    if let Some(region) = parse_trusted_gateway_region(headers, remote, &state.trusted_proxy_nets) {
         context = context.with_region(region);
     }
 
     if let Some(ttl) = parse_cache_ttl(headers) {
         context = context.with_cache_ttl_secs(ttl);
-    }
-
-    let policy_tags = parse_policy_tags_header(headers, HEADER_SORA_POLICY_TAGS);
-    if !policy_tags.is_empty() {
-        context = context.with_policy_tags(policy_tags);
-    }
-
-    let moderation_slugs = parse_policy_tags_header(headers, HEADER_SORA_MODERATION_SLUGS);
-    if !moderation_slugs.is_empty() {
-        context = context.with_moderation_slugs(moderation_slugs);
     }
 
     context = context.with_provider_id(&provider_id);
@@ -26976,19 +26998,9 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
             )
                 .into_response()
         }
-        PolicyViolation::CdnPurgeRequired { required_tags } => {
+        PolicyViolation::CdnPurgeRequired { .. } => {
             let body = json_object(vec![
                 json_entry("error", Value::from("purge_required")),
-                json_entry(
-                    "required_tags",
-                    Value::Array(
-                        required_tags
-                            .iter()
-                            .cloned()
-                            .map(Value::from)
-                            .collect::<Vec<Value>>(),
-                    ),
-                ),
                 json_entry(
                     "message",
                     Value::from("gar policy requires purge tags before serving content"),
@@ -26996,19 +27008,9 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
             ]);
             (StatusCode::PRECONDITION_REQUIRED, JsonBody(body)).into_response()
         }
-        PolicyViolation::CdnModerationRequired { required_slugs } => {
+        PolicyViolation::CdnModerationRequired { .. } => {
             let body = json_object(vec![
                 json_entry("error", Value::from("moderation_required")),
-                json_entry(
-                    "required_slugs",
-                    Value::Array(
-                        required_slugs
-                            .iter()
-                            .cloned()
-                            .map(Value::from)
-                            .collect::<Vec<Value>>(),
-                    ),
-                ),
                 json_entry(
                     "message",
                     Value::from("gar policy requires moderation before serving content"),
@@ -27034,7 +27036,7 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
                 json_entry("ceiling_rps", Value::from(ceiling_rps)),
                 json_entry(
                     "message",
-                    Value::from("gar policy rate ceiling reached for this host"),
+                    Value::from("gar policy gateway-wide rate ceiling reached"),
                 ),
             ]);
             (StatusCode::TOO_MANY_REQUESTS, headers, JsonBody(body)).into_response()
@@ -28286,17 +28288,22 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     let writer_chunks = chunk_slice.chunks;
     let writer_manifest_id = manifest_id_hex.clone();
     tokio::task::spawn_blocking(move || {
-        let _stream_token_guard = stream_token_guard;
-        let mut reader = ChunkFilesReader::new(writer_chunks);
-        let mut body_writer = StreamingBodyWriter { sender: body_tx };
-        let writer = CarStreamingWriter::new(&writer_plan);
-        if let Err(err) = writer.write_from_reader(&mut reader, &mut body_writer) {
-            error!(
-                ?err,
-                manifest_id = writer_manifest_id,
-                "failed to stream CAR range response"
-            );
-        }
+        // Tokio task-local handler suppression is intentionally not inherited by detached
+        // blocking tasks. Restore it explicitly for this request-owned writer so an unexpected
+        // library panic terminates only the response stream, not the node process.
+        iroha_core::panic_hook::with_hook_suppressed(|| {
+            let _stream_token_guard = stream_token_guard;
+            let mut reader = ChunkFilesReader::new(writer_chunks);
+            let mut body_writer = StreamingBodyWriter { sender: body_tx };
+            let writer = CarStreamingWriter::new(&writer_plan);
+            if let Err(err) = writer.write_from_reader(&mut reader, &mut body_writer) {
+                error!(
+                    ?err,
+                    manifest_id = writer_manifest_id,
+                    "failed to stream CAR range response"
+                );
+            }
+        });
     });
 
     (
@@ -29774,8 +29781,26 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
 }
 
 fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
-    HeaderValue::from_str(value.as_ref())
-        .unwrap_or_else(|_| panic!("{name} header produced invalid value: {}", value.as_ref()))
+    match HeaderValue::from_str(value.as_ref()) {
+        Ok(value) => value,
+        Err(error) => {
+            error!(
+                header = name,
+                ?error,
+                "internal header value violated its canonicalization invariant"
+            );
+            HeaderValue::from_static("unavailable")
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn invalid_internal_header_value_fails_closed_without_panicking() {
+    assert_eq!(
+        header_value("invalid\0value", "X-Test"),
+        HeaderValue::from_static("unavailable")
+    );
 }
 
 #[cfg(test)]
@@ -30536,10 +30561,10 @@ fn advert_ingest_response(
 }
 
 fn snapshot_to_json(snapshot: CapacitySnapshot, limit: usize) -> Result<Value, json::Error> {
-    let declaration_count = snapshot.declarations.len();
-    let ledger_count = snapshot.fee_ledger.len();
-    let credit_count = snapshot.credit_ledger.len();
-    let dispute_count = snapshot.disputes.len();
+    let declaration_count = snapshot.declaration_count;
+    let ledger_count = snapshot.fee_ledger_count;
+    let credit_count = snapshot.credit_ledger_count;
+    let dispute_count = snapshot.dispute_count;
     let truncated_declarations = declaration_count > limit;
     let truncated_fee_ledger = ledger_count > limit;
     let truncated_credit_ledger = credit_count > limit;
@@ -33559,6 +33584,14 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("not-hex".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_block(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("ff".to_string()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -45762,6 +45795,10 @@ mod advert_tests {
             metadata_json: Value::Object(Map::new()),
         };
         let snapshot = CapacitySnapshot {
+            declaration_count: 1,
+            fee_ledger_count: 1,
+            credit_ledger_count: 1,
+            dispute_count: 0,
             declarations: vec![declaration],
             fee_ledger: vec![ledger],
             credit_ledger: vec![credit],
@@ -45879,6 +45916,10 @@ mod advert_tests {
             dispute_b64: "ZGlzcHV0ZQ==".into(),
         };
         let snapshot = CapacitySnapshot {
+            declaration_count: 2,
+            fee_ledger_count: 2,
+            credit_ledger_count: 2,
+            dispute_count: 2,
             declarations: vec![
                 declaration.clone(),
                 RegistryDeclaration {
@@ -50792,7 +50833,7 @@ mod advert_tests {
                 );
                 if let Some(ip) = forwarded_ip {
                     headers.insert(
-                        header::HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+                        header::HeaderName::from_static(crate::limits::FORWARDED_FOR_HEADER),
                         HeaderValue::from_static(ip),
                     );
                 }

@@ -59,9 +59,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -69,17 +68,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` prend en charge 48 octets pour la réutilisation et `iroha_crypto::kzg`
-  میں ہے۔ جب absent ہو تو صرف Merkle proofs استعمال ہوتے ہیں۔
-- Catalogue de voies `proof_scheme` et dériver ہوتا ہے؛ Charges utiles KZG des voies Merkle
-  rejeter کرتی ہیں جبکہ `kzg_bls12_381` voies non nulles les engagements KZG exigent
-  کرتی ہیں۔ Torii pour les engagements Merkle pour la configuration KZG
-  voies et rejeter کرتا ہے۔
-- `KzgCommitment` prend en charge 48 octets pour la réutilisation et `iroha_crypto::kzg`
-  میں ہے۔ جب Merkle Lanes پر absent ہو تو صرف Merkle proofs استعمال ہوتے ہیں۔
-- Intégration `proof_digest` DA-5 PDP/PoTR
-  enregistrer le calendrier d'échantillonnage des blobs et des blobs
-  ہوتا ہے۔
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Extension d'en-tête de bloc
 
@@ -188,9 +179,7 @@ index تیزی سے reconstruire کر سکتے ہیں۔
 
 ## Questions ouvertes
 
-1. ** Valeurs par défaut KZG vs Merkle ** — Les blobs et les engagements KZG sont également disponibles.
-   La taille des blocs est définie par la taille du bloc. Modèle : `kzg_commitment` optionnel
-   Pour `iroha_config::da.enable_kzg` porte d'entrée
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Écarts de séquence** — Pour les voies dans le désordre et pour les problèmes موجودہ پلان lacunes کو
    rejeter la procédure de gouvernance `allow_sequence_skips` et la rediffusion d'urgence
    activer نہ کرے۔

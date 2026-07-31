@@ -2,12 +2,15 @@
 
 use super::*;
 
+#[cfg(test)]
 type TypeName = fn() -> &'static str;
 
 /// One built-in instruction's Rust type and path-independent wire identity.
 #[derive(Clone, Copy)]
 pub(super) struct BuiltInWireId {
+    #[cfg(test)]
     pub(super) type_name: TypeName,
+    #[cfg(test)]
     pub(super) wire_id: &'static str,
     apply: Registrar,
 }
@@ -15,7 +18,9 @@ pub(super) struct BuiltInWireId {
 macro_rules! built_in_wire_id {
     ($ty:ty => $wire_id:literal) => {
         BuiltInWireId {
+            #[cfg(test)]
             type_name: std::any::type_name::<$ty>,
+            #[cfg(test)]
             wire_id: $wire_id,
             apply: |registry| registry.remap_wire_id::<$ty>($wire_id),
         }
@@ -55,8 +60,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(offline::ActivateKagemushaRecursiveReleaseV4 => "iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4"),
     built_in_wire_id!(offline::RegisterOfflineDeviceAttestation => "iroha.offline.device_attestation.register"),
     built_in_wire_id!(offline::SetOfflineDeviceAttestationPolicy => "iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy"),
-    built_in_wire_id!(zk::RegisterAssetHiddenZkPool => "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool"),
-    built_in_wire_id!(zk::AssetHiddenZkTransfer => "iroha_data_model::isi::zk::AssetHiddenZkTransfer"),
     built_in_wire_id!(asset_alias::SetAssetDefinitionBalancePolicy => "iroha.asset_definition.balance_policy.set"),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneValidator => "iroha_data_model::isi::staking::RegisterPublicLaneValidator"),
     built_in_wire_id!(crate::isi::staking::RebindPublicLaneValidatorPeer => "iroha.staking.rebind_public_lane_validator_peer"),

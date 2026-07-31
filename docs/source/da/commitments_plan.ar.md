@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- يقوم `KzgCommitment` بإعادة استخدام نقطة 48 بايت الموجودة المستخدمة تحت
-  `iroha_crypto::kzg`. ممرات ميركل تتركها فارغة. الممرات `kzg_bls12_381` الآن
-  الحصول على التزام BLAKE3-XOF الحتمي المشتق من جذر القطعة و
-  تذكرة تخزين حتى تظل تجزئات الكتلة مستقرة بدون إثبات خارجي.
-- `proof_scheme` مشتق من كتالوج الممرات؛ ممرات ميركل ترفض KZG الضالة
-  الحمولات بينما تتطلب ممرات `kzg_bls12_381` التزامات KZG غير صفرية.
-- يتوقع `proof_digest` تكامل DA-5 PDP/PoTR لذا فإن نفس السجل
-  يعدد جدول أخذ العينات المستخدم للحفاظ على النقط حية.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 ملحق رأس الكتلة
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`; تقدم الحزم المخصصة مؤشرات الاستلام (رطبة
    من Kura عند إعادة التشغيل) وتقليم إدخالات التخزين المؤقت التي لا معنى لها لربط نمو القرص.
 
-يقوم تجميع الكتلة واستيعاب `BlockCreated` بإعادة التحقق من صحة كل التزام مقابله
-كتالوج الممرات: ترفض ممرات Merkle التزامات KZG الضالة، وتتطلب ممرات KZG أ
-التزام KZG غير صفري و`chunk_root`، والممرات غير المعروفة هي
-انخفض. تعكس نقطة نهاية Torii الخاصة بـ `/v1/da/commitments/verify` نفس الحماية،
-واستوعب الآن خيوط التزام KZG الحتمي في كل شيء
-سجل `kzg_bls12_381` حتى تصل الحزم المتوافقة مع السياسة إلى تجميع الكتلة.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 تتضاعف تركيبات البيان الموضحة في خطة استيعاب DA-2 كمصدر لـ
 الحقيقة للمجمع الالتزام. اختبار Torii
@@ -210,9 +199,7 @@ pub struct DaCommitmentBundle {
 
 ## أسئلة مفتوحة
 
-1. **الإعدادات الافتراضية لـ KZG مقابل Merkle** — هل يجب على النقط الصغيرة دائمًا تخطي التزامات KZG إلى
-   تقليل حجم الكتلة؟ الاقتراح: احتفظ بـ `kzg_commitment` اختياريًا وقم بالبوابة عبره
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **فجوات التسلسل** — هل نسمح بوجود ممرات خارج الترتيب؟ الخطة الحالية ترفض الثغرات
    ما لم تقم الإدارة بتبديل `allow_sequence_skips` لإعادة التشغيل في حالات الطوارئ.
 3. **ذاكرة التخزين المؤقت للعميل الخفيف** — طلب فريق SDK ذاكرة تخزين مؤقت خفيفة الوزن لـ SQLite

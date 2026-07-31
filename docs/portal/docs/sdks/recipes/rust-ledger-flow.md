@@ -8,9 +8,9 @@ import SampleDownload from '@site/src/components/SampleDownload';
 
 This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
 but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+prepared by the [Norito quickstart](../../norito/quickstart.md) and the demo
+credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes
+one for one.
 
 <SampleDownload
   href="/sdk-recipes/rust/src/main.rs"

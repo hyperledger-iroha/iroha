@@ -97,7 +97,12 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 3. The gateway verifies the receipt, and an authorized retry-safe transaction
    forwarder submits its exact canonical bytes for ledger commitment. The
    native instruction rechecks both signatures and the active signer policy.
-   Invalid, unsigned, revoked-key, or non-canonical receipts are rejected.
+   Before either signer is invoked, Torii validates the unsigned receipt's
+   status, latency, timestamps, range, and identifiers, requires the requested
+   deadline to equal the council-admitted provider QoS maximum, and requires
+   the requested tier to equal the admitted storage tier (`hot`, `warm`, or
+   `archive`). Invalid, unsigned, revoked-key, policy-mismatched, or
+   non-canonical receipts are rejected.
 4. Operators read the exact finalized outcome with:
 
    ```bash

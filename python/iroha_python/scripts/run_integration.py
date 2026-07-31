@@ -26,6 +26,32 @@ DEFAULT_TORII_URL = "http://127.0.0.1:8080"
 DEFAULT_SERVICE = "irohad0"
 DEFAULT_WAIT_SECONDS = 90
 DEFAULT_PYTEST_PATH = "python/iroha_python/tests/integration"
+GENESIS_KEY_FILE_ENV = (
+    "IROHA_GENESIS_PUBLIC_KEY_FILE",
+    "IROHA_GENESIS_PRIVATE_KEY_FILE",
+)
+
+
+def _validate_default_compose_genesis_custody(compose_file: pathlib.Path) -> None:
+    if compose_file.resolve() != DEFAULT_COMPOSE_FILE.resolve():
+        return
+    for name in GENESIS_KEY_FILE_ENV:
+        raw_path = os.environ.get(name)
+        if not raw_path:
+            raise RuntimeError(
+                f"{name} is required by the default Compose stack; generate "
+                "runtime-only genesis key files with kagami and never commit "
+                "the private file"
+            )
+        path = pathlib.Path(raw_path)
+        try:
+            record = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise RuntimeError(f"{name} cannot be read") from error
+        if not record.endswith("\n") or not record.strip() or "\n" in record.strip():
+            raise RuntimeError(
+                f"{name} must contain exactly one non-empty key record and a final newline"
+            )
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -193,6 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileNotFoundError(f"compose file not found: {compose_file}")
 
     if args.start:
+        _validate_default_compose_genesis_custody(compose_file)
         compose_cmd = _find_compose_binary(args.compose_bin)
         compose_args = ["-f", str(compose_file), "up", "-d", args.service]
         _run_compose(compose_cmd, compose_args)

@@ -2,7 +2,9 @@
 //!
 //! The envelope format is a thin binary header followed by flattened public
 //! inputs and the raw Halo2 transcript bytes. It mirrors the specification in
-//! `docs/source/confidential_assets.md`.
+//! `docs/source/confidential_assets.md`. The redundant public-input count and
+//! byte-length fields are canonical only when `pi_len == n_pi * 32`; decoding
+//! rejects any other relationship before reading or allocating public inputs.
 
 use core::mem::size_of;
 
@@ -73,6 +75,28 @@ pub enum EnvelopeError {
         expected: u16,
     },
 
+    /// Declared public input byte length did not match the declared count.
+    #[error(
+        "public input shape mismatch: {count} entries require {expected} bytes, declared {declared}"
+    )]
+    PublicInputShape {
+        /// Declared number of public inputs.
+        count: u16,
+        /// Declared byte length in the header.
+        declared: u32,
+        /// Canonical byte length for `count` entries.
+        expected: u32,
+    },
+
+    /// Computing the canonical public input byte length overflowed.
+    #[error("public input size overflow for {count} entries of {stride} bytes")]
+    PublicInputSizeOverflow {
+        /// Number of public input entries.
+        count: usize,
+        /// Bytes per public input entry.
+        stride: usize,
+    },
+
     /// Declared byte length for public inputs did not match the actual payload.
     #[error("public input byte length mismatch: declared {declared}, actual {actual}")]
     PublicInputLength {
@@ -119,9 +143,13 @@ pub struct Halo2ProofEnvelopeHeader {
     /// Circuit flags (bitfield).
     pub flags: u8,
     /// Declared number of public inputs.
-    pub n_pi: u16,
+    ///
+    /// Canonical envelopes require `pi_len == n_pi * PUBLIC_INPUT_STRIDE`.
+    n_pi: u16,
     /// Declared length of public input bytes.
-    pub pi_len: u32,
+    ///
+    /// Canonical envelopes require `pi_len == n_pi * PUBLIC_INPUT_STRIDE`.
+    pi_len: u32,
 }
 
 impl Halo2ProofEnvelopeHeader {
@@ -129,6 +157,8 @@ impl Halo2ProofEnvelopeHeader {
     ///
     /// Format is fixed to:
     /// `anchor_root || nullifiers[N_IN] || commitments[N_OUT] || asset_id || policy_digest`.
+    /// Because both variable counts are `u8`, accepted envelopes contain at
+    /// most 513 public inputs (16,416 bytes).
     #[must_use]
     pub const fn expected_pi_count(n_in: u8, n_out: u8) -> u16 {
         1u16  // anchor root
@@ -138,9 +168,41 @@ impl Halo2ProofEnvelopeHeader {
             + 1u16 // policy_digest
     }
 
-    /// Construct a new header for the provided parameters.
-    pub fn new(k: u8, n_in: u8, n_out: u8, flags: u8, n_pi: u16, pi_len: u32) -> Self {
-        Self {
+    /// Construct a canonical header for the provided parameters.
+    ///
+    /// The redundant count and byte-length fields are validated together so
+    /// callers cannot construct a header with two different public-input
+    /// shapes.
+    pub fn new(
+        k: u8,
+        n_in: u8,
+        n_out: u8,
+        flags: u8,
+        n_pi: u16,
+        pi_len: u32,
+    ) -> Result<Self, EnvelopeError> {
+        if !pi_len.is_multiple_of(PUBLIC_INPUT_STRIDE as u32) {
+            return Err(EnvelopeError::PublicInputAlignment {
+                declared: pi_len,
+                stride: PUBLIC_INPUT_STRIDE,
+            });
+        }
+        let expected = Self::expected_pi_count(n_in, n_out);
+        if n_pi != expected {
+            return Err(EnvelopeError::PublicInputCount {
+                declared: n_pi,
+                expected,
+            });
+        }
+        let expected_pi_len = checked_public_input_byte_len(usize::from(n_pi))?;
+        if pi_len != expected_pi_len {
+            return Err(EnvelopeError::PublicInputShape {
+                count: n_pi,
+                declared: pi_len,
+                expected: expected_pi_len,
+            });
+        }
+        Ok(Self {
             version: ENVELOPE_VERSION,
             curve: CURVE_PASTA,
             pcs: PCS_IPA,
@@ -151,7 +213,19 @@ impl Halo2ProofEnvelopeHeader {
             flags,
             n_pi,
             pi_len,
-        }
+        })
+    }
+
+    /// Return the canonical public-input count.
+    #[must_use]
+    pub const fn n_pi(&self) -> u16 {
+        self.n_pi
+    }
+
+    /// Return the canonical public-input byte length.
+    #[must_use]
+    pub const fn pi_len(&self) -> u32 {
+        self.pi_len
     }
 
     fn write_prefix(&self, out: &mut Vec<u8>) {
@@ -205,8 +279,8 @@ impl Halo2ProofEnvelope {
                 actual: proof.len(),
             });
         }
-        let pi_len = (pi_count * PUBLIC_INPUT_STRIDE) as u32;
-        let header = Halo2ProofEnvelopeHeader::new(k, n_in, n_out, flags, pi_count as u16, pi_len);
+        let pi_len = checked_public_input_byte_len(pi_count)?;
+        let header = Halo2ProofEnvelopeHeader::new(k, n_in, n_out, flags, pi_count as u16, pi_len)?;
         Ok(Self {
             header,
             public_inputs,
@@ -260,49 +334,55 @@ impl Halo2ProofEnvelope {
         let n_in = bytes[5];
         let n_out = bytes[6];
         let flags = bytes[7];
-        let n_pi = u16::from_le_bytes([bytes[8], bytes[9]]);
-        let pi_len = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
-
-        if !pi_len.is_multiple_of(PUBLIC_INPUT_STRIDE as u32) {
-            return Err(EnvelopeError::PublicInputAlignment {
-                declared: pi_len,
-                stride: PUBLIC_INPUT_STRIDE,
-            });
-        }
-        let expected = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
-        if n_pi != expected {
-            return Err(EnvelopeError::PublicInputCount {
-                declared: n_pi,
-                expected,
-            });
-        }
+        let declared_n_pi = u16::from_le_bytes([bytes[8], bytes[9]]);
+        let declared_pi_len = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+        let header =
+            Halo2ProofEnvelopeHeader::new(k, n_in, n_out, flags, declared_n_pi, declared_pi_len)?;
+        let n_pi = header.n_pi();
+        let pi_len = header.pi_len();
 
         let offset_after_header = HEADER_PREFIX_LEN;
-        let required = offset_after_header.checked_add(pi_len as usize).ok_or(
+        let actual = bytes.len().saturating_sub(offset_after_header);
+        let pi_len_usize =
+            usize::try_from(pi_len).map_err(|_| EnvelopeError::PublicInputLength {
+                declared: pi_len,
+                actual,
+            })?;
+        let proof_len_offset = offset_after_header.checked_add(pi_len_usize).ok_or(
             EnvelopeError::PublicInputLength {
                 declared: pi_len,
-                actual: bytes.len().saturating_sub(offset_after_header),
+                actual,
             },
         )?;
-        if bytes.len() < required + size_of::<u32>() {
+        let proof_start = proof_len_offset.checked_add(size_of::<u32>()).ok_or(
+            EnvelopeError::PublicInputLength {
+                declared: pi_len,
+                actual,
+            },
+        )?;
+        if bytes.len() < proof_start {
             return Err(EnvelopeError::PublicInputLength {
                 declared: pi_len,
-                actual: bytes.len().saturating_sub(offset_after_header),
+                actual,
             });
         }
-        let pi_bytes = &bytes[offset_after_header..offset_after_header + pi_len as usize];
-        let mut public_inputs = Vec::with_capacity(n_pi as usize);
+        let pi_bytes = &bytes[offset_after_header..proof_len_offset];
+        let mut public_inputs = Vec::with_capacity(usize::from(n_pi));
         for chunk in pi_bytes.chunks_exact(PUBLIC_INPUT_STRIDE) {
             public_inputs.push(chunk.try_into().expect("chunk exact 32"));
         }
+        debug_assert_eq!(public_inputs.len(), usize::from(n_pi));
 
-        let proof_len_offset = offset_after_header + pi_len as usize;
-        let proof_len_bytes = &bytes[proof_len_offset..proof_len_offset + size_of::<u32>()];
+        let proof_len_bytes = &bytes[proof_len_offset..proof_start];
         let proof_len = u32::from_le_bytes(proof_len_bytes.try_into().expect("len 4"));
-        let proof_start = proof_len_offset + size_of::<u32>();
+        let proof_len_usize =
+            usize::try_from(proof_len).map_err(|_| EnvelopeError::ProofLength {
+                declared: proof_len,
+                actual: bytes.len().saturating_sub(proof_start),
+            })?;
         let proof_end =
             proof_start
-                .checked_add(proof_len as usize)
+                .checked_add(proof_len_usize)
                 .ok_or(EnvelopeError::ProofLength {
                     declared: proof_len,
                     actual: bytes.len().saturating_sub(proof_start),
@@ -320,13 +400,22 @@ impl Halo2ProofEnvelope {
         }
         let proof = bytes[proof_start..proof_end].to_vec();
 
-        let header = Halo2ProofEnvelopeHeader::new(k, n_in, n_out, flags, n_pi, pi_len);
         Ok(Self {
             header,
             public_inputs,
             proof,
         })
     }
+}
+
+fn checked_public_input_byte_len(count: usize) -> Result<u32, EnvelopeError> {
+    count
+        .checked_mul(PUBLIC_INPUT_STRIDE)
+        .and_then(|len| u32::try_from(len).ok())
+        .ok_or(EnvelopeError::PublicInputSizeOverflow {
+            count,
+            stride: PUBLIC_INPUT_STRIDE,
+        })
 }
 
 #[cfg(test)]
@@ -338,6 +427,35 @@ mod tests {
         let mut out = [0u8; PUBLIC_INPUT_STRIDE];
         out.copy_from_slice(&bytes);
         out
+    }
+
+    fn raw_envelope(
+        n_in: u8,
+        n_out: u8,
+        n_pi: u16,
+        public_input_bytes: &[u8],
+        proof: &[u8],
+    ) -> Vec<u8> {
+        let pi_len = u32::try_from(public_input_bytes.len()).expect("fixture PI length fits u32");
+        let proof_len = u32::try_from(proof.len()).expect("fixture proof length fits u32");
+        let mut bytes =
+            Vec::with_capacity(HEADER_PREFIX_LEN + public_input_bytes.len() + 4 + proof.len());
+        bytes.extend_from_slice(&[
+            ENVELOPE_VERSION,
+            CURVE_PASTA,
+            PCS_IPA,
+            TRANSCRIPT_BLAKE2B,
+            18,
+            n_in,
+            n_out,
+            0,
+        ]);
+        bytes.extend_from_slice(&n_pi.to_le_bytes());
+        bytes.extend_from_slice(&pi_len.to_le_bytes());
+        bytes.extend_from_slice(public_input_bytes);
+        bytes.extend_from_slice(&proof_len.to_le_bytes());
+        bytes.extend_from_slice(proof);
+        bytes
     }
 
     #[test]
@@ -363,6 +481,14 @@ mod tests {
         assert_eq!(parsed.header.n_in, 2);
         assert_eq!(parsed.header.n_out, 2);
         assert_eq!(parsed.header.flags, FLAG_LOOKUPS);
+        assert_eq!(
+            parsed.header.n_pi(),
+            u16::try_from(inputs.len()).expect("fixture PI count fits u16")
+        );
+        assert_eq!(
+            parsed.header.pi_len(),
+            u32::try_from(inputs.len() * PUBLIC_INPUT_STRIDE).expect("fixture PI length fits u32")
+        );
         assert_eq!(parsed.public_inputs, inputs);
         assert_eq!(parsed.proof, proof);
     }
@@ -418,28 +544,59 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_public_input_length_mismatch() {
-        let inputs = vec![
-            hex_array("7f19b2a9c5b8f1d3c4e2aa1100ddc3f0e1d2c3b4a5968776655443322110aa55"),
-            hex_array("0101010101010101010101010101010101010101010101010101010101010101"),
-            hex_array("0202020202020202020202020202020202020202020202020202020202020202"),
-            hex_array("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-            hex_array("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-            hex_array("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff"),
-            hex_array("ffeeddccbbaa0099887766554433221100ffeeddccbbaa009988776655443322"),
-        ];
-        let env = Halo2ProofEnvelope::new(18, 2, 2, 0, inputs, vec![0u8; 8]).expect("env");
-        let mut bytes = env.to_bytes();
-        let pi_len_offset = 10; // header prefix: version..flags (8 bytes) + n_pi (2 bytes)
-        let mut pi_len = u32::from_le_bytes(
-            bytes[pi_len_offset..pi_len_offset + 4]
-                .try_into()
-                .expect("slice len"),
-        );
-        pi_len = pi_len.saturating_add(PUBLIC_INPUT_STRIDE as u32);
-        bytes[pi_len_offset..pi_len_offset + 4].copy_from_slice(&pi_len.to_le_bytes());
+    fn parse_rejects_undersized_public_input_length_for_count() {
+        let n_in = 1;
+        let n_out = 1;
+        let n_pi = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
+        let declared = u32::from(n_pi - 1) * PUBLIC_INPUT_STRIDE as u32;
+        let bytes = raw_envelope(n_in, n_out, n_pi, &vec![0x11; declared as usize], b"proof");
+
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
-        assert!(matches!(err, EnvelopeError::PublicInputLength { .. }));
+        assert_eq!(
+            err,
+            EnvelopeError::PublicInputShape {
+                count: n_pi,
+                declared,
+                expected: u32::from(n_pi) * PUBLIC_INPUT_STRIDE as u32,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_oversized_public_input_length_for_count() {
+        let n_in = 1;
+        let n_out = 1;
+        let n_pi = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
+        let declared = u32::from(n_pi + 1) * PUBLIC_INPUT_STRIDE as u32;
+        let bytes = raw_envelope(n_in, n_out, n_pi, &vec![0x22; declared as usize], b"proof");
+
+        let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
+        assert_eq!(
+            err,
+            EnvelopeError::PublicInputShape {
+                count: n_pi,
+                declared,
+                expected: u32::from(n_pi) * PUBLIC_INPUT_STRIDE as u32,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_misaligned_public_input_length() {
+        let n_in = 1;
+        let n_out = 1;
+        let n_pi = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
+        let declared = u32::from(n_pi) * PUBLIC_INPUT_STRIDE as u32 - 1;
+        let bytes = raw_envelope(n_in, n_out, n_pi, &vec![0x33; declared as usize], b"proof");
+
+        let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
+        assert_eq!(
+            err,
+            EnvelopeError::PublicInputAlignment {
+                declared,
+                stride: PUBLIC_INPUT_STRIDE,
+            }
+        );
     }
 
     #[test]

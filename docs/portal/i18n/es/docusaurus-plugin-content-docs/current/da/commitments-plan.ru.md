@@ -59,23 +59,18 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
     pub acknowledgement_sig: Signature,       // Torii DA service key
 }
-```- `KzgCommitment` tiene una configuración de 48 teclas en `iroha_crypto::kzg`.
-  При отсутствии используем только Pruebas de Merkle.
-- `proof_scheme` está disponible en los carriles del catálogo; Merkle lanes отклоняют cargas útiles KZG,
-  A `kzg_bls12_381` carriles требуют ненулевых compromisos KZG. Torii сейчас
-  производит только Merkle compromisos и отклоняет carriles с конфигурацией KZG.
-- `KzgCommitment` tiene una configuración de 48 teclas en `iroha_crypto::kzg`.
-  Los usuarios de Merkle Lanes utilizaron pruebas de Merkle.
-- `proof_digest` закладывает DA-5 PDP/PoTR integrado, чтобы запись содержала
-  muestreo rápido, aplicación de manchas.
+```
+
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Encabezado del bloque Расширение
 
@@ -184,9 +179,7 @@ Los índices antiguos incluyen `(lane_id, epoch)` e `(lane_id, sequence)`, entre
 
 ## Открытые вопросы
 
-1. **Valores predeterminados de KZG vs Merkle** — Нужно ли для маленьких blobs всегда пропускать
-   Compromisos de KZG, чтобы уменьшить размер блока? Предложение: оставить
-   `kzg_commitment` ofrece opciones y compuertas desde `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Brechos en la secuencia** — Разрешать ли разрывы последовательности? Plan de tecnología
    отклоняет brechas, если gobernanza не включит `allow_sequence_skips` для
    repetición exclusiva.

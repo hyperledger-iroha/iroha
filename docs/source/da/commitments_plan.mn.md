@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` одоо байгаа 48 байт цэгийг дахин ашигладаг.
-  `iroha_crypto::kzg`. Мерклийн эгнээ хоосон орхидог; Одоо `kzg_bls12_381` эгнээ
-  бөөгнөрөл үндэс болон үүсэлтэй deterministic BLAKE3-XOF амлалт хүлээн авах
-  хадгалах тасалбар нь гадны провергүйгээр блок хэшүүд тогтвортой байх болно.
-- `proof_scheme` нь эгнээний каталогоос гаралтай; Merkle lanes төөрсөн KZG-г үгүйсгэдэг
-  `kzg_bls12_381` эгнээ нь тэгээс өөр KZG амлалт шаарддаг бол даацын ачаалал.
-- `proof_digest` нь DA-5 PDP/PoTR интеграцчлалыг хүлээж байгаа тул ижил амжилт
-  Бөмбөгүүдийг амьд байлгахад ашигладаг түүвэрлэлтийн хуваарийг тоолдог.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Блок толгойн өргөтгөл
 
@@ -126,12 +120,7 @@ Torii бодит багцуудыг дамжуулах хүртэл.
    `SignedBlockWire`; Заасан багцууд нь төлбөрийн курсоруудыг урагшлуулна (устай
    дахин эхлүүлэх үед Kura-аас) ба хуучирсан дамар оруулгуудыг тайрч, дискний өсөлтийг холбоно.
 
-Блок угсрах болон `BlockCreated` залгих нь амлалт тус бүрийг дахин баталгаажуулдаг.
-эгнээний каталог: Merkle lanes нь төөрсөн KZG амлалтаас татгалздаг, KZG эгнээ нь
-тэг биш KZG амлалт ба тэг биш `chunk_root` ба үл мэдэгдэх эгнээ
-унасан. Torii-ийн `/v1/da/commitments/verify` төгсгөлийн цэг нь ижил хамгаалалтыг тусгадаг.
-болон ingest одоо бүрд тодорхой KZG амлалтыг дамжуулдаг
-`kzg_bls12_381` тэмдэглэснээр бодлогод нийцсэн багцууд блок угсралтад хүрдэг.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 залгих төлөвлөгөөнд тодорхойлсон манифест бэхэлгээ нь эх үүсвэр болж хоёр дахин нэмэгддэг
 амлалт багцлагчийн хувьд үнэн. Torii тест
@@ -210,9 +199,7 @@ WSV нь амлалтуудыг `manifest_hash`-ээр тохируулсан т
 
 ## Нээлттэй асуултууд
 
-1. **KZG ба Merkle өгөгдмөл** - Жижиг бөмбөлөгүүд KZG-ийн амлалтыг үргэлж алгасах уу?
-   блокийн хэмжээг багасгах уу? Санал: `kzg_commitment`-г нэмэлтээр үлдээж, гарцыг ашиглана уу
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Дэс дарааллын цоорхой** — Бид эмх цэгцгүй эгнээг зөвшөөрдөг үү? Одоогийн төлөвлөгөө нь цоорхойг үгүйсгэдэг
    засаглал `allow_sequence_skips`-г яаралтай дахин тоглуулахаар солихгүй бол.
 3. **Хөнгөн үйлчлүүлэгчийн кэш** — SDK баг нь SQLite-д хөнгөн жинтэй кэш хүссэн.

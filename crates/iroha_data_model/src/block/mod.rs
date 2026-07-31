@@ -260,6 +260,7 @@ impl SignedBlock {
         transactions: Vec<SignedTransaction>,
         da_commitments: Option<DaCommitmentBundle>,
     ) -> SignedBlock {
+        let da_commitments = da_commitments.filter(|bundle| !bundle.is_empty());
         let external_entrypoints = transactions
             .iter()
             .cloned()
@@ -284,7 +285,12 @@ impl SignedBlock {
 
     /// Create a block with a given signature and payload.
     #[cfg(feature = "transparent_api")]
-    pub fn presigned_with_payload(signature: BlockSignature, payload: BlockPayload) -> SignedBlock {
+    pub fn presigned_with_payload(
+        signature: BlockSignature,
+        mut payload: BlockPayload,
+    ) -> SignedBlock {
+        payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
+        payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload,
@@ -657,6 +663,23 @@ impl SignedBlock {
         core::mem::replace(&mut self.payload.header, header)
     }
 
+    /// Replace DA sidecars without canonicalizing empty bundles for adversarial fixtures.
+    ///
+    /// This is intentionally available only to data-model tests and the
+    /// existing `test-fixtures` feature. Production block construction
+    /// canonicalizes empty sidecars to absence.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn replace_da_sidecars_for_testing(
+        &mut self,
+        da_commitments: Option<DaCommitmentBundle>,
+        da_pin_intents: Option<DaPinIntentBundle>,
+    ) -> (Option<DaCommitmentBundle>, Option<DaPinIntentBundle>) {
+        (
+            core::mem::replace(&mut self.payload.da_commitments, da_commitments),
+            core::mem::replace(&mut self.payload.da_pin_intents, da_pin_intents),
+        )
+    }
+
     /// Signatures of peers which approved this block.
     #[inline]
     pub fn signatures(
@@ -828,6 +851,7 @@ impl SignedBlock {
     ) -> Result<SignedBlock, iroha_crypto::Error> {
         use nonzero_ext::nonzero;
 
+        let da_commitments = da_commitments.filter(|bundle| !bundle.is_empty());
         let mut entry_merkle = MerkleTree::default();
         for tx in &transactions {
             entry_merkle.add(tx.hash_as_entrypoint());
@@ -850,13 +874,9 @@ impl SignedBlock {
             }])
         });
         let proof_policy_hash = HashOf::new(&proof_policies);
-        let da_commitments_hash = da_commitments.as_ref().and_then(|bundle| {
-            if bundle.is_empty() {
-                None
-            } else {
-                Some(bundle.canonical_hash())
-            }
-        });
+        let da_commitments_hash = da_commitments
+            .as_ref()
+            .and_then(DaCommitmentBundle::merkle_commitment);
 
         let header = BlockHeader {
             height: nonzero!(1_u64),
@@ -1706,7 +1726,7 @@ mod tests {
     use crate::{
         ChainId,
         da::{
-            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
@@ -1744,7 +1764,6 @@ mod tests {
             ManifestDigest::new([0x22; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x33; 32]),
-            Some(KzgCommitment::new([0x44; 48])),
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),
@@ -2058,6 +2077,40 @@ mod tests {
 
     #[test]
     #[cfg(feature = "transparent_api")]
+    fn presigned_constructors_normalize_empty_da_bundles() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let key_pair = checked_bls_keypair();
+        let signature = checked_block_signature(0, &key_pair, &header);
+
+        let with_da = SignedBlock::presigned_with_da(
+            signature.clone(),
+            header.clone(),
+            Vec::new(),
+            Some(DaCommitmentBundle::default()),
+        );
+        assert!(with_da.da_commitments().is_none());
+        assert!(with_da.header().da_commitments_hash().is_none());
+
+        let payload = BlockPayload {
+            header,
+            transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
+            execution_context: None,
+            da_commitments: Some(DaCommitmentBundle::default()),
+            da_proof_policies: None,
+            da_pin_intents: Some(DaPinIntentBundle::default()),
+            previous_roster_evidence: None,
+            npos_consensus_effects: None,
+        };
+        let with_payload = SignedBlock::presigned_with_payload(signature, payload);
+        assert!(with_payload.da_commitments().is_none());
+        assert!(with_payload.header().da_commitments_hash().is_none());
+        assert!(with_payload.da_pin_intents().is_none());
+        assert!(with_payload.header().da_pin_intents_hash().is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_does_not_hydrate_transactions_from_entrypoints() {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
@@ -2331,6 +2384,37 @@ mod tests {
         assert_eq!(block.replace_header_for_testing(replacement), original);
         assert_eq!(block.header(), replacement);
         assert_eq!(block.external_entrypoint_count(), transaction_count);
+    }
+
+    #[test]
+    fn adversarial_fixture_da_sidecar_replacement_preserves_noncanonical_empty_bundles() {
+        let keypair = checked_random_keypair();
+        let authority = crate::account::AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("da-sidecar-replacement-test"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let mut block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
+
+        assert_eq!(
+            block.replace_da_sidecars_for_testing(
+                Some(DaCommitmentBundle::default()),
+                Some(DaPinIntentBundle::default()),
+            ),
+            (None, None)
+        );
+        assert!(
+            block
+                .da_commitments()
+                .is_some_and(DaCommitmentBundle::is_empty)
+        );
+        assert!(
+            block
+                .da_pin_intents()
+                .is_some_and(DaPinIntentBundle::is_empty)
+        );
     }
 
     #[test]
@@ -2681,6 +2765,10 @@ mod tests {
 
         assert!(block.payload.header.da_commitments_hash().is_none());
 
+        block.set_da_commitments(Some(DaCommitmentBundle::default()));
+        assert!(block.da_commitments().is_none());
+        assert!(block.payload.header.da_commitments_hash().is_none());
+
         let record = DaCommitmentRecord::new(
             LaneId::new(1),
             2,
@@ -2689,7 +2777,6 @@ mod tests {
             ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
             Some(Hash::prehashed([0xEE; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0xFF; 32]),
@@ -2697,7 +2784,7 @@ mod tests {
                 .expect("checked signed-block DA commitment acknowledgement signature fixture"),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
-        let expected = Some(bundle.canonical_hash());
+        let expected = bundle.merkle_commitment();
         block.set_da_commitments(Some(bundle));
         assert_eq!(block.payload.header.da_commitments_hash(), expected);
 
@@ -2876,6 +2963,10 @@ mod tests {
 
         assert!(block.payload.header.da_pin_intents_hash().is_none());
 
+        block.set_da_pin_intents(Some(DaPinIntentBundle::default()));
+        assert!(block.da_pin_intents().is_none());
+        assert!(block.payload.header.da_pin_intents_hash().is_none());
+
         let intent = DaPinIntent::new(
             LaneId::new(7),
             9,
@@ -2885,9 +2976,8 @@ mod tests {
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         let expected = bundle
-            .merkle_root()
-            .map(HashOf::<DaPinIntentBundle>::from_untyped_unchecked)
-            .expect("non-empty bundle must have root");
+            .merkle_commitment()
+            .expect("non-empty bundle must have a tree commitment");
 
         block.set_da_pin_intents(Some(bundle.clone()));
         assert_eq!(block.da_pin_intents().unwrap(), &bundle);
@@ -2998,11 +3088,24 @@ mod tests {
         .sign(keypair.private_key());
         let bundle = sample_da_bundle();
 
-        let block =
-            SignedBlock::genesis(vec![tx], keypair.private_key(), None, Some(bundle.clone()));
+        let block = SignedBlock::genesis(
+            vec![tx.clone()],
+            keypair.private_key(),
+            None,
+            Some(bundle.clone()),
+        );
 
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
+
+        let empty = SignedBlock::genesis(
+            vec![tx],
+            keypair.private_key(),
+            None,
+            Some(DaCommitmentBundle::default()),
+        );
+        assert!(empty.da_commitments().is_none());
+        assert!(empty.header().da_commitments_hash().is_none());
     }
 
     #[test]
@@ -3034,7 +3137,7 @@ mod tests {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "custom".to_string(),
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
         }]);
         let expected_hash = HashOf::new(&bundle);
 

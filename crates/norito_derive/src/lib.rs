@@ -40,35 +40,15 @@ fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
 
 /// Returns true if the container has `#[norito(decode_from_slice)]` attribute.
 fn has_decode_from_slice_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if !attr.path().is_ident("norito") {
-            return false;
-        }
-        let mut found = false;
-        let _ = attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("decode_from_slice") {
-                found = true;
-            }
-            Ok(())
-        });
-        found
-    })
+    ContainerAttr::parse(attrs)
+        .expect("container attributes must be validated before code generation")
+        .decode_from_slice
 }
 
 fn reuse_archived_alias(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if !attr.path().is_ident("norito") {
-            return false;
-        }
-        let mut reuse = false;
-        let _ = attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("reuse_archived") {
-                reuse = true;
-            }
-            Ok(())
-        });
-        reuse
-    })
+    ContainerAttr::parse(attrs)
+        .expect("container attributes must be validated before code generation")
+        .reuse_archived
 }
 
 // ---- Type classification helpers for packed-struct hybrid layout ----
@@ -154,7 +134,7 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
 }
 
 fn needs_packed_size(field: &syn::Field) -> bool {
-    let attrs = FieldAttr::parse(&field.attrs);
+    let attrs = FieldAttr::parse_validated(&field.attrs);
     attrs.needs_size
         || is_staged_wrapper(&field.ty)
         || !(is_self_delimiting(&field.ty) || is_fixed_size(&field.ty).is_some())
@@ -165,13 +145,13 @@ fn packed_field_bitset(fields: &Fields) -> Vec<u8> {
         Fields::Named(named) => named
             .named
             .iter()
-            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .filter(|field| !FieldAttr::parse_validated(&field.attrs).skip)
             .map(needs_packed_size)
             .collect::<Vec<_>>(),
         Fields::Unnamed(unnamed) => unnamed
             .unnamed
             .iter()
-            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .filter(|field| !FieldAttr::parse_validated(&field.attrs).skip)
             .map(needs_packed_size)
             .collect::<Vec<_>>(),
         Fields::Unit => Vec::new(),
@@ -336,10 +316,7 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
     match fields {
         Fields::Named(named) => {
             for f in &named.named {
-                let attrs = FieldAttr::parse(&f.attrs);
-                if let Some(err) = attrs.error {
-                    return Err(err);
-                }
+                let attrs = FieldAttr::parse(&f.attrs)?;
                 if attrs.skip && attrs.default {
                     return Err(syn::Error::new_spanned(
                         f,
@@ -370,10 +347,7 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
         }
         Fields::Unnamed(unnamed) => {
             for f in &unnamed.unnamed {
-                let attrs = FieldAttr::parse(&f.attrs);
-                if let Some(err) = attrs.error {
-                    return Err(err);
-                }
+                let attrs = FieldAttr::parse(&f.attrs)?;
                 if attrs.rename.is_some() {
                     return Err(syn::Error::new_spanned(
                         f,
@@ -397,6 +371,23 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
         Fields::Unit => {}
     }
     Ok(())
+}
+
+/// Validate field attributes for structs and for every enum-variant shape.
+fn validate_data_field_attrs(data: &Data) -> syn::Result<()> {
+    match data {
+        Data::Struct(data) => validate_field_attrs(&data.fields),
+        Data::Enum(data) => {
+            for variant in &data.variants {
+                validate_field_attrs(&variant.fields)?;
+            }
+            Ok(())
+        }
+        Data::Union(data) => Err(syn::Error::new_spanned(
+            &data.union_token,
+            "Norito derives do not support unions",
+        )),
+    }
 }
 
 /// Extract a custom wire index from `#[codec(index = ...)]`.
@@ -573,7 +564,7 @@ mod enum_variant_index_tests {
 }
 
 /// Parsed helper attributes for a field.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 struct FieldAttr {
     /// Optional renamed identifier used during (de)serialization.
     #[allow(dead_code)]
@@ -592,8 +583,6 @@ struct FieldAttr {
     flatten: bool,
     /// Force packed-struct layout to emit an explicit size header for this field.
     needs_size: bool,
-    /// Deferred parsing error propagated during validation.
-    error: Option<syn::Error>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -757,6 +746,11 @@ struct ContainerAttr {
     rename_all: Option<RenameRule>,
     schema_name: Option<String>,
     deny_unknown_fields: bool,
+    decode_from_slice: bool,
+    reuse_archived: bool,
+    no_fast_from_json: bool,
+    tag: Option<String>,
+    content: Option<String>,
 }
 
 impl ContainerAttr {
@@ -789,8 +783,48 @@ impl ContainerAttr {
                         return Err(meta.error("duplicate deny_unknown_fields attribute"));
                     }
                     out.deny_unknown_fields = true;
+                } else if meta.path.is_ident("decode_from_slice") {
+                    if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if out.decode_from_slice {
+                        return Err(meta.error("duplicate decode_from_slice attribute"));
+                    }
+                    out.decode_from_slice = true;
+                } else if meta.path.is_ident("reuse_archived") {
+                    if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if out.reuse_archived {
+                        return Err(meta.error("duplicate reuse_archived attribute"));
+                    }
+                    out.reuse_archived = true;
+                } else if meta.path.is_ident("no_fast_from_json") {
+                    if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if out.no_fast_from_json {
+                        return Err(meta.error("duplicate no_fast_from_json attribute"));
+                    }
+                    out.no_fast_from_json = true;
+                } else if meta.path.is_ident("tag") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    if out.tag.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `tag` attribute"));
+                    }
+                } else if meta.path.is_ident("content") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    if out.content.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `content` attribute"));
+                    }
                 } else {
-                    consume_unknown_meta(meta)?;
+                    return Err(meta.error("unknown `norito` container attribute"));
                 }
                 Ok(())
             })?;
@@ -908,76 +942,126 @@ mod container_attr_tests {
             "deny_unknown_fields does not take a value"
         );
     }
+
+    #[test]
+    fn unknown_container_attribute_is_rejected() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(transparent)]
+            struct Demo(u32);
+        };
+
+        let error = ContainerAttr::parse(&input.attrs).expect_err("unknown key must reject");
+        assert_eq!(error.to_string(), "unknown `norito` container attribute");
+    }
+
+    #[test]
+    fn attributes_owned_by_other_norito_derives_are_accepted() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(
+                decode_from_slice,
+                reuse_archived,
+                no_fast_from_json,
+                tag = "kind",
+                content = "payload"
+            )]
+            enum Demo {
+                Unit,
+            }
+        };
+
+        ContainerAttr::parse(&input.attrs).expect("known shared container attributes");
+    }
+
+    #[test]
+    fn duplicate_shared_container_attribute_is_rejected() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(decode_from_slice, decode_from_slice)]
+            struct Demo(u32);
+        };
+
+        let error =
+            ContainerAttr::parse(&input.attrs).expect_err("duplicate shared flag must reject");
+        assert_eq!(error.to_string(), "duplicate decode_from_slice attribute");
+    }
 }
 
 impl FieldAttr {
     /// Parse `#[norito(...)]` attributes from a field definition.
-    fn parse(attrs: &[syn::Attribute]) -> Self {
+    fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
         let mut out = FieldAttr::default();
         for attr in attrs {
             if attr.path().is_ident("norito") {
-                let res = attr.parse_nested_meta(|meta| {
+                attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("rename") {
                         let lit: syn::LitStr = meta.value()?.parse()?;
-                        out.rename = Some(lit.value());
+                        if out.rename.replace(lit.value()).is_some() {
+                            return Err(meta.error("duplicate `rename` attribute"));
+                        }
                     } else if meta.path.is_ident("skip") {
+                        if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                            return Err(meta.error("`skip` does not take a value"));
+                        }
+                        if out.skip {
+                            return Err(meta.error("duplicate `skip` attribute"));
+                        }
                         out.skip = true;
                     } else if meta.path.is_ident("default") {
+                        if out.default {
+                            return Err(meta.error("duplicate `default` attribute"));
+                        }
                         out.default = true;
-                        if !meta.input.is_empty() {
+                        if meta.input.peek(Token![=]) {
                             let lit: syn::LitStr = meta.value()?.parse()?;
-                            match syn::parse_str::<syn::Path>(&lit.value()) {
-                                Ok(path) => out.default_fn = Some(path),
-                                Err(err) => {
-                                    out.error =
-                                        Some(meta.error(format!(
-                                            "invalid path `{}`: {err}",
-                                            lit.value()
-                                        )));
-                                }
-                            }
+                            out.default_fn =
+                                Some(syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                                    meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                                })?);
                         }
                     } else if meta.path.is_ident("skip_serializing_if") {
                         let lit: syn::LitStr = meta.value()?.parse()?;
-                        match syn::parse_str::<syn::Path>(&lit.value()) {
-                            Ok(path) => out.skip_serializing_if = Some(path),
-                            Err(err) => {
-                                out.error = Some(
-                                    meta.error(format!("invalid path `{}`: {err}", lit.value())),
-                                );
-                            }
+                        let path = syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                        })?;
+                        if out.skip_serializing_if.replace(path).is_some() {
+                            return Err(meta.error("duplicate `skip_serializing_if` attribute"));
                         }
                     } else if meta.path.is_ident("with") {
                         let lit: syn::LitStr = meta.value()?.parse()?;
-                        match syn::parse_str::<syn::Path>(&lit.value()) {
-                            Ok(path) => {
-                                if out.with.is_some() {
-                                    out.error = Some(meta.error("duplicate `with` attribute"));
-                                } else {
-                                    out.with = Some(path);
-                                }
-                            }
-                            Err(err) => {
-                                out.error = Some(
-                                    meta.error(format!("invalid path `{}`: {err}", lit.value())),
-                                );
-                            }
+                        let path = syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                        })?;
+                        if out.with.replace(path).is_some() {
+                            return Err(meta.error("duplicate `with` attribute"));
                         }
                     } else if meta.path.is_ident("flatten") {
+                        if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                            return Err(meta.error("`flatten` does not take a value"));
+                        }
+                        if out.flatten {
+                            return Err(meta.error("duplicate `flatten` attribute"));
+                        }
                         out.flatten = true;
                     } else if meta.path.is_ident("needs_size") {
+                        if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                            return Err(meta.error("`needs_size` does not take a value"));
+                        }
+                        if out.needs_size {
+                            return Err(meta.error("duplicate `needs_size` attribute"));
+                        }
                         out.needs_size = true;
                     } else {
-                        consume_unknown_meta(meta)?;
+                        return Err(meta.error("unknown `norito` field attribute"));
                     }
                     Ok(())
-                });
-                if let Err(err) = res {
-                    out.error = Some(err);
-                }
+                })?;
             }
         }
-        out
+        Ok(out)
+    }
+
+    /// Parse attributes after the derive entry point has validated every field.
+    fn parse_validated(attrs: &[syn::Attribute]) -> Self {
+        Self::parse(attrs).expect("field attributes must be validated before code generation")
     }
 }
 
@@ -1030,8 +1114,39 @@ mod field_attr_tests {
             #[norito(needs_size)]
             demo: u32
         };
-        let attrs = FieldAttr::parse(&field.attrs);
+        let attrs = FieldAttr::parse(&field.attrs).expect("valid field attribute");
         assert!(attrs.needs_size);
+    }
+
+    #[test]
+    fn malformed_and_unknown_field_attributes_are_rejected() {
+        let malformed: syn::Field = syn::parse_quote! {
+            #[norito(with = "bad::")]
+            malformed: u32
+        };
+        assert!(FieldAttr::parse(&malformed.attrs).is_err());
+
+        let unknown: syn::Field = syn::parse_quote! {
+            #[norito(transparant)]
+            unknown: u32
+        };
+        let error = FieldAttr::parse(&unknown.attrs).expect_err("unknown key must reject");
+        assert_eq!(error.to_string(), "unknown `norito` field attribute");
+    }
+
+    #[test]
+    fn malformed_enum_field_attribute_is_rejected_before_codegen() {
+        let input: DeriveInput = syn::parse_quote! {
+            enum Demo {
+                Value {
+                    #[norito(with = "bad::")]
+                    value: u32,
+                },
+            }
+        };
+
+        validate_data_field_attrs(&input.data)
+            .expect_err("enum fields must use the same validation as struct fields");
     }
 }
 
@@ -1089,47 +1204,19 @@ mod self_delimiting_tests {
 struct EnumAttr {
     tag: Option<String>,
     content: Option<String>,
-    error: Option<syn::Error>,
 }
 
 impl EnumAttr {
     fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
-        let mut out = EnumAttr::default();
-        for attr in attrs {
-            if !attr.path().is_ident("norito") {
-                continue;
-            }
-            let res = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("tag") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    if out.tag.is_some() {
-                        return Err(meta.error("duplicate `tag` attribute"));
-                    }
-                    out.tag = Some(lit.value());
-                } else if meta.path.is_ident("content") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    if out.content.is_some() {
-                        return Err(meta.error("duplicate `content` attribute"));
-                    }
-                    out.content = Some(lit.value());
-                } else {
-                    consume_unknown_meta(meta)?;
-                }
-                Ok(())
-            });
-            if let Err(err) = res {
-                out.error = Some(err);
-            }
-        }
-        if let Some(err) = out.error {
-            Err(err)
-        } else {
-            Ok(out)
-        }
+        let container = ContainerAttr::parse(attrs)?;
+        Ok(Self {
+            tag: container.tag,
+            content: container.content,
+        })
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct VariantAttr {
     rename: Option<String>,
 }
@@ -1144,14 +1231,32 @@ impl VariantAttr {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename") {
                     let lit: syn::LitStr = meta.value()?.parse()?;
-                    out.rename = Some(lit.value());
+                    if out.rename.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `rename` attribute"));
+                    }
                 } else {
-                    consume_unknown_meta(meta)?;
+                    return Err(meta.error("unknown `norito` variant attribute"));
                 }
                 Ok(())
             })?;
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod variant_attr_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_variant_attribute_is_rejected() {
+        let variant: Variant = syn::parse_quote! {
+            #[norito(other)]
+            Unknown
+        };
+
+        let error = VariantAttr::parse(&variant.attrs).expect_err("unknown key must reject");
+        assert_eq!(error.to_string(), "unknown `norito` variant attribute");
     }
 }
 
@@ -1172,7 +1277,7 @@ fn derive_struct_serialize(
         Fields::Named(named) => named
             .named
             .iter()
-            .any(|f| FieldAttr::parse(&f.attrs).flatten),
+            .any(|f| FieldAttr::parse_validated(&f.attrs).flatten),
         _ => false,
     };
     let serialize_calls: Vec<_> = match fields {
@@ -1180,7 +1285,7 @@ fn derive_struct_serialize(
             .named
             .iter()
             .filter_map(|f| {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     return None;
                 }
@@ -1215,7 +1320,7 @@ fn derive_struct_serialize(
             .iter()
             .enumerate()
             .filter_map(|(i, f)| {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     return None;
                 }
@@ -1250,7 +1355,7 @@ fn derive_struct_serialize(
     match fields {
         Fields::Named(named) => {
             for f in &named.named {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1311,7 +1416,7 @@ fn derive_struct_serialize(
         }
         Fields::Unnamed(unnamed) => {
             for (i, f) in unnamed.unnamed.iter().enumerate() {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1385,12 +1490,12 @@ fn derive_struct_serialize(
         Fields::Named(named) => named
             .named
             .iter()
-            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .filter(|field| !FieldAttr::parse_validated(&field.attrs).skip)
             .any(|field| is_signature_like(&field.ty)),
         Fields::Unnamed(unnamed) => unnamed
             .unnamed
             .iter()
-            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .filter(|field| !FieldAttr::parse_validated(&field.attrs).skip)
             .any(|field| is_signature_like(&field.ty)),
         Fields::Unit => false,
     };
@@ -1411,7 +1516,7 @@ fn derive_struct_serialize(
             let mut offset_parts = Vec::new();
             let mut count = 0usize;
             for f in &named.named {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1476,7 +1581,7 @@ fn derive_struct_serialize(
             let mut offset_parts = Vec::new();
             let mut count = 0usize;
             for (i, f) in unnamed.unnamed.iter().enumerate() {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1538,7 +1643,7 @@ fn derive_struct_serialize(
             let mut offset_parts = Vec::new();
             let mut count = 0usize;
             for f in &named.named {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1603,7 +1708,7 @@ fn derive_struct_serialize(
             let mut offset_parts = Vec::new();
             let mut count = 0usize;
             for (i, f) in unnamed.unnamed.iter().enumerate() {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1685,7 +1790,7 @@ fn derive_struct_serialize(
     match fields {
         Fields::Named(named) => {
             for f in &named.named {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1696,7 +1801,7 @@ fn derive_struct_serialize(
         }
         Fields::Unnamed(unnamed) => {
             for f in &unnamed.unnamed {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 if attrs.skip {
                     continue;
                 }
@@ -1715,7 +1820,7 @@ fn derive_struct_serialize(
         match fields {
             Fields::Named(named) => {
                 for f in &named.named {
-                    let attrs = FieldAttr::parse(&f.attrs);
+                    let attrs = FieldAttr::parse_validated(&f.attrs);
                     if attrs.skip {
                         continue;
                     }
@@ -1724,7 +1829,7 @@ fn derive_struct_serialize(
             }
             Fields::Unnamed(unnamed) => {
                 for f in &unnamed.unnamed {
-                    let attrs = FieldAttr::parse(&f.attrs);
+                    let attrs = FieldAttr::parse_validated(&f.attrs);
                     if attrs.skip {
                         continue;
                     }
@@ -1854,7 +1959,7 @@ fn derive_struct_deserialize(
         Fields::Named(named) => named
             .named
             .iter()
-            .any(|f| FieldAttr::parse(&f.attrs).flatten),
+            .any(|f| FieldAttr::parse_validated(&f.attrs).flatten),
         _ => false,
     };
     // Helper: detect [u8; N] arrays for a fast path
@@ -1872,7 +1977,7 @@ fn derive_struct_deserialize(
             .named
             .iter()
             .map(|f| {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 let name = f.ident.as_ref().unwrap();
                 let ty = &f.ty;
                 if attrs.skip {
@@ -1994,7 +2099,7 @@ fn derive_struct_deserialize(
                 .iter()
                 .enumerate()
                 .map(|(i, f)| {
-                    let attrs = FieldAttr::parse(&f.attrs);
+                    let attrs = FieldAttr::parse_validated(&f.attrs);
                     let idx_var = format_ident!("field{}", i);
                     let ty = &f.ty;
                     if attrs.skip {
@@ -2078,7 +2183,7 @@ fn derive_struct_deserialize(
             .named
             .iter()
             .filter(|f| {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 !(attrs.skip)
             })
             .any(|f| is_signature_like(&f.ty)),
@@ -2086,7 +2191,7 @@ fn derive_struct_deserialize(
             .unnamed
             .iter()
             .filter(|f| {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 !(attrs.skip)
             })
             .any(|f| is_signature_like(&f.ty)),
@@ -2110,7 +2215,7 @@ fn derive_struct_deserialize(
                     .named
                     .iter()
                     .filter(|f| {
-                        let a = FieldAttr::parse(&f.attrs);
+                        let a = FieldAttr::parse_validated(&f.attrs);
                         !a.skip
                     })
                     .count(),
@@ -2122,7 +2227,7 @@ fn derive_struct_deserialize(
                     .named
                     .iter()
                     .map(|f| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         let name = f.ident.as_ref().unwrap();
                         let ty = &f.ty;
                         if attrs.skip {
@@ -2170,7 +2275,7 @@ fn derive_struct_deserialize(
                         .named
                         .iter()
                         .map(|f| {
-                            let attrs = FieldAttr::parse(&f.attrs);
+                            let attrs = FieldAttr::parse_validated(&f.attrs);
                             if attrs.skip {
                                 None
                             } else {
@@ -2188,7 +2293,7 @@ fn derive_struct_deserialize(
                 Fields::Named(named) => {
                     let mut any = false;
                     for f in &named.named {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip {
                             continue;
                         }
@@ -2214,7 +2319,7 @@ fn derive_struct_deserialize(
                     .iter()
                     .enumerate()
                     .map(|(i, f)| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         let name = f.ident.as_ref().unwrap();
                         let ty = &f.ty;
                         let fixed_size = is_fixed_size(ty);
@@ -2344,7 +2449,7 @@ fn derive_struct_deserialize(
                     .named
                     .iter()
                     .filter_map(|f| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip || !needs_packed_size(f) {
                             return None;
                         }
@@ -2380,7 +2485,7 @@ fn derive_struct_deserialize(
                         #[inline]
                         fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
                             let __logical_len = bytes.len();
-                            let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                            let __min_size = norito::core::archived_payload_size::<Self>();
                             if __min_size > 0 && __logical_len == 0 {
                                 return Err(norito::core::Error::LengthMismatch);
                             }
@@ -2572,7 +2677,7 @@ fn derive_struct_deserialize(
                     .unnamed
                     .iter()
                     .filter(|f| {
-                        let a = FieldAttr::parse(&f.attrs);
+                        let a = FieldAttr::parse_validated(&f.attrs);
                         !a.skip
                     })
                     .count(),
@@ -2585,7 +2690,7 @@ fn derive_struct_deserialize(
                     .iter()
                     .enumerate()
                     .map(|(i, f)| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         let idx_var = format_ident!("field{}", i);
                         let ty = &f.ty;
                         if attrs.skip {
@@ -2618,7 +2723,7 @@ fn derive_struct_deserialize(
                 Fields::Unnamed(unnamed) => {
                     let mut any = false;
                     for f in &unnamed.unnamed {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip {
                             continue;
                         }
@@ -2645,7 +2750,7 @@ fn derive_struct_deserialize(
                         .unnamed
                         .iter()
                         .map(|f| {
-                            let attrs = FieldAttr::parse(&f.attrs);
+                            let attrs = FieldAttr::parse_validated(&f.attrs);
                             if attrs.skip {
                                 None
                             } else {
@@ -2665,7 +2770,7 @@ fn derive_struct_deserialize(
                     .iter()
                     .enumerate()
                     .map(|(i, f)| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         let idx_var = format_ident!("field{}", i);
                         let ty = &f.ty;
                         let fixed_size = is_fixed_size(ty);
@@ -2743,7 +2848,7 @@ fn derive_struct_deserialize(
                     .unnamed
                     .iter()
                     .filter_map(|f| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip || !needs_packed_size(f) {
                             return None;
                         }
@@ -2770,7 +2875,7 @@ fn derive_struct_deserialize(
                         #[inline]
                         fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
                             let __logical_len = bytes.len();
-                            let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                            let __min_size = norito::core::archived_payload_size::<Self>();
                             if __min_size > 0 && __logical_len == 0 {
                                 return Err(norito::core::Error::LengthMismatch);
                             }
@@ -2925,7 +3030,7 @@ fn derive_struct_deserialize(
                         #[inline]
                         fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
                             let __logical_len = bytes.len();
-                            let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                            let __min_size = norito::core::archived_payload_size::<Self>();
                             if __min_size > 0 && __logical_len == 0 {
                                 return Err(norito::core::Error::LengthMismatch);
                             }
@@ -3006,7 +3111,7 @@ fn derive_enum_serialize(
                     .iter()
                     .zip(bindings.iter())
                     .filter_map(|(f, b)| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip {
                             return None;
                         }
@@ -3058,7 +3163,7 @@ fn derive_enum_serialize(
                         .iter()
                         .zip(bindings.iter())
                         .filter_map(|(f, b)| {
-                            let attrs = FieldAttr::parse(&f.attrs);
+                            let attrs = FieldAttr::parse_validated(&f.attrs);
                             if attrs.skip {
                                 return None;
                             }
@@ -3143,7 +3248,7 @@ fn derive_enum_serialize(
                     .map(|f| f.ident.as_ref().unwrap())
                     .collect();
                 let serialize_calls = fields.named.iter().filter_map(|f| {
-                    let attrs = FieldAttr::parse(&f.attrs);
+                    let attrs = FieldAttr::parse_validated(&f.attrs);
                     if attrs.skip {
                         return None;
                     }
@@ -3341,7 +3446,7 @@ fn derive_enum_deserialize(
                     .iter()
                     .enumerate()
                     .map(|(i, f)| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         let ty = &f.ty;
                         let idx_var = format_ident!("field{}", i);
                         if attrs.skip {
@@ -3450,7 +3555,7 @@ fn derive_enum_deserialize(
                                 } else {
                                     quote! {
                                         let #idx_var = {
-                                            norito::core::decode_context_field_flexible::<#ty>(
+                                            norito::core::decode_context_field_canonical_or_archived::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                             )?
@@ -3479,7 +3584,7 @@ fn derive_enum_deserialize(
                     .named
                     .iter()
                     .map(|f| {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         let name = f.ident.as_ref().unwrap();
                         let ty = &f.ty;
                         if attrs.skip {
@@ -3619,7 +3724,7 @@ fn derive_enum_deserialize(
                 #[inline]
                 fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
                     let __logical_len = bytes.len();
-                    let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                    let __min_size = norito::core::archived_payload_size::<Self>();
                     if __min_size > 0 && __logical_len == 0 {
                         return Err(norito::core::Error::LengthMismatch);
                     }
@@ -3800,8 +3905,12 @@ mod deserialize_codegen_tests {
             "ordinary framed struct fields must use the shared canonical helper"
         );
         assert!(
-            enum_expansion.contains("decode_context_field_flexible::<Opaque>"),
-            "tuple-enum compatibility decoding must use the shared flexible helper"
+            enum_expansion.contains("decode_context_field_canonical_or_archived::<Opaque>"),
+            "framed tuple-enum fields must remain bounded by their declared length"
+        );
+        assert!(
+            !enum_expansion.contains("decode_context_field_flexible"),
+            "enum fields must not consume bytes beyond their declared frame"
         );
         assert!(
             enum_expansion.contains("decode_context_field_prefix::<Vec<u32>>"),
@@ -3814,8 +3923,10 @@ mod deserialize_codegen_tests {
             );
         }
         assert!(
-            struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len)"),
-            "packed-struct bitsets must use the bounded payload helper"
+            struct_expansion
+                .contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len,)"),
+            "packed-struct bitsets must use the bounded payload helper; expansion: \
+             {struct_expansion}"
         );
         for expansion in [&struct_expansion, &tuple_expansion] {
             assert!(
@@ -3843,6 +3954,18 @@ mod deserialize_codegen_tests {
             enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
             "enum tags must use the bounded payload helper"
         );
+        for struct_only_token in [
+            "decode_packed_offsets_slice",
+            "__sizes",
+            "__bitset",
+            "__packed_data_len",
+        ] {
+            assert!(
+                !enum_expansion.contains(struct_only_token),
+                "enum codegen must not inherit packed-struct offset/size loops: \
+                 {struct_only_token}"
+            );
+        }
     }
 }
 
@@ -3850,6 +3973,9 @@ mod deserialize_codegen_tests {
 /// Entry point for the `#[derive(NoritoSerialize)]` macro.
 pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    if let Err(error) = validate_data_field_attrs(&input.data) {
+        return error.to_compile_error().into();
+    }
     let container_attrs = match ContainerAttr::parse(&input.attrs) {
         Ok(attrs) => attrs,
         Err(error) => return error.to_compile_error().into(),
@@ -3888,6 +4014,9 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
 /// Entry point for the `#[derive(NoritoDeserialize)]` macro.
 pub fn derive_norito_deserialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    if let Err(error) = validate_data_field_attrs(&input.data) {
+        return error.to_compile_error().into();
+    }
     let container_attrs = match ContainerAttr::parse(&input.attrs) {
         Ok(attrs) => attrs,
         Err(error) => return error.to_compile_error().into(),
@@ -3937,10 +4066,7 @@ fn derive_fast_json_struct_flatten(
     let mut finals = Vec::new();
 
     for field in named.named.iter() {
-        let attrs = FieldAttr::parse(&field.attrs);
-        if let Some(err) = attrs.error {
-            return Err(err);
-        }
+        let attrs = FieldAttr::parse(&field.attrs)?;
         let field_ident = field.ident.as_ref().unwrap();
         let ty = &field.ty;
         if attrs.skip {
@@ -4069,6 +4195,9 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
         generics,
         ..
     } = parse_macro_input!(input);
+    if let Err(error) = validate_data_field_attrs(&data) {
+        return error.to_compile_error().into();
+    }
     let container_attrs = match ContainerAttr::parse(&attrs) {
         Ok(attrs) => attrs,
         Err(err) => return err.to_compile_error().into(),
@@ -4083,7 +4212,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                     if named
                         .named
                         .iter()
-                        .any(|f| FieldAttr::parse(&f.attrs).flatten)
+                        .any(|f| FieldAttr::parse_validated(&f.attrs).flatten)
                     {
                         match derive_fast_json_struct_flatten(
                             &ident,
@@ -4114,7 +4243,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
 
                         for (idx, f) in named.named.iter().enumerate() {
                             let name = f.ident.as_ref().unwrap();
-                            let attrs = FieldAttr::parse(&f.attrs);
+                            let attrs = FieldAttr::parse_validated(&f.attrs);
                             let key = container_attrs.rename_field(name, &attrs);
                             let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
                             // Precompute 64-bit key hash at compile-time to match TapeWalker
@@ -4740,10 +4869,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                     }
                     Fields::Unnamed(fields) => {
                         for field in fields.unnamed.iter() {
-                            let attrs = FieldAttr::parse(&field.attrs);
-                            if let Some(err) = attrs.error {
-                                return err.to_compile_error().into();
-                            }
+                            let attrs = FieldAttr::parse_validated(&field.attrs);
                             if attrs.skip {
                                 return syn::Error::new_spanned(
                                     field,
@@ -4764,7 +4890,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
 
                         if fields.unnamed.len() == 1 {
                             let field = &fields.unnamed[0];
-                            let attrs = FieldAttr::parse(&field.attrs);
+                            let attrs = FieldAttr::parse_validated(&field.attrs);
                             let ty = &field.ty;
                             let deserialize_call =
                                 attrs.deserializer_call(ty, quote!(&mut __parser));
@@ -4788,7 +4914,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                             let mut match_tokens = Vec::new();
                             let mut finals = Vec::new();
                             for (tuple_idx, field) in fields.unnamed.iter().enumerate() {
-                                let attrs = FieldAttr::parse(&field.attrs);
+                                let attrs = FieldAttr::parse_validated(&field.attrs);
                                 let ty = &field.ty;
                                 let binding = format_ident!("__norito_variant_{tuple_idx}");
                                 inits.push(quote! {
@@ -4862,10 +4988,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                     }
                     Fields::Named(fields) => {
                         for field in fields.named.iter() {
-                            let attrs = FieldAttr::parse(&field.attrs);
-                            if let Some(err) = attrs.error {
-                                return err.to_compile_error().into();
-                            }
+                            let attrs = FieldAttr::parse_validated(&field.attrs);
                             if attrs.skip {
                                 return syn::Error::new_spanned(
                                     field,
@@ -4888,7 +5011,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         let mut match_tokens = Vec::new();
                         let mut finals = Vec::new();
                         for field in fields.named.iter() {
-                            let attrs = FieldAttr::parse(&field.attrs);
+                            let attrs = FieldAttr::parse_validated(&field.attrs);
                             let field_ident = field.ident.as_ref().unwrap();
                             let key = container_attrs.rename_field(field_ident, &attrs);
                             let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
@@ -5069,6 +5192,9 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
         attrs,
         ..
     } = parse_macro_input!(input as DeriveInput);
+    if let Err(error) = validate_data_field_attrs(&data) {
+        return error.to_compile_error().into();
+    }
     let container_attrs = match ContainerAttr::parse(&attrs) {
         Ok(attrs) => attrs,
         Err(err) => return err.to_compile_error().into(),
@@ -5083,7 +5209,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     let mut r#gen = generics.clone();
                     let mut writers = Vec::new();
                     for f in named.named.iter() {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip {
                             continue;
                         }
@@ -5160,7 +5286,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     let mut r#gen = generics.clone();
                     let mut writers = Vec::new();
                     for (idx, f) in unnamed.unnamed.iter().enumerate() {
-                        let attrs = FieldAttr::parse(&f.attrs);
+                        let attrs = FieldAttr::parse_validated(&f.attrs);
                         if attrs.skip {
                             continue;
                         }
@@ -5292,7 +5418,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                             continue;
                         }
                         if fields.unnamed.len() == 1 {
-                            let attrs = FieldAttr::parse(&fields.unnamed[0].attrs);
+                            let attrs = FieldAttr::parse_validated(&fields.unnamed[0].attrs);
                             if attrs.skip {
                                 return syn::Error::new_spanned(
                                     &fields.unnamed[0],
@@ -5325,7 +5451,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                             let mut bindings = Vec::new();
                             let mut serializers = Vec::new();
                             for (idx, field) in fields.unnamed.iter().enumerate() {
-                                let attrs = FieldAttr::parse(&field.attrs);
+                                let attrs = FieldAttr::parse_validated(&field.attrs);
                                 if attrs.skip {
                                     return syn::Error::new_spanned(
                                         field,
@@ -5372,7 +5498,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                         let mut field_writers = Vec::new();
                         let mut ref_idents = Vec::new();
                         for field in fields.named.iter() {
-                            let attrs = FieldAttr::parse(&field.attrs);
+                            let attrs = FieldAttr::parse_validated(&field.attrs);
                             if attrs.skip {
                                 return syn::Error::new_spanned(
                                     field,
@@ -5461,7 +5587,7 @@ fn derive_struct_json_deserialize(
             if named
                 .named
                 .iter()
-                .any(|f| FieldAttr::parse(&f.attrs).flatten)
+                .any(|f| FieldAttr::parse_validated(&f.attrs).flatten)
             {
                 return derive_struct_json_deserialize_flatten(
                     ident,
@@ -5487,7 +5613,7 @@ fn derive_struct_json_deserialize(
             let mut arms = Vec::new();
             let mut finals = Vec::new();
             for f in named.named.iter() {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 let field_ident = f.ident.as_ref().unwrap();
                 let key = container_attrs.rename_field(field_ident, &attrs);
                 let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
@@ -5581,7 +5707,7 @@ fn derive_struct_json_deserialize(
             let mut finals = Vec::new();
             let mut gen_local = r#gen.clone();
             for (idx, f) in unnamed.unnamed.iter().enumerate() {
-                let attrs = FieldAttr::parse(&f.attrs);
+                let attrs = FieldAttr::parse_validated(&f.attrs);
                 let var_ident = format_ident!("__norito_tuple_{idx}");
                 if attrs.skip {
                     add_bound(&mut gen_local, &f.ty, quote!(::core::default::Default));
@@ -5698,7 +5824,7 @@ fn derive_struct_json_deserialize_flatten(
     let mut finals = Vec::new();
 
     for field in named.named.iter() {
-        let attrs = FieldAttr::parse(&field.attrs);
+        let attrs = FieldAttr::parse(&field.attrs)?;
         let field_ident = field.ident.as_ref().unwrap();
         let ty = &field.ty;
         if attrs.skip {
@@ -5873,7 +5999,7 @@ fn derive_enum_json_deserialize(
                 let count = fields.unnamed.len();
                 if count == 1 {
                     let field = &fields.unnamed[0];
-                    let attrs = FieldAttr::parse(&field.attrs);
+                    let attrs = FieldAttr::parse(&field.attrs)?;
                     if attrs.skip {
                         return Err(syn::Error::new_spanned(
                             field,
@@ -5902,7 +6028,7 @@ fn derive_enum_json_deserialize(
                     let mut match_tokens = Vec::new();
                     let mut finals = Vec::new();
                     for (idx, field) in fields.unnamed.iter().enumerate() {
-                        let attrs = FieldAttr::parse(&field.attrs);
+                        let attrs = FieldAttr::parse(&field.attrs)?;
                         if attrs.skip {
                             return Err(syn::Error::new_spanned(
                                 field,
@@ -5980,7 +6106,7 @@ fn derive_enum_json_deserialize(
                 let mut finals = Vec::new();
                 let mut gen_local = r#gen.clone();
                 for field in fields.named.iter() {
-                    let attrs = FieldAttr::parse(&field.attrs);
+                    let attrs = FieldAttr::parse(&field.attrs)?;
                     if attrs.skip {
                         return Err(syn::Error::new_spanned(
                             field,
@@ -6150,18 +6276,9 @@ fn derive_fast_from_json_fallback(input: &DeriveInput) -> TokenStream2 {
 }
 
 fn has_no_fast_from_json_attr(attrs: &[syn::Attribute]) -> bool {
-    let mut flag = false;
-    for attr in attrs {
-        if attr.path().is_ident("norito") {
-            let _ = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("no_fast_from_json") {
-                    flag = true;
-                }
-                Ok(())
-            });
-        }
-    }
-    flag
+    ContainerAttr::parse(attrs)
+        .expect("container attributes must be validated before code generation")
+        .no_fast_from_json
 }
 
 #[proc_macro_derive(JsonDeserialize, attributes(norito))]
@@ -6173,6 +6290,9 @@ fn has_no_fast_from_json_attr(attrs: &[syn::Attribute]) -> bool {
 /// schemas are also closed.
 pub fn derive_json_deserialize(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as DeriveInput);
+    if let Err(error) = validate_data_field_attrs(&parsed.data) {
+        return error.to_compile_error().into();
+    }
     let container_attrs = match ContainerAttr::parse(&parsed.attrs) {
         Ok(attrs) => attrs,
         Err(err) => return err.to_compile_error().into(),

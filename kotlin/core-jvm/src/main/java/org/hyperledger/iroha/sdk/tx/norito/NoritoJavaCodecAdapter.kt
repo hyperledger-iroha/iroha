@@ -48,6 +48,17 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
             }
         }
 
+        /** Reject transaction payload bytes that are not the exact canonical Norito encoding. */
+        @JvmStatic
+        @Throws(NoritoException::class)
+        fun validateCanonicalTransactionPayload(encoded: ByteArray) {
+            try {
+                TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
+            } catch (ex: Exception) {
+                throw NoritoException("Invalid canonical Norito transaction payload", ex)
+            }
+        }
+
         private fun hasHeader(encoded: ByteArray): Boolean {
             if (encoded.size < NoritoHeader.HEADER_LENGTH) return false
             return encoded[0] == 'N'.code.toByte()

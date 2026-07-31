@@ -181,9 +181,11 @@ payload, or metadata field invalidates the signature.
 2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
    erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
    and metadata.
-3. Queue the canonical manifest bytes under `config.da_ingest.manifest_store_dir`
-   (Torii writes `manifest.encoded` files keyed by lane/epoch/sequence/ticket/fingerprint) so SoraFS
-   orchestration can ingest them and link the storage ticket to persisted data.
+3. Queue the canonical manifest and PDP bytes under the sharded ticket index
+   `config.da_ingest.manifest_store_dir/artifacts/<first-ticket-byte-hex>/<ticket-hex>/`
+   as `manifest.norito` and `pdp-commitment.norito`. The one-record-per-ticket
+   layout gives SoraFS orchestration a direct, unambiguous lookup without
+   scanning the shared spool.
 4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
 5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
    governance, analytics).
@@ -292,6 +294,11 @@ All previously blocked ingest TODOs have been implemented and verified:
   deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, drops the encoded payload
   into `config.da_ingest.manifest_store_dir` for SoraFS orchestration, and adds the `Sora-PDP-Commitment`
   header so operators capture the commitment that PDP schedulers will reference.【crates/iroha_torii/src/da/ingest.rs:220】
+- Client-supplied manifest bytes are admitted only through checked Norito decoding; malformed or
+  truncated payloads return `400 Bad Request`. Manifest retrieval resolves the exact sharded ticket
+  path above, so request cost is independent of the total number of spool artifacts. On Unix,
+  Torii creates the ticket-index directories with owner-only `0700` permissions and all new DA and
+  Taikai artifact files with `0600` permissions.
 - Every accepted blob now produces a `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito`
   entry under `manifest_store_dir` bundling the canonical `DaCommitmentRecord` together with the raw
   `PdpCommitmentV1` bytes so DA-3 bundle builders and DA-5 schedulers hydrate identical inputs without
@@ -342,8 +349,9 @@ unchanged.
   chunking completes.【crates/iroha_data_model/src/da/manifest.rs:1】
 - `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
   `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
-- Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
+- Manifest and PDP spool files land in the sharded, storage-ticket-indexed
+  `config.da_ingest.manifest_store_dir/artifacts/` hierarchy, ready for direct
+  SoraFS orchestration lookup without a global directory scan.【crates/iroha_torii/src/da/ingest.rs:220】
 
 Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
 `crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, ensuring the Norito codec

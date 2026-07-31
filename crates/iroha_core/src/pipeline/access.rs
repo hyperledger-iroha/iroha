@@ -3591,15 +3591,15 @@ seiyaku HelperStaticAccess {
 
     #[test]
     fn helper_call_clobber_cannot_reuse_pre_call_literal_state_provenance() {
-        let claimed_path: Name = "claimed".parse().expect("claimed state path");
-        let runtime_path: Name = "runtime".parse().expect("runtime state path");
+        let claimed_path: StatePath = "claimed".parse().expect("claimed state path");
+        let runtime_path: StatePath = "runtime".parse().expect("runtime state path");
         let literals = [
             make_tlv(
-                ivm::PointerType::Name as u16,
+                ivm::PointerType::NoritoBytes as u16,
                 &norito::to_bytes(&claimed_path).expect("encode claimed path"),
             ),
             make_tlv(
-                ivm::PointerType::Name as u16,
+                ivm::PointerType::NoritoBytes as u16,
                 &norito::to_bytes(&runtime_path).expect("encode runtime path"),
             ),
         ];
@@ -3614,7 +3614,7 @@ seiyaku HelperStaticAccess {
                 ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 3),
             ),
         ] {
-            // The helper overwrites r10 with a different authenticated Name and
+            // The helper overwrites r10 with a different authenticated StatePath and
             // returns. Trusting the literal loaded before the call would let a
             // forged exact CNTR key omit the path actually used by STATE_SET.
             let code = [
@@ -3654,15 +3654,15 @@ seiyaku HelperStaticAccess {
 
     #[test]
     fn fresh_authenticated_literal_after_helper_recovers_exact_state_provenance() {
-        let claimed_path: Name = "claimed".parse().expect("claimed state path");
-        let runtime_path: Name = "runtime".parse().expect("runtime state path");
+        let claimed_path: StatePath = "claimed".parse().expect("claimed state path");
+        let runtime_path: StatePath = "runtime".parse().expect("runtime state path");
         let literals = [
             make_tlv(
-                ivm::PointerType::Name as u16,
+                ivm::PointerType::NoritoBytes as u16,
                 &norito::to_bytes(&claimed_path).expect("encode claimed path"),
             ),
             make_tlv(
-                ivm::PointerType::Name as u16,
+                ivm::PointerType::NoritoBytes as u16,
                 &norito::to_bytes(&runtime_path).expect("encode runtime path"),
             ),
         ];

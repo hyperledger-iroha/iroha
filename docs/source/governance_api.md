@@ -2,7 +2,7 @@
 title: Governance App API — Endpoints (Draft)
 ---
 
-Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii returns unsigned instruction skeletons for governance transaction-producing flows and rejects `private_key` payloads. Clients sign locally and submit via `/v1/pipeline/transactions`.
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii returns unsigned instruction skeletons for governance transaction-producing flows. The draft request schemas that formerly exposed server-side signing inputs now exclude private signing material and reject `private_key` as an unknown field before constructing a request object. Clients sign locally and submit via `/v1/pipeline/transactions`.
 
 Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the bonded citizen registry. A citizen is an account that posted the configured minimum bond; the bond is an anti-Sybil/collateral floor and does not increase Parliament draw odds or vote weight above the minimum. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
 
@@ -12,7 +12,10 @@ Overview
   `tx_instructions` — an array of one or more instruction skeletons:
   - `wire_id`: registry identifier for the instruction type
   - `payload_hex`: Norito payload bytes (hex)
-- Governance endpoints do not server-sign. Supplying `private_key` to a `/v1/gov/*` transaction-producing endpoint is rejected; clients assemble a `SignedTransaction` using their authority and chain id, then sign locally and POST to `/v1/pipeline/transactions`.
+- Governance endpoints do not server-sign and their request types have no
+  private-key fields. Clients assemble a `SignedTransaction` using their
+  authority and chain id, then sign locally and POST to
+  `/v1/pipeline/transactions`.
 - SDK coverage:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
@@ -119,8 +122,7 @@ Endpoints
       "window": { "lower": 12345, "upper": 12400 },
       "mode": "Zk" | "Plain",
       "limits": { … }?,
-      "manifest_provenance": { … }?,
-      "authority": "<i105-account-id>?"
+      "manifest_provenance": { … }?
     }
   - Response (JSON):
     { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
@@ -131,7 +133,10 @@ Endpoints
     - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
     - `window.upper` must be `>= window.lower`; and
     - `mode`, when supplied, must be `Zk` or `Plain`.
-  - Submission model: this endpoint is draft-first. `private_key` is rejected because governance server-side signing is disabled; clients should consume `tx_instructions`, sign locally, and submit via `/v1/pipeline/transactions`.
+  - Submission model: this endpoint is draft-only. Its strict request schema
+    contains neither authority nor private-key material; clients consume
+    `tx_instructions`, sign locally, and submit via
+    `/v1/pipeline/transactions`.
 
 Contracts API (locally signed deployment)
 - Torii does not expose a server-side deployment endpoint and never accepts a
@@ -189,7 +194,7 @@ Code Size Cap
     retain their explicit non-proposal behavior.
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?" }
+  - Strict request: { "referendum_id": "r1", "proposal_id": "…64hex" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
@@ -400,7 +405,8 @@ Unlock Sweep (Operator/Audit)
       ]
     }
   - Notes:
-    - Supplying `private_key` is rejected; Torii returns only an unsigned instruction skeleton for local signing.
+    - The strict request has no private-key field; Torii returns only an
+      unsigned instruction skeleton for local signing.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is part of every V1 app API build.

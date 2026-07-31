@@ -47,6 +47,22 @@ jobs:
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Generate runtime-only genesis signing custody
+        run: |
+          umask 077
+          key_root="$(mktemp -d "$RUNNER_TEMP/iroha-compose-genesis.XXXXXX")"
+          echo "IROHA_GENESIS_KEY_ROOT=$key_root" >> "$GITHUB_ENV"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$key_root,dst=/keys" \
+            --entrypoint kagami \
+            hyperledger/iroha:local \
+            keys --out-dir /keys/custody > /dev/null
+          key_dir="$key_root/custody"
+          test -s "$key_dir/public.key"
+          test -s "$key_dir/private.key"
+          echo "IROHA_GENESIS_PUBLIC_KEY_FILE=$key_dir/public.key" >> "$GITHUB_ENV"
+          echo "IROHA_GENESIS_PRIVATE_KEY_FILE=$key_dir/private.key" >> "$GITHUB_ENV"
       - name: Test docker-compose.single.yml
         run: |
           docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
@@ -71,3 +87,12 @@ jobs:
             exit 1;
           }
           docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down
+      - name: Remove runtime-only genesis signing custody
+        if: always()
+        run: |
+          case "${IROHA_GENESIS_KEY_ROOT:-}" in
+            "") exit 0 ;;
+            "$RUNNER_TEMP"/iroha-compose-genesis.*) ;;
+            *) echo "Refusing to remove an unexpected genesis custody path" >&2; exit 1 ;;
+          esac
+          rm -rf -- "$IROHA_GENESIS_KEY_ROOT"

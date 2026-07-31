@@ -72,7 +72,6 @@ impl_decode_from_slice_via_archived! {
     crate::nexus::LanePrivacyProof,
     crate::nexus::LanePrivacyWitness,
     crate::nexus::LanePrivacyMerkleWitness,
-    crate::nexus::LanePrivacySnarkWitness,
     // Also cover event payloads that may appear in option/sequence contexts
     crate::events::data::proof::ProofVerified,
     crate::events::data::proof::ProofRejected,

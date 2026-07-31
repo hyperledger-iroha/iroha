@@ -2,7 +2,10 @@
 //!
 //! This carries the lane block header, optional QC and DA digest,
 //! plus the settlement commitment and its hash so the merge ledger can verify
-//! relay payloads deterministically.
+//! relay payloads deterministically. The optional QC represents a pending
+//! in-memory envelope only; merge admission and contract-visible registration
+//! require a quorum-satisfying QC whose aggregate BLS signature authenticates
+//! against the canonical on-chain lane committee.
 
 use core::cmp::Ordering;
 
@@ -67,7 +70,10 @@ pub struct LaneRelayEnvelope {
     pub block_height: u64,
     /// Full lane block header being relayed.
     pub block_header: BlockHeader,
-    /// QC attesting to the block header (when available).
+    /// QC attesting to the block header.
+    ///
+    /// `None` is permitted only for pending transport/status. Any persistent
+    /// or merge-authoritative use must require and cryptographically verify it.
     #[norito(default)]
     pub qc: Option<Qc>,
     /// Optional hash of the DA commitment bundle for the block payload.
@@ -88,24 +94,28 @@ pub struct LaneRelayEnvelope {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub manifest_root: Option<[u8; 32]>,
-    /// `FastPQ` proof material required before this relay can be admitted into the merge path.
+    /// Untrusted `FastPQ` proof metadata carried with the relay.
+    ///
+    /// This metadata is progress evidence only. Merge authority additionally
+    /// requires the exact envelope to have a committed cryptographically
+    /// verified relay record.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 
-/// `FastPQ` admission state for a relay envelope.
+/// Presence state for structurally valid relay `FastPQ` metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "status", content = "state")]
-pub enum LaneRelayProofStatus {
-    /// The relay is structurally valid but has not yet been upgraded with verified `FastPQ` material.
-    Pending,
-    /// The relay carries structurally valid `FastPQ` material and can be considered for merge.
-    Verified,
+pub enum LaneRelayFastpqMaterialStatus {
+    /// The relay carries no structurally valid `FastPQ` metadata.
+    Missing,
+    /// The relay carries structurally valid but unauthenticated `FastPQ` metadata.
+    Present,
 }
 
 impl PartialOrd for LaneRelayEnvelope {
@@ -613,19 +623,23 @@ impl LaneRelayEnvelope {
         self.verify_settlement_hash()
     }
 
-    /// Return the current `FastPQ` admission state for this envelope.
+    /// Return whether this envelope carries structurally valid `FastPQ` metadata.
     #[must_use]
-    pub fn proof_status(&self) -> LaneRelayProofStatus {
+    pub fn fastpq_metadata_status(&self) -> LaneRelayFastpqMaterialStatus {
         if self.has_fastpq_proof_material() {
-            LaneRelayProofStatus::Verified
+            LaneRelayFastpqMaterialStatus::Present
         } else {
-            LaneRelayProofStatus::Pending
+            LaneRelayFastpqMaterialStatus::Missing
         }
     }
 
-    /// Whether this relay satisfies merge-admission prerequisites.
+    /// Whether this relay carries the structural material required for merge admission.
+    ///
+    /// This check does not authenticate the QC signature or the `FastPQ`
+    /// proof. Consensus code must validate both against authoritative state
+    /// before treating the settlement as merge input.
     #[must_use]
-    pub fn is_merge_admissible(&self) -> bool {
+    pub fn has_merge_admission_material(&self) -> bool {
         self.block_height > 0
             && self.qc.as_ref().is_some_and(|qc| {
                 qc.phase == crate::block::consensus::CertPhase::Commit
@@ -761,16 +775,19 @@ impl LaneRelayEnvelope {
     /// Whether the envelope includes structurally valid `FastPQ` proof material.
     #[must_use]
     pub fn has_fastpq_proof_material(&self) -> bool {
-        self.verify_fastpq_proof_material().is_ok()
+        self.validate_fastpq_proof_metadata().is_ok()
     }
 
-    /// Validate `FastPQ` proof metadata.
+    /// Validate the shape of untrusted `FastPQ` proof metadata.
+    ///
+    /// This does not verify a proof. Consensus callers must additionally
+    /// require the exact committed [`VerifiedLaneRelayRecord`].
     ///
     /// # Errors
     ///
     /// Returns [`LaneRelayError::MissingFastpqProof`] when proof metadata is absent and
     /// [`LaneRelayError::InvalidFastpqProof`] when the proof binding is malformed.
-    pub fn verify_fastpq_proof_material(&self) -> Result<(), LaneRelayError> {
+    pub fn validate_fastpq_proof_metadata(&self) -> Result<(), LaneRelayError> {
         let Some(material) = self.fastpq_proof.as_ref() else {
             return Err(LaneRelayError::MissingFastpqProof);
         };
@@ -1395,18 +1412,24 @@ mod tests {
     }
 
     #[test]
-    fn proof_status_distinguishes_pending_and_verified_relays() {
+    fn fastpq_metadata_status_distinguishes_missing_and_present_metadata() {
         let pending = build_envelope(6, None);
-        assert_eq!(pending.proof_status(), LaneRelayProofStatus::Pending);
-        assert!(!pending.is_merge_admissible());
+        assert_eq!(
+            pending.fastpq_metadata_status(),
+            LaneRelayFastpqMaterialStatus::Missing
+        );
+        assert!(!pending.has_merge_admission_material());
 
         let verified = pending.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest: Hash::new(b"verified-relay-proof"),
             verified_at_height: 6,
         }));
-        assert_eq!(verified.proof_status(), LaneRelayProofStatus::Verified);
+        assert_eq!(
+            verified.fastpq_metadata_status(),
+            LaneRelayFastpqMaterialStatus::Present
+        );
         assert!(
-            !verified.is_merge_admissible(),
+            !verified.has_merge_admission_material(),
             "QC is still required for merge"
         );
     }
@@ -1429,6 +1452,11 @@ mod tests {
         assert_ne!(
             domain_separated_hash(LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1, payload),
             domain_separated_hash(LANE_RELAY_MERGE_HINT_DOMAIN_V1, payload)
+        );
+        assert_ne!(
+            domain_separated_hash(b"a", b"bc"),
+            domain_separated_hash(b"ab", b"c"),
+            "the framed domain cannot be shifted into the payload"
         );
     }
 
@@ -1807,7 +1835,7 @@ mod tests {
             }));
 
         envelope
-            .verify_fastpq_proof_material()
+            .validate_fastpq_proof_metadata()
             .expect("external proof digest should be accepted");
     }
 
@@ -1820,7 +1848,7 @@ mod tests {
             }));
 
         let err = envelope
-            .verify_fastpq_proof_material()
+            .validate_fastpq_proof_metadata()
             .expect_err("stale verification height must be rejected");
         assert_eq!(err, LaneRelayError::InvalidFastpqProof);
     }

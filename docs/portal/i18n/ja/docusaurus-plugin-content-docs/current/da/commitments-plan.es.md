@@ -63,9 +63,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -73,16 +72,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` は、`iroha_crypto::kzg` で 48 バイトを再利用します。
-  Cuando esta ausente, se vuelve a Merkle Proof solamente。
-- `proof_scheme` レーンのカタログから派生します。ラス・レーンズ・マークル・レチャザン
-  ペイロード KZG mientras que las lanes `kzg_bls12_381` はコミットメントを必要とします KZG
-  セロはいない。 Torii マークルとレチャザレーンの妥協によるソロプロデュース
-  KZG を設定します。
-- `KzgCommitment` 48 バイトの再利用 `iroha_crypto::kzg`。
-  Cuando esta ausente en Lanes Merkle se vuelve a Merkle Proof solamente。
-- `proof_digest` 統合 DA-5 PDP/PoTR パラレルミスモレコード
-  生体内でのマンテナーブロブのサンプリングスケジュールを列挙します。
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 ヘッダーブロックの拡張
 
@@ -177,30 +169,7 @@ El WSV アルマセナ コンプロミソスとウナ コラム ファミリー 
 
 ## 7. プルエバスの戦略
 
-1. **`DaCommitmentBundle` のエンコード/デコードに関する **テスト ユニタリオ**
-   ブロックのハッシュの実際の派生。
-2. **フィクスチャ ゴールデン** バホ `fixtures/da/commitments/` クエリ キャプチャー バイト
-   カノニコス デル バンドルとプルエバス マークル。
-3. **統合テスト** レバンタンド ドス バリダドレス、インギリエンド ブロブ
-   バンドルの内容を確認して、アンボス ノードを確認してください
-   ラス・レスプエスタ・デ・コンサルタ/プルエバ。
-4. **クライアントの危険性テスト** en `integration_tests/tests/da/commitments.rs`
-   (Rust) que llaman `/prove` y verifican la prueba sin hablar con Torii。
-5. **Smoke de CLI** コン `scripts/da/check_commitments.sh` パラ マンテナー ツール
-   再現可能なド・オペラドール。
-
-## 8. 展開の計画
-
-|ファセ |説明 |サリダの基準 |
-|------|-------------|----------|
-| P0 - モデルとデータを結合 |統合型 `DaCommitmentRecord`、ヘッダーとブロックの実際のコーデック Norito。 | `cargo test -p iroha_data_model` は最新のフィクスチャを備えています。 |
-| P1 - ケーブルアド コア/WSV | Enhebrar ロジック + ブロック ビルダー、永続化インデックス、エクスポナー ハンドラー RPC。 | `cargo test -p iroha_core`、`integration_tests/tests/da/commitments.rs` のバンドル証明に関する主張。 |
-| P2 - オペレーターのツール | Lanzar の CLI ヘルパー、ダッシュボード Grafana とドキュメントの検証と証明の実際。 | `iroha_cli app da prove-commitment` 開発ネットに反する機能。 EL ダッシュボードは生体内でのデータを保存します。 |
-| P3 - ゴベルナンザ門 | `iroha_config::nexus` では、マルカダのマルカダでの妥協が必要です。 | DA-3 は COMPLETADO と同様に、ステータスとロードマップの更新を記録します。 |
-
-## プレグンタス・アビエルタス1. **KZG と Merkle のデフォルト** - KZG と BLOB ペケノスの侵害を省略するデベモス
-   パラ・リデューシル・エル・タマノ・デル・ブロック?プロプエスタ: マンテナー `kzg_commitment`
-   `iroha_config::da.enable_kzg` 経由のオプションの Y ゲート。
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **シーケンス ギャップ** - レーンの制限は許可されますか?エルプラン実レチャザ
    ギャップサルボ ケ ゴベルナンザ アクティブ `allow_sequence_skips` パラ リプレイ デ
    緊急事態。

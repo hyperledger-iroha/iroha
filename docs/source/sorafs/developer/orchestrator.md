@@ -156,17 +156,20 @@ The `--guard-directory` flag now expects a Norito-encoded
 - `version` — schema version (currently `2`).
 - `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
   metadata that must match every embedded certificate.
-- `validation_phase` — certificate policy gate (`1` = allow single Ed25519 signature,
-  `2` = prefer dual signatures, `3` = require dual signatures).
+- `validation_phase` — signed certificate-policy metadata. The first release
+  accepts only `3` (require both Ed25519 and ML-DSA-65); values `1` and `2` may
+  be decoded by inspection tools but are rejected at runtime trust boundaries.
 - `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
   Fingerprints are computed as
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
 - `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
   carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
   signatures.
-Snapshots are rejected if the version or validation phase is unknown or if the validity window is
-inconsistent (`valid_after_unix > valid_until_unix` or `published_at_unix > valid_until_unix`).
-Runtime authentication also requires `valid_after_unix <= now < valid_until_unix`.
+Snapshots are rejected if the version is unknown, if the authenticated
+validation phase is not `3`, or if the validity window is inconsistent
+(`valid_after_unix > valid_until_unix` or
+`published_at_unix > valid_until_unix`). Runtime authentication also requires
+`valid_after_unix <= now < valid_until_unix`.
 Embedded issuer keys prove only signature self-consistency; the independently
 obtained exact snapshot digest authenticates the issuer set. SRCv2 decoding
 rejects oversized containers before allocation: at most 16 endpoints, 8 tags

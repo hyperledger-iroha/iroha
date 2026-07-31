@@ -64,9 +64,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -74,16 +73,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` доор ашигласан 48 байт цэгийг дахин ашигладаг.
-  `iroha_crypto::kzg`. Байхгүй үед бид зөвхөн Мерклийн нотолгоо руу буцдаг.
-- `proof_scheme` нь эгнээний каталогоос гаралтай; Merkle lanes KZG-г үгүйсгэдэг
-  `kzg_bls12_381` эгнээ нь тэгээс өөр KZG амлалт шаарддаг бол ачааны ачаалал. Torii
-  одоогоор зөвхөн Merkle амлалтуудыг гаргадаг бөгөөд KZG-ийн тохируулсан эгнээнээс татгалздаг.
-- `KzgCommitment` одоо байгаа 48 байт цэгийг дахин ашигладаг.
-  `iroha_crypto::kzg`. Мерклийн эгнээнд байхгүй үед бид Мерклийн нотолгоо руу буцдаг
-  зөвхөн.
-- `proof_digest` нь DA-5 PDP/PoTR интеграцчлалыг хүлээж байгаа тул ижил амжилт
-  Бөмбөгүүдийг амьд байлгахад ашигладаг түүвэрлэлтийн хуваарийг тоолдог.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Блок толгойн өргөтгөл
 
@@ -201,9 +193,7 @@ WSV нь амлалтуудыг `manifest_hash`-ээр тохируулсан т
 
 ## Нээлттэй асуултууд
 
-1. **KZG ба Merkle өгөгдмөл** - Жижиг бөмбөлөгүүд KZG-ийн амлалтыг үргэлж алгасах уу?
-   блокийн хэмжээг багасгах уу? Санал: `kzg_commitment`-г нэмэлтээр үлдээж, гарцыг ашиглана уу
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Дэс дарааллын цоорхой** — Бид эмх цэгцгүй эгнээг зөвшөөрдөг үү? Одоогийн төлөвлөгөө нь цоорхойг үгүйсгэдэг
    засаглал `allow_sequence_skips`-г яаралтай дахин тоглуулахаар солихгүй бол.
 3. **Хөнгөн үйлчлүүлэгчийн кэш** — SDK баг нь SQLite-д хөнгөн жинтэй кэш хүссэн.

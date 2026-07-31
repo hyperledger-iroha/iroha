@@ -73,7 +73,7 @@ do_check_swarm() {
     local image="$2"
     local extra="$3"
     local target="$4"
-    local cmd_base="${bin_kagami[@]} swarm --peers $peers --seed Iroha --healthcheck --config-dir ./defaults --image $image --print"
+    local cmd_base="${bin_kagami[@]} docker --peers $peers --seed Iroha --healthcheck --config-dir ./defaults --image $image --print"
     do_check "$cmd_base --out-file $target $extra" "$target"
 }
 

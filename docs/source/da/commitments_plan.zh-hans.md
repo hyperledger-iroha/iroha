@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` 重用下使用的现有 48 字节点
-  `iroha_crypto::kzg`。 Merkle 通道将其留空；现在为 `kzg_bls12_381` 通道
-  接收从块根派生的确定性 BLAKE3-XOF 承诺，并且
-  存储票证，使块哈希在没有外部证明的情况下保持稳定。
-- `proof_scheme`源自车道目录； Merkle 通道拒绝杂散 KZG
-  有效负载，而 `kzg_bls12_381` 通道需要非零 KZG 承诺。
-- `proof_digest` 预计 DA-5 PDP/PoTR 集成，因此记录相同
-  枚举用于保持 blob 存活的采样计划。
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 区块头扩展
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`；承诺的捆绑包推进收据光标（水合
    重新启动时从 Kura 中删除）并修剪过时的假脱机条目以限制磁盘增长。
 
-块组装和 `BlockCreated` 摄取重新验证每个承诺
-通道目录：Merkle 通道拒绝杂散的 KZG 承诺，KZG 通道需要
-非零 KZG 承诺和非零 `chunk_root`，并且未知车道是
-掉了。 Torii 的 `/v1/da/commitments/verify` 端点镜像相同的防护，
-并摄取现在将确定性 KZG 承诺融入到每个
-`kzg_bls12_381` 记录，以便符合策略的捆绑包到达块组装。
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 摄取计划中描述的清单固定装置兼作来源
 承诺捆绑器的真相。 Torii 测试
@@ -210,9 +199,7 @@ WSV 将承诺存储在由 `manifest_hash` 键入的专用列族中。
 
 ## 开放问题
 
-1. **KZG 与 Merkle 默认值** — 小斑点是否应该始终跳过 KZG 的承诺
-   减小块大小？建议：保留 `kzg_commitment` 可选并通过gate via
-   `iroha_config::da.enable_kzg`。
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **序列间隙** — 我们是否允许无序通道？目前的计划拒绝存在差距
    除非治理切换 `allow_sequence_skips` 进行紧急重播。
 3. **轻客户端缓存** — SDK 团队请求轻量级 SQLite 缓存

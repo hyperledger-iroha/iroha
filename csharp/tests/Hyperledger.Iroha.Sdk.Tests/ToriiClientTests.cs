@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -5,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Http;
+using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
@@ -28,6 +30,7 @@ public sealed class ToriiClientTests
     private static readonly string ContractFeeSponsorAccountId = TestAccountId(0x46);
     private static readonly string MultisigFeeSponsorAccountId = TestAccountId(0x47);
     private static readonly string VerifyingKeyAuthorityAccountId = TestAccountId(0x48);
+    private const string VerifyingKeySigningChainId = "test-chain";
     private static readonly string SoraFsAuthorityAccountId = TestAccountId(0x49);
     private static readonly string ExplorerTransactionAuthorityAccountId = TestAccountId(0x4B);
     private static readonly string ExplorerInstructionAuthorityAccountId = TestAccountId(0x4C);
@@ -96,7 +99,9 @@ public sealed class ToriiClientTests
             Content = new StringContent("ok"),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         var health = await client.GetHealthAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", health);
@@ -111,7 +116,9 @@ public sealed class ToriiClientTests
             Content = new ByteArrayContent([0xff, 0xfe, 0xfd]),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<InvalidDataException>(() => client.GetHealthAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -9070,7 +9077,7 @@ public sealed class ToriiClientTests
             using var body = ReadBodyAsJson(request);
             var root = body.RootElement;
             Assert.Equal(VerifyingKeyAuthorityAccountId, root.GetProperty("authority").GetString());
-            Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
+            Assert.False(root.TryGetProperty("private_key", out _));
             Assert.Equal("halo2/ipa", root.GetProperty("backend").GetString());
             Assert.Equal("vk_main", root.GetProperty("name").GetString());
             Assert.Equal(1u, root.GetProperty("version").GetUInt32());
@@ -9079,14 +9086,13 @@ public sealed class ToriiClientTests
             Assert.Equal(Convert.ToBase64String(expectedVkBytes), root.GetProperty("vk_bytes").GetString());
             Assert.Equal(3u, root.GetProperty("vk_len").GetUInt32());
             Assert.Equal("Active", root.GetProperty("status").GetString());
-            return JsonResponse("""{"accepted":true}""", HttpStatusCode.Accepted);
+            return JsonResponse(VerifyingKeyTransactionDraftResponseJson());
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateVerifyingKeyClient(handler);
 
         var registerRequest = new ToriiVerifyingKeyRegisterRequest
         {
             Authority = VerifyingKeyAuthorityAccountId,
-            PrivateKey = "ed25519:deadbeef",
             Backend = "halo2/ipa",
             Name = "vk_main",
             Version = 1,
@@ -9102,9 +9108,11 @@ public sealed class ToriiClientTests
         detachedVkBytes[1] = (byte)'z';
         Assert.Equal(expectedVkBytes, Assert.IsType<byte[]>(registerRequest.VerifyingKeyBytes));
 
-        using var response = await client.RegisterVerifyingKeyAsync(registerRequest, cancellationToken: TestContext.Current.CancellationToken);
+        var response = await client.RegisterVerifyingKeyAsync(registerRequest, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.True(response.RootElement.GetProperty("accepted").GetBoolean());
+        Assert.False(response.Submitted);
+        Assert.Equal(CanonicalVerifyingKeyTransactionPayload(), response.TransactionPayload);
+        Assert.Equal(IrohaHash.Hash(response.TransactionPayload), response.SigningMessage);
     }
 
     [Fact]
@@ -9113,13 +9121,18 @@ public sealed class ToriiClientTests
         var vkBytes = "abcd"u8.ToArray();
         var expectedVkBytes = vkBytes.ToArray();
         var commitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", expectedVkBytes);
+        var expectedDraftRequest = ValidVerifyingKeyUpdateRequest() with
+        {
+            GasScheduleId = null,
+            Status = "Withdrawn",
+        };
         using var handler = new RecordingHandler(request =>
         {
             Assert.Equal("/v1/zk/vk/update", request.RequestUri!.AbsolutePath);
             using var body = ReadBodyAsJson(request);
             var root = body.RootElement;
             Assert.Equal(VerifyingKeyAuthorityAccountId, root.GetProperty("authority").GetString());
-            Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
+            Assert.False(root.TryGetProperty("private_key", out _));
             Assert.Equal("halo2/ipa", root.GetProperty("backend").GetString());
             Assert.Equal("vk_main", root.GetProperty("name").GetString());
             Assert.Equal(2u, root.GetProperty("version").GetUInt32());
@@ -9128,14 +9141,14 @@ public sealed class ToriiClientTests
             Assert.Equal(Convert.ToBase64String(expectedVkBytes), root.GetProperty("vk_bytes").GetString());
             Assert.Equal(4u, root.GetProperty("vk_len").GetUInt32());
             Assert.Equal("Withdrawn", root.GetProperty("status").GetString());
-            return JsonResponse("""{"accepted":true}""", HttpStatusCode.Accepted);
+            return JsonResponse(
+                VerifyingKeyTransactionDraftResponseJson(expectedDraftRequest));
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateVerifyingKeyClient(handler);
 
         var updateRequest = new ToriiVerifyingKeyUpdateRequest
         {
             Authority = VerifyingKeyAuthorityAccountId,
-            PrivateKey = "ed25519:deadbeef",
             Backend = "halo2/ipa",
             Name = "vk_main",
             Version = 2,
@@ -9150,9 +9163,13 @@ public sealed class ToriiClientTests
         detachedVkBytes[1] = (byte)'z';
         Assert.Equal(expectedVkBytes, Assert.IsType<byte[]>(updateRequest.VerifyingKeyBytes));
 
-        using var response = await client.UpdateVerifyingKeyAsync(updateRequest, cancellationToken: TestContext.Current.CancellationToken);
+        var response = await client.UpdateVerifyingKeyAsync(updateRequest, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.True(response.RootElement.GetProperty("accepted").GetBoolean());
+        Assert.False(response.Submitted);
+        Assert.Equal(
+            CanonicalVerifyingKeyTransactionPayload(expectedDraftRequest),
+            response.TransactionPayload);
+        Assert.Equal(IrohaHash.Hash(response.TransactionPayload), response.SigningMessage);
     }
 
     [Fact]
@@ -9160,7 +9177,9 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             JsonResponse(VerifyingKeyDetailResponseJson()));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
         using var response = await client.GetVerifyingKeyAsync("halo2/ipa", "vk_main", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -9173,13 +9192,12 @@ public sealed class ToriiClientTests
     public async Task UpdateVerifyingKeyAsyncRejectsMismatchedInlineCommitmentBeforeRequest()
     {
         using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateVerifyingKeyClient(handler);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
             {
                 Authority = VerifyingKeyAuthorityAccountId,
-                PrivateKey = "ed25519:deadbeef",
                 Backend = "halo2/ipa",
                 Name = "vk_main",
                 Version = 2,
@@ -9317,7 +9335,9 @@ public sealed class ToriiClientTests
         string expectedMessage)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.GetVerifyingKeyAsync("halo2/ipa", "vk_main", cancellationToken: TestContext.Current.CancellationToken));
@@ -9329,8 +9349,16 @@ public sealed class ToriiClientTests
 
     public static IEnumerable<object?[]> InvalidVerifyingKeyWriteResponses()
     {
+        var nonCanonicalPayloadSigningBase64 =
+            Convert.ToBase64String(IrohaHash.Hash(new byte[] { 1, 2, 3 }));
         foreach (var operation in new[] { "register", "update" })
         {
+            object request = operation == "register"
+                ? ValidVerifyingKeyRegisterRequest()
+                : ValidVerifyingKeyUpdateRequest();
+            var payload = CanonicalVerifyingKeyTransactionPayload(request);
+            var payloadBase64 = Convert.ToBase64String(payload);
+            var signingBase64 = Convert.ToBase64String(IrohaHash.Hash(payload));
             yield return new object?[]
             {
                 operation,
@@ -9341,51 +9369,79 @@ public sealed class ToriiClientTests
             yield return new object?[]
             {
                 operation,
-                "accepted",
+                "verifying key " + operation,
                 "{}",
-                "must not be null",
+                "must contain exactly",
             };
             yield return new object?[]
             {
                 operation,
-                "accepted",
-                """{"accepted":null}""",
-                "must not be null",
+                "submitted",
+                $$"""{"submitted":true,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}"}""",
+                "must be false",
             };
             yield return new object?[]
             {
                 operation,
-                "accepted",
-                """{"accepted":false}""",
-                "must be true",
+                "submitted",
+                $$"""{"submitted":"false","transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}"}""",
+                "must be false",
             };
             yield return new object?[]
             {
                 operation,
-                "accepted",
-                """{"accepted":"true"}""",
-                "must be true",
+                "transaction_payload_b64",
+                $$"""{"submitted":false,"transaction_payload_b64":"AQI","signing_message_b64":"{{signingBase64}}"}""",
+                "canonical",
             };
             yield return new object?[]
             {
                 operation,
-                "accepted",
-                """{"accepted":1}""",
-                "must be true",
+                "transaction_payload_b64",
+                $$"""{"submitted":false,"transaction_payload_b64":"AQID","signing_message_b64":"{{nonCanonicalPayloadSigningBase64}}"}""",
+                "canonical nine-field",
+            };
+            yield return new object?[]
+            {
+                operation,
+                "signing_message_b64",
+                $$"""{"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{Convert.ToBase64String(new byte[31])}}"}""",
+                "exactly 32 bytes",
+            };
+            yield return new object?[]
+            {
+                operation,
+                "signing_message_b64",
+                $$"""{"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{Convert.ToBase64String(new byte[32])}}"}""",
+                "exact Iroha prehash",
+            };
+            yield return new object?[]
+            {
+                operation,
+                "verifying key " + operation,
+                $$"""{"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}","private_key":"retired"}""",
+                "must contain exactly",
+            };
+            yield return new object?[]
+            {
+                operation,
+                "submitted",
+                $$"""{"submitted":false,"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}"}""",
+                "must not appear more than once",
             };
         }
     }
 
     [Theory]
     [MemberData(nameof(InvalidVerifyingKeyWriteResponses))]
-    public async Task VerifyingKeyWriteResponsesRejectMalformedAcceptedEnvelope(
+    public async Task VerifyingKeyWriteResponsesRejectMalformedTransactionDraft(
         string operation,
         string expectedField,
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => JsonResponse(json, HttpStatusCode.Accepted));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var handler = new RecordingHandler(_ => JsonResponse(json));
+        using var client = CreateVerifyingKeyClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVerifyingKeyWriteOperationAsync(
@@ -9400,6 +9456,128 @@ public sealed class ToriiClientTests
         Assert.Equal($"/v1/zk/vk/{operation}", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
+    [Theory]
+    [InlineData("register")]
+    [InlineData("update")]
+    public async Task VerifyingKeyWriteResponsesRequireHttp200(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            JsonResponse(VerifyingKeyTransactionDraftResponseJson(), HttpStatusCode.Accepted));
+        using var client = CreateVerifyingKeyClient(handler);
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            InvokeVerifyingKeyWriteOperationAsync(
+                client,
+                operation,
+                operation == "register"
+                    ? ValidVerifyingKeyRegisterRequest()
+                    : ValidVerifyingKeyUpdateRequest()));
+
+        Assert.Equal(HttpStatusCode.Accepted, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task VerifyingKeyWritesRequireImmutableLocalSigningContextBeforeDispatch()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("request must not be sent"));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.RegisterVerifyingKeyAsync(
+                ValidVerifyingKeyRegisterRequest(),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("ToriiLocalSigningContext", error.Message);
+        Assert.Null(handler.LastRequest);
+        Assert.Throws<ArgumentException>(() => new ToriiLocalSigningContext(""));
+        Assert.Throws<ArgumentException>(() => new ToriiLocalSigningContext("chain/other"));
+    }
+
+    [Fact]
+    public async Task RegisterVerifyingKeyAsyncRejectsSemanticallySubstitutedDrafts()
+    {
+        var request = ValidVerifyingKeyRegisterRequest();
+        var substitutions = new (string Label, byte[] Payload, string ExpectedMessage)[]
+        {
+            (
+                "wrong operation",
+                CanonicalVerifyingKeyTransactionPayload(
+                    request,
+                    wireNameOverride:
+                        "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"),
+                "requested verifying-key registry operation"
+            ),
+            (
+                "wrong identifier",
+                CanonicalVerifyingKeyTransactionPayload(
+                    request,
+                    idNameOverride: "vk_substituted"),
+                "identifier does not match"
+            ),
+            (
+                "wrong full record",
+                CanonicalVerifyingKeyTransactionPayload(
+                    request,
+                    recordVersionOverride: 2),
+                "full requested record"
+            ),
+            (
+                "wrong chain",
+                CanonicalVerifyingKeyTransactionPayload(
+                    request,
+                    chainId: "other-chain"),
+                "configured chain"
+            ),
+            (
+                "wrong authority",
+                CanonicalVerifyingKeyTransactionPayload(
+                    request,
+                    authorityOverride: SoraFsAuthorityAccountId),
+                "requested authority"
+            ),
+        };
+
+        foreach (var substitution in substitutions)
+        {
+            using var handler = new RecordingHandler(_ =>
+                JsonResponse(
+                    VerifyingKeyTransactionDraftResponseJson(
+                        request,
+                        substitution.Payload)));
+            using var client = CreateVerifyingKeyClient(handler);
+
+            var error = await Assert.ThrowsAsync<JsonException>(() =>
+                client.RegisterVerifyingKeyAsync(
+                    request,
+                    cancellationToken: TestContext.Current.CancellationToken));
+
+            Assert.Contains(substitution.ExpectedMessage, error.Message);
+        }
+    }
+
+    [Theory]
+    [InlineData("register")]
+    [InlineData("update")]
+    public void VerifyingKeyRequestsRejectRetiredPrivateKeyFieldDuringDeserialization(string operation)
+    {
+        const string json = """{"authority":"alice","private_key":"must-not-be-accepted"}""";
+
+        Assert.Throws<JsonException>(() =>
+        {
+            if (operation == "register")
+            {
+                _ = JsonSerializer.Deserialize<ToriiVerifyingKeyRegisterRequest>(json);
+            }
+            else
+            {
+                _ = JsonSerializer.Deserialize<ToriiVerifyingKeyUpdateRequest>(json);
+            }
+        });
+    }
+
     public static IEnumerable<object?[]> InvalidVerifyingKeyWriteExactTextRequests()
     {
         var register = ValidVerifyingKeyRegisterRequest();
@@ -9408,7 +9586,6 @@ public sealed class ToriiClientTests
         foreach (var (request, paramName) in new (ToriiVerifyingKeyRegisterRequest Request, string ParamName)[]
         {
             (register with { Authority = " " + VerifyingKeyAuthorityAccountId }, "Authority"),
-            (register with { PrivateKey = "ed25519:deadbeef " }, "PrivateKey"),
             (register with { Name = " vk_main" }, "Name"),
             (register with { CircuitId = "halo2/ipa::transfer v1" }, "CircuitId"),
             (register with { PublicInputsSchemaHashHex = "0x " + new string('a', 64) }, "PublicInputsSchemaHashHex"),
@@ -9436,7 +9613,6 @@ public sealed class ToriiClientTests
         foreach (var (request, paramName) in new (ToriiVerifyingKeyUpdateRequest Request, string ParamName)[]
         {
             (update with { Authority = VerifyingKeyAuthorityAccountId + " " }, "Authority"),
-            (update with { PrivateKey = " ed25519:deadbeef" }, "PrivateKey"),
             (update with { Name = "vk_main " }, "Name"),
             (update with { CircuitId = "halo2/ipa::transfer v2" }, "CircuitId"),
             (update with { PublicInputsSchemaHashHex = "0x" + new string('b', 64) + " " }, "PublicInputsSchemaHashHex"),
@@ -9473,7 +9649,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed verifying-key request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateVerifyingKeyClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             InvokeVerifyingKeyWriteOperationAsync(client, operation, request));
@@ -9487,13 +9663,12 @@ public sealed class ToriiClientTests
     public async Task VerifyingKeyRequestsRejectMalformedInputsBeforeRequest()
     {
         using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateVerifyingKeyClient(handler);
 
         var valid = ValidVerifyingKeyRegisterRequest();
         ToriiVerifyingKeyRegisterRequest[] invalid =
         {
             valid with { Backend = " halo2/ipa" },
-            valid with { PrivateKey = "" },
             valid with { Backend = "halo2/ipa/orchard" },
             valid with { Backend = "halo2/\u200Bipa" },
             valid with { Name = "vk:main" },
@@ -9528,7 +9703,6 @@ public sealed class ToriiClientTests
             client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
             {
                 Authority = VerifyingKeyAuthorityAccountId,
-                PrivateKey = "ed25519:deadbeef",
                 Backend = "halo2/ipa",
                 Name = "vk_main",
                 Version = 2,
@@ -9543,7 +9717,6 @@ public sealed class ToriiClientTests
             client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
             {
                 Authority = VerifyingKeyAuthorityAccountId,
-                PrivateKey = "ed25519:deadbeef",
                 Backend = "halo2/ipa",
                 Name = "vk_main",
                 Version = 2,
@@ -9554,18 +9727,6 @@ public sealed class ToriiClientTests
             }, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Null(handler.LastRequest);
 
-        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
-            {
-                Authority = VerifyingKeyAuthorityAccountId,
-                PrivateKey = "",
-                Backend = "halo2/ipa",
-                Name = "vk_main",
-                Version = 2,
-                CircuitId = "halo2/ipa::transfer_v2",
-                PublicInputsSchemaHashHex = new string('b', 64),
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Null(handler.LastRequest);
     }
 
     public static IEnumerable<object?[]> InvalidDirectSoraFsResponseMetadata()
@@ -22137,6 +22298,19 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             });
     }
 
+    private static ToriiClient CreateVerifyingKeyClient(
+        RecordingHandler handler,
+        string chainId = VerifyingKeySigningChainId)
+    {
+        return new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(chainId),
+            });
+    }
+
     private static object? DeserializeRawVpnResponse(string operation, string json)
     {
         return operation switch
@@ -29244,6 +29418,274 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
+    private static string VerifyingKeyTransactionDraftResponseJson(
+        object? request = null,
+        byte[]? transactionPayload = null)
+    {
+        transactionPayload ??= CanonicalVerifyingKeyTransactionPayload(request);
+        return new JsonObject
+        {
+            ["submitted"] = false,
+            ["transaction_payload_b64"] = Convert.ToBase64String(transactionPayload),
+            ["signing_message_b64"] = Convert.ToBase64String(IrohaHash.Hash(transactionPayload)),
+        }.ToJsonString();
+    }
+
+    private sealed record VerifyingKeyFixtureValues(
+        string Authority,
+        string Backend,
+        string Name,
+        uint Version,
+        string CircuitId,
+        string PublicInputsSchemaHashHex,
+        string? Curve,
+        string? GasScheduleId,
+        uint? VerifyingKeyLength,
+        uint? MaxProofBytes,
+        string? MetadataUriCid,
+        string? VerifyingKeyBytesCid,
+        ulong? ActivationHeight,
+        ulong? WithdrawHeight,
+        string? CommitmentHex,
+        byte[]? VerifyingKeyBytes,
+        string? Status);
+
+    private static byte[] CanonicalVerifyingKeyTransactionPayload(
+        object? request = null,
+        string? wireNameOverride = null,
+        string chainId = VerifyingKeySigningChainId,
+        string? authorityOverride = null,
+        string? idBackendOverride = null,
+        string? idNameOverride = null,
+        uint? recordVersionOverride = null)
+    {
+        request ??= ValidVerifyingKeyRegisterRequest();
+        var values = VerifyingKeyFixture(request);
+        var wireName = wireNameOverride ?? request switch
+        {
+            ToriiVerifyingKeyRegisterRequest _ =>
+                "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+            ToriiVerifyingKeyUpdateRequest _ =>
+                "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+            _ => throw new ArgumentException("Unsupported verifying-key fixture request.", nameof(request)),
+        };
+        var keyBytes = values.VerifyingKeyBytes;
+        var schemaHashHex = values.PublicInputsSchemaHashHex.StartsWith(
+            "0x",
+            StringComparison.OrdinalIgnoreCase)
+            ? values.PublicInputsSchemaHashHex[2..]
+            : values.PublicInputsSchemaHashHex;
+        var schemaHash = Convert.FromHexString(schemaHashHex);
+        var commitment = keyBytes is null
+            ? Convert.FromHexString(values.CommitmentHex!)
+            : Convert.FromHexString(
+                VerifyingKeyCommitmentHex(values.Backend, keyBytes));
+        var exactKeyLength = keyBytes is null
+            ? values.VerifyingKeyLength!.Value
+            : checked((uint)keyBytes.Length);
+        var status = values.Status?.ToUpperInvariant() switch
+        {
+            null or "ACTIVE" => (byte)1,
+            "PROPOSED" => (byte)0,
+            "WITHDRAWN" => (byte)2,
+            _ => throw new ArgumentException("Unsupported verifying-key fixture status."),
+        };
+
+        var id = VkFields(
+            VkString(idBackendOverride ?? values.Backend),
+            VkString(idNameOverride ?? values.Name));
+        var inlineKey = keyBytes is null
+            ? null
+            : VkFields(VkString(values.Backend), VkRawByteVector(keyBytes));
+        var record = VkFields(
+            VkUInt32(recordVersionOverride ?? values.Version),
+            VkString(values.CircuitId),
+            VkOption(null),
+            VkString("core"),
+            VkUInt32(values.Backend.StartsWith("stark/", StringComparison.Ordinal) ? 1U : 0U),
+            VkString(values.Curve ?? "unknown"),
+            schemaHash,
+            commitment,
+            VkUInt32(exactKeyLength),
+            VkUInt32(values.MaxProofBytes ?? 0),
+            VkOption(values.GasScheduleId is null ? null : VkString(values.GasScheduleId)),
+            VkOption(values.MetadataUriCid is null ? null : VkString(values.MetadataUriCid)),
+            VkOption(values.VerifyingKeyBytesCid is null
+                ? null
+                : VkString(values.VerifyingKeyBytesCid)),
+            VkOption(values.ActivationHeight.HasValue
+                ? VkUInt64(values.ActivationHeight.Value)
+                : null),
+            VkOption(values.WithdrawHeight.HasValue
+                ? VkUInt64(values.WithdrawHeight.Value)
+                : null),
+            VkOption(inlineKey),
+            [status]);
+        var instructionArchive = NoritoCodec.Encode(
+            wireName,
+            VkFields(id, record),
+            flags: 0x02);
+        var instruction = VkFields(
+            VkString(wireName),
+            VkRawByteVector(instructionArchive));
+        var instructions = VkConcat(VkUInt64(1), VkCompactField(instruction));
+        var executable = VkConcat(VkUInt32(0), VkCompactField(instructions));
+        var authority = VkAuthority(authorityOverride ?? values.Authority);
+        var feeValue = VkFields(VkUInt64(0), [0]);
+        var feePayment = VkConcat(VkUInt32(0), VkCompactField(feeValue));
+
+        return VkFields(
+            VkCompactField(VkString(chainId)),
+            authority,
+            VkUInt64(1),
+            executable,
+            VkOption(VkUInt64(100_000)),
+            [0],
+            feePayment,
+            VkUInt64(0),
+            [0]);
+    }
+
+    private static VerifyingKeyFixtureValues VerifyingKeyFixture(object request) =>
+        request switch
+        {
+            ToriiVerifyingKeyRegisterRequest value => new(
+                value.Authority!,
+                value.Backend!,
+                value.Name!,
+                value.Version!.Value,
+                value.CircuitId!,
+                value.PublicInputsSchemaHashHex!,
+                value.Curve,
+                value.GasScheduleId,
+                value.VerifyingKeyLength,
+                value.MaxProofBytes,
+                value.MetadataUriCid,
+                value.VerifyingKeyBytesCid,
+                value.ActivationHeight,
+                value.WithdrawHeight,
+                value.CommitmentHex,
+                value.VerifyingKeyBytes,
+                value.Status),
+            ToriiVerifyingKeyUpdateRequest value => new(
+                value.Authority!,
+                value.Backend!,
+                value.Name!,
+                value.Version!.Value,
+                value.CircuitId!,
+                value.PublicInputsSchemaHashHex!,
+                value.Curve,
+                value.GasScheduleId,
+                value.VerifyingKeyLength,
+                value.MaxProofBytes,
+                value.MetadataUriCid,
+                value.VerifyingKeyBytesCid,
+                value.ActivationHeight,
+                value.WithdrawHeight,
+                value.CommitmentHex,
+                value.VerifyingKeyBytes,
+                value.Status),
+            _ => throw new ArgumentException(
+                "Unsupported verifying-key fixture request.",
+                nameof(request)),
+        };
+
+    private static byte[] VkAuthority(string accountId)
+    {
+        var address = AccountAddress.Parse(
+            accountId,
+            AccountAddress.DefaultChainDiscriminant);
+        if (!string.Equals(address.Algorithm, "ed25519", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The verifying-key transaction fixture requires an Ed25519 authority.",
+                nameof(accountId));
+        }
+
+        var compactPublicKey = new byte[1 + address.PublicKey.Length];
+        address.PublicKey.CopyTo(compactPublicKey, 1);
+        return VkConcat(
+            VkUInt32(0),
+            VkCompactField(VkByteVector(compactPublicKey)));
+    }
+
+    private static byte[] VkFields(params byte[][] fields) =>
+        VkConcat(fields.Select(VkCompactField).ToArray());
+
+    private static byte[] VkOption(byte[]? value) =>
+        value is null
+            ? [0]
+            : VkConcat([1], VkCompactField(value));
+
+    private static byte[] VkString(string value) =>
+        VkConcat(
+            VkCompactLength(checked((ulong)Encoding.UTF8.GetByteCount(value))),
+            Encoding.UTF8.GetBytes(value));
+
+    private static byte[] VkCompactField(byte[] value) =>
+        VkConcat(VkCompactLength(checked((ulong)value.Length)), value);
+
+    private static byte[] VkRawByteVector(byte[] value) =>
+        VkConcat(VkUInt64(checked((ulong)value.Length)), value);
+
+    private static byte[] VkByteVector(byte[] value)
+    {
+        using var output = new MemoryStream();
+        output.Write(VkUInt64(checked((ulong)value.Length)));
+        foreach (var item in value)
+        {
+            output.WriteByte(1);
+            output.WriteByte(item);
+        }
+        return output.ToArray();
+    }
+
+    private static byte[] VkCompactLength(ulong value)
+    {
+        using var output = new MemoryStream();
+        do
+        {
+            var item = (byte)(value & 0x7f);
+            value >>= 7;
+            if (value != 0)
+            {
+                item |= 0x80;
+            }
+            output.WriteByte(item);
+        }
+        while (value != 0);
+        return output.ToArray();
+    }
+
+    private static byte[] VkUInt32(uint value)
+    {
+        var result = new byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(result, value);
+        return result;
+    }
+
+    private static byte[] VkUInt64(ulong value)
+    {
+        var result = new byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64LittleEndian(result, value);
+        return result;
+    }
+
+    private static byte[] VkConcat(params byte[][] values)
+    {
+        var length = values.Aggregate(
+            0,
+            static (total, value) => checked(total + value.Length));
+        var result = new byte[length];
+        var offset = 0;
+        foreach (var value in values)
+        {
+            value.CopyTo(result, offset);
+            offset += value.Length;
+        }
+        return result;
+    }
+
     private static string VerifyingKeyDetailResponseJson(string? field = null, object? value = null)
     {
         var id = new JsonObject
@@ -29768,7 +30210,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiVerifyingKeyRegisterRequest
         {
             Authority = VerifyingKeyAuthorityAccountId,
-            PrivateKey = "ed25519:deadbeef",
             Backend = "halo2/ipa",
             Name = "vk_main",
             Version = 1,
@@ -29787,7 +30228,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiVerifyingKeyUpdateRequest
         {
             Authority = VerifyingKeyAuthorityAccountId,
-            PrivateKey = "ed25519:deadbeef",
             Backend = "halo2/ipa",
             Name = "vk_main",
             Version = 2,

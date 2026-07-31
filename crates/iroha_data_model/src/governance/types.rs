@@ -111,7 +111,7 @@ fn parse_hash_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], norito:
         array.copy_from_slice(payload);
         return Ok(array);
     }
-    if payload.len() >= 4 + N {
+    if payload.len() == 4 + N {
         let mut version_bytes = [0u8; 2];
         version_bytes.copy_from_slice(&payload[..2]);
         let version = u16::from_le_bytes(version_bytes);
@@ -1070,6 +1070,24 @@ mod tests {
     }
 
     #[test]
+    fn hash_decode_rejects_versioned_payload_with_trailing_bytes() {
+        let mut payload = Vec::with_capacity(4 + ContractCodeHash::LENGTH + 1);
+        payload.extend_from_slice(&HASH_WIRE_VERSION_V1.to_le_bytes());
+        payload.extend_from_slice(
+            &u16::try_from(ContractCodeHash::LENGTH)
+                .expect("contract hash length fits u16")
+                .to_le_bytes(),
+        );
+        payload.extend_from_slice(&[0x11; ContractCodeHash::LENGTH]);
+        payload.push(0xFF);
+
+        assert!(matches!(
+            parse_hash_payload::<{ ContractCodeHash::LENGTH }>(&payload),
+            Err(norito::core::Error::LengthMismatch)
+        ));
+    }
+
+    #[test]
     fn parliament_body_default_is_agenda() {
         assert_eq!(ParliamentBody::default(), ParliamentBody::AgendaCouncil);
     }
@@ -1179,8 +1197,13 @@ mod tests {
         let fp = kind.fingerprint();
 
         let manual_bytes = Encode::encode(&kind);
+        let domain = crate::governance_fingerprint::DEPLOY_CONTRACT_V1;
+        let domain_len = u64::try_from(domain.len())
+            .expect("test domain fits in u64")
+            .to_le_bytes();
         let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length");
-        hasher.update(crate::governance_fingerprint::DEPLOY_CONTRACT_V1);
+        hasher.update(&domain_len);
+        hasher.update(domain);
         hasher.update(&manual_bytes);
         let mut manual_arr = [0u8; 32];
         hasher

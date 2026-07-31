@@ -25,10 +25,17 @@ norito = { version = "*", default-features = false, features = ["derive"] }
 # norito = { version = "*", default-features = false, features = ["compression"] }
 ```
 
-### Field attributes
+### Derive attributes
 
-The derive macros understand additional field-level attributes to customise
-serialization:
+Norito helper attributes form a closed set. Every derive validates container,
+variant, and field attributes before generating code; unknown keys, malformed
+values, and duplicate options are compile-time errors. In particular,
+`#[norito(transparent)]` and `#[norito(untagged)]` are not supported and are
+rejected instead of being treated as representation directives. A tuple
+newtype retains its structural tuple representation (including a one-element
+JSON array) unless its field uses an explicitly supported field helper.
+
+The supported field-level attributes are:
 
 - `#[norito(rename = "other")]` renames the field for the serialized
   representation. While the current binary format does not store field names,
@@ -37,8 +44,22 @@ serialization:
   is filled with [`Default::default`].
 - `#[norito(default)]` behaves similarly to `skip`, using
   [`Default::default`] when reading the value.
+- `#[norito(default = "path::to::function")]` supplies a function for a
+  missing value.
+- `#[norito(skip_serializing_if = "path::to::predicate")]` conditionally
+  omits a JSON field.
+- `#[norito(with = "path::to::module")]` delegates JSON serialization and
+  deserialization to the named helper module.
+- `#[norito(flatten)]` flattens a named field into its enclosing JSON object.
+- `#[norito(needs_size)]` forces an explicit packed-struct size entry.
 
-These attributes apply to both struct fields and enum variants.
+Container-level options are `rename_all`, `schema_name`,
+`deny_unknown_fields`, `decode_from_slice`, `reuse_archived`,
+`no_fast_from_json`, `tag`, and `content`. Enum variants support only
+`#[norito(rename = "other")]`.
+
+Attributes accepted for coordination between different Norito derives are
+still validated even when a particular derive does not consume their value.
 
 ## Benchmarks
 
@@ -79,7 +100,9 @@ Decoding details:
   bytes remain valid for the lifetime of the wrapper. It enforces the header
   length during decompression and rejects overlong outputs.
 - `ArchiveView::decode` enforces the header schema hash; use
-  `ArchiveView::decode_unchecked` only for raw inspection tools.
+  `ArchiveView::decode_unchecked` only for raw inspection tools. Every
+  `ArchiveView` decode method installs payload-derived sequence, allocation,
+  field-size, and nesting limits.
 
 ## Adaptive Acceleration (CPU/GPU) and Layout
 
@@ -144,6 +167,10 @@ default v1 helpers (`to_bytes`, `to_compressed_bytes`, `to_bytes_auto`) emit
 `flags = 0x02` (`COMPACT_LEN`) unless you opt into another layout and frame
 those bytes with the corresponding header flags. The minor version remains
 `0x00`; the header flag byte advertises compact length prefixes.
+
+Every offset table and length-framed field is bounded by its active payload
+context. A nested decoder cannot widen that context to an outer/root frame, and
+enum fields cannot consume sibling bytes beyond their declared length.
 
 Flag scoping:
 - `COMPACT_LEN` affects per-value length prefixes only.

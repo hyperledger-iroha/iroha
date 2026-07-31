@@ -7,7 +7,8 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fs,
+    io::{self, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -21,6 +22,8 @@ use norito::{
 use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
+
+use super::replay_lock::ExclusiveLedgerLock;
 
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
 const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
@@ -484,7 +487,7 @@ impl AdmissionTokenVerifier {
 
         if let Some(store) = &self.replay_store {
             let token_id = token.token_id();
-            let expires_at = UNIX_EPOCH
+            let token_expires_at = UNIX_EPOCH
                 .checked_add(Duration::from_secs(token.expires_at()))
                 .ok_or_else(|| {
                     VerifyError::Store(TokenStoreError::Parse(format!(
@@ -492,11 +495,25 @@ impl AdmissionTokenVerifier {
                         token.expires_at()
                     )))
                 })?;
+            // Verification accepts a token until `expires_at + clock_skew`.
+            // Keep its single-use marker for that entire acceptance window;
+            // pruning it at the nominal expiry would permit a replay during
+            // the configured skew allowance.
+            let replay_expires_at =
+                token_expires_at
+                    .checked_add(self.clock_skew)
+                    .ok_or_else(|| {
+                        VerifyError::Store(TokenStoreError::Parse(format!(
+                            "token replay expiry {} + clock skew {:?} overflows system time",
+                            token.expires_at(),
+                            self.clock_skew
+                        )))
+                    })?;
             let mut guard = store
                 .lock()
                 .map_err(|_| VerifyError::Store(TokenStoreError::Poisoned))?;
             let outcome = guard
-                .insert(token_id, expires_at, now)
+                .insert(token_id, replay_expires_at, now)
                 .map_err(VerifyError::Store)?;
             match outcome.status {
                 TokenInsertStatus::Accepted => {}
@@ -542,7 +559,10 @@ pub fn compute_issuer_fingerprint(public_key: &[u8]) -> [u8; 32] {
 /// Policy for admission token stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenStoreLimits {
-    /// Maximum number of entries to keep; oldest entries are evicted when capacity is exceeded.
+    /// Maximum number of active entries to keep.
+    ///
+    /// Once capacity is reached, new tokens are rejected until existing
+    /// records expire. Active replay records are never evicted.
     pub max_entries: usize,
     /// Maximum allowed time-to-live for a token relative to insertion.
     pub max_ttl: Duration,
@@ -579,32 +599,26 @@ pub enum TokenInsertStatus {
     Expired,
     /// Token TTL exceeded the configured maximum.
     TtlExceeded,
-    /// Token could not be inserted because the store was at capacity and eviction was not possible.
+    /// Token could not be inserted because all replay slots contain active records.
     Capacity,
 }
 
-/// Result of an insertion attempt, including any evicted record.
+/// Result of an insertion attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenInsertOutcome {
     /// Final status for the insertion attempt.
     pub status: TokenInsertStatus,
-    /// Optional token id evicted to make room for the new entry.
-    pub evicted: Option<[u8; 32]>,
 }
 
 impl TokenInsertOutcome {
-    fn accepted(evicted: Option<[u8; 32]>) -> Self {
+    const fn accepted() -> Self {
         Self {
             status: TokenInsertStatus::Accepted,
-            evicted,
         }
     }
 
-    fn rejected(status: TokenInsertStatus) -> Self {
-        Self {
-            status,
-            evicted: None,
-        }
+    const fn rejected(status: TokenInsertStatus) -> Self {
+        Self { status }
     }
 }
 
@@ -679,9 +693,9 @@ struct TokenStoreSnapshot {
 
 /// In-memory implementation of a bounded admission token store.
 ///
-/// Tokens that are expired at the time of insertion are rejected. When the store reaches capacity,
-/// the oldest entry (by `expires_at`) is evicted to make room for a new token. If eviction is not
-/// possible (e.g., capacity is zero), the insert is rejected with `Capacity`.
+/// Tokens that are expired at the time of insertion are rejected. When the
+/// store reaches capacity, inserts fail closed with `Capacity`; an active
+/// replay record is never discarded to admit a newer token.
 #[derive(Debug)]
 pub struct InMemoryTokenStore {
     limits: TokenStoreLimits,
@@ -700,19 +714,6 @@ impl InMemoryTokenStore {
     fn prune_expired(&mut self, now: SystemTime) {
         self.records
             .retain(|_, record| !is_expired(record.expires_at, now));
-    }
-
-    fn evict_oldest(&mut self) -> Option<[u8; 32]> {
-        let oldest = self
-            .records
-            .iter()
-            .min_by_key(|(_, record)| record.expires_at)
-            .map(|(id, _)| *id);
-        if let Some(id) = oldest {
-            self.records.remove(&id);
-            return Some(id);
-        }
-        None
     }
 }
 
@@ -733,15 +734,11 @@ impl TokenStore for InMemoryTokenStore {
         if self.records.contains_key(&token_id) {
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Duplicate));
         }
-        let mut evicted = None;
         if self.records.len() >= self.limits.max_entries {
-            evicted = self.evict_oldest();
-            if evicted.is_none() && self.records.len() >= self.limits.max_entries {
-                return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
-            }
+            return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
         }
         self.records.insert(token_id, TokenRecord { expires_at });
-        Ok(TokenInsertOutcome::accepted(evicted))
+        Ok(TokenInsertOutcome::accepted())
     }
 
     fn contains(&self, token_id: &[u8; 32], now: SystemTime) -> bool {
@@ -764,16 +761,18 @@ impl TokenStore for InMemoryTokenStore {
     }
 }
 
-/// Persistent admission token store backed by a newline-delimited file.
+/// Persistent admission token store backed by a Norito snapshot.
 ///
-/// Each entry is encoded as `<hex_token_id> <expires_at_unix>` on its own line. The store prunes
-/// expired and over-TTL entries on load and before every insert. Inserts evict the oldest record
-/// (earliest expiry) when capacity is exceeded.
+/// The store prunes expired entries on load and before every insert. Active
+/// records that violate the configured TTL or capacity make loading fail
+/// closed. Inserts never evict an active record. A process-lifetime sidecar
+/// lock prevents concurrent writers from forking replay history.
 #[derive(Debug)]
 pub struct PersistentTokenStore {
     limits: TokenStoreLimits,
     records: HashMap<[u8; 32], TokenRecord>,
     path: PathBuf,
+    _ledger_lock: ExclusiveLedgerLock,
 }
 
 impl PersistentTokenStore {
@@ -787,12 +786,21 @@ impl PersistentTokenStore {
         limits: TokenStoreLimits,
         now: SystemTime,
     ) -> Result<Self, TokenStoreError> {
+        let limits = TokenStoreLimits::new(limits.max_entries, limits.max_ttl)?;
+        let path = path.into();
+        let ledger_lock = ExclusiveLedgerLock::acquire(&path)
+            .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         let mut store = Self {
             limits,
             records: HashMap::new(),
-            path: path.into(),
+            path,
+            _ledger_lock: ledger_lock,
         };
-        if let Some(parent) = store.path.parent() {
+        if let Some(parent) = store
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent).map_err(|err| TokenStoreError::Io(err.to_string()))?;
         }
         store.load_from_disk(now)?;
@@ -802,11 +810,15 @@ impl PersistentTokenStore {
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TokenStoreError> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            // Materialise the empty ledger immediately so startup validates
+            // that replay state is actually durable before serving clients.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return self.persist(),
             Err(err) => return Err(TokenStoreError::Io(err.to_string())),
         };
         if bytes.is_empty() {
-            return Ok(());
+            return Err(TokenStoreError::Parse(
+                "token replay snapshot is empty".to_string(),
+            ));
         }
 
         let snapshot = decode_adaptive::<TokenStoreSnapshot>(&bytes).map_err(|decode_err| {
@@ -815,7 +827,6 @@ impl PersistentTokenStore {
         self.ingest_snapshot(snapshot, now)?;
 
         self.prune_expired(now);
-        self.enforce_capacity();
         self.persist()
     }
 
@@ -839,10 +850,21 @@ impl PersistentTokenStore {
                         entry.expires_at_secs
                     ))
                 })?;
-            if is_expired(expires_at, now) || exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+            if is_expired(expires_at, now) {
                 continue;
             }
+            if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+                return Err(TokenStoreError::Parse(format!(
+                    "active token expiry exceeds configured max_ttl of {:?}",
+                    self.limits.max_ttl
+                )));
+            }
             let _ = self.records.insert(entry.id, TokenRecord { expires_at });
+            if self.records.len() > self.limits.max_entries {
+                return Err(TokenStoreError::Parse(
+                    "token replay snapshot exceeds capacity".to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -852,33 +874,20 @@ impl PersistentTokenStore {
             .retain(|_, record| !is_expired(record.expires_at, now));
     }
 
-    fn evict_oldest(&mut self) -> Option<[u8; 32]> {
-        let oldest = self
-            .records
-            .iter()
-            .min_by_key(|(_, record)| record.expires_at)
-            .map(|(id, _)| *id);
-        if let Some(id) = oldest {
-            self.records.remove(&id);
-            return Some(id);
-        }
-        None
-    }
-
-    fn enforce_capacity(&mut self) {
-        while self.records.len() > self.limits.max_entries {
-            if self.evict_oldest().is_none() {
-                break;
-            }
-        }
-    }
-
     fn persist(&self) -> Result<(), TokenStoreError> {
-        if let Some(parent) = self.path.parent() {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent).map_err(|err| TokenStoreError::Io(err.to_string()))?;
         }
         let mut entries: Vec<_> = self.records.iter().collect();
-        entries.sort_by_key(|(_, record)| record.expires_at);
+        entries.sort_by(|(left_id, left), (right_id, right)| {
+            left.expires_at
+                .cmp(&right.expires_at)
+                .then_with(|| left_id.cmp(right_id))
+        });
         let snapshot = TokenStoreSnapshot {
             entries: entries
                 .into_iter()
@@ -893,8 +902,23 @@ impl PersistentTokenStore {
         };
         let buf = encode_adaptive(&snapshot);
         let tmp_path = self.path.with_extension("tmp");
-        fs::write(&tmp_path, buf).map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        fs::rename(&tmp_path, &self.path).map_err(|err| TokenStoreError::Io(err.to_string()))
+        let mut tmp =
+            fs::File::create(&tmp_path).map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        tmp.write_all(&buf)
+            .and_then(|()| tmp.sync_all())
+            .map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        fs::rename(&tmp_path, &self.path).map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        #[cfg(unix)]
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -915,16 +939,12 @@ impl TokenStore for PersistentTokenStore {
         if self.records.contains_key(&token_id) {
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Duplicate));
         }
-        let mut evicted = None;
         if self.records.len() >= self.limits.max_entries {
-            evicted = self.evict_oldest();
-            if evicted.is_none() && self.records.len() >= self.limits.max_entries {
-                return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
-            }
+            return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
         }
         self.records.insert(token_id, TokenRecord { expires_at });
         self.persist()?;
-        Ok(TokenInsertOutcome::accepted(evicted))
+        Ok(TokenInsertOutcome::accepted())
     }
 
     fn contains(&self, token_id: &[u8; 32], now: SystemTime) -> bool {
@@ -1918,7 +1938,7 @@ mod tests {
     }
 
     #[test]
-    fn token_store_evicts_oldest_when_full() {
+    fn token_store_fails_closed_without_evicting_active_records() {
         let limits = TokenStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
         let mut store = InMemoryTokenStore::new(limits);
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
@@ -1928,19 +1948,15 @@ mod tests {
 
         let insert_a = store.insert([0x01; 32], a_exp, now).expect("insert a");
         assert_eq!(insert_a.status, TokenInsertStatus::Accepted);
-        assert!(insert_a.evicted.is_none());
 
         let insert_b = store.insert([0x02; 32], b_exp, now).expect("insert b");
         assert_eq!(insert_b.status, TokenInsertStatus::Accepted);
-        assert!(insert_b.evicted.is_none());
 
-        // Third insert should evict the oldest (token 0x01)
         let insert_c = store.insert([0x03; 32], c_exp, now).expect("insert c");
-        assert_eq!(insert_c.status, TokenInsertStatus::Accepted);
-        assert_eq!(insert_c.evicted, Some([0x01; 32]));
-        assert!(!store.contains(&[0x01; 32], now));
+        assert_eq!(insert_c.status, TokenInsertStatus::Capacity);
+        assert!(store.contains(&[0x01; 32], now));
         assert!(store.contains(&[0x02; 32], now));
-        assert!(store.contains(&[0x03; 32], now));
+        assert!(!store.contains(&[0x03; 32], now));
         assert_eq!(store.len(now), 2);
     }
 
@@ -1983,6 +1999,58 @@ mod tests {
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("replay must be blocked");
         assert!(matches!(err, VerifyError::Replay(_)));
+    }
+
+    #[test]
+    fn verifier_retains_replay_marker_through_clock_skew_window() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(60);
+        let clock_skew = Duration::from_secs(5);
+        let mut rng = StdRng::seed_from_u64(0x5A17);
+        let token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+
+        let limits =
+            TokenStoreLimits::new(4, Duration::from_secs(70)).expect("replay store limits");
+        let store = Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            MlDsaSuite::MlDsa44,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(60),
+            clock_skew,
+        )
+        .with_replay_store(store);
+
+        verifier
+            .verify(
+                &token,
+                &RELAY_ID,
+                &TRANSCRIPT,
+                issued - Duration::from_secs(4),
+            )
+            .expect("first use inside the early clock-skew allowance");
+        let replay = verifier
+            .verify(
+                &token,
+                &RELAY_ID,
+                &TRANSCRIPT,
+                expires + Duration::from_secs(4),
+            )
+            .expect_err("replay inside the accepted skew window must remain blocked");
+        assert!(matches!(replay, VerifyError::Replay(_)));
     }
 
     #[test]
@@ -2217,6 +2285,24 @@ mod tests {
     }
 
     #[test]
+    fn persistent_store_materializes_empty_ledger_on_load() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("nested/replay_store.norito");
+
+        let store = PersistentTokenStore::load(&path, limits, now).expect("create ledger");
+        assert_eq!(store.len(now), 0);
+        assert!(
+            std::fs::metadata(&path).expect("ledger metadata").len() > 0,
+            "startup must materialize a parseable durable snapshot"
+        );
+        drop(store);
+        let reloaded = PersistentTokenStore::load(&path, limits, now).expect("reload ledger");
+        assert_eq!(reloaded.len(now), 0);
+    }
+
+    #[test]
     fn persistent_store_blocks_replay_after_restart() {
         let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
         let now = UNIX_EPOCH + Duration::from_secs(10_000);
@@ -2238,7 +2324,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_store_eviction_persists() {
+    fn persistent_store_capacity_preserves_active_records_across_restart() {
         let limits = TokenStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
         let now = UNIX_EPOCH + Duration::from_secs(50_000);
         let dir = tempdir().expect("tempdir");
@@ -2251,15 +2337,16 @@ mod tests {
         let _ = store
             .insert([0x02; 32], now + Duration::from_secs(20), now)
             .expect("insert b");
-        let eviction = store
+        let rejected = store
             .insert([0x03; 32], now + Duration::from_secs(30), now)
             .expect("insert c");
-        assert_eq!(eviction.evicted, Some([0x01; 32]));
+        assert_eq!(rejected.status, TokenInsertStatus::Capacity);
 
+        drop(store);
         let store = PersistentTokenStore::load(&path, limits, now).expect("reload");
-        assert!(!store.contains(&[0x01; 32], now));
+        assert!(store.contains(&[0x01; 32], now));
         assert!(store.contains(&[0x02; 32], now));
-        assert!(store.contains(&[0x03; 32], now));
+        assert!(!store.contains(&[0x03; 32], now));
         assert_eq!(store.len(now), 2);
     }
 
@@ -2329,6 +2416,72 @@ mod tests {
     }
 
     #[test]
+    fn persistent_store_rejects_active_snapshot_beyond_ttl() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("over_ttl_store.txt");
+        write_token_store_snapshot(
+            &path,
+            vec![TokenStoreEntry {
+                id: [0xAC; 32],
+                expires_at_secs: 10_121,
+            }],
+        );
+
+        let err =
+            PersistentTokenStore::load(&path, limits, now).expect_err("over-TTL entry should fail");
+        match err {
+            TokenStoreError::Parse(message) => assert!(message.contains("max_ttl")),
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn persistent_store_rejects_snapshot_over_capacity() {
+        let limits = TokenStoreLimits::new(1, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("over_capacity_store.txt");
+        write_token_store_snapshot(
+            &path,
+            vec![
+                TokenStoreEntry {
+                    id: [0xAD; 32],
+                    expires_at_secs: 10_030,
+                },
+                TokenStoreEntry {
+                    id: [0xAE; 32],
+                    expires_at_secs: 10_060,
+                },
+            ],
+        );
+
+        let err = PersistentTokenStore::load(&path, limits, now)
+            .expect_err("over-capacity snapshot should fail");
+        match err {
+            TokenStoreError::Parse(message) => assert!(message.contains("capacity")),
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn persistent_store_rejects_empty_snapshot() {
+        let limits = TokenStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("empty_store.txt");
+
+        std::fs::write(&path, b"").expect("write empty snapshot");
+        let err =
+            PersistentTokenStore::load(&path, limits, now).expect_err("empty snapshot should fail");
+        match err {
+            TokenStoreError::Parse(message) => assert!(message.contains("empty")),
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn persistent_store_rejects_overflowing_expiry_on_load() {
         let limits = TokenStoreLimits::new(4, Duration::from_secs(120)).expect("limits");
         let now = UNIX_EPOCH + Duration::from_secs(10_000);
@@ -2363,5 +2516,24 @@ mod tests {
         let err = PersistentTokenStore::load(&path, limits, now)
             .expect_err("invalid snapshot should fail");
         assert!(matches!(err, TokenStoreError::Parse(_)));
+    }
+
+    #[test]
+    fn persistent_store_rejects_concurrent_ledger_owner() {
+        let limits = TokenStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("single_owner.norito");
+        let owner = PersistentTokenStore::load(&path, limits, now).expect("first owner");
+
+        let error = PersistentTokenStore::load(&path, limits, now)
+            .expect_err("a second ledger owner must fail closed");
+        assert!(
+            matches!(&error, TokenStoreError::Io(message) if message.contains("exclusive replay-ledger lock")),
+            "unexpected concurrent-owner error: {error:?}"
+        );
+
+        drop(owner);
+        PersistentTokenStore::load(&path, limits, now).expect("lock released with owner");
     }
 }

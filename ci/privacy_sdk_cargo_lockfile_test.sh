@@ -2142,7 +2142,7 @@ printf '%s\n' \
   '    esac' \
   '    pyo3_config="${CARGO_TARGET_DIR}/maturin/pyo3-config-${host_triple}-3.12-abi3.txt"' \
   '    mkdir -p "$(dirname "${pyo3_config}")"' \
-  '    printf "%b" "implementation=CPython\\nversion=3.9\\ntarget_abi=CPython-abi3-3.9\\nshared=true\\nbuild_flags=\\nsuppress_build_script_link_lines=false\\npointer_width=64" >"${pyo3_config}"' \
+  '    printf "%b" "implementation=CPython\\nversion=3.9\\ntarget_abi=CPython-abi3-3.9\\nshared=true\\nbuild_flags=\\nsuppress_build_script_link_lines=false" >"${pyo3_config}"' \
   '    case "${FAKE_MATURIN_PYO3_CONFIG_ACTION:-}" in' \
   '      "") ;;' \
   '      bad-content)' \

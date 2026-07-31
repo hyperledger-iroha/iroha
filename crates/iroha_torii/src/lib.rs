@@ -484,6 +484,7 @@ pub use utils::{
 mod account_literal;
 mod app_auth;
 mod block;
+mod bounded_replay_cache;
 #[cfg(feature = "connect")]
 mod connect;
 #[cfg(feature = "app_api")]
@@ -542,10 +543,10 @@ pub use routing::handle_get_proof_tags;
 pub use routing::handle_p2p_ws;
 #[cfg(feature = "app_api")]
 pub use routing::{
-    AssetTransferIntentDto, AssetTransferReceiptDto, AssetTransferRequestDto,
-    AssetTransferResponseDto, AssetTransferSigningPayloadDto, ContractAliasResolveRequestDto,
-    ContractAliasResolveResponseDto, ContractCallBatchPlanDto, ContractCallBatchPrepareDto,
-    ContractCallDto, ContractCallResponseDto, ContractCallSimulateDto,
+    AppApiTransactionDraftDto, AssetTransferIntentDto, AssetTransferReceiptDto,
+    AssetTransferRequestDto, AssetTransferResponseDto, AssetTransferSigningPayloadDto,
+    ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallBatchPlanDto,
+    ContractCallBatchPrepareDto, ContractCallDto, ContractCallResponseDto, ContractCallSimulateDto,
     ContractCallSimulateResponseDto, ContractDeploymentStateRequestDto,
     ContractDeploymentStateResponseDto, ContractViewDto, ContractViewResponseDto,
     EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
@@ -561,8 +562,7 @@ pub use routing::{
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
     handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
-    handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
+    handle_v1_events_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
     handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
@@ -591,14 +591,15 @@ pub use routing::{
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
     ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto, ZkVoteGetTallyResponseDto,
-    handle_v1_zk_merkle_path, handle_v1_zk_roots, handle_v1_zk_submit_proof, handle_v1_zk_verify,
-    handle_v1_zk_vote_tally,
+    handle_v1_zk_merkle_path, handle_v1_zk_roots, handle_v1_zk_vote_tally,
 };
 pub use routing::{
     accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
     verify_signed_query_request as verify_signed_query_request_for_bench,
 };
+#[cfg(all(feature = "app_api", feature = "bench"))]
+pub use routing::{handle_queries_with_opts as handle_queries, handle_queries_with_opts};
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
     handle_runtime_upgrades_list,
@@ -3626,7 +3627,7 @@ mod preauth_connection_lifetime_tests {
 
         let mut request = Request::builder()
             .uri("/hold")
-            .header(limits::REMOTE_ADDR_HEADER, forwarded_ip)
+            .header(limits::FORWARDED_FOR_HEADER, forwarded_ip)
             .body(Body::empty())
             .expect("request");
         request
@@ -4624,7 +4625,15 @@ fn evaluate_api_token<'headers>(
 }
 
 fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
-    match evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers) {
+    api_token_rejection_with_policy(app.require_api_token, app.api_tokens_set.as_ref(), headers)
+}
+
+fn api_token_rejection_with_policy(
+    require_api_token: bool,
+    configured_tokens: &HashSet<String>,
+    headers: &HeaderMap,
+) -> Option<Response> {
+    match evaluate_api_token(require_api_token, configured_tokens, headers) {
         ApiTokenEvaluation::Disabled | ApiTokenEvaluation::Authenticated(_) => None,
         ApiTokenEvaluation::Unavailable => {
             let format = early_rejection_response_format(headers);
@@ -4809,6 +4818,26 @@ async fn enforce_api_token(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     if let Some(response) = api_token_rejection(&app, req.headers()) {
+        return Ok(response);
+    }
+    Ok(next.run(req).await)
+}
+
+/// Require one configured Torii API token for a route regardless of the
+/// listener-wide API-token setting.
+pub(crate) async fn enforce_required_api_token(
+    State(app): State<SharedAppState>,
+    mut req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    for (name, value) in req.headers_mut().iter_mut() {
+        if name.as_str() == HEADER_API_TOKEN {
+            value.set_sensitive(true);
+        }
+    }
+    if let Some(response) =
+        api_token_rejection_with_policy(true, app.api_tokens_set.as_ref(), req.headers())
+    {
         return Ok(response);
     }
     Ok(next.run(req).await)
@@ -9508,19 +9537,28 @@ async fn handler_push_register_device(
     method: HttpMethod,
     uri: axum::http::Uri,
     headers: HeaderMap,
-    crate::utils::extractors::NoritoJsonWithBytes {
-        value: mut req,
-        raw,
-    }: crate::utils::extractors::NoritoJsonWithBytes<push::RegisterDeviceRequest>,
+    body: Bytes,
 ) -> AxResponse {
-    let account_id = match push_authorize_device_request(
-        &app,
-        &method,
-        &uri,
-        &headers,
-        raw.as_ref(),
-        &req.account_id,
-    ) {
+    let verified =
+        match push_authenticate_device_request(&app, &method, &uri, &headers, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_push_bridge(&app) {
+        return response;
+    }
+    let format = match utils::typed_request_content_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return response,
+    };
+    let mut req = match utils::extractors::decode_body_as_norito_or_json::<
+        push::RegisterDeviceRequest,
+    >(&body, format)
+    {
+        Ok(req) => req,
+        Err(response) => return response,
+    };
+    let account_id = match push_authorize_device_account(&app, &verified, &req.account_id) {
         Ok(account_id) => account_id,
         Err(response) => return response,
     };
@@ -9585,19 +9623,28 @@ async fn handler_push_unregister_device(
     method: HttpMethod,
     uri: axum::http::Uri,
     headers: HeaderMap,
-    crate::utils::extractors::NoritoJsonWithBytes {
-        value: mut req,
-        raw,
-    }: crate::utils::extractors::NoritoJsonWithBytes<push::UnregisterDeviceRequest>,
+    body: Bytes,
 ) -> AxResponse {
-    let account_id = match push_authorize_device_request(
-        &app,
-        &method,
-        &uri,
-        &headers,
-        raw.as_ref(),
-        &req.account_id,
-    ) {
+    let verified =
+        match push_authenticate_device_request(&app, &method, &uri, &headers, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_push_bridge(&app) {
+        return response;
+    }
+    let format = match utils::typed_request_content_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return response,
+    };
+    let mut req = match utils::extractors::decode_body_as_norito_or_json::<
+        push::UnregisterDeviceRequest,
+    >(&body, format)
+    {
+        Ok(req) => req,
+        Err(response) => return response,
+    };
+    let account_id = match push_authorize_device_account(&app, &verified, &req.account_id) {
         Ok(account_id) => account_id,
         Err(response) => return response,
     };
@@ -9637,14 +9684,26 @@ async fn handler_push_unregister_device(
 }
 
 #[cfg(all(feature = "app_api", feature = "push"))]
-fn push_authorize_device_request(
+fn push_authenticate_device_request(
     app: &SharedAppState,
     method: &HttpMethod,
     uri: &axum::http::Uri,
     headers: &HeaderMap,
     body: &[u8],
-    account_literal: &str,
-) -> Result<AccountId, AxResponse> {
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, AxResponse> {
+    match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(push_error_response(
+            StatusCode::UNAUTHORIZED,
+            "push_auth_required",
+            "signed account headers are required",
+        )),
+        Err(error) => Err(push_auth_error_response(error)),
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "push"))]
+fn require_push_bridge(app: &SharedAppState) -> Result<(), AxResponse> {
     if app.push.is_none() {
         return Err(push_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -9652,6 +9711,15 @@ fn push_authorize_device_request(
             "push bridge disabled",
         ));
     }
+    Ok(())
+}
+
+#[cfg(all(feature = "app_api", feature = "push"))]
+fn push_authorize_device_account(
+    app: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+    account_literal: &str,
+) -> Result<AccountId, AxResponse> {
     let account_id = match routing::parse_account_literal_with_state(
         app.state.as_ref(),
         account_literal,
@@ -9667,35 +9735,19 @@ fn push_authorize_device_request(
             ));
         }
     };
-    match crate::app_auth::verify_canonical_request(
-        &app.state,
-        headers,
-        method,
-        uri,
-        body,
-        Some(&account_id),
-    ) {
-        Ok(Some(_)) => Ok(account_id),
-        Ok(None) => Err(push_error_response(
-            StatusCode::UNAUTHORIZED,
-            "push_auth_required",
-            "signed account headers are required",
-        )),
-        Err(error) => Err(push_auth_error_response(error)),
+    if verified.account == account_id {
+        Ok(account_id)
+    } else {
+        Err(push_error_response(
+            StatusCode::FORBIDDEN,
+            "push_account_mismatch",
+            "signed account does not match device account",
+        ))
     }
 }
 
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_auth_error_response(error: Error) -> AxResponse {
-    if let Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)) = &error
-        && message.contains("does not match")
-    {
-        return push_error_response(
-            StatusCode::FORBIDDEN,
-            "push_account_mismatch",
-            "signed account does not match device account",
-        );
-    }
     push_error_response(
         StatusCode::UNAUTHORIZED,
         "push_auth_invalid",
@@ -10181,14 +10233,7 @@ async fn handler_gov_propose_deploy(
         "v1/gov/proposals/deploy-contract",
     )
     .await?;
-    crate::gov::handle_gov_propose_deploy(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
+    crate::gov::handle_gov_propose_deploy(app.state.clone(), body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -11591,19 +11636,11 @@ async fn handler_proof_tags(
     )))
 }
 
-/// Forward `/v1/zk/verify-batch` requests to the routing handler.
+/// Forward `/v1/zk/verify-batch` requests with explicit finite diagnostic limits.
 ///
-/// # Errors
-/// Propagates routing errors when the batch verification fails.
-#[cfg(all(feature = "app_api", feature = "zk-verify-batch"))]
-pub async fn handle_v1_zk_verify_batch(
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<impl IntoResponse, Error> {
-    crate::routing::handle_v1_zk_verify_batch(headers, body).await
-}
-
-/// Forward `/v1/zk/verify-batch` requests with explicit diagnostic verifier limits.
+/// `max_body_bytes` is enforced before either Norito or JSON decoding. The
+/// remaining limits bound the decoded batch, each envelope, and native IPA
+/// reconstruction.
 ///
 /// # Errors
 /// Propagates routing errors when response rendering fails.
@@ -11612,6 +11649,7 @@ pub async fn handle_v1_zk_verify_batch_with_limits(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
     open_limits: iroha_zkp_halo2::OpenVerifyLimits,
+    max_body_bytes: usize,
     max_batch: usize,
     max_envelope_bytes: usize,
     enforce_transcript_label_ascii: bool,
@@ -11621,6 +11659,7 @@ pub async fn handle_v1_zk_verify_batch_with_limits(
         body,
         crate::routing::ZkVerifyBatchLimits {
             open: open_limits,
+            max_body_bytes,
             max_batch,
             max_envelope_bytes,
             enforce_transcript_label_ascii,
@@ -12204,7 +12243,6 @@ async fn handler_space_directory_manifest_publish(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             request,
         )
         .await
@@ -12226,7 +12264,6 @@ async fn handler_space_directory_manifest_publish(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         request,
     )
     .await
@@ -12247,7 +12284,6 @@ async fn handler_space_directory_manifest_revoke(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             request,
         )
         .await
@@ -12269,7 +12305,6 @@ async fn handler_space_directory_manifest_revoke(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         request,
     )
     .await
@@ -16826,7 +16861,6 @@ async fn handler_subscription_plans_create(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             crate::utils::extractors::NoritoJson(req),
         )
         .await;
@@ -16847,7 +16881,6 @@ async fn handler_subscription_plans_create(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         crate::utils::extractors::NoritoJson(req),
     )
     .await
@@ -17105,7 +17138,6 @@ async fn handler_subscription_usage(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             subscription_id,
             crate::utils::extractors::NoritoJson(req),
         )
@@ -17127,7 +17159,6 @@ async fn handler_subscription_usage(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         subscription_id,
         crate::utils::extractors::NoritoJson(req),
     )
@@ -17253,7 +17284,6 @@ async fn handler_gov_ballot_zk(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/ballots/zk", true).await?;
     crate::gov::handle_gov_ballot_zk(
         app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
         body,
@@ -17295,7 +17325,6 @@ async fn handler_gov_ballot_zk_v1(
     })?;
     crate::gov::handle_gov_ballot_zk_v1(
         app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJsonWithBytes {
@@ -17341,7 +17370,6 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
         })?;
     crate::gov::handle_gov_ballot_zk_v1_ballotproof(
         app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJsonWithBytes {
@@ -17370,7 +17398,6 @@ async fn handler_gov_ballot_plain(
     .await?;
     crate::gov::handle_gov_ballot_plain_with_policy(
         app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
         body,
         app.telemetry.clone(),
@@ -17412,14 +17439,7 @@ async fn handler_gov_finalize(
 ) -> Result<JsonBody<crate::gov::FinalizeResponse>, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/finalize", true).await?;
-    crate::gov::handle_gov_finalize(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
+    crate::gov::handle_gov_finalize(body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -18280,26 +18300,6 @@ async fn handler_zk_merkle_path(
     .await
 }
 
-async fn handler_zk_verify(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    enforce_proof_body_limit(&app, body.len(), "v1/zk/verify")?;
-    check_proof_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/zk/verify",
-        PROOF_REQUEST_RATE_COST,
-        true,
-    )
-    .await?;
-    routing::handle_v1_zk_verify(headers, body).await
-}
-
 #[cfg(feature = "zk-verify-batch")]
 async fn handler_zk_verify_batch(
     State(app): State<SharedAppState>,
@@ -18321,36 +18321,14 @@ async fn handler_zk_verify_batch(
 
     let halo2 = app.state.zk_snapshot().halo2;
     let limits = routing::ZkVerifyBatchLimits {
-        open: iroha_zkp_halo2::OpenVerifyLimits {
-            max_k: Some(halo2.max_k),
-            max_transcript_label_len: Some(halo2.max_transcript_label_len),
-        },
+        open: iroha_zkp_halo2::OpenVerifyLimits::new(halo2.max_k, halo2.max_transcript_label_len),
+        max_body_bytes: usize::try_from(app.proof_limits.max_body_bytes).unwrap_or(usize::MAX),
         max_batch: halo2.verifier_max_batch.max(1) as usize,
         max_envelope_bytes: halo2.max_envelope_bytes,
         enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
     };
 
     routing::handle_v1_zk_verify_batch_with_limits(headers, body, limits).await
-}
-
-async fn handler_zk_submit_proof(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    enforce_proof_body_limit(&app, body.len(), "v1/zk/submit-proof")?;
-    check_proof_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/zk/submit-proof",
-        PROOF_REQUEST_RATE_COST,
-        true,
-    )
-    .await?;
-    routing::handle_v1_zk_submit_proof(headers, body).await
 }
 
 #[derive(
@@ -19603,8 +19581,6 @@ async fn handler_zk_ivm_prove(
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    zk_ivm_prove_gc_jobs(&app);
-    enforce_proof_body_limit(&app, body.len(), "v1/zk/ivm/prove")?;
     check_proof_access(
         &app,
         &headers,
@@ -19614,6 +19590,8 @@ async fn handler_zk_ivm_prove(
         true,
     )
     .await?;
+    zk_ivm_prove_gc_jobs(&app);
+    enforce_proof_body_limit(&app, body.len(), "v1/zk/ivm/prove")?;
     require_proof_json_content_type(&headers, "v1/zk/ivm/prove")?;
 
     let mut req: ZkIvmProveRequestDto = norito::json::from_slice(body.as_ref()).map_err(|err| {
@@ -20081,7 +20059,6 @@ async fn handler_zk_ivm_prove_get(
     job_id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
         &headers,
@@ -20091,6 +20068,7 @@ async fn handler_zk_ivm_prove_get(
         true,
     )
     .await?;
+    zk_ivm_prove_gc_jobs(&app);
 
     let job_id = job_id.0;
     validate_zk_ivm_prove_job_id(&job_id)?;
@@ -20129,7 +20107,6 @@ async fn handler_zk_ivm_prove_delete(
     job_id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
         &headers,
@@ -20139,6 +20116,7 @@ async fn handler_zk_ivm_prove_delete(
         true,
     )
     .await?;
+    zk_ivm_prove_gc_jobs(&app);
 
     let job_id = job_id.0;
     validate_zk_ivm_prove_job_id(&job_id)?;
@@ -38034,7 +38012,6 @@ async fn handler_post_contract_alias_set(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         request,
     )
     .await
@@ -39647,10 +39624,7 @@ async fn handler_iso_pacs008(
     }
 
     runtime.mark_queued(&msg_id);
-    runtime.mark_accepted(&msg_id, &tx_hash_str);
-    let status_snapshot = runtime
-        .message_status(&msg_id)
-        .expect("iso bridge status must exist immediately after mark_accepted");
+    let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
 
     let mut payload = norito::json::native::Map::new();
     payload.insert(
@@ -39835,10 +39809,7 @@ async fn handler_iso_pacs009(
     }
 
     runtime.mark_queued(&msg_id);
-    runtime.mark_accepted(&msg_id, &tx_hash_str);
-    let status_snapshot = runtime
-        .message_status(&msg_id)
-        .expect("iso bridge status must exist immediately after mark_accepted");
+    let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
 
     let mut payload = norito::json::native::Map::new();
     payload.insert(
@@ -41191,7 +41162,6 @@ async fn handler_post_vk_register(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             request,
         )
         .await
@@ -41215,7 +41185,6 @@ async fn handler_post_vk_register(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         request,
     )
     .await
@@ -41235,7 +41204,6 @@ async fn handler_post_vk_update(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             request,
         )
         .await
@@ -41259,7 +41227,6 @@ async fn handler_post_vk_update(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         request,
     )
     .await
@@ -46656,6 +46623,7 @@ async fn handler_ram_lfe_receipt_verify(
         &request.receipt,
         &program_policy,
         now_ms,
+        iroha_core::zk::ZkVerifyGuardrails::from_cfg(&app.state.zk_snapshot()),
     )
     .err();
     let validation = match (validation, output_hash_matches) {
@@ -47547,6 +47515,8 @@ pub use self::da::compute_taikai_ingest_tags;
 mod stream;
 #[cfg(feature = "app_api")]
 pub(crate) mod webhook;
+#[cfg(feature = "app_api")]
+mod zk1;
 #[cfg(feature = "app_api")]
 pub mod zk_attachments;
 #[cfg(feature = "app_api")]
@@ -49438,6 +49408,32 @@ mod sorafs_evidence_viewer_startup_tests {
     }
 }
 
+const fn iso_bridge_body_limit(configured: u64, transaction_limit: usize) -> usize {
+    let configured = if configured > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        configured as usize
+    };
+    let configured = if configured == 0 { 1 } else { configured };
+    if configured < transaction_limit {
+        configured
+    } else {
+        transaction_limit
+    }
+}
+
+#[cfg(test)]
+mod iso_bridge_body_limit_tests {
+    use super::iso_bridge_body_limit;
+
+    #[test]
+    fn body_limit_is_positive_and_capped_by_transaction_limit() {
+        assert_eq!(iso_bridge_body_limit(1024 * 1024, 64_000_000), 1024 * 1024);
+        assert_eq!(iso_bridge_body_limit(128_000_000, 64_000_000), 64_000_000);
+        assert_eq!(iso_bridge_body_limit(0, 64_000_000), 1);
+    }
+}
+
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -49448,6 +49444,7 @@ pub struct Torii {
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
     transaction_max_content_len: ConfigBytes<u64>,
+    iso_bridge_max_body_bytes: ConfigBytes<u64>,
     transaction_ingress_max_concurrent_compute_jobs: usize,
     transaction_batch_max_transactions: usize,
     ws_message_timeout: Duration,
@@ -51372,27 +51369,33 @@ impl Torii {
         );
         builder.route(
             &route_catalog::core::VPN_QUOTE_CREATE,
-            catalog_post(handler_create_vpn_quote),
+            catalog_post(handler_create_vpn_quote)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::core::VPN_SESSION_CREATE,
-            catalog_post(handler_create_vpn_session),
+            catalog_post(handler_create_vpn_session)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::core::VPN_RECEIPTS,
-            catalog_get(handler_list_vpn_receipts),
+            catalog_get(handler_list_vpn_receipts)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::core::VPN_RECEIPT_SUBMIT,
-            catalog_post(handler_submit_vpn_receipt),
+            catalog_post(handler_submit_vpn_receipt)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::core::VPN_SESSION,
-            catalog_get(handler_get_vpn_session),
+            catalog_get(handler_get_vpn_session)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::core::VPN_SESSION_DELETE,
-            catalog_delete(handler_delete_vpn_session),
+            catalog_delete(handler_delete_vpn_session)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::core::LEDGER_HEADERS,
@@ -51586,6 +51589,9 @@ impl Torii {
             .get()
             .try_into()
             .expect("shouldn't exceed usize");
+        let iso_body_limit =
+            iso_bridge_body_limit(self.iso_bridge_max_body_bytes.get(), body_limit);
+        let app_state = builder.state().clone();
         builder.route(
             &route_catalog::pipeline::TRANSACTION,
             catalog_post(handler_post_transaction).layer(DefaultBodyLimit::max(body_limit)),
@@ -51602,67 +51608,86 @@ impl Torii {
 
         builder.route(
             &route_catalog::iso20022::PACS008_SUBMIT,
-            catalog_post(handler_iso_pacs008),
+            catalog_post(handler_iso_pacs008)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS009_SUBMIT,
-            catalog_post(handler_iso_pacs009),
+            catalog_post(handler_iso_pacs009)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS002_SUBMIT,
-            catalog_post(handler_iso_pacs002_submit),
+            catalog_post(handler_iso_pacs002_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS004_SUBMIT,
-            catalog_post(handler_iso_pacs004_submit),
+            catalog_post(handler_iso_pacs004_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::CAMT056_SUBMIT,
-            catalog_post(handler_iso_camt056_submit),
+            catalog_post(handler_iso_camt056_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE023_SUBMIT,
-            catalog_post(handler_iso_sese023_submit),
+            catalog_post(handler_iso_sese023_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE024_SUBMIT,
-            catalog_post(handler_iso_sese024_submit),
+            catalog_post(handler_iso_sese024_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE025_SUBMIT,
-            catalog_post(handler_iso_sese025_submit),
+            catalog_post(handler_iso_sese025_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::COLR012_SUBMIT,
-            catalog_post(handler_iso_colr012_submit),
+            catalog_post(handler_iso_colr012_submit)
+                .layer(DefaultBodyLimit::max(iso_body_limit))
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE,
-            catalog_get(handler_iso_status),
+            catalog_get(handler_iso_status).authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::AUDIT_MESSAGES,
-            catalog_get(handler_iso_audit_messages),
+            catalog_get(handler_iso_audit_messages)
+                .authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_PACS002,
-            catalog_get(handler_iso_pacs002),
+            catalog_get(handler_iso_pacs002).authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_PACS004,
-            catalog_get(handler_iso_pacs004),
+            catalog_get(handler_iso_pacs004).authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_CAMT029,
-            catalog_get(handler_iso_camt029),
+            catalog_get(handler_iso_camt029).authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE024,
-            catalog_get(handler_iso_sese024),
+            catalog_get(handler_iso_sese024).authenticated_required_api_token(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE025,
-            catalog_get(handler_iso_sese025),
+            catalog_get(handler_iso_sese025).authenticated_required_api_token(app_state),
         );
     }
 
@@ -51690,27 +51715,39 @@ impl Torii {
         );
         builder.route(
             &route_catalog::data_availability::COMMITMENTS,
-            catalog_post(da::commitments::handler_list_commitments),
+            catalog_post(da::commitments::handler_list_commitments).layer(DefaultBodyLimit::max(
+                da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+            )),
         );
         builder.route(
             &route_catalog::data_availability::COMMITMENTS_PROVE,
-            catalog_post(da::commitments::handler_prove_commitment),
+            catalog_post(da::commitments::handler_prove_commitment).layer(DefaultBodyLimit::max(
+                da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+            )),
         );
         builder.route(
             &route_catalog::data_availability::COMMITMENTS_VERIFY,
-            catalog_post(da::commitments::handler_verify_commitment),
+            catalog_post(da::commitments::handler_verify_commitment).layer(DefaultBodyLimit::max(
+                da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+            )),
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS,
-            catalog_post(da::pin_intents::handler_list_pin_intents),
+            catalog_post(da::pin_intents::handler_list_pin_intents).layer(DefaultBodyLimit::max(
+                da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+            )),
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_PROVE,
-            catalog_post(da::pin_intents::handler_prove_pin_intent),
+            catalog_post(da::pin_intents::handler_prove_pin_intent).layer(DefaultBodyLimit::max(
+                da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+            )),
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_VERIFY,
-            catalog_post(da::pin_intents::handler_verify_pin_intent),
+            catalog_post(da::pin_intents::handler_verify_pin_intent).layer(DefaultBodyLimit::max(
+                da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+            )),
         );
     }
 
@@ -52637,6 +52674,7 @@ impl Torii {
     /// App-facing typed and protocol-native endpoints.
     #[cfg(feature = "app_api")]
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
+        let app_state = builder.state().clone();
         let transaction_max_content_len: usize = self
             .transaction_max_content_len
             .get()
@@ -52935,12 +52973,14 @@ impl Torii {
         #[cfg(feature = "push")]
         builder.route(
             &route_catalog::application_api::NOTIFY_DEVICES_POST,
-            catalog_post(handler_push_register_device),
+            catalog_post(handler_push_register_device)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         #[cfg(feature = "push")]
         builder.route(
             &route_catalog::application_api::NOTIFY_DEVICES_DELETE,
-            catalog_delete(handler_push_unregister_device),
+            catalog_delete(handler_push_unregister_device)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_GET,
@@ -53460,28 +53500,34 @@ impl Torii {
         if self.webhooks_enabled {
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_GET,
-                catalog_get(handler_webhooks_list),
+                catalog_get(handler_webhooks_list)
+                    .authenticated_required_api_token(app_state.clone()),
             );
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_POST,
-                catalog_post(handler_webhooks_create),
+                catalog_post(handler_webhooks_create)
+                    .authenticated_required_api_token(app_state.clone()),
             );
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_BY_ID_DELETE,
-                catalog_delete(handler_webhooks_delete),
+                catalog_delete(handler_webhooks_delete)
+                    .authenticated_required_api_token(app_state.clone()),
             );
         } else {
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_GET,
-                catalog_get(|| async { StatusCode::NOT_FOUND }),
+                catalog_get(|| async { StatusCode::NOT_FOUND })
+                    .authenticated_required_api_token(app_state.clone()),
             );
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_POST,
-                catalog_post(|| async { StatusCode::NOT_FOUND }),
+                catalog_post(|| async { StatusCode::NOT_FOUND })
+                    .authenticated_required_api_token(app_state.clone()),
             );
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_BY_ID_DELETE,
-                catalog_delete(|| async { StatusCode::NOT_FOUND }),
+                catalog_delete(|| async { StatusCode::NOT_FOUND })
+                    .authenticated_required_api_token(app_state),
             );
         }
     }
@@ -53801,11 +53847,12 @@ impl Torii {
         );
         capacity_get!(STORAGE_PLAN, sorafs::api::handle_get_sorafs_storage_plan);
         capacity_post!(STORAGE_FETCH, sorafs::api::handle_post_sorafs_storage_fetch);
+        let stream_token_app_state = builder.state().clone();
         builder.route(
             &route_catalog::sorafs::STORAGE_TOKEN,
             catalog_post(sorafs::api::handle_post_sorafs_storage_token)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::RequiredApiToken),
+                .authenticated_required_api_token(stream_token_app_state),
         );
         capacity_get!(
             STORAGE_CAR,
@@ -54007,8 +54054,6 @@ impl Torii {
 
         mount_proof_post!(ZK_ROOTS, handler_zk_roots);
         mount_proof_post!(ZK_MERKLE_PATH, handler_zk_merkle_path);
-        mount_proof_post!(ZK_VERIFY, handler_zk_verify);
-        mount_proof_post!(ZK_SUBMIT_PROOF, handler_zk_submit_proof);
         mount_proof_post!(ZK_VOTE_TALLY, handler_zk_vote_tally);
         #[cfg(feature = "zk-verify-batch")]
         mount_proof_post!(ZK_VERIFY_BATCH, handler_zk_verify_batch);
@@ -54385,7 +54430,8 @@ impl Torii {
         ));
         crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::from(
             &config.app_api,
-        ));
+        ))
+        .expect("validated Torii app-auth replay window");
         #[cfg(feature = "app_api")]
         crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
@@ -54680,12 +54726,15 @@ impl Torii {
             )
             .unwrap_or_else(|err| panic!("invalid torii.operator_auth configuration: {err}")),
         );
-        let operator_signatures = Arc::new(operator_signatures::OperatorSignatures::new(
-            config.operator_signatures.clone(),
-            da_receipt_signer.public_key().clone(),
-            config.max_content_len.get(),
-            telemetry.clone(),
-        ));
+        let operator_signatures = Arc::new(
+            operator_signatures::OperatorSignatures::new(
+                config.operator_signatures.clone(),
+                da_receipt_signer.public_key().clone(),
+                config.max_content_len.get(),
+                telemetry.clone(),
+            )
+            .expect("validated Torii operator-signature replay window"),
+        );
         #[cfg(feature = "app_api")]
         if config.sorafs_por.enabled {
             assert_por_runtime_ready(&config.sorafs_por);
@@ -55400,6 +55449,7 @@ impl Torii {
             content_config: content_snapshot,
             address: config.address,
             transaction_max_content_len: config.max_content_len,
+            iso_bridge_max_body_bytes: config.iso_bridge.max_body_bytes,
             transaction_ingress_max_concurrent_compute_jobs: config
                 .transaction_ingress
                 .max_concurrent_compute_jobs
@@ -55734,24 +55784,19 @@ impl Torii {
                 .expect("bounded replay cursor store must fit the matching replay cache capacity");
         }
         let replay_store = Arc::new(replay_cursor_store);
-        let receipt_log = match da::DaReceiptLog::open(
-            self.da_ingest.manifest_store_dir.clone(),
-            Arc::clone(&replay_store),
-            self.da_receipt_signer.public_key().clone(),
-        ) {
-            Ok(log) => Arc::new(log),
-            Err(err) => {
-                iroha_logger::error!(
-                    ?err,
-                    dir = ?self.da_ingest.manifest_store_dir,
-                    "failed to open DA receipt log; DA ingest receipt appends will fail closed with an in-memory log"
-                );
-                Arc::new(da::DaReceiptLog::in_memory(
-                    Arc::clone(&replay_store),
-                    self.da_receipt_signer.public_key().clone(),
-                ))
-            }
-        };
+        let receipt_log = Arc::new(
+            da::DaReceiptLog::open(
+                self.da_ingest.manifest_store_dir.clone(),
+                Arc::clone(&replay_store),
+                self.da_receipt_signer.public_key().clone(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to open durable DA receipt log at {}; refusing to start Torii: {err:?}",
+                    self.da_ingest.manifest_store_dir.display()
+                )
+            }),
+        );
         #[cfg(feature = "telemetry")]
         self.telemetry.with_metrics(|metrics| {
             for (lane_epoch, highest) in replay_store.highest_sequences() {

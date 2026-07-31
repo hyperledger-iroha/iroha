@@ -18,8 +18,8 @@ use iroha_data_model::{
         execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
     },
     merge::{LaneDrainFrontierV1, MergeLedgerEntry},
-    name::Name,
     nexus::{DataSpaceId, LaneId},
+    state_path::StatePath,
     transaction::signed::TransactionEntrypoint,
 };
 use norito::codec::{Decode, DecodeAll, Encode};
@@ -3467,7 +3467,7 @@ impl Kura {
         snapshot_height: u64,
         snapshot_block_hash: Option<HashOf<BlockHeader>>,
         snapshot_state_hash: Hash,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<LaneGeometryGcSummary> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
@@ -3495,7 +3495,7 @@ impl Kura {
         snapshot_height: u64,
         snapshot_block_hash: Option<HashOf<BlockHeader>>,
         snapshot_state_hash: Hash,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<LaneGeometryGcSummary> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
@@ -3867,7 +3867,7 @@ impl Kura {
     fn geometry_merge_releases_proven_by_snapshot(
         &self,
         snapshot_height: u64,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<Vec<LaneGeometryMergeRelease>> {
         let entries = self.merge_ledger_all_entries()?;
         let carriers = self.geometry_merge_carrier_map()?;
@@ -12853,7 +12853,7 @@ fn geometry_pending_archive_gc_root(pending: &[LaneGeometryPendingArchiveGc]) ->
     Hash::new_from_chunks(&[PENDING_GC_DOMAIN, pending.to_vec().encode().as_slice()])
 }
 
-fn geometry_merge_marker_set_root(markers: &[(Name, Vec<u8>)]) -> Hash {
+fn geometry_merge_marker_set_root(markers: &[(StatePath, Vec<u8>)]) -> Hash {
     Hash::new_from_chunks(&[
         MERGE_RELEASE_MARKERS_DOMAIN,
         markers.to_vec().encode().as_slice(),
@@ -14172,6 +14172,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1_024,
@@ -15016,14 +15017,17 @@ mod tests {
                 .expect("geometry participant settlement hashes");
         let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
             .expect("geometry retirement participant PoP");
-        let qc = |body| NativeAmxAttestationQcV2 {
-            body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&participant_validator_set),
-            validator_set: participant_validator_set.clone(),
-            validator_set_pops: vec![participant_pop.clone()],
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
+        let qc = |body| {
+            NativeAmxAttestationQcV2::try_new(
+                body,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&participant_validator_set),
+                participant_validator_set.clone(),
+                vec![participant_pop.clone()],
+                vec![1],
+                vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
+            )
+            .expect("geometry fixture validator set and proofs must align")
         };
         let prepare_qc = qc(prepare_body);
         let mut commit_body = prepare_body;

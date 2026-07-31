@@ -395,9 +395,21 @@ def _privacy_capability_archive() -> bytes:
     return bytes(frame)
 
 
+_DEFAULT_CAPABILITY_ARCHIVE = object()
+
+
 class _CapabilityNative:
-    def __init__(self, archive: object | None = None, *, abi: object = PRIVACY_REQUIRED_BRIDGE_ABI_VERSION) -> None:
-        self.archive = _privacy_capability_archive() if archive is None else archive
+    def __init__(
+        self,
+        archive: object = _DEFAULT_CAPABILITY_ARCHIVE,
+        *,
+        abi: object = PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
+    ) -> None:
+        self.archive = (
+            _privacy_capability_archive()
+            if archive is _DEFAULT_CAPABILITY_ARCHIVE
+            else archive
+        )
         self.abi = abi
 
     def privacy_bridge_abi_version(self) -> object:

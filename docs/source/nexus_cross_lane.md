@@ -261,19 +261,34 @@ quantities, plus `timestamp_ms`. Commitment totals use the corresponding
 lane-relay-burn XOR fees; each ordered `native_amx_receipts` entry binds the
 source transaction, coordinator context, routing-plan digest, and every
 participant prepare/commit leg.
-`LaneRelayEnvelope` binds that commitment and its hash to the lane header, lane
-QC, DA commitment, RBC byte count, manifest root, and FastPQ proof material.
+`LaneRelayEnvelope` carries that commitment and its hash alongside the lane
+header, lane QC, DA commitment, RBC byte count, manifest root, and FastPQ proof
+metadata. The lane QC authenticates the header and finality roots; it does not
+by itself authenticate the settlement, descriptor, or FastPQ metadata.
 The header height is the global proposal and authority context used for
 lifecycle, committee, key-history, and policy checks. The envelope and
 settlement `block_height` is the incarnation-scoped lane-local coordinate used
 for relay identity and contiguous merge progression; a recreated lane therefore
 restarts at lane-local height 1 without reusing its retired incarnation.
 
-A relay becomes merge-admissible only after all structural, committee,
-signature, DA, proof, settlement, and activation checks pass. Contract-persisted
-verified relay records are revalidated before hydrating the runtime cache.
-Envelope identity includes immutable header, descriptor, DA, settlement, RBC,
-and manifest fields, so a later “upgrade” cannot overwrite drifted evidence.
+A relay becomes merge-authoritative only after all structural, committee,
+signature, DA, settlement, and activation checks pass and an exact
+contract-persisted record proves the FastPQ effect claim over that same
+envelope. Nonzero proof metadata in the gossip cache is progress data only and
+cannot create a merge candidate or block lane retirement. Verified relay
+records are revalidated before hydrating the runtime cache. Envelope identity
+includes immutable header, descriptor, DA, settlement, RBC, and manifest
+fields, so a later “upgrade” cannot overwrite drifted evidence.
+
+`RegisterVerifiedLaneRelay` is permissionless transport, not permissionless
+authority. Before either contract-state key is written, Core derives the exact
+lane committee from the transaction's consensus snapshot, requires commit
+quorum, checks the QC roster and epoch, and verifies the aggregate BLS signature
+with the committee's on-chain proofs of possession. It separately verifies the
+FastPQ proof and its effect-specific claim digest over the exact descriptor,
+settlement, QC, DA, and manifest fields before persisting the record. Pending or
+metadata-only envelopes remain valid for local status/progress only and cannot
+create durable contract-visible settlement state or merge authority.
 
 Relay settlement candidates contain the exact envelope. Merge validators
 preflight duplicate markers, fee schedule arithmetic, canonical asset

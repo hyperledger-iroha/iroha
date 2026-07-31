@@ -1080,7 +1080,7 @@ mod tests {
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
-            commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment, RetentionClass},
+            commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, StorageTicketId},
         },
@@ -1121,7 +1121,6 @@ mod tests {
             ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
             DaProofScheme::MerkleSha256,
             Hash::prehashed(*receipt.chunk_root.as_bytes()),
-            Some(KzgCommitment::new([0x44; 48])),
             None,
             RetentionClass::default(),
             receipt.storage_ticket,

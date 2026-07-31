@@ -129,6 +129,7 @@ fn finality_evidence(
                 parent_commit_qc: None,
                 snapshot_bootstrap: None,
                 nexus_amx_context_hash: Hash::new([seed, 11]),
+                execution_policy_hash: Hash::new([seed, 12]),
                 da_layout: DataAvailabilityLayout {
                     encoding: PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,

@@ -3484,8 +3484,9 @@ mod candidate {
         use crate::{
             account::{AccountId, MultisigMember, MultisigPolicy},
             query::{
-                FindExecutorDataModel, QueryRequest, SingularQueryBox,
-                candidate::SignedQueryCandidate, parameters,
+                FindExecutorDataModel, QueryRequest, QueryRequestWithAuthority,
+                SignedQueryValidationError, SingularQueryBox, candidate::SignedQueryCandidate,
+                parameters,
             },
         };
 

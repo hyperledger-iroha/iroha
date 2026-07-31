@@ -63,9 +63,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -73,16 +72,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` `iroha_crypto::kzg` میں استعمال ہونے والے 48 بائٹ پوائنٹ کو دوبارہ استعمال کرتا ہے۔
-  جب غیر حاضر رہتے ہیں تو ، یہ صرف مرکل کے ثبوتوں کی طرف لوٹتا ہے۔
-- `proof_scheme` لین کیٹلاگ سے ماخوذ ہے۔ مرکل لین مسترد کردیتے ہیں
-  کے زیڈ جی پے لوڈ جبکہ `kzg_bls12_381` لینوں کے لئے KZG وعدوں کی ضرورت ہوتی ہے
-  صفر نہیں۔ Torii فی الحال صرف مرکل کا کمٹٹس تیار کرتا ہے اور لینوں کو مسترد کرتا ہے
-  کے زیڈ جی کے ساتھ تشکیل شدہ۔
-- `KzgCommitment` `iroha_crypto::kzg` میں استعمال ہونے والے 48 بائٹ پوائنٹ کو دوبارہ استعمال کرتا ہے۔
-  جب مرکل میں غیر حاضر رہتے ہیں تو یہ صرف مرکل کے ثبوتوں کی طرف لوٹتا ہے۔
-- `proof_digest` DA-5 PDP/POTR انضمام کی توقع کرتا ہے تاکہ وہی ریکارڈ ہوں
-  بلابز کو زندہ رکھنے کے لئے استعمال ہونے والے نمونے لینے کے شیڈول کی فہرست بنائیں۔
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 بلاک ہیڈر توسیع
 
@@ -177,30 +169,7 @@ Torii موجودہ ڈا ingestion اختتامی مقامات کے ساتھ ہی
 
 ## 7. جانچ کی حکمت عملی
 
-1. ** یونٹ ٹیسٹ ** `DaCommitmentBundle` اور انکوڈنگ/ضابطہ کشائی کے لئے
-   بلاک ہیش اخذ کردہ تازہ کاریوں کو۔
-2
-   بنڈل کیننیکلز اور مرکل ٹیسٹ۔
-3.
-   یہ ظاہر کرنا اور اس کی تصدیق کرنا کہ دونوں نوڈس بنڈل کے مواد پر متفق ہیں اور
-   استفسار/ٹیسٹ کے جوابات۔
-4. ** پتلی کلائنٹ ٹیسٹ ** `integration_tests/tests/da/commitments.rs` پر
-   (زنگ) جو `/prove` پر کال کرتا ہے اور Torii سے بات کیے بغیر ٹیسٹ کی تصدیق کرتا ہے۔
-5
-   تولیدی آپریٹرز کی۔
-
-## 8. رول آؤٹ پلان
-
-| مرحلہ | تفصیل | باہر نکلنے کے معیارات |
-| ------ | ------------- | ------------------------ |
-| P0 - ڈیٹا ماڈل انضمام | `DaCommitmentRecord` ، بلاک ہیڈر کی تازہ کاریوں اور Norito کوڈیکس کو مربوط کریں۔ | نئے فکسچر کے ساتھ سبز رنگ میں `cargo test -p iroha_data_model`۔ |
-| P1 - کور/WSV وائرنگ | تھریڈ قطار منطق + بلاک بلڈر ، انڈیکس کو برقرار رکھیں اور آر پی سی ہینڈلرز کو بے نقاب کریں۔ | `cargo test -p iroha_core` ، `integration_tests/tests/da/commitments.rs` بنڈل پروف دعووں کے ساتھ پاس۔ |
-| P2 - آپریٹر ٹولنگ | سی ایل آئی مددگار ، Grafana ڈیش بورڈ اور پروف تصدیقی دستاویز کی تازہ کاریوں کو لانچ کریں۔ | `iroha_cli app da prove-commitment` ڈیونیٹ کے خلاف کام کرتا ہے۔ ڈیش بورڈ براہ راست ڈیٹا دکھاتا ہے۔ |
-| P3 - گورننس گیٹ | اس بلاک کی توثیق کنندہ کو فعال کریں جس کے لئے `iroha_config::nexus` میں نشان زد لینوں پر DA وعدوں کی ضرورت ہوتی ہے۔ | اسٹیٹس انٹری + روڈ میپ اپ ڈیٹ مارک ڈی اے 3 کے مطابق۔ |
-
-## سوالات کھولیں1.
-   بلاک سائز کو کم کرنے کے لئے؟ تجویز: `kzg_commitment` رکھیں
-   `iroha_config::da.enable_kzg` کے ذریعے اختیاری اور کرال۔
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. ** تسلسل کے فرق موجودہ منصوبہ مسترد کرتا ہے
    گیپس جب تک کہ گورننس ری پلے کے لئے `allow_sequence_skips` کو چالو نہیں کرتا ہے
    ہنگامی صورتحال

@@ -17,7 +17,7 @@ use iroha_core::iso_bridge::{
         self, EmbeddedSignaturePolicy, MessageDirection, MessageProfile,
         ReferenceDatasetRequirement, StructuredAddressMode, TradfiRail, TradfiRailProfile,
     },
-    reference_data::{ReferenceDataError, ReferenceDataSnapshots, ValidationOutcome},
+    reference_data::{ReferenceDataError, ReferenceDataSnapshots},
 };
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::PrivateKey;
@@ -52,6 +52,12 @@ use x509_parser::{
 
 use crate::routing::{self, MaybeTelemetry};
 
+#[derive(Clone)]
+struct IsoCurrencyBinding {
+    asset_definition: String,
+    max_amount: Quantity,
+}
+
 /// Runtime bridge configuration derived from Torii settings.
 #[derive(Clone)]
 pub struct Iso20022BridgeRuntime {
@@ -60,7 +66,7 @@ pub struct Iso20022BridgeRuntime {
     account_aliases: Arc<HashMap<String, AccountId>>,
     alias_indices: Arc<HashMap<String, AliasIndex>>,
     index_aliases: Arc<BTreeMap<AliasIndex, (String, AccountId)>>,
-    currency_assets: Arc<HashMap<String, String>>,
+    currency_assets: Arc<HashMap<String, IsoCurrencyBinding>>,
     reference_data: Arc<ReferenceDataSnapshots>,
     default_profile_id: String,
     profiles: Arc<HashMap<String, TradfiRailProfile>>,
@@ -1398,6 +1404,9 @@ impl Iso20022BridgeRuntime {
         if !config.enabled {
             return Ok(None);
         }
+        if config.max_body_bytes.get() == 0 {
+            eyre::bail!("iso_bridge max_body_bytes must be greater than zero");
+        }
 
         let signer = config
             .signer
@@ -1439,7 +1448,23 @@ impl Iso20022BridgeRuntime {
             }
             let asset_selector = validate_asset_definition_selector(&binding.asset_definition)
                 .wrap_err_with(|| format!("invalid asset definition for currency {currency}"))?;
-            currencies.insert(currency, asset_selector);
+            if binding.max_amount.is_zero() {
+                eyre::bail!(
+                    "iso_bridge currency binding `{currency}` max_amount must be greater than zero"
+                );
+            }
+            if currencies
+                .insert(
+                    currency.clone(),
+                    IsoCurrencyBinding {
+                        asset_definition: asset_selector,
+                        max_amount: binding.max_amount.clone(),
+                    },
+                )
+                .is_some()
+            {
+                eyre::bail!("iso_bridge contains duplicate currency binding `{currency}`");
+            }
         }
 
         let reference_data = Arc::new(ReferenceDataSnapshots::from_config(&config.reference_data));
@@ -1497,8 +1522,83 @@ impl Iso20022BridgeRuntime {
         currency: &str,
     ) -> Option<AssetDefinitionId> {
         let currency = normalise_currency(currency);
-        let selector = self.currency_assets.get(&currency)?;
-        resolve_asset_definition_selector(world, selector, now_ms)
+        let binding = self.currency_assets.get(&currency)?;
+        resolve_asset_definition_selector(world, &binding.asset_definition, now_ms)
+    }
+
+    fn resolve_bound_account(
+        &self,
+        iban: &str,
+        iban_field: &'static str,
+        hint: Option<&str>,
+        hint_field: &'static str,
+        telemetry: &MaybeTelemetry,
+        context: &'static str,
+    ) -> Result<AccountId, MsgError> {
+        let configured = self
+            .resolve_account(iban)
+            .ok_or_else(|| MsgError::InvalidIdentifier {
+                field: iban_field.to_owned(),
+                kind: IdentifierKind::Iban,
+            })?;
+        if let Some(hint) = hint {
+            let (hinted, _) = parse_iso_account_hint(hint, telemetry, context)?;
+            if hinted != configured {
+                return Err(MsgError::InvalidValue {
+                    field: hint_field.to_owned(),
+                    kind: InvalidValueKind::Enum,
+                });
+            }
+        }
+        Ok(configured)
+    }
+
+    fn resolve_bound_asset(
+        &self,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
+        currency: &str,
+        hint: Option<&str>,
+    ) -> Result<AssetDefinitionId, MsgError> {
+        let configured = self.resolve_asset(world, now_ms, currency).ok_or_else(|| {
+            MsgError::InvalidIdentifier {
+                field: "IntrBkSttlmCcy".to_owned(),
+                kind: IdentifierKind::Currency,
+            }
+        })?;
+        if let Some(hint) = hint {
+            let hinted = resolve_asset_definition_selector(world, hint, now_ms)
+                .ok_or(MsgError::ValidationFailed)?;
+            if hinted != configured {
+                return Err(MsgError::InvalidValue {
+                    field: "SplmtryData/AssetDefinitionId".to_owned(),
+                    kind: InvalidValueKind::Enum,
+                });
+            }
+        }
+        Ok(configured)
+    }
+
+    fn settlement_amount(&self, currency: &str, amount: &str) -> Result<Quantity, MsgError> {
+        let currency = normalise_currency(currency);
+        let binding =
+            self.currency_assets
+                .get(&currency)
+                .ok_or_else(|| MsgError::InvalidIdentifier {
+                    field: "IntrBkSttlmCcy".to_owned(),
+                    kind: IdentifierKind::Currency,
+                })?;
+        let amount = Quantity::from_str(amount).map_err(|_| MsgError::InvalidValue {
+            field: "IntrBkSttlmAmt".to_owned(),
+            kind: InvalidValueKind::Amount,
+        })?;
+        if amount.is_zero() || amount > binding.max_amount {
+            return Err(MsgError::InvalidValue {
+                field: "IntrBkSttlmAmt".to_owned(),
+                kind: InvalidValueKind::Amount,
+            });
+        }
+        Ok(amount)
     }
 
     /// Access the cached ISO reference datasets.
@@ -1592,6 +1692,12 @@ impl Iso20022BridgeRuntime {
             });
         }
         self.validate_amount_minor_units(message_profile, parsed)?;
+        if let (Some(currency), Some(amount)) = (
+            parsed.field_text("IntrBkSttlmCcy"),
+            parsed.field_text("IntrBkSttlmAmt"),
+        ) {
+            self.settlement_amount(currency, amount)?;
+        }
         self.validate_supplementary_data_limit(message_profile, parsed)?;
         self.validate_structured_address_mode(message_profile, parsed)?;
         self.validate_message_reference_data(message_type, parsed)?;
@@ -1900,11 +2006,12 @@ impl Iso20022BridgeRuntime {
         }
     }
 
-    /// Mark the provided message as successfully submitted on-chain.
-    pub fn mark_accepted(&self, message_id: &str, transaction_hash: &str) {
+    /// Mark the provided message as successfully submitted on-chain and return
+    /// the exact status snapshot produced by that atomic update.
+    pub fn mark_accepted(&self, message_id: &str, transaction_hash: &str) -> IsoMessageStatus {
         let now = Instant::now();
         let tx_hash = transaction_hash.to_owned();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
+        let status = if let Some(mut existing) = self.records.get_mut(message_id) {
             if let Some(old_hash) = existing.transaction_hash.replace(tx_hash.clone()) {
                 if old_hash != tx_hash {
                     self.tx_hash_index.remove(&old_hash);
@@ -1920,14 +2027,16 @@ impl Iso20022BridgeRuntime {
             existing.change_reason_codes.clear();
             existing.rejection_reason_code = None;
             existing.push_history();
+            Self::status_snapshot(message_id, &existing)
         } else {
-            self.records.insert(
-                message_id.to_owned(),
-                IsoMessageRecord::accepted(now, tx_hash.clone()),
-            );
-        }
+            let record = IsoMessageRecord::accepted(now, tx_hash.clone());
+            let status = Self::status_snapshot(message_id, &record);
+            self.records.insert(message_id.to_owned(), record);
+            status
+        };
         self.tx_hash_index.insert(tx_hash, message_id.to_owned());
         self.persist_message(message_id);
+        status
     }
 
     /// Mark an inbound lifecycle message as durably accepted without creating a ledger transfer.
@@ -1992,28 +2101,27 @@ impl Iso20022BridgeRuntime {
 
     /// Retrieve the current status of a processed ISO 20022 message.
     pub fn message_status(&self, message_id: &str) -> Option<IsoMessageStatus> {
-        self.records.get(message_id).map(|record| {
-            let record = record.clone();
-            let derived_status = record.derived_status();
-            let hold_reason_code = record.hold_reason_code.clone();
-            let change_reason_codes = record.change_reason_codes.clone();
-            let context = record.context;
-            IsoMessageStatus {
-                message_id: message_id.to_owned(),
-                state: record.state,
-                transaction_hash: record.transaction_hash.clone(),
-                detail: record.detail.clone(),
-                updated_at: record.updated_at,
-                settled_at: record.settled_at,
-                context,
-                metadata: record.metadata.clone(),
-                derived_status,
-                hold_reason_code,
-                change_reason_codes,
-                rejection_reason_code: record.rejection_reason_code.clone(),
-                status_history: record.status_history.clone(),
-            }
-        })
+        self.records
+            .get(message_id)
+            .map(|record| Self::status_snapshot(message_id, &record))
+    }
+
+    fn status_snapshot(message_id: &str, record: &IsoMessageRecord) -> IsoMessageStatus {
+        IsoMessageStatus {
+            message_id: message_id.to_owned(),
+            state: record.state,
+            transaction_hash: record.transaction_hash.clone(),
+            detail: record.detail.clone(),
+            updated_at: record.updated_at,
+            settled_at: record.settled_at,
+            context: record.context.clone(),
+            metadata: record.metadata.clone(),
+            derived_status: record.derived_status(),
+            hold_reason_code: record.hold_reason_code.clone(),
+            change_reason_codes: record.change_reason_codes.clone(),
+            rejection_reason_code: record.rejection_reason_code.clone(),
+            status_history: record.status_history.clone(),
+        }
     }
 
     /// Determine the durable identifier for an inbound lifecycle message.
@@ -2169,21 +2277,15 @@ impl Iso20022BridgeRuntime {
             context.ledger_id = Some(ledger_hint.to_owned());
         }
 
-        let debtor = if let Some(hint) = parsed.field_text("SplmtryData/SourceAccountId") {
-            let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, ISO_PACS008_CONTEXT)?;
-            context.source_account_id = Some(canonical);
-            account
-        } else {
-            let account =
-                self.resolve_account(&debtor_iban)
-                    .ok_or_else(|| MsgError::InvalidIdentifier {
-                        field: "DbtrAcct".to_owned(),
-                        kind: IdentifierKind::Iban,
-                    })?;
-            context.source_account_id = Some(account.to_string());
-            account
-        };
+        let debtor = self.resolve_bound_account(
+            &debtor_iban,
+            "DbtrAcct",
+            parsed.field_text("SplmtryData/SourceAccountId"),
+            "SplmtryData/SourceAccountId",
+            telemetry,
+            ISO_PACS008_CONTEXT,
+        )?;
+        context.source_account_id = Some(debtor.to_string());
         if let Some(address) = parsed.field_text("SplmtryData/SourceAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
@@ -2195,21 +2297,15 @@ impl Iso20022BridgeRuntime {
             }
         }
 
-        let creditor = if let Some(hint) = parsed.field_text("SplmtryData/TargetAccountId") {
-            let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, ISO_PACS008_CONTEXT)?;
-            context.target_account_id = Some(canonical);
-            account
-        } else {
-            let account = self.resolve_account(&creditor_iban).ok_or_else(|| {
-                MsgError::InvalidIdentifier {
-                    field: "CdtrAcct".to_owned(),
-                    kind: IdentifierKind::Iban,
-                }
-            })?;
-            context.target_account_id = Some(account.to_string());
-            account
-        };
+        let creditor = self.resolve_bound_account(
+            &creditor_iban,
+            "CdtrAcct",
+            parsed.field_text("SplmtryData/TargetAccountId"),
+            "SplmtryData/TargetAccountId",
+            telemetry,
+            ISO_PACS008_CONTEXT,
+        )?;
+        context.target_account_id = Some(creditor.to_string());
         if let Some(address) = parsed.field_text("SplmtryData/TargetAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
@@ -2221,23 +2317,14 @@ impl Iso20022BridgeRuntime {
             }
         }
 
-        let asset_definition =
-            if let Some(hint) = parsed.field_text("SplmtryData/AssetDefinitionId") {
-                let definition = resolve_asset_definition_selector(world, hint, now_ms)
-                    .ok_or(MsgError::ValidationFailed)?;
-                context.asset_definition_id = Some(definition.to_string());
-                definition
-            } else {
-                let definition = self
-                    .resolve_asset(world, now_ms, &currency)
-                    .ok_or_else(|| MsgError::InvalidIdentifier {
-                        field: "IntrBkSttlmCcy".to_owned(),
-                        kind: IdentifierKind::Currency,
-                    })?;
-                context.asset_definition_id = Some(definition.to_string());
-                definition
-            };
-        let amount = Quantity::from_str(amount_raw).map_err(|_| MsgError::ValidationFailed)?;
+        let asset_definition = self.resolve_bound_asset(
+            world,
+            now_ms,
+            &currency,
+            parsed.field_text("SplmtryData/AssetDefinitionId"),
+        )?;
+        context.asset_definition_id = Some(asset_definition.to_string());
+        let amount = self.settlement_amount(&currency, amount_raw)?;
         let asset = AssetId::new(asset_definition.clone(), debtor.clone());
         let asset_id_str = asset.to_string();
         context.asset_id = Some(asset_id_str);
@@ -2362,21 +2449,15 @@ impl Iso20022BridgeRuntime {
             context.ledger_id = Some(ledger_hint.to_owned());
         }
 
-        let debtor = if let Some(hint) = parsed.field_text("SplmtryData/SourceAccountId") {
-            let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, ISO_PACS009_CONTEXT)?;
-            context.source_account_id = Some(canonical);
-            account
-        } else {
-            let account =
-                self.resolve_account(&debtor_iban)
-                    .ok_or_else(|| MsgError::InvalidIdentifier {
-                        field: "DbtrAcct".to_owned(),
-                        kind: IdentifierKind::Iban,
-                    })?;
-            context.source_account_id = Some(account.to_string());
-            account
-        };
+        let debtor = self.resolve_bound_account(
+            &debtor_iban,
+            "DbtrAcct",
+            parsed.field_text("SplmtryData/SourceAccountId"),
+            "SplmtryData/SourceAccountId",
+            telemetry,
+            ISO_PACS009_CONTEXT,
+        )?;
+        context.source_account_id = Some(debtor.to_string());
         if let Some(address) = parsed.field_text("SplmtryData/SourceAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
@@ -2388,21 +2469,15 @@ impl Iso20022BridgeRuntime {
             }
         }
 
-        let creditor = if let Some(hint) = parsed.field_text("SplmtryData/TargetAccountId") {
-            let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, ISO_PACS009_CONTEXT)?;
-            context.target_account_id = Some(canonical);
-            account
-        } else {
-            let account = self.resolve_account(&creditor_iban).ok_or_else(|| {
-                MsgError::InvalidIdentifier {
-                    field: "CdtrAcct".to_owned(),
-                    kind: IdentifierKind::Iban,
-                }
-            })?;
-            context.target_account_id = Some(account.to_string());
-            account
-        };
+        let creditor = self.resolve_bound_account(
+            &creditor_iban,
+            "CdtrAcct",
+            parsed.field_text("SplmtryData/TargetAccountId"),
+            "SplmtryData/TargetAccountId",
+            telemetry,
+            ISO_PACS009_CONTEXT,
+        )?;
+        context.target_account_id = Some(creditor.to_string());
         if let Some(address) = parsed.field_text("SplmtryData/TargetAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
@@ -2414,23 +2489,14 @@ impl Iso20022BridgeRuntime {
             }
         }
 
-        let asset_definition =
-            if let Some(hint) = parsed.field_text("SplmtryData/AssetDefinitionId") {
-                let definition = resolve_asset_definition_selector(world, hint, now_ms)
-                    .ok_or(MsgError::ValidationFailed)?;
-                context.asset_definition_id = Some(definition.to_string());
-                definition
-            } else {
-                let definition = self
-                    .resolve_asset(world, now_ms, &currency)
-                    .ok_or_else(|| MsgError::InvalidIdentifier {
-                        field: "IntrBkSttlmCcy".to_owned(),
-                        kind: IdentifierKind::Currency,
-                    })?;
-                context.asset_definition_id = Some(definition.to_string());
-                definition
-            };
-        let amount = Quantity::from_str(amount_raw).map_err(|_| MsgError::ValidationFailed)?;
+        let asset_definition = self.resolve_bound_asset(
+            world,
+            now_ms,
+            &currency,
+            parsed.field_text("SplmtryData/AssetDefinitionId"),
+        )?;
+        context.asset_definition_id = Some(asset_definition.to_string());
+        let amount = self.settlement_amount(&currency, amount_raw)?;
         let asset = AssetId::new(asset_definition.clone(), debtor.clone());
         let asset_id_str = asset.to_string();
         context.asset_id = Some(asset_id_str);
@@ -3027,14 +3093,14 @@ impl Iso20022BridgeRuntime {
         let isin = normalise_identifier(IdentifierKind::Isin, value);
         if ivm::iso20022::validate_identifier(IdentifierKind::Isin, &isin) {
             return match self.reference_data.validate_isin(&isin) {
-                Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
             };
         }
         let cusip = normalise_identifier(IdentifierKind::Cusip, value);
         if ivm::iso20022::validate_identifier(IdentifierKind::Cusip, &cusip) {
             return match self.reference_data.validate_cusip(&cusip) {
-                Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Cusip, err)),
             };
         }
@@ -3049,8 +3115,7 @@ impl Iso20022BridgeRuntime {
             .reference_data
             .validate_instrument_ledger_mapping(value)
         {
-            Ok(ValidationOutcome::Enforced) => Ok(()),
-            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Ok(()) => Ok(()),
             Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
         }
     }
@@ -3058,7 +3123,7 @@ impl Iso20022BridgeRuntime {
     fn require_mic(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let mic = require_identifier(field, IdentifierKind::Mic, value)?;
         match self.reference_data.validate_mic(&mic) {
-            Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+            Ok(()) => Ok(()),
             Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
         }
     }
@@ -3066,8 +3131,7 @@ impl Iso20022BridgeRuntime {
     fn require_csd_venue_mapping(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let mic = require_identifier(field, IdentifierKind::Mic, value)?;
         match self.reference_data.validate_csd_venue(&mic) {
-            Ok(ValidationOutcome::Enforced) => Ok(()),
-            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Ok(()) => Ok(()),
             Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
         }
     }
@@ -3086,12 +3150,12 @@ impl Iso20022BridgeRuntime {
             .reference_data
             .validate_securities_account(account, bic)
         {
-            Ok(ValidationOutcome::Enforced) => Ok(()),
-            Ok(ValidationOutcome::Skipped)
-            | Err(ReferenceDataError::MissingLedgerMapping { .. }) => {
-                Err(MsgError::ValidationFailed)
-            }
-            Err(ReferenceDataError::DatasetFailed { .. }) => Err(MsgError::ValidationFailed),
+            Ok(()) => Ok(()),
+            Err(ReferenceDataError::MissingLedgerMapping { .. }) => Err(MsgError::ValidationFailed),
+            Err(
+                ReferenceDataError::DatasetUnavailable { .. }
+                | ReferenceDataError::DatasetFailed { .. },
+            ) => Err(MsgError::ValidationFailed),
             Err(ReferenceDataError::NotFound { .. } | ReferenceDataError::MicInactive { .. }) => {
                 Err(MsgError::InvalidValue {
                     field: field.to_owned(),
@@ -3104,7 +3168,7 @@ impl Iso20022BridgeRuntime {
     fn require_bic(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let bic = require_identifier(field, IdentifierKind::Bic, value)?;
         match self.reference_data.validate_bic(&bic) {
-            Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+            Ok(()) => Ok(()),
             Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Bic, err)),
         }
     }
@@ -3120,8 +3184,7 @@ impl Iso20022BridgeRuntime {
             .reference_data
             .validate_cash_leg(&currency, payment_type)
         {
-            Ok(ValidationOutcome::Enforced) => Ok(()),
-            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Ok(()) => Ok(()),
             Err(err) => Err(Self::map_reference_error(
                 field,
                 IdentifierKind::Currency,
@@ -3132,7 +3195,8 @@ impl Iso20022BridgeRuntime {
 
     fn map_reference_error(field: &str, kind: IdentifierKind, err: ReferenceDataError) -> MsgError {
         match err {
-            ReferenceDataError::DatasetFailed { .. } => MsgError::ValidationFailed,
+            ReferenceDataError::DatasetUnavailable { .. }
+            | ReferenceDataError::DatasetFailed { .. } => MsgError::ValidationFailed,
             ReferenceDataError::NotFound { .. } => MsgError::InvalidIdentifier {
                 field: field.to_owned(),
                 kind,
@@ -9214,6 +9278,7 @@ mod tests {
         let asset_definition = sample_asset_definition_literal();
         actual::IsoBridge {
             enabled: true,
+            max_body_bytes: iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
             dedupe_ttl_secs: 60,
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),
@@ -9235,6 +9300,7 @@ mod tests {
             currency_assets: vec![actual::IsoCurrencyAsset {
                 currency: "USD".to_string(),
                 asset_definition,
+                max_amount: Quantity::from(10_000_u64),
             }],
             reference_data: actual::IsoReferenceData::default(),
         }
@@ -13645,6 +13711,22 @@ mod tests {
             .expect("alias");
         let (expected_account, _, _) = sample_account_bundle();
         assert_eq!(resolved, expected_account);
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_zero_body_limit() {
+        let mut config = sample_config();
+        config.max_body_bytes = 0_u64.into();
+
+        let error = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("enabled ISO bridge must reject a zero request-body limit"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("max_body_bytes must be greater than zero")
+        );
     }
 
     #[test]
@@ -19410,6 +19492,37 @@ mod tests {
     }
 
     #[test]
+    fn generic_securities_validation_cannot_skip_unconfigured_reference_data() {
+        let mut config = sample_config();
+        let mut profile = live_securities_lifecycle_profile();
+        profile.id = "generic-securities-reference-gate".to_owned();
+        profile.rail = "generic-iso20022".to_owned();
+        profile.required_reference_datasets.clear();
+        config.profiles.push(profile);
+
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("generic-securities-reference-gate"))
+            .expect("generic securities profile");
+        let payload = data_pdu_with_app_header(
+            "SEC-INSTR-MISSING-REFERENCE-DATA",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            SESE023_FIXTURE_XML,
+        );
+        let parsed =
+            parse_message("sese.023", payload.as_bytes()).expect("sese.023 fixture parses");
+
+        let err = runtime
+            .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+            .expect_err("unconfigured reference data must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn securities_profile_rejects_incomplete_sese023_ledger_crosswalk_rows() {
         let cases = [
             (
@@ -22083,6 +22196,28 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rejects_zero_or_duplicate_currency_caps() {
+        let mut zero = sample_config();
+        zero.currency_assets[0].max_amount = Quantity::zero();
+        let err = Iso20022BridgeRuntime::from_config(&zero)
+            .err()
+            .expect("zero settlement cap must fail");
+        assert!(
+            err.to_string()
+                .contains("max_amount must be greater than zero")
+        );
+
+        let mut duplicate = sample_config();
+        duplicate
+            .currency_assets
+            .push(duplicate.currency_assets[0].clone());
+        let err = Iso20022BridgeRuntime::from_config(&duplicate)
+            .err()
+            .expect("duplicate settlement currency must fail");
+        assert!(err.to_string().contains("duplicate currency binding `USD`"));
+    }
+
+    #[test]
     fn runtime_accepts_asset_alias_currency_binding() {
         let mut config = sample_config();
         config.currency_assets[0].asset_definition = "usd#test".to_string();
@@ -22232,6 +22367,110 @@ mod tests {
     }
 
     #[test]
+    fn pacs008_supplementary_accounts_must_match_iban_bindings() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let mismatched_account =
+            AccountId::new(fixture_key_pair(0xAB).public_key().clone()).to_string();
+        let world = sample_world(None);
+        let world_view = world.view();
+        let chain_id: ChainId = "test-chain".parse().unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+
+        for hint_field in ["SplmtryData/SourceAccountId", "SplmtryData/TargetAccountId"] {
+            let message = format!(
+                "MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\n{hint_field}={mismatched_account}"
+            );
+            let parsed =
+                parse_message("pacs.008", message.as_bytes()).expect("pacs.008 hint parses");
+            let err = runtime
+                .build_pacs008_payload(&parsed, &world_view, 10_000, &chain_id, &telemetry)
+                .expect_err("mismatched account hint must not replace the IBAN binding");
+            assert!(matches!(
+                err,
+                MsgError::InvalidValue {
+                    field,
+                    kind: InvalidValueKind::Enum,
+                } if field == hint_field
+            ));
+        }
+    }
+
+    #[test]
+    fn pacs008_enforces_currency_cap_and_asset_binding() {
+        let mut config = sample_config();
+        config.currency_assets[0].max_amount = Quantity::from(100_u32);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let world = sample_world(None);
+        let world_view = world.view();
+        let chain_id: ChainId = "test-chain".parse().unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+        let message = |amount: &str, extra: &str| {
+            parse_message(
+                "pacs.008",
+                format!(
+                    "MsgId=m1\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\n{extra}"
+                )
+                .as_bytes(),
+            )
+            .expect("pacs.008 parses")
+        };
+
+        runtime
+            .build_pacs008_payload(
+                &message("100", ""),
+                &world_view,
+                10_000,
+                &chain_id,
+                &telemetry,
+            )
+            .expect("amount equal to the configured cap must be accepted");
+        let err = runtime
+            .build_pacs008_payload(
+                &message("100.01", ""),
+                &world_view,
+                10_000,
+                &chain_id,
+                &telemetry,
+            )
+            .expect_err("amount above the configured cap must fail");
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                ref field,
+                kind: InvalidValueKind::Amount,
+            } if field == "IntrBkSttlmAmt"
+        ));
+
+        let other_asset = AssetDefinitionId::new(
+            DomainId::try_new("test", "universal").expect("domain"),
+            "eur".parse().expect("name"),
+        );
+        let err = runtime
+            .build_pacs008_payload(
+                &message(
+                    "10",
+                    &format!("SplmtryData/AssetDefinitionId={other_asset}"),
+                ),
+                &world_view,
+                10_000,
+                &chain_id,
+                &telemetry,
+            )
+            .expect_err("asset hint must not replace the currency binding");
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                ref field,
+                kind: InvalidValueKind::Enum,
+            } if field == "SplmtryData/AssetDefinitionId"
+        ));
+    }
+
+    #[test]
     fn pacs008_rejects_unknown_bic() {
         let snapshot = r#"{
             "version":"2024-05-01",
@@ -22367,6 +22606,110 @@ mod tests {
             .and_then(|json| json.try_into_any_norito::<String>().ok())
             .expect("purpose metadata");
         assert_eq!(stored_purpose, "SECU");
+    }
+
+    #[test]
+    fn pacs009_supplementary_accounts_must_match_iban_bindings() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let mismatched_account =
+            AccountId::new(fixture_key_pair(0xAB).public_key().clone()).to_string();
+        let world = sample_world(None);
+        let world_view = world.view();
+        let chain_id: ChainId = "test-chain".parse().unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+
+        for hint_field in ["SplmtryData/SourceAccountId", "SplmtryData/TargetAccountId"] {
+            let message = format!(
+                "BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\n{hint_field}={mismatched_account}"
+            );
+            let parsed =
+                parse_message("pacs.009", message.as_bytes()).expect("pacs.009 hint parses");
+            let err = runtime
+                .build_pacs009_payload(&parsed, &world_view, 10_000, &chain_id, &telemetry)
+                .expect_err("mismatched account hint must not replace the IBAN binding");
+            assert!(matches!(
+                err,
+                MsgError::InvalidValue {
+                    field,
+                    kind: InvalidValueKind::Enum,
+                } if field == hint_field
+            ));
+        }
+    }
+
+    #[test]
+    fn pacs009_enforces_currency_cap_and_asset_binding() {
+        let mut config = sample_config();
+        config.currency_assets[0].max_amount = Quantity::from(100_u32);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let world = sample_world(None);
+        let world_view = world.view();
+        let chain_id: ChainId = "test-chain".parse().unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+        let message = |amount: &str, extra: &str| {
+            parse_message(
+                "pacs.009",
+                format!(
+                    "BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\n{extra}"
+                )
+                .as_bytes(),
+            )
+            .expect("pacs.009 parses")
+        };
+
+        runtime
+            .build_pacs009_payload(
+                &message("100", ""),
+                &world_view,
+                10_000,
+                &chain_id,
+                &telemetry,
+            )
+            .expect("amount equal to the configured cap must be accepted");
+        let err = runtime
+            .build_pacs009_payload(
+                &message("100.01", ""),
+                &world_view,
+                10_000,
+                &chain_id,
+                &telemetry,
+            )
+            .expect_err("amount above the configured cap must fail");
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                ref field,
+                kind: InvalidValueKind::Amount,
+            } if field == "IntrBkSttlmAmt"
+        ));
+
+        let other_asset = AssetDefinitionId::new(
+            DomainId::try_new("test", "universal").expect("domain"),
+            "eur".parse().expect("name"),
+        );
+        let err = runtime
+            .build_pacs009_payload(
+                &message(
+                    "10",
+                    &format!("SplmtryData/AssetDefinitionId={other_asset}"),
+                ),
+                &world_view,
+                10_000,
+                &chain_id,
+                &telemetry,
+            )
+            .expect_err("asset hint must not replace the currency binding");
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                ref field,
+                kind: InvalidValueKind::Enum,
+            } if field == "SplmtryData/AssetDefinitionId"
+        ));
     }
 
     #[test]
@@ -22506,7 +22849,9 @@ mod tests {
         assert_eq!(pending.status_label(), "Pending");
         assert!(pending.ledger_id().is_none());
         assert_eq!(pending.pacs002_code(), "ACTC");
-        runtime.mark_accepted("m2", "hash-1");
+        let accepted_update = runtime.mark_accepted("m2", "hash-1");
+        assert_eq!(accepted_update.status_label(), "Accepted");
+        assert_eq!(accepted_update.transaction_hash(), Some("hash-1"));
         let accepted = runtime.message_status("m2").expect("status");
         assert_eq!(accepted.status_label(), "Accepted");
         assert_eq!(accepted.pacs002_code(), "ACSP");

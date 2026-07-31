@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,17 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` — 48-байтовый формат для повторного использования `iroha_crypto::kzg`
-  میں ہے۔ جب отсутствует ہو تو صرف Меркла доказательства استعمال ہوتے ہیں۔
-- `proof_scheme` каталог дорожек سے получить ہوتا ہے؛ Полезные нагрузки Merkle Lanes KZG
-  отклонить کرتی ہیں جبکہ `kzg_bls12_381` полосы ненулевые обязательства KZG требуют
-  کرتی ہیں۔ Torii فی الحال صرف Обязательства Меркла بناتا ہے اور KZG-configured
-  полосы движения کو отклонить کرتا ہے۔
-- `KzgCommitment` — 48-байтовый формат для повторного использования `iroha_crypto::kzg`
-  میں ہے۔ جب Меркл Лейнс پر отсутствует ہو تو صرف Меркл доказательства استعمال ہوتے ہیں۔
-- `proof_digest` DA-5 PDP/PoTR интеграция с возможностью подключения к сети
-  запись میں график выборки
-  ہوتا ہے۔
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Расширение заголовка блока
 
@@ -196,9 +187,7 @@ Torii для конечных точек, например:
 
 ## Открытые вопросы
 
-1. **KZG против дефолтов Меркла** — Каковы обязательства KZG?
-   Размер блока کم ہو؟ Дополнительно: `kzg_commitment` опционально.
-   `iroha_config::da.enable_kzg` — ворота ворота
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Пробелы в последовательности** – неправильные полосы движения. Как избавиться от пробелов
    отклонить запрос на управление `allow_sequence_skips` для экстренного воспроизведения.
    включить نہ کرے۔

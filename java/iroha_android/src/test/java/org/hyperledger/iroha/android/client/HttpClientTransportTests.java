@@ -14,6 +14,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -39,6 +40,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
+import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -78,6 +80,7 @@ public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
   private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
+  private static final String VERIFYING_KEY_CHAIN_ID = "test-chain";
 
   private static FeePaymentIntent feePayment(final Long gasLimit) {
     return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
@@ -161,8 +164,12 @@ public final class HttpClientTransportTests {
     feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
     feeSponsorProgramRejectsSubstitutedResponseId();
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
-    verifierKeyRegisterAndUpdatePostSignedPayloads();
+    verifierKeyRegisterAndUpdateReturnUnsignedDrafts();
     verifierKeyRequestsRejectMalformedInputsBeforeRequest();
+    verifierKeyDraftCanonicalInstructionUsesU8StatusDiscriminant();
+    verifierKeyDraftParserRejectsNonExactOrTamperedResponses();
+    verifierKeyDraftRejectsSemanticSubstitutionBeforeSigning();
+    verifierKeyDraftRequiresLocalSigningContextBeforeRequest();
     callContractRequestParsesResponse();
     contractCallBoundaryConsumesSharedRustArgumentRecordFixture();
     callContractRejectsInvalidEntrypointOrGas();
@@ -2929,51 +2936,78 @@ public final class HttpClientTransportTests {
         : "VPN receipt list URI mismatch";
   }
 
-  private static void verifierKeyRegisterAndUpdatePostSignedPayloads() throws Exception {
+  private static void verifierKeyRegisterAndUpdateReturnUnsignedDrafts() throws Exception {
     final String backend = "halo2/ipa";
     final byte[] registerBytes = new byte[] {1, 2, 3};
     final byte[] updateBytes = new byte[] {10};
+    final String authority = TestAccountIds.ed25519Authority(0x37);
+    final VerifyingKeyRegisterRequest registerRequestBody =
+        verifierKeyRegisterRequestBuilder()
+            .authority(" " + authority + " ")
+            .backend(backend)
+            .name(" transfer_vk ")
+            .publicInputsSchemaHashHex("0x" + "AA".repeat(32))
+            .gasScheduleId(" halo2-default ")
+            .activationHeight(10L)
+            .withdrawHeight(10L)
+            .commitmentHex(
+                verifierKeyCommitment(backend, registerBytes).toUpperCase(Locale.ROOT))
+            .verifyingKeyBytes(registerBytes)
+            .status("active")
+            .build();
+    final VerifyingKeyUpdateRequest updateRequestBody =
+        verifierKeyUpdateRequestBuilder()
+            .authority(authority)
+            .backend(backend)
+            .name("transfer_vk")
+            .version(2L)
+            .commitmentHex(verifierKeyCommitment(backend, updateBytes))
+            .verifyingKeyBytes(updateBytes)
+            .verifyingKeyLength(1L)
+            .status("withdrawn")
+            .build();
+    final Map<String, Object> expectedRegisterPayload =
+        HttpClientTransport.buildVerifyingKeyRegisterPayload(registerRequestBody);
+    final Map<String, Object> expectedUpdatePayload =
+        HttpClientTransport.buildVerifyingKeyUpdatePayload(updateRequestBody);
+    final byte[] registerTransactionPayload =
+        verifyingKeyTransactionPayload(
+            expectedRegisterPayload, VerifyingKeyDraftBinding.Operation.REGISTER);
+    final byte[] updateTransactionPayload =
+        verifyingKeyTransactionPayload(
+            expectedUpdatePayload, VerifyingKeyDraftBinding.Operation.UPDATE);
     final QueueResponseExecutor executor =
         new QueueResponseExecutor(
-            List.of(new QueuedResponse(202, ""), new QueuedResponse(202, "")));
+            List.of(
+                new QueuedResponse(200, verifyingKeyDraftJson(registerTransactionPayload)),
+                new QueuedResponse(200, verifyingKeyDraftJson(updateTransactionPayload))));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            ClientConfig.builder()
+                .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_CHAIN_ID))
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build());
 
-    final ClientResponse registerResponse =
-        transport
-            .registerVerifyingKey(
-                verifierKeyRegisterRequestBuilder()
-                    .authority(" alice ")
-                    .privateKey(" privkey ")
-                    .backend(backend)
-                    .name(" transfer_vk ")
-                    .publicInputsSchemaHashHex("0x" + "AA".repeat(32))
-                    .gasScheduleId(" halo2-default ")
-                    .activationHeight(10L)
-                    .withdrawHeight(10L)
-                    .commitmentHex(verifierKeyCommitment(backend, registerBytes).toUpperCase(Locale.ROOT))
-                    .verifyingKeyBytes(registerBytes)
-                    .status("active")
-                    .build())
-            .join();
-    final ClientResponse updateResponse =
-        transport
-            .updateVerifyingKey(
-                verifierKeyUpdateRequestBuilder()
-                    .backend(backend)
-                    .name("transfer_vk")
-                    .version(2L)
-                    .commitmentHex(verifierKeyCommitment(backend, updateBytes))
-                    .verifyingKeyBytes(updateBytes)
-                    .verifyingKeyLength(1L)
-                    .status("withdrawn")
-                    .build())
-            .join();
+    final VerifyingKeyTransactionDraft registerResponse =
+        transport.registerVerifyingKey(registerRequestBody).join();
+    final VerifyingKeyTransactionDraft updateResponse =
+        transport.updateVerifyingKey(updateRequestBody).join();
 
-    assert registerResponse.statusCode() == 202 : "VK register status mismatch";
-    assert updateResponse.statusCode() == 202 : "VK update status mismatch";
+    assert !registerResponse.submitted() : "VK register draft must not be submitted";
+    assert java.util.Arrays.equals(
+            registerTransactionPayload, registerResponse.transactionPayloadBytes())
+        : "VK register transaction payload mismatch";
+    assert java.util.Arrays.equals(
+            IrohaHash.prehash(registerTransactionPayload), registerResponse.signingMessageBytes())
+        : "VK register signing message mismatch";
+    assert !updateResponse.submitted() : "VK update draft must not be submitted";
+    assert java.util.Arrays.equals(
+            updateTransactionPayload, updateResponse.transactionPayloadBytes())
+        : "VK update transaction payload mismatch";
+    assert java.util.Arrays.equals(
+            IrohaHash.prehash(updateTransactionPayload), updateResponse.signingMessageBytes())
+        : "VK update signing message mismatch";
     assert executor.requests().size() == 2 : "VK request count mismatch";
 
     final TransportRequest registerRequest = executor.requests().get(0);
@@ -2983,8 +3017,9 @@ public final class HttpClientTransportTests {
     @SuppressWarnings("unchecked")
     final Map<String, Object> registerPayload =
         (Map<String, Object>) JsonParser.parse(readBody(registerRequest));
-    assert "alice".equals(registerPayload.get("authority")) : "VK register authority mismatch";
-    assert "privkey".equals(registerPayload.get("private_key")) : "VK register private key mismatch";
+    assert authority.equals(registerPayload.get("authority")) : "VK register authority mismatch";
+    assert !registerPayload.containsKey("private_key")
+        : "VK register request must not contain private signing material";
     assert backend.equals(registerPayload.get("backend")) : "VK register backend mismatch";
     assert "transfer_vk".equals(registerPayload.get("name")) : "VK register name mismatch";
     assert Long.valueOf(1L).equals(((Number) registerPayload.get("version")).longValue())
@@ -3013,8 +3048,9 @@ public final class HttpClientTransportTests {
     @SuppressWarnings("unchecked")
     final Map<String, Object> updatePayload =
         (Map<String, Object>) JsonParser.parse(readBody(updateRequest));
-    assert "alice".equals(updatePayload.get("authority")) : "VK update authority mismatch";
-    assert "privkey".equals(updatePayload.get("private_key")) : "VK update private key mismatch";
+    assert authority.equals(updatePayload.get("authority")) : "VK update authority mismatch";
+    assert !updatePayload.containsKey("private_key")
+        : "VK update request must not contain private signing material";
     assert backend.equals(updatePayload.get("backend")) : "VK update backend mismatch";
     assert "transfer_vk".equals(updatePayload.get("name")) : "VK update name mismatch";
     assert Long.valueOf(2L).equals(((Number) updatePayload.get("version")).longValue())
@@ -3041,7 +3077,10 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            ClientConfig.builder()
+                .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_CHAIN_ID))
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build());
 
     expectVerifierReject(
         () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().backend("mock/dev").build()),
@@ -3051,10 +3090,6 @@ public final class HttpClientTransportTests {
         () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().authority(" ").build()),
         executor,
         "VK register must reject blank authority");
-    expectVerifierReject(
-        () -> transport.updateVerifyingKey(verifierKeyUpdateRequestBuilder().privateKey(" ").build()),
-        executor,
-        "VK update must reject blank private key");
     expectVerifierReject(
         () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().name("scope:vk").build()),
         executor,
@@ -3131,16 +3166,248 @@ public final class HttpClientTransportTests {
         "VK register must reject u32 overflow proof limits");
   }
 
+  private static void verifierKeyDraftCanonicalInstructionUsesU8StatusDiscriminant()
+      throws Exception {
+    final Map<String, Object> fixture =
+        loadSharedFixture("fixtures/zk/verifying_key_record_v1.json");
+    final Map<String, Object> request = object(fixture, "request");
+    final InstructionBox.WirePayload payload =
+        (InstructionBox.WirePayload)
+            VerifyingKeyDraftBinding.expectedInstruction(
+                    request, VerifyingKeyDraftBinding.Operation.REGISTER)
+                .payload();
+    final byte[] bytes = payload.payloadBytes();
+    final String actualHex = hex(bytes);
+    final Map<String, Object> backendTagFrame = object(fixture, "backend_tag_frame");
+    final Map<String, Object> statusBoundary = object(fixture, "status_boundary");
+    final int backendTagOffset = number(backendTagFrame, "offset").intValue();
+    final String backendTagHex = string(backendTagFrame, "hex");
+    final int statusOffset = number(statusBoundary, "offset").intValue();
+    final String statusHex = string(statusBoundary, "hex");
+
+    assert string(fixture, "expected_inner_frame_hex").equals(actualHex)
+        : "canonical VK instruction mismatch: " + actualHex;
+    assert bytes.length == number(fixture, "expected_inner_frame_bytes").intValue()
+        : "canonical VK instruction length mismatch: " + bytes.length;
+    assert backendTagHex.equals(
+            hex(
+                Arrays.copyOfRange(
+                    bytes, backendTagOffset, backendTagOffset + backendTagHex.length() / 2)))
+        : "backend tag must remain a four-byte u32 field at the canonical offset";
+    assert statusHex.equals(
+            hex(
+                Arrays.copyOfRange(
+                    bytes, statusOffset, statusOffset + statusHex.length() / 2)))
+        : "absent inline key must end immediately before the one-byte status field";
+  }
+
+  private static void verifierKeyDraftParserRejectsNonExactOrTamperedResponses() throws Exception {
+    final Map<String, Object> request =
+        HttpClientTransport.buildVerifyingKeyRegisterPayload(
+            verifierKeyRegisterRequestBuilder().build());
+    final byte[] transactionPayload =
+        verifyingKeyTransactionPayload(
+            request, VerifyingKeyDraftBinding.Operation.REGISTER);
+    final String valid = verifyingKeyDraftJson(transactionPayload);
+    final VerifyingKeyTransactionDraft parsed =
+        VerifyingKeyTransactionDraft.parseRegister(
+            valid.getBytes(StandardCharsets.UTF_8), VERIFYING_KEY_CHAIN_ID, request);
+    assert !parsed.submitted() : "parsed VK draft must not be submitted";
+    assert java.util.Arrays.equals(transactionPayload, parsed.transactionPayloadBytes())
+        : "parsed VK draft transaction payload mismatch";
+
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                valid
+                    .replace(
+                        "\"submitted\":false",
+                        "\"submitted\":false,\"retired_private_key\":\"secret\"")
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must reject retired or unknown fields");
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                valid
+                    .replace("\"submitted\":false", "\"submitted\":true")
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must reject submitted responses");
+    final String transactionPayloadB64 =
+        Base64.getEncoder().encodeToString(transactionPayload);
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                valid
+                    .replace(transactionPayloadB64, transactionPayloadB64 + "=")
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must reject non-canonical base64");
+    final String signingMessageB64 =
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                valid
+                    .replace(
+                        signingMessageB64,
+                        Base64.getEncoder().encodeToString(new byte[31]))
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must require a 32-byte signing message");
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                valid
+                    .replace(
+                        signingMessageB64,
+                        Base64.getEncoder().encodeToString(new byte[32]))
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must reject a signing-message substitution");
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                verifyingKeyDraftJson(new byte[] {1, 2, 3, 4})
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must reject a non-Norito transaction payload");
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                valid
+                    .replace("\"transaction_payload_b64\":", "\"payload_b64\":")
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        "VK draft parser must reject a missing transaction payload");
+
+    final HttpClientTransport wrongStatusTransport =
+        HttpClientTransport.withExecutor(
+            new StubResponseExecutor(202, valid.getBytes(StandardCharsets.UTF_8)),
+            ClientConfig.builder()
+                .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_CHAIN_ID))
+                .setBaseUri(URI.create("https://torii.example"))
+                .build());
+    try {
+      final byte[] verifyingKeyBytes = new byte[] {9};
+      wrongStatusTransport
+          .registerVerifyingKey(
+              verifierKeyRegisterRequestBuilder()
+                  .verifyingKeyBytes(verifyingKeyBytes)
+                  .commitmentHex(verifierKeyCommitment("halo2/ipa", verifyingKeyBytes))
+                  .build())
+          .join();
+      throw new AssertionError("VK draft route must reject HTTP 202");
+    } catch (final java.util.concurrent.CompletionException error) {
+      assert error.getCause() != null && error.getCause().getMessage().contains("status 202")
+          : "VK draft wrong-status rejection must identify HTTP 202";
+    }
+  }
+
+  private static void verifierKeyDraftRejectsSemanticSubstitutionBeforeSigning()
+      throws Exception {
+    final Map<String, Object> request =
+        HttpClientTransport.buildVerifyingKeyRegisterPayload(
+            verifierKeyRegisterRequestBuilder()
+                .verifyingKeyBytes(new byte[] {1, 2, 3})
+                .build());
+    final InstructionBox expectedInstruction =
+        VerifyingKeyDraftBinding.expectedInstruction(
+            request, VerifyingKeyDraftBinding.Operation.REGISTER);
+
+    expectVerifierDraftReject(
+        verifyingKeyTransactionPayload(
+            request, VerifyingKeyDraftBinding.Operation.UPDATE),
+        request,
+        "VK draft must reject register/update substitution");
+    expectVerifierDraftReject(
+        verifyingKeyTransactionPayload(
+            request,
+            VerifyingKeyDraftBinding.Operation.REGISTER,
+            VERIFYING_KEY_CHAIN_ID,
+            (String) request.get("authority"),
+            List.of(expectedInstruction, expectedInstruction)),
+        request,
+        "VK draft must reject extra instructions");
+    expectVerifierDraftReject(
+        verifyingKeyTransactionPayload(
+            request,
+            VerifyingKeyDraftBinding.Operation.REGISTER,
+            "other-chain",
+            (String) request.get("authority"),
+            null),
+        request,
+        "VK draft must reject another chain");
+    expectVerifierDraftReject(
+        verifyingKeyTransactionPayload(
+            request,
+            VerifyingKeyDraftBinding.Operation.REGISTER,
+            VERIFYING_KEY_CHAIN_ID,
+            TestAccountIds.ed25519Authority(0x59),
+            null),
+        request,
+        "VK draft must reject another authority");
+
+    final Map<String, Object> changedRecord = new LinkedHashMap<>(request);
+    changedRecord.put("curve", "pasta");
+    expectVerifierDraftReject(
+        verifyingKeyTransactionPayload(
+            changedRecord, VerifyingKeyDraftBinding.Operation.REGISTER),
+        request,
+        "VK draft must reject a record-field substitution");
+
+    final byte[] canonical =
+        verifyingKeyTransactionPayload(
+            request, VerifyingKeyDraftBinding.Operation.REGISTER);
+    if ((canonical[0] & 0x80) != 0) {
+      throw new AssertionError("fixture requires a one-byte first field length");
+    }
+    final byte[] noncanonical = new byte[canonical.length + 1];
+    noncanonical[0] = (byte) (canonical[0] | 0x80);
+    noncanonical[1] = 0;
+    System.arraycopy(canonical, 1, noncanonical, 2, canonical.length - 1);
+    expectVerifierDraftReject(
+        noncanonical, request, "VK draft must reject non-canonical Norito");
+  }
+
+  private static void verifierKeyDraftRequiresLocalSigningContextBeforeRequest() {
+    final CapturingExecutor executor = new CapturingExecutor();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build());
+
+    expectIllegalState(
+        () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().build()),
+        "VK register must require a local signing context");
+    expectIllegalState(
+        () -> transport.updateVerifyingKey(verifierKeyUpdateRequestBuilder().build()),
+        "VK update must require a local signing context");
+    assert executor.lastRequest == null
+        : "missing local signing context must fail before network I/O";
+  }
+
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
         "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    final String signingMessageB64 = Base64.getEncoder().encodeToString(new byte[32]);
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
             ("{"
                     + "\"ok\":true,"
-                    + "\"submitted\":true,"
+                    + "\"submitted\":false,"
                     + "\"dataspace\":\"router\","
                     + "\"code_hash_hex\":\""
                     + "44".repeat(32)
@@ -3152,26 +3419,19 @@ public final class HttpClientTransportTests {
                     + "\"contract_address\":\""
                     + contractAddress
                     + "\","
-                    + "\"tx_hash_hex\":\""
-                    + "66".repeat(32)
-                    + "\","
-                    + "\"pipeline_status\":{"
-                    + "\"hash\":\""
-                    + "66".repeat(32)
-                    + "\",\"status\":{\"kind\":\"Queued\"},"
-                    + "\"summary\":\"Queued\",\"diagnostics\":[],"
-                    + "\"scope\":\"local\",\"resolved_from\":\"queue\"},"
                     + "\"entrypoint\":\"contribute\","
                     + "\"transaction_ttl_ms\":60000,"
                     + "\"entrypoint_hash_hex\":\""
                     + "77".repeat(32)
                     + "\","
                     + "\"transaction_scaffold_b64\":\"AQID\","
-                    + "\"signed_transaction_b64\":\"BAUG\","
-                    + "\"signing_message_b64\":\"BwgJ\","
+                    + "\"signed_transaction_b64\":\"AQID\","
+                    + "\"signing_message_b64\":\""
+                    + signingMessageB64
+                    + "\","
                     + "\"operation_receipt\":{"
                     + "\"operation_kind\":\"contract_call\","
-                    + "\"status\":\"submitted\","
+                    + "\"status\":\"pending_signature\","
                     + "\"transport\":\"torii\","
                     + "\"dataspace\":\"router\","
                     + "\"contract_alias\":\"router::universal\","
@@ -3183,9 +3443,6 @@ public final class HttpClientTransportTests {
                     + "\","
                     + "\"abi_hash_hex\":\""
                     + "55".repeat(32)
-                    + "\","
-                    + "\"tx_hash_hex\":\""
-                    + "66".repeat(32)
                     + "\","
                     + "\"entrypoint\":\"contribute\","
                     + "\"entrypoint_hash_hex\":\""
@@ -3209,9 +3466,8 @@ public final class HttpClientTransportTests {
 
     final ContractCallResponse response =
         transport
-            .callContract(
+            .prepareContractCall(
                 "alice",
-                "privkey",
                 feePayment(5000L),
                 null,
                 "router::universal",
@@ -3220,15 +3476,14 @@ public final class HttpClientTransportTests {
             .join();
 
     assert response.ok() : "Call response should be successful";
-    assert response.submitted() : "Call should be marked submitted";
+    assert !response.submitted() : "Call draft must not be submitted";
     assert "router".equals(response.dataspace()) : "Call dataspace mismatch";
     assert "contribute".equals(response.entrypoint()) : "Entrypoint mismatch";
     assert Long.valueOf(60_000L).equals(response.transactionTtlMs())
         : "transaction_ttl_ms mismatch";
     assert "77".repeat(32).equals(response.entrypointHashHex())
         : "entrypoint_hash_hex mismatch";
-    assert "local".equals(response.pipelineStatus().get("scope"))
-        : "pipeline_status mismatch";
+    assert response.pipelineStatus() == null : "draft must not include pipeline status";
     assert "contract_call".equals(response.operationReceipt().operationKind())
         : "operation kind mismatch";
     assert Long.valueOf(5_000L).equals(response.operationReceipt().gasLimit())
@@ -3237,8 +3492,9 @@ public final class HttpClientTransportTests {
         : "payload digest mismatch";
     assert "AQID".equals(response.transactionScaffoldB64())
         : "transaction_scaffold_b64 mismatch";
-    assert "BAUG".equals(response.signedTransactionB64()) : "signed_transaction_b64 mismatch";
-    assert "BwgJ".equals(response.signingMessageB64()) : "signing_message_b64 mismatch";
+    assert "AQID".equals(response.signedTransactionB64()) : "signed_transaction_b64 mismatch";
+    assert signingMessageB64.equals(response.signingMessageB64())
+        : "signing_message_b64 mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Contract call request must be captured";
@@ -3248,7 +3504,8 @@ public final class HttpClientTransportTests {
     final Map<String, Object> payload =
         (Map<String, Object>) JsonParser.parse(readBody(request));
     assert "alice".equals(payload.get("authority")) : "Call authority mismatch";
-    assert "privkey".equals(payload.get("private_key")) : "Call private key mismatch";
+    assert !payload.containsKey("private_key")
+        : "contract call preparation must not contain private signing material";
     assert !payload.containsKey("gas_limit") : "legacy gas_limit must be absent";
     assert "router::universal".equals(payload.get("contract_alias"))
         : "contract_alias mismatch";
@@ -3286,9 +3543,8 @@ public final class HttpClientTransportTests {
     final org.hyperledger.iroha.android.model.FeePaymentIntent boundaryFeePayment =
         FeePaymentJson.parse(boundary.get("fee_payment"), "torii_boundary.fee_payment");
     final Map<String, Object> request =
-        HttpClientTransport.buildContractCallPayload(
+        HttpClientTransport.buildContractCallDraftPayload(
             string(boundary, "authority"),
-            "fixture-private-key",
             boundaryFeePayment,
             null,
             string(boundary, "contract_alias"),
@@ -3297,8 +3553,8 @@ public final class HttpClientTransportTests {
 
     assert string(boundary, "authority").equals(request.get("authority"))
         : "Shared call authority mismatch";
-    assert "fixture-private-key".equals(request.get("private_key"))
-        : "Shared call private key mismatch";
+    assert !request.containsKey("private_key")
+        : "Shared contract-call draft must not contain private signing material";
     assert string(boundary, "contract_alias").equals(request.get("contract_alias"))
         : "Shared call alias mismatch";
     assert !request.containsKey("contract_address") : "Shared call must select only the alias";
@@ -3676,9 +3932,8 @@ public final class HttpClientTransportTests {
 
     boolean failed = false;
     try {
-      transport.callContract(
+      transport.prepareContractCall(
           "alice",
-          "privkey",
           feePayment(5000L),
           "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           "router::universal",
@@ -3694,8 +3949,8 @@ public final class HttpClientTransportTests {
     for (final String entrypoint : new String[] {"", "   "}) {
       expectIllegalArgument(
           () ->
-              HttpClientTransport.buildContractCallPayload(
-                  "alice", "privkey", feePayment(1L), null, "router::universal", entrypoint, null),
+              HttpClientTransport.buildContractCallDraftPayload(
+                  "alice", feePayment(1L), null, "router::universal", entrypoint, null),
           "blank contract entrypoint must be rejected");
     }
     for (final long gasLimit : new long[] {0L, -1L}) {
@@ -4694,6 +4949,75 @@ public final class HttpClientTransportTests {
     return hex(digest.digest()).toLowerCase(Locale.ROOT);
   }
 
+  private static String verifyingKeyDraftJson(final byte[] transactionPayload) {
+    final String transactionPayloadB64 =
+        Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 =
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    return "{\"submitted\":false,\"transaction_payload_b64\":\""
+        + transactionPayloadB64
+        + "\",\"signing_message_b64\":\""
+        + signingMessageB64
+        + "\"}";
+  }
+
+  private static byte[] verifyingKeyTransactionPayload(
+      final Map<String, Object> request,
+      final VerifyingKeyDraftBinding.Operation operation) {
+    return verifyingKeyTransactionPayload(
+        request,
+        operation,
+        VERIFYING_KEY_CHAIN_ID,
+        (String) request.get("authority"),
+        null);
+  }
+
+  private static byte[] verifyingKeyTransactionPayload(
+      final Map<String, Object> request,
+      final VerifyingKeyDraftBinding.Operation operation,
+      final String chainId,
+      final String authority,
+      final List<InstructionBox> instructions) {
+    final Integer discriminant =
+        org.hyperledger.iroha.android.address.AccountAddress.detectI105Discriminant(authority);
+    if (discriminant == null) {
+      throw new AssertionError("test authority must be canonical I105");
+    }
+    final List<InstructionBox> instructionList =
+        instructions == null
+            ? List.of(VerifyingKeyDraftBinding.expectedInstruction(request, operation))
+            : instructions;
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(chainId)
+            .setAuthority(authority)
+            .setCreationTimeMs(1_700_000_000_000L)
+            .setInstructions(instructionList)
+            .setTimeToLiveMs(5_000L)
+            .setNonce(1L)
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), null))
+            .build();
+    try {
+      return new NoritoJavaCodecAdapter(discriminant).encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to encode verifying-key transaction fixture", ex);
+    }
+  }
+
+  private static void expectVerifierDraftReject(
+      final byte[] transactionPayload,
+      final Map<String, Object> request,
+      final String message) {
+    expectIllegalArgument(
+        () ->
+            VerifyingKeyTransactionDraft.parseRegister(
+                verifyingKeyDraftJson(transactionPayload)
+                    .getBytes(StandardCharsets.UTF_8),
+                VERIFYING_KEY_CHAIN_ID,
+                request),
+        message);
+  }
+
   private static void updateU64Be(final MessageDigest digest, final long value) {
     for (int shift = 56; shift >= 0; shift -= 8) {
       digest.update((byte) (value >>> shift));
@@ -4702,25 +5026,25 @@ public final class HttpClientTransportTests {
 
   private static VerifyingKeyRegisterRequest.Builder verifierKeyRegisterRequestBuilder() {
     return VerifyingKeyRegisterRequest.builder()
-        .authority("alice")
-        .privateKey("privkey")
+        .authority(TestAccountIds.ed25519Authority(0x37))
         .backend("halo2/ipa")
         .name("transfer_vk")
         .version(1L)
         .circuitId("transfer-v1")
         .publicInputsSchemaHashHex("aa".repeat(32))
-        .gasScheduleId("halo2-default");
+        .gasScheduleId("halo2-default")
+        .verifyingKeyBytes(new byte[] {1});
   }
 
   private static VerifyingKeyUpdateRequest.Builder verifierKeyUpdateRequestBuilder() {
     return VerifyingKeyUpdateRequest.builder()
-        .authority("alice")
-        .privateKey("privkey")
+        .authority(TestAccountIds.ed25519Authority(0x37))
         .backend("halo2/ipa")
         .name("transfer_vk")
         .version(1L)
         .circuitId("transfer-v1")
-        .publicInputsSchemaHashHex("aa".repeat(32));
+        .publicInputsSchemaHashHex("aa".repeat(32))
+        .verifyingKeyBytes(new byte[] {1});
   }
 
   private static void assertBfvOperationKeyComponentVectors(
@@ -5272,6 +5596,16 @@ public final class HttpClientTransportTests {
     try {
       action.run();
     } catch (final IllegalArgumentException expected) {
+      failed = true;
+    }
+    assert failed : message;
+  }
+
+  private static void expectIllegalState(final Runnable action, final String message) {
+    boolean failed = false;
+    try {
+      action.run();
+    } catch (final IllegalStateException expected) {
       failed = true;
     }
     assert failed : message;

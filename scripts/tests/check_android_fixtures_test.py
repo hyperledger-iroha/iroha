@@ -63,7 +63,7 @@ def _fixture_entry(
     creation_time_ms: int,
     chain: str,
     authority: str,
-    time_to_live_ms: Optional[int],
+    time_to_live_ms: int,
     nonce: Optional[int],
 ) -> dict:
     signed = _signed_transaction(payload, signed)
@@ -109,6 +109,11 @@ def test_transaction_nonce_validator_accepts_nonzero_u32_range(
     assert MODULE.is_valid_transaction_nonce(nonce)
 
 
+@pytest.mark.parametrize("ttl", [1, 100_000, 0xFFFF_FFFF_FFFF_FFFF])
+def test_transaction_ttl_validator_accepts_positive_integers(ttl: int) -> None:
+    assert MODULE.is_valid_transaction_ttl(ttl)
+
+
 @pytest.mark.parametrize("nonce", [-1, 0, 0x1_0000_0000, True])
 def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
     tmp_path: Path,
@@ -120,12 +125,50 @@ def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
-        "time_to_live_ms": None,
+        "time_to_live_ms": 100_000,
         "nonce": nonce,
     }
     path = _write_payloads(tmp_path / "transaction_payloads.json", [entry])
 
     with pytest.raises(ValueError, match="invalid nonce"):
+        MODULE.load_payload_fixtures(path)
+
+
+@pytest.mark.parametrize(
+    "ttl",
+    [None, 0, -1, True, False, 1.5, "100000"],
+    ids=["null", "zero", "negative", "true", "false", "float", "string"],
+)
+def test_payload_loader_rejects_non_positive_integer_ttl(
+    tmp_path: Path, ttl: object
+) -> None:
+    entry = {
+        "name": "invalid-ttl",
+        "encoded": base64.b64encode(b"payload").decode(),
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "time_to_live_ms": ttl,
+        "nonce": None,
+    }
+    path = _write_payloads(tmp_path / "transaction_payloads.json", [entry])
+
+    with pytest.raises(ValueError, match="invalid time_to_live_ms"):
+        MODULE.load_payload_fixtures(path)
+
+
+def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
+    entry = {
+        "name": "missing-ttl",
+        "encoded": base64.b64encode(b"payload").decode(),
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "nonce": None,
+    }
+    path = _write_payloads(tmp_path / "transaction_payloads.json", [entry])
+
+    with pytest.raises(ValueError, match="missing time_to_live_ms field"):
         MODULE.load_payload_fixtures(path)
 
 
@@ -136,7 +179,7 @@ def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
-        "time_to_live_ms": None,
+        "time_to_live_ms": 100_000,
         "nonce": None,
     }
     path = _write_payloads(tmp_path / "transaction_payloads.json", [entry, entry])
@@ -152,7 +195,7 @@ def test_payload_loader_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
-        "time_to_live_ms": None,
+        "time_to_live_ms": 100_000,
         "nonce": None,
     }
     second = {**first, "name": "renamed-clone"}
@@ -171,7 +214,7 @@ def test_manifest_checker_rejects_duplicate_names_and_files(tmp_path: Path) -> N
         1,
         "00000002",
         "sorau-example",
-        None,
+        100_000,
         None,
     )
 
@@ -190,7 +233,7 @@ def test_manifest_checker_rejects_renamed_cloned_payloads(tmp_path: Path) -> Non
         1,
         "00000002",
         "sorau-example",
-        None,
+        100_000,
         None,
     )
     clone = {**first, "name": "renamed-clone", "encoded_file": "renamed-clone.norito"}
@@ -216,13 +259,60 @@ def test_manifest_checker_rejects_nonce_outside_nonzero_u32_range(
         1,
         "00000002",
         "sorau-example",
-        None,
+        100_000,
         nonce,  # type: ignore[arg-type]
     )
 
     errors = MODULE.compare(tmp_path, {"fixtures": [entry]}, {})
 
     assert any("manifest fixture has invalid nonce" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "ttl",
+    [None, 0, -1, True, False, 1.5, "100000"],
+    ids=["null", "zero", "negative", "true", "false", "float", "string"],
+)
+def test_manifest_checker_rejects_non_positive_integer_ttl(
+    tmp_path: Path, ttl: object
+) -> None:
+    entry = _fixture_entry(
+        "invalid-ttl",
+        "invalid-ttl.norito",
+        b"payload",
+        b"signed",
+        1,
+        "00000002",
+        "sorau-example",
+        100_000,
+        None,
+    )
+    entry["time_to_live_ms"] = ttl
+
+    errors = MODULE.compare(tmp_path, {"fixtures": [entry]}, {})
+
+    assert any(
+        "manifest fixture has invalid time_to_live_ms" in error for error in errors
+    )
+
+
+def test_manifest_checker_rejects_missing_ttl(tmp_path: Path) -> None:
+    entry = _fixture_entry(
+        "missing-ttl",
+        "missing-ttl.norito",
+        b"payload",
+        b"signed",
+        1,
+        "00000002",
+        "sorau-example",
+        100_000,
+        None,
+    )
+    entry.pop("time_to_live_ms")
+
+    errors = MODULE.compare(tmp_path, {"fixtures": [entry]}, {})
+
+    assert any("manifest fixture missing time_to_live_ms field" in error for error in errors)
 
 
 def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
@@ -325,7 +415,7 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
     creation_time_ms = 1_735_000_000_222
     chain = "00000003"
     authority = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
-    time_to_live_ms = None
+    time_to_live_ms = 100_000
     nonce = None
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -398,7 +488,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
                 "creation_time_ms": 1_735_000_000_333,
                 "chain": chain,
                 "authority": authority,
-                "time_to_live_ms": None,
+                "time_to_live_ms": 100_000,
                 "nonce": None,
             }
         ],
@@ -414,7 +504,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
                 creation_time_ms=1_735_000_000_999,
                 chain=chain,
                 authority=authority,
-                time_to_live_ms=None,
+                time_to_live_ms=100_000,
                 nonce=None,
             )
         ],
@@ -451,7 +541,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
                 "creation_time_ms": 1_735_000_000_444,
                 "chain": "00000004",
                 "authority": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
-                "time_to_live_ms": None,
+                "time_to_live_ms": 100_000,
                 "nonce": None,
             }
         ],
@@ -467,7 +557,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
                 creation_time_ms=1_735_000_000_444,
                 chain="00000005",
                 authority="sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
-                time_to_live_ms=None,
+                time_to_live_ms=100_000,
                 nonce=None,
             )
         ],
@@ -504,7 +594,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
                 "creation_time_ms": 1_735_000_000_777,
                 "chain": "00000008",
                 "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-                "time_to_live_ms": None,
+                "time_to_live_ms": 100_000,
                 "nonce": None,
             }
         ],
@@ -520,7 +610,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
                 creation_time_ms=1_735_000_000_777,
                 chain="00000008",
                 authority="sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36",
-                time_to_live_ms=None,
+                time_to_live_ms=100_000,
                 nonce=None,
             )
         ],
@@ -610,7 +700,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
                 "creation_time_ms": 1_735_000_000_999,
                 "chain": "00000010",
                 "authority": "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
-                "time_to_live_ms": None,
+                "time_to_live_ms": 100_000,
                 "nonce": 9,
             }
         ],
@@ -626,7 +716,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
                 creation_time_ms=1_735_000_000_999,
                 chain="00000010",
                 authority="sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
-                time_to_live_ms=None,
+                time_to_live_ms=100_000,
                 nonce=11,
             )
         ],
@@ -663,7 +753,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
                 "creation_time_ms": 1_735_000_000_555,
                 "chain": "00000006",
                 "authority": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                "time_to_live_ms": None,
+                "time_to_live_ms": 100_000,
             }
         ],
     )
@@ -678,7 +768,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
                 creation_time_ms=1_735_000_000_555,
                 chain="00000006",
                 authority="sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                time_to_live_ms=None,
+                time_to_live_ms=100_000,
                 nonce=None,
             )
         ],
@@ -730,7 +820,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
                 creation_time_ms=1_735_000_000_666,
                 chain="00000007",
                 authority="sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-                time_to_live_ms=None,
+                time_to_live_ms=100_000,
                 nonce=None,
             )
         ],

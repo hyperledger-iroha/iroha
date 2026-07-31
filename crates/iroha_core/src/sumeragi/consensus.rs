@@ -310,6 +310,7 @@ pub fn compute_consensus_handshake_caps_from_world(
         .map_err(str::to_owned)?;
     let fingerprint = compute_consensus_fingerprint_from_params(&common_config.chain, &canon)?;
     let mut config_caps = *config_caps;
+    config_caps.execution_policy_hash = signed_v2_context.execution_policy_hash;
     config_caps.v2_config_fingerprint = sumeragi_config
         .v2_config(s_params.sumeragi().block_cadence(), frozen_mode)
         .map_err(|error| error.to_string())?

@@ -10,11 +10,13 @@ It exposes five HTTP endpoints:
   from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
   The response also echoes the PoW revocation store capacity/TTL so operators
   can validate the shared replay cache settings.
-- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
-  `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  requests a shorter TTL (clamped to the policy window), binds the ticket to a
-  transcript hash, and returns a relay-signed ticket + signature fingerprint
-  when signing keys are configured.
+- `POST /v1/puzzle/mint` – mints an Argon2 ticket. The JSON body must contain
+  `"transcript_hash_hex"` with exactly 32 non-zero bytes; `"ttl_secs"` and
+  `"signed"` are optional:
+  `{ "transcript_hash_hex": "<32-byte hex>", "ttl_secs": <u64>, "signed": true }`.
+  The service clamps TTL overrides to the policy window and returns a
+  relay-signed ticket plus signature fingerprint when signing keys are
+  configured.
 - `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
   admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
   and the merged revocation set).
@@ -29,7 +31,9 @@ scenarios.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
 The JavaScript SDK exposes a lightweight client (`SoranetPuzzleClient`) that
 wraps these endpoints with typed DTOs and timeout/header handling so operators
 and automation do not need bespoke HTTP glue (see
-`javascript/iroha_js/README.md` for usage examples).
+`javascript/iroha_js/README.md` for usage examples). Its
+`mintPuzzleTicket(transcriptHashHex, options)` API requires the same non-zero
+32-byte binding before it sends a request.
 
 ## Configuring token issuance
 
@@ -44,8 +48,7 @@ revocation list:
     "enabled": true,
     "issuer_public_key_hex": "<ML-DSA-44 public key>",
     "replay_store_capacity": 8192,
-    "replay_store_ttl_secs": 900,
-    "replay_store_path": "/var/lib/soranet/token_replays.log",
+    "replay_store_path": "/var/lib/soranet-relay/token_replays.norito",
     "revocation_list_hex": [],
     "revocation_list_path": "/etc/soranet/relay/token_revocations.json"
   }
@@ -53,12 +56,19 @@ revocation list:
 ```
 
 The replay store enforces single-use admission tokens with a bounded capacity
-and TTL cap. When `replay_store_path` is set, the relay persists consumed
-`token_id_hex` entries to disk and reloads them on restart; the oldest
-non-expired entries are evicted when the store fills. If unset, the store
-remains in-memory and tokens can be reused after a restart. Keep the TTL bound
-aligned with `max_ttl_secs` and size the capacity to cover the expected client
-burst for the configured retention window.
+and retains each record through the token's late clock-skew allowance. Its
+admissible retention window is derived from
+`max_ttl_secs + 2 * clock_skew_secs`, covering both early and late skew edges,
+so replay retention cannot undercut a token the verifier still accepts. The
+relay always persists consumed `token_id_hex` entries at `replay_store_path`
+and reloads them on restart. Active entries are never evicted: a full store
+rejects new token admissions until records expire. A process-lifetime
+exclusive sidecar lock makes a second ledger owner fail startup instead of
+forking consumption state.
+Empty, malformed, over-TTL, or over-capacity snapshots fail startup rather
+than silently discarding replay history. Keep the TTL bound aligned with
+`max_ttl_secs`, place the snapshot on durable storage, and size the capacity
+to cover the expected client burst for the configured retention window.
 Relay metrics expose `soranet_token_verify_total{issuer,relay,outcome}` counters
 for acceptance, replay, expiry/TTL, mismatch, revocation, and store failures so
 dashboards can alert on replay spikes or issuer/relay mismatches.
@@ -86,28 +96,25 @@ revocation state.
 
 ## Signed-ticket revocation store
 
-Relay-issued signed tickets can persist their replay guards to a Norito snapshot on disk.
-The store is keyed by a blake3 fingerprint of the ML-DSA signature and enforces TTL +
-capacity bounds before admitting new entries. Configure the capacity/TTL/path under
-`network.soranet_handshake.pow.{revocation_store_capacity,revocation_max_ttl_secs,revocation_store_path}`
-in the shared relay JSON; reuse the same values when minting or validating tickets in the
-puzzle service so both processes converge on the same persisted set. Place the snapshot on
-durable storage, keep the directory writable by the relay user, and size the TTL to cover the longest
-accepted ticket lifetime (including any grace windows). If the store fills, the oldest
-non-expired entries are evicted; if the file is missing or unreadable the replay cache
-starts empty (the relay falls back to an in-memory cache), so schedule periodic integrity
-checks alongside the token revocation files and alert on load failures.
+Accepted puzzle/PoW tickets are consumed in a Norito replay snapshot on disk.
+The store keys signed tickets by a BLAKE3 fingerprint of the ML-DSA signature
+and unsigned tickets by a fingerprint of their canonical payload. Configure
+`network.soranet_handshake.pow.{revocation_store_capacity,revocation_store_ttl_secs,revocation_store_path}`
+for nodes, or the equivalent top-level `pow.*` fields for the standalone relay.
+Place the snapshot on durable storage, keep the directory writable by the relay
+user, and size the TTL/capacity to cover the longest accepted ticket lifetime
+and peak issuance rate. Active entries are never evicted: a full store rejects
+new handshakes until records expire. A missing snapshot starts as an empty
+persistent store at the configured path; an unreadable or malformed snapshot
+fails startup instead of silently discarding consumption history.
 Telemetry exposes `soranet_privacy_pow_rejects_total{reason}` with `relay_mismatch`,
 `replay`, and `store_error` reason labels so dashboards can distinguish cross-relay
 presentation from genuine replay attempts and correlate spikes with store errors or relay
-ID rotation. Alert on sustained `store_error` spikes; they usually indicate an unwritable
-snapshot path or corruption during rotation. When the snapshot cannot be parsed the relay logs a
-warning and falls back to an in-memory cache so replays remain blocked for the lifetime of the
-process even though persistence is temporarily lost until the path is repaired. A transient
-`store_error` reason on live traffic means the persistence path is unavailable (full disk,
-permission change); address the underlying filesystem issue and purge expired entries once the
-store is writable again.
-Tickets that exceed `revocation_max_ttl_secs` are rejected with the same `store_error`
+ID rotation. Alert on sustained `store_error` spikes; they usually indicate an
+unwritable snapshot path, exhausted capacity, or corruption. A persistence
+error on live traffic rejects the handshake; address the underlying filesystem
+issue and purge expired entries once the store is writable again.
+Tickets that exceed `revocation_store_ttl_secs` are rejected with the same `store_error`
 label; keep the TTL cap aligned with `pow.ticket_ttl` (or lower it only when you
 intentionally want shorter replay retention windows).
 Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
@@ -120,8 +127,9 @@ accepted by relays that do not configure a signed-ticket verifier key.
 Pass the signer secret via `--signed-ticket-secret-hex` or `--signed-ticket-secret-path` when
 launching the puzzle service; startup rejects mismatched keypairs if the secret does not
 validate against `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` accepts
-`"signed": true` (and optional `"transcript_hash_hex"`) to return a Norito-encoded signed
-ticket alongside the raw ticket bytes; responses include `signed_ticket_b64` and
+`"signed": true` together with the required `"transcript_hash_hex"` to return a
+Norito-encoded signed ticket alongside the raw ticket bytes; responses include
+`signed_ticket_b64` and
 `signed_ticket_fingerprint_hex` so clients can pin the replay fingerprint. Requests with
 `signed = true` are rejected if the signer secret is not configured.
 The p2p handshake path now records every accepted PoW ticket into the same Norito
@@ -143,7 +151,8 @@ deterministic purge without deleting the snapshot on disk.
 3. **Stage the restart.** Reload the systemd unit or container once governance
    announces the rotation cutover. The service has no hot-reload support; a
    restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
+4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` with a fresh,
+   non-zero `transcript_hash_hex` and confirm the
    returned `difficulty` and `expires_at` match the new policy. The soak report
    (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
    bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
@@ -152,9 +161,10 @@ deterministic purge without deleting the snapshot on disk.
 
 ## Emergency hardening procedure
 
-1. Keep `pow.required = true` and leave the Argon2 puzzle gate enabled. The first
-   release has no operator-facing puzzle-disable path; live config updates reject
-   attempts to make PoW optional or clear puzzle admission.
+1. Keep `pow.required = true`, use a non-zero difficulty, and leave the Argon2
+   puzzle gate enabled. The first release has no operator-facing
+   puzzle-disable path; startup and live config updates reject attempts to make
+   PoW optional, set zero difficulty, or clear puzzle admission.
 2. Enforce `pow.emergency` entries to reject stale descriptors while the service
    is degraded.
 3. Restart both the relay and the puzzle service after cost or emergency-list

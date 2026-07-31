@@ -318,6 +318,7 @@ impl StrictReplayFixture {
             quorum: wire::DualQuorum::from_roster(&roster).expect("derive fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"strict replay fixture pending state"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 2 * 1024 * 1024,
@@ -523,6 +524,10 @@ impl StrictReplayFixture {
             nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                 self.materialized_state.as_ref(),
             ),
+            execution_policy_hash: crate::sumeragi::v2_recovery::committed_execution_policy_hash(
+                self.materialized_state.as_ref(),
+            )
+            .expect("derive strict-replay execution policy"),
             da_layout: self.context.da_layout,
             leader_seed: [0; 32],
         };

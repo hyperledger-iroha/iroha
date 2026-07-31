@@ -19,15 +19,6 @@ use syn::parse_quote;
 
 use crate::rename::RenameRule;
 
-fn consume_unknown_meta(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
-    if meta.input.peek(syn::token::Paren) {
-        meta.parse_nested_meta(|nested| consume_unknown_meta(&nested))?;
-    } else if meta.input.peek(syn::token::Eq) {
-        let _ = meta.value()?.parse::<syn::Expr>()?;
-    }
-    Ok(())
-}
-
 fn add_bounds_to_all_generic_parameters(generics: &mut syn::Generics, bound: &syn::Path) {
     let generic_type_parameters = generics
         .type_params()
@@ -108,72 +99,21 @@ struct SchemaAttributes {
     bounds: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-enum NoritoContainerFlag {
-    Transparent = 1 << 0,
-    Untagged = 1 << 1,
-    NoFastFromJson = 1 << 2,
-    ReuseArchived = 1 << 3,
-}
-
-impl NoritoContainerFlag {
-    const fn bit(self) -> u8 {
-        self as u8
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct NoritoContainerFlags {
-    bits: u8,
-}
-
-impl NoritoContainerFlags {
-    fn insert(&mut self, flag: NoritoContainerFlag) {
-        self.bits |= flag.bit();
-    }
-
-    #[cfg(test)]
-    fn contains(self, flag: NoritoContainerFlag) -> bool {
-        self.bits & flag.bit() != 0
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 struct NoritoContainerAttrs {
     rename_all: Option<RenameRule>,
     tag: Option<String>,
     content: Option<String>,
-    flags: NoritoContainerFlags,
 }
 
 impl NoritoContainerAttrs {
-    fn set_flag(&mut self, flag: NoritoContainerFlag) {
-        self.flags.insert(flag);
-    }
-
-    #[cfg(test)]
-    fn is_transparent(&self) -> bool {
-        self.flags.contains(NoritoContainerFlag::Transparent)
-    }
-
-    #[cfg(test)]
-    fn is_untagged(&self) -> bool {
-        self.flags.contains(NoritoContainerFlag::Untagged)
-    }
-
-    #[cfg(test)]
-    fn disables_fast_from_json(&self) -> bool {
-        self.flags.contains(NoritoContainerFlag::NoFastFromJson)
-    }
-
-    #[cfg(test)]
-    fn reuses_archived(&self) -> bool {
-        self.flags.contains(NoritoContainerFlag::ReuseArchived)
-    }
-
     fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
         let mut parsed = Self::default();
+        let mut no_fast_from_json = false;
+        let mut reuse_archived = false;
+        let mut decode_from_slice = false;
+        let mut deny_unknown_fields = false;
+        let mut schema_name = false;
 
         for attr in attrs {
             if !attr.path().is_ident("norito") {
@@ -187,22 +127,67 @@ impl NoritoContainerAttrs {
                         return Err(darling::Error::duplicate_field("rename_all").into());
                     }
                     parsed.rename_all = Some(RenameRule::from_string(&lit.value())?);
-                } else if meta.path.is_ident("transparent") {
-                    parsed.set_flag(NoritoContainerFlag::Transparent);
                 } else if meta.path.is_ident("tag") {
                     let lit: syn::LitStr = meta.value()?.parse()?;
-                    parsed.tag = Some(lit.value());
+                    if parsed.tag.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `tag` attribute"));
+                    }
                 } else if meta.path.is_ident("content") {
                     let lit: syn::LitStr = meta.value()?.parse()?;
-                    parsed.content = Some(lit.value());
-                } else if meta.path.is_ident("untagged") {
-                    parsed.set_flag(NoritoContainerFlag::Untagged);
+                    if parsed.content.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `content` attribute"));
+                    }
                 } else if meta.path.is_ident("no_fast_from_json") {
-                    parsed.set_flag(NoritoContainerFlag::NoFastFromJson);
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if no_fast_from_json {
+                        return Err(meta.error("duplicate no_fast_from_json attribute"));
+                    }
+                    no_fast_from_json = true;
                 } else if meta.path.is_ident("reuse_archived") {
-                    parsed.set_flag(NoritoContainerFlag::ReuseArchived);
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if reuse_archived {
+                        return Err(meta.error("duplicate reuse_archived attribute"));
+                    }
+                    reuse_archived = true;
+                } else if meta.path.is_ident("decode_from_slice") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if decode_from_slice {
+                        return Err(meta.error("duplicate decode_from_slice attribute"));
+                    }
+                    decode_from_slice = true;
+                } else if meta.path.is_ident("deny_unknown_fields") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(
+                            meta.error("this `norito` container flag does not take a value")
+                        );
+                    }
+                    if deny_unknown_fields {
+                        return Err(meta.error("duplicate deny_unknown_fields attribute"));
+                    }
+                    deny_unknown_fields = true;
+                } else if meta.path.is_ident("schema_name") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    if lit.value().is_empty() {
+                        return Err(meta.error("schema_name must not be empty"));
+                    }
+                    if schema_name {
+                        return Err(meta.error("duplicate schema_name attribute"));
+                    }
+                    schema_name = true;
                 } else {
-                    consume_unknown_meta(&meta)?;
+                    return Err(meta.error("unknown `norito` container attribute"));
                 }
                 Ok(())
             })
@@ -297,9 +282,11 @@ impl NoritoVariantAttrs {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename") {
                     let lit: syn::LitStr = meta.value()?.parse()?;
-                    parsed.rename = Some(lit.value());
+                    if parsed.rename.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `rename` attribute"));
+                    }
                 } else {
-                    consume_unknown_meta(&meta)?;
+                    return Err(meta.error("unknown `norito` variant attribute"));
                 }
 
                 Ok(())
@@ -319,6 +306,12 @@ struct NoritoFieldAttrs {
 impl NoritoFieldAttrs {
     fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
         let mut parsed = Self::default();
+        let mut skip = false;
+        let mut default = false;
+        let mut skip_serializing_if = false;
+        let mut with = false;
+        let mut flatten = false;
+        let mut needs_size = false;
 
         for attr in attrs {
             if !attr.path().is_ident("norito") {
@@ -328,9 +321,64 @@ impl NoritoFieldAttrs {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename") {
                     let lit: syn::LitStr = meta.value()?.parse()?;
-                    parsed.rename = Some(lit.value());
+                    if parsed.rename.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate `rename` attribute"));
+                    }
+                } else if meta.path.is_ident("skip") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("`skip` does not take a value"));
+                    }
+                    if skip {
+                        return Err(meta.error("duplicate `skip` attribute"));
+                    }
+                    skip = true;
+                } else if meta.path.is_ident("default") {
+                    if default {
+                        return Err(meta.error("duplicate `default` attribute"));
+                    }
+                    default = true;
+                    if !meta.input.is_empty() {
+                        let lit: syn::LitStr = meta.value()?.parse()?;
+                        syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                        })?;
+                    }
+                } else if meta.path.is_ident("skip_serializing_if") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                        meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                    })?;
+                    if skip_serializing_if {
+                        return Err(meta.error("duplicate `skip_serializing_if` attribute"));
+                    }
+                    skip_serializing_if = true;
+                } else if meta.path.is_ident("with") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                        meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                    })?;
+                    if with {
+                        return Err(meta.error("duplicate `with` attribute"));
+                    }
+                    with = true;
+                } else if meta.path.is_ident("flatten") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("`flatten` does not take a value"));
+                    }
+                    if flatten {
+                        return Err(meta.error("duplicate `flatten` attribute"));
+                    }
+                    flatten = true;
+                } else if meta.path.is_ident("needs_size") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("`needs_size` does not take a value"));
+                    }
+                    if needs_size {
+                        return Err(meta.error("duplicate `needs_size` attribute"));
+                    }
+                    needs_size = true;
                 } else {
-                    consume_unknown_meta(&meta)?;
+                    return Err(meta.error("unknown `norito` field attribute"));
                 }
 
                 Ok(())
@@ -899,24 +947,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn container_flags_are_recorded() {
-        let attrs =
-            vec![parse_quote!(#[norito(transparent, untagged, no_fast_from_json, reuse_archived)])];
+    fn shared_container_flags_are_accepted() {
+        let attrs = vec![parse_quote!(
+            #[norito(no_fast_from_json, reuse_archived, decode_from_slice)]
+        )];
 
-        let parsed =
-            NoritoContainerAttrs::from_attributes(&attrs).expect("attributes should parse");
-
-        assert!(parsed.is_transparent());
-        assert!(parsed.is_untagged());
-        assert!(parsed.disables_fast_from_json());
-        assert!(parsed.reuses_archived());
+        NoritoContainerAttrs::from_attributes(&attrs).expect("known shared flags should parse");
     }
 
     #[test]
-    fn unknown_meta_is_consumed() {
-        let attrs = vec![parse_quote!(#[norito(custom(key = "value", nested(flag = true)))])];
+    fn unknown_container_meta_is_rejected() {
+        let attrs = vec![parse_quote!(#[norito(transparent)])];
 
-        NoritoContainerAttrs::from_attributes(&attrs).expect("unknown meta should be ignored");
+        let error =
+            NoritoContainerAttrs::from_attributes(&attrs).expect_err("unknown meta must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown `norito` container attribute")
+        );
+    }
+
+    #[test]
+    fn unknown_variant_and_field_meta_are_rejected() {
+        let variant: syn::Variant = parse_quote! {
+            #[norito(other)]
+            Unknown
+        };
+        let variant_error = NoritoVariantAttrs::from_attributes(&variant.attrs)
+            .expect_err("unknown variant key must reject");
+        assert!(
+            variant_error
+                .to_string()
+                .contains("unknown `norito` variant attribute")
+        );
+
+        let field: syn::Field = parse_quote! {
+            #[norito(transparant)]
+            value: u32
+        };
+        let field_error = NoritoFieldAttrs::from_attributes(&field.attrs)
+            .expect_err("unknown field key must reject");
+        assert!(
+            field_error
+                .to_string()
+                .contains("unknown `norito` field attribute")
+        );
+    }
+
+    #[test]
+    fn malformed_and_duplicate_shared_meta_are_rejected() {
+        let malformed_field: syn::Field = parse_quote! {
+            #[norito(with = "bad::")]
+            value: u32
+        };
+        NoritoFieldAttrs::from_attributes(&malformed_field.attrs)
+            .expect_err("malformed helper path must reject");
+
+        let attrs = vec![parse_quote!(
+            #[norito(reuse_archived, reuse_archived)]
+        )];
+        let error = NoritoContainerAttrs::from_attributes(&attrs)
+            .expect_err("duplicate shared flag must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate reuse_archived attribute")
+        );
     }
 }
 

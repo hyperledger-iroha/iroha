@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,15 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` переиспользует 48-байтовую точку из `iroha_crypto::kzg`.
-  При отсутствии используем только מרקל הוכחות.
-- `proof_scheme` берется из каталога נתיבי; נתיבי מרקל отклоняют מטעני KZG,
-  а `kzg_bls12_381` נתיבים требуют ненулевых התחייבויות KZG. Torii сейчас
-  производит только התחייבויות מרקל и отклоняет מסלולים с конфигурацией KZG.
-- `KzgCommitment` переиспользует 48-байтовую точку из `iroha_crypto::kzg`.
-  При отсутствии на Merkle lanes используем только מרקל הוכחות.
-- `proof_digest` מזוקק DA-5 PDP/PoTR интеграцию, чтобы запись содержала
-  דגימה расписание, использованное для поддержания כתמים.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 כותרת בלוק Расширение
 
@@ -192,9 +185,7 @@ token/mTLS политики.
 
 ## Открытые вопросы
 
-1. **ברירת המחדל של KZG נגד מרקל** — Нужно ли для маленьких blobs всегда пропускать
-   התחייבויות KZG, чтобы уменьшить размер блока? Предложение: оставить
-   `kzg_commitment` опциональным и gating через `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **פערים ברצף** — Разрешать ли разрывы последовательности? Текущий план
    отклоняет פערים, если ממשל не включит `allow_sequence_skips` для
    שידור חוזר של экстренного.

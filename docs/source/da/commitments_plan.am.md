@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` አሁን ያለውን ባለ 48-ባይት ነጥብ ከዚህ በታች ጥቅም ላይ ይውላል
-  `iroha_crypto::kzg`. Merkle መስመሮች ባዶ መተው; `kzg_bls12_381` መስመሮች አሁን
-  ቆራጥ የሆነ BLAKE3-XOF ቁርጠኝነት ከ chunk root የተገኘ እና ያግኙ
-  የማጠራቀሚያ ትኬት ስለዚህ hashes ያለ ውጫዊ prover ተረጋግተው እንዲቆዩ።
-- `proof_scheme` ከሌይን ካታሎግ የተገኘ ነው; የመርክል መስመሮች የባዘነውን KZG ውድቅ ያደርጋሉ
-  የሚጫኑ ጭነቶች `kzg_bls12_381` መስመሮች ዜሮ ያልሆኑ KZG ግዴታዎችን ይፈልጋሉ።
-- `proof_digest` የ DA-5 PDP/PoTR ውህደትን ይጠብቃል ስለዚህም ተመሳሳይ መዝገብ
-  ነጠብጣቦችን በቀጥታ ለማቆየት ጥቅም ላይ የዋለውን የናሙና መርሃ ግብር ይዘረዝራል።
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 የራስጌ ቅጥያ አግድ
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`; የተፈፀሙ ጥቅሎች ደረሰኝ ጠቋሚዎችን ያራምዳሉ (hydrated
    ከኩራ እንደገና ሲጀመር) እና ከዲስክ እድገት ጋር የታሰሩ የቆዩ ስፖሎች ግቤቶችን ይከርክሙ።
 
-ስብሰባን አግድ እና `BlockCreated` መግባቱ እያንዳንዱን ቃል ኪዳን በድጋሚ ያረጋግጣል
-የሌይን ካታሎግ፡ የመርክል መስመሮች የ KZG ቃል ኪዳኖችን አይቀበሉም፣ KZG መስመሮች ያስፈልጋቸዋል
-ዜሮ ያልሆኑ KZG ቁርጠኝነት እና ዜሮ ያልሆኑ `chunk_root`፣ እና ያልታወቁ መስመሮች
-ወረደ። የTorii's `/v1/da/commitments/verify` የመጨረሻ ነጥብ አንድ አይነት ጠባቂ ያንጸባርቃል፣
-እና አሁን ወሳኙን የKZG ቁርጠኝነት ወደ እያንዳንዱ አስገባ
-`kzg_bls12_381` መዝገብ ስለዚህ ፖሊሲን የሚያከብሩ ጥቅሎች የማገጃ ስብሰባ ላይ ደርሰዋል።
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 በDA-2 የመግቢያ እቅድ ውስጥ የተገለጹት የማሳያ መሳሪያዎች እንደ ምንጭ በእጥፍ ይጨምራሉ
 እውነት ለቁርጠኝነት ጥቅል። የ Torii ፈተና
@@ -210,9 +199,7 @@ WSV በ`manifest_hash` ቁልፍ በተሰየመ አምድ ቤተሰብ ውስ�
 
 ## ክፍት ጥያቄዎች
 
-1. **KZG vs Merkle ነባሪዎች** - ትናንሽ ነጠብጣቦች ሁል ጊዜ የKZG ቃል ኪዳኖችን መዝለል አለባቸው
-   የማገጃውን መጠን ይቀንሱ? ፕሮፖዛል፡ `kzg_commitment` እንደ አማራጭ ያቆዩ እና በር በኩል
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **የቅደም ተከተል ክፍተቶች** - ከትዕዛዝ ውጪ መስመሮችን እንፈቅዳለን? አሁን ያለው እቅድ ክፍተቶችን ውድቅ ያደርጋል
    የአደጋ ጊዜ መልሶ ማጫወት `allow_sequence_skips` አስተዳደር ካልተቀየረ በስተቀር።
 3. **የብርሃን ደንበኛ መሸጎጫ** — የኤስዲኬ ቡድን ቀላል ክብደት ያለው SQLite መሸጎጫ ጠየቀ።

@@ -1378,7 +1378,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut lane_work,
                             output_guard.as_ref(),
                             kura.as_ref(),
-                            &context_store,
                             &common_config.key_pair,
                             block_sync_server
                                 .as_mut()
@@ -1480,7 +1479,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut lane_work,
                     output_guard.as_ref(),
                     kura.as_ref(),
-                    &context_store,
                     &common_config.key_pair,
                     block_sync_server
                         .as_mut()
@@ -2347,7 +2345,6 @@ fn drain_v2_ingress(
     lane_work: &mut V2LaneWorkAdapter,
     output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
@@ -2650,13 +2647,8 @@ fn drain_v2_ingress(
                     match serve_block_sync_while_guarded(
                         output_guard,
                         || {
-                            block_sync_server.serve_historical_body(
-                                kura,
-                                context_store,
-                                request,
-                                &sender,
-                                local_key,
-                            )
+                            block_sync_server
+                                .serve_historical_body(kura, request, &sender, local_key)
                         },
                         |response, permit| {
                             services.post_durable_history_response_on_reply_routes_with_permit(
@@ -4133,6 +4125,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,

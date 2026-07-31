@@ -18640,6 +18640,7 @@ impl Kura {
                     parent_commit_qc: context.parent_commit_qc.clone(),
                     snapshot_bootstrap: context.snapshot_bootstrap,
                     nexus_amx_context_hash: context.nexus_amx_context_hash,
+                    execution_policy_hash: context.execution_policy_hash,
                     da_layout: context.da_layout,
                     leader_seed: context.leader_seed,
                 },

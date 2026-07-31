@@ -570,10 +570,10 @@ fn migration_fail_should_not_cause_any_effects() {
 }
 
 #[test]
-fn executor_with_fuel() -> Result<()> {
+fn executor_uses_governed_fuel() -> Result<()> {
     let builder = NetworkBuilder::new();
     let Some((network, _rt)) =
-        sandbox::start_network_blocking_or_skip(builder, stringify!(executor_with_fuel))?
+        sandbox::start_network_blocking_or_skip(builder, stringify!(executor_uses_governed_fuel))?
     else {
         return Ok(());
     };
@@ -581,25 +581,22 @@ fn executor_with_fuel() -> Result<()> {
 
     upgrade_executor(&client, "executor_with_fuel")?;
 
-    let additional_fuel = |fuel: u64| {
+    let metadata_claiming_unbounded_fuel = || {
         let mut metadata = Metadata::default();
-        metadata.insert("additional_fuel".parse().unwrap(), fuel);
+        metadata.insert("additional_fuel".parse().unwrap(), u64::MAX);
         metadata
     };
 
-    // upgrade_executor changes default fuel limits, but we need to reset it for this test.
-    // Set 10_000_000 fuel as default, which is definitely not enough to execute
-    // 3 instructions consuming 30_000_000 fuel each.
+    // The governed limit is the only source of executor fuel. Three fixture
+    // instructions consume 93_000_000 fuel in total.
     client.submit_blocking_with_metadata(
         SetParameter::new(Parameter::Executor(
             iroha_data_model::parameter::SmartContractParameter::Fuel(
-                std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
+                std::num::NonZeroU64::new(100_000_000_u64).unwrap(),
             ),
         )),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        // The upgraded executor always expects this metadata entry.
-        // No additional fuel, assuming the default parameter before override provides plenty of fuel.
-        additional_fuel(0),
+        metadata_claiming_unbounded_fuel(),
     )?;
 
     let bob_rose = AssetId::new(
@@ -618,14 +615,22 @@ fn executor_with_fuel() -> Result<()> {
             mint_a_rose.clone(),
         ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        // Each instruction will use 30_000_000 additional fuel, so this should cover it.
-        additional_fuel(90_000_000),
+        Metadata::default(),
     )?;
     wait_for_asset_value(
         &client,
         &bob_rose,
         &Quantity::from(3_u32),
         "executor fuel mint",
+    )?;
+
+    client.submit_blocking(
+        SetParameter::new(Parameter::Executor(
+            iroha_data_model::parameter::SmartContractParameter::Fuel(
+                std::num::NonZeroU64::new(90_000_000_u64).unwrap(),
+            ),
+        )),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
 
     let res = client.submit_all_blocking_with_metadata(
@@ -635,8 +640,8 @@ fn executor_with_fuel() -> Result<()> {
             mint_a_rose.clone(),
         ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        // Total fuel (90_000_000) only suffices for additional fuel consumption, so this fails.
-        additional_fuel(80_000_000),
+        // This is ordinary metadata. Even u64::MAX cannot raise the governed limit.
+        metadata_claiming_unbounded_fuel(),
     );
     assert!(matches!(
         res.expect_err("transaction should fail")
@@ -650,11 +655,11 @@ fn executor_with_fuel() -> Result<()> {
 
 /// Test the same executable as above by invoking it via a trigger.
 #[test]
-fn executor_with_fuel_and_trigger() -> Result<()> {
+fn executor_uses_governed_fuel_for_trigger() -> Result<()> {
     let builder = NetworkBuilder::new();
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
         builder,
-        stringify!(executor_with_fuel_and_trigger),
+        stringify!(executor_uses_governed_fuel_for_trigger),
     )?
     else {
         return Ok(());
@@ -663,20 +668,20 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
 
     upgrade_executor(&client, "executor_with_fuel")?;
 
-    let additional_fuel = |fuel: u64| {
+    let metadata_claiming_unbounded_fuel = || {
         let mut metadata = Metadata::default();
-        metadata.insert("additional_fuel".parse().unwrap(), fuel);
+        metadata.insert("additional_fuel".parse().unwrap(), u64::MAX);
         metadata
     };
 
     client.submit_blocking_with_metadata(
         SetParameter::new(Parameter::Executor(
             iroha_data_model::parameter::SmartContractParameter::Fuel(
-                std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
+                std::num::NonZeroU64::new(100_000_000_u64).unwrap(),
             ),
         )),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        additional_fuel(0),
+        metadata_claiming_unbounded_fuel(),
     )?;
 
     let bob_rose = AssetId::new(
@@ -701,14 +706,14 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
     client.submit_blocking_with_metadata(
         register_trigger,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        additional_fuel(30_000_000),
+        Metadata::default(),
     )?;
 
     let execute_trigger = ExecuteTrigger::new(trigger_id);
     client.submit_blocking_with_metadata(
         execute_trigger.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        additional_fuel(90_000_000),
+        Metadata::default(),
     )?;
 
     wait_for_asset_value(
@@ -718,10 +723,19 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
         "executor fuel trigger mint",
     )?;
 
+    client.submit_blocking(
+        SetParameter::new(Parameter::Executor(
+            iroha_data_model::parameter::SmartContractParameter::Fuel(
+                std::num::NonZeroU64::new(90_000_000_u64).unwrap(),
+            ),
+        )),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+
     let res = client.submit_blocking_with_metadata(
         execute_trigger.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        additional_fuel(80_000_000),
+        metadata_claiming_unbounded_fuel(),
     );
     assert!(matches!(
         res.expect_err("transaction should fail")

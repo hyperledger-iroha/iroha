@@ -64,9 +64,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -74,16 +73,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` သည် အောက်ရှိ ရှိပြီးသား 48-byte point ကို ပြန်သုံးသည်
-  `iroha_crypto::kzg`။ ပျက်ကွက်သည့်အခါ ကျွန်ုပ်တို့သည် Merkle အထောက်အထားများထံသာ ပြန်သွားကြသည်။
-- `proof_scheme` ကို လမ်းသွားကတ်တလောက်မှ ဆင်းသက်လာသည်။ Merkle လမ်းကြောများသည် KZG ကို ငြင်းပယ်သည်။
-  `kzg_bls12_381` လမ်းကြောများသည် KZG ကတိကဝတ်များ သုညမဟုတ်သော လိုအပ်ပါသည်။ Torii
-  လက်ရှိတွင် Merkle မှ ကတိကဝတ်များကိုသာ ထုတ်လုပ်ပြီး KZG-configured လမ်းသွားများကို ပယ်ချပါသည်။
-- `KzgCommitment` သည် အောက်ရှိ ရှိပြီးသား 48-byte point ကို ပြန်သုံးသည်
-  `iroha_crypto::kzg`။ Merkle လမ်းကြောများတွင် မရှိတော့သည့်အခါ Merkle အထောက်အထားများထံ ပြန်ရောက်သွားပါသည်။
-  အားလုံးအတွက်
-- `proof_digest` သည် DA-5 PDP/PoTR ပေါင်းစပ်မှုကို မျှော်လင့်ထားသောကြောင့် တူညီသောစံချိန်
-  blobs အသက်ရှင်နေစေရန်အသုံးပြုသည့်နမူနာအချိန်ဇယားကိုရေတွက်သည်။
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 ခေါင်းစီးတိုးချဲ့မှုကို ပိတ်ဆို့ခြင်း။
 
@@ -201,9 +193,7 @@ block log မှ အညွှန်းကိန်းကို လျင်မ�
 
 ## မေးခွန်းများဖွင့်ပါ။
 
-1. **KZG နှင့် Merkle ပုံသေများ** — သေးငယ်သော blobs များသည် KZG ကတိကဝတ်များကို အမြဲကျော်သွားသင့်သည်
-   ဘလောက်အရွယ်အစားကို လျှော့ချမလား။ အဆိုပြုချက်- `kzg_commitment` ကို ရွေးချယ်နိုင်ပြီး ဂိတ်မှတစ်ဆင့် ထားရှိပါ။
-   `iroha_config::da.enable_kzg`။
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **တစ်ဆက်တည်း ကွာဟချက်များ** — ကျွန်ုပ်တို့သည် အစီအစဥ်မရှိသော လမ်းကြောများကို ခွင့်ပြုပါသလား။ လက်ရှိအစီအစဉ်သည် ကွက်လပ်များကို ပယ်ချပါသည်။
    အရေးပေါ်ပြန်ဖွင့်ရန်အတွက် အုပ်ချုပ်ရေးသည် `allow_sequence_skips` ကို ပြောင်းမထားပါ။
 3. **Light-client cache** — SDK အဖွဲ့သည် ပေါ့ပါးသော SQLite cache အတွက် တောင်းဆိုခဲ့သည်

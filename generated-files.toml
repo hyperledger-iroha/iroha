@@ -149,6 +149,18 @@ inputs = [
 check = "node scripts/check_sf1_vectors.mjs"
 
 [[generated]]
+name = "norito-rpc-compact-hash-vector"
+kind = "file"
+outputs = ["fixtures/norito_rpc/iroha_compact_hash_vector.properties"]
+generator = "cargo run --locked -p xtask -- norito-rpc-fixtures"
+generator_sources = [
+  "tools/norito_codegen_exporter/src/norito_rpc.rs",
+  "xtask/src/norito_rpc.rs",
+]
+inputs = ["java/iroha_android/src/test/resources/transaction_payloads.json"]
+check = "cargo run --locked -p xtask -- norito-rpc-verify"
+
+[[generated]]
 name = "default-docker-compose"
 kind = "file"
 outputs = [

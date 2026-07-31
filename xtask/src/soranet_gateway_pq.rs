@@ -231,7 +231,7 @@ fn load_srcv2_status(
     }
 
     // Validate signatures when possible.
-    match bundle.verify(&ed_pub, &mldsa_key, phase) {
+    match bundle.verify_signatures(&ed_pub, &mldsa_key, phase) {
         Ok(()) => {
             details.insert("signature_valid".into(), Value::Bool(true));
         }

@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,15 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` повторно использует 48 байт, использованных в `iroha_crypto::kzg`.
-  Когда вы встретитесь, нажмите на кнопку «Меркле апенас».
-- `proof_scheme` — производный каталог дорожек; полосы движения Merkle rejeitam полезные грузы KZG
-  enquanto переулки `kzg_bls12_381` exigem обязательства KZG nao ноль. Torii в реальности
-  так что производите компромиссные решения Merkle и используйте настройки дорожек с KZG.
-- `KzgCommitment` повторно использует 48 байт, использованных в `iroha_crypto::kzg`.
-  Когда вы выходите на полосу Меркле, нужно, чтобы Меркле был открыт.
-- `proof_digest` перед интеграцией DA-5 PDP/PoTR для основной записи
-  Перечислите расписание отбора проб, используемое для хранения больших объемов живых организмов.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Расширение заголовка блока
 
@@ -173,30 +166,7 @@ O WSV Armazena Compromissos em uma Column Family dedicada com chave
 
 ## 7. Стратегия яичек
 
-1. **Унитарные тесты** для кодирования/декодирования `DaCommitmentBundle` e
-   автоматическое получение хэш-блока.
-2. **Светильники золотые** sob `fixtures/da/commitments/` capturando bytes canonicos
-   сделай связку и провас Меркле.
-3. **Интеграционные тесты** с валидаторами, встроенными образцами и примерами.
-   verificando que ambos os nos concordam no conteudo do Bundle e nas respostas
-   де запрос/доказательство.
-4. **Тесты уровня клиента** в `integration_tests/tests/da/commitments.rs`
-   (Rust) que chamam `/prove` и проверенный образец с Torii.
-5. **Smoke CLI** с `scripts/da/check_commitments.sh` параметрами инструментов
-   Operadores воспроизводит.
-
-## 8. План развертывания
-
-| Фаза | Описание | Критерий выбора |
-|------|-----------|-------------------|
-| P0 — Объединить модель данных | Интегрируйте `DaCommitmentRecord`, инициализируйте заголовок блока и кодеки Norito. | `cargo test -p iroha_data_model` светильники verde com novas. |
-| P1 — жила проводки/WSV | Логическая логика файла + построитель блоков, сохранение индексов и обработчики экспорта RPC. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` проходят с утверждениями пакета доказательств. |
-| P2 - Инструменты для эксплуатации | Включите вспомогательный интерфейс командной строки, панель управления Grafana и обновления документов проверки доказательств. | `iroha_cli app da prove-commitment` работает против разработчиков; o приборная панель Mostra Dados ao Vivo. |
-| P3 – Ворота управления | Навык проверки блоков, требующих компромиссов на полосах движения в `iroha_config::nexus`. | Введение статуса + обновление дорожной карты для модели DA-3 как ЗАВЕРШЕНО. |
-
-## Пергунтас абертас1. **KZG против дефолтов Меркла** – Дедемос вечных обязательств KZG в больших объемах
-   Пекенос, чтобы уменьшить или уменьшить блок? Пропоста: мантер `kzg_commitment`
-   дополнительный электронный шлюз через `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Пробелы в последовательности** — Разрешены ли полосы для порядка? O plano atual rejeita пробелы
    Залп включается активный режим `allow_sequence_skips` для повтора аварийной ситуации.
 3. **Кэш легкого клиента** — во время SDK уровня кэша SQLite для проверки;

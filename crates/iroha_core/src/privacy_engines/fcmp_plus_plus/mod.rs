@@ -26,6 +26,13 @@ mod tree;
 mod wallet;
 mod wire;
 
+use iroha_data_model::{
+    ChainId,
+    privacy::{
+        PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+    },
+};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
@@ -103,6 +110,56 @@ pub use self::{
 pub const FCMP_UPSTREAM_REVISION_V1: &str = "15ef71140944b5b5d2feff0e58569b71f34c84a2";
 /// Auditable source profile for the clean-room native port.
 pub const FCMP_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:clean-room:full-chain-membership-proofs+helioselene+monero-fcmp-plus-plus:15ef71140944b5b5d2feff0e58569b71f34c84a2:v1";
+
+/// Complete consensus fields bound into every native FCMP++ transcript.
+#[derive(Clone, Copy, Debug)]
+pub struct FcmpRuntimeContextBindingV1<'a> {
+    /// Exact signed chain identifier.
+    pub chain_id: &'a ChainId,
+    /// Canonical genesis hash selected by the verifier.
+    pub genesis_hash: [u8; 32],
+    /// Zero-based action index in the direct privacy transaction.
+    pub action_index: u32,
+    /// Digest of the complete typed public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Governed parameter identifier.
+    pub parameter_id: PrivacyParameterIdV1,
+    /// Governed parameter archive digest.
+    pub parameter_digest: PrivacyParameterDigestV1,
+    /// Native verifier digest.
+    pub verifier_digest: PrivacyVerifierDigestV1,
+    /// Typed statement-schema digest.
+    pub statement_schema_digest: PrivacyStatementSchemaDigestV1,
+    /// Complete compiled engine-manifest digest.
+    pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
+}
+
+/// Derive the sole canonical native FCMP++ runtime transcript digest.
+///
+/// Both wallet-side proving and validator-side verification call this function,
+/// preventing either boundary from carrying a private copy of the transcript
+/// framing.
+#[must_use]
+pub fn derive_fcmp_runtime_context_hash_v1(binding: &FcmpRuntimeContextBindingV1<'_>) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"iroha.privacy.fcmp-plus-plus.runtime-context.v1";
+
+    let chain_id = binding.chain_id.as_str().as_bytes();
+    let chain_id_len =
+        u64::try_from(chain_id.len()).expect("canonical ChainId length always fits u64");
+    let mut hash = Sha256::new();
+    hash.update(DOMAIN);
+    hash.update(chain_id_len.to_be_bytes());
+    hash.update(chain_id);
+    hash.update(binding.genesis_hash);
+    hash.update(binding.action_index.to_be_bytes());
+    hash.update(binding.statement_digest.as_bytes());
+    hash.update(binding.parameter_id.as_bytes());
+    hash.update(binding.parameter_digest.as_bytes());
+    hash.update(binding.verifier_digest.as_bytes());
+    hash.update(binding.statement_schema_digest.as_bytes());
+    hash.update(binding.engine_manifest_digest.as_bytes());
+    hash.finalize().into()
+}
 /// Canonical description of every fixed first-release FCMP++ parameter family.
 ///
 /// The compiled privacy profile hashes these bytes together with the numeric

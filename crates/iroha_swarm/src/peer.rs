@@ -4,10 +4,6 @@ pub type PeerInfo = (PeerName, P2pApiPorts, ExposedKeyPair, PeerPop);
 pub type PeerName = String;
 pub type P2pApiPorts = [u16; 2];
 pub type ExposedKeyPair = (iroha_crypto::PublicKey, iroha_crypto::ExposedPrivateKey);
-pub type ExposedKeyRefPair<'a> = (
-    &'a iroha_crypto::PublicKey,
-    &'a iroha_crypto::ExposedPrivateKey,
-);
 pub type PeerPop = Vec<u8>;
 
 pub const SERVICE_NAME: &str = "irohad";
@@ -25,6 +21,7 @@ pub struct PeerOverride {
     pub api_port: u16,
 }
 
+#[cfg(test)]
 pub fn generate_key_pair(base_seed: Option<&[u8]>, extra_seed: &[u8]) -> Result<ExposedKeyPair> {
     let key_pair = match base_seed {
         Some(seed) => iroha_crypto::KeyPair::try_from_seed(

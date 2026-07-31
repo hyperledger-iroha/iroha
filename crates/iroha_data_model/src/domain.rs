@@ -75,7 +75,6 @@ mod model {
     #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
-        norito(rename = "Domain"),
         derive(
             crate::DeriveJsonSerialize,
             crate::DeriveJsonDeserialize,

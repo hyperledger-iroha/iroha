@@ -9,10 +9,12 @@ use std::{
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
-    Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Zk as ActualZk,
+    Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,
+    Zk as ActualZk,
 };
 use iroha_core::{
     block::ValidBlock,
+    compliance::LaneComplianceEngine,
     governance::manifest::LaneManifestRegistry,
     query::store::LiveQueryStore,
     state::{State, World},
@@ -70,6 +72,15 @@ use toml::Table;
 use tracing::warn;
 
 use crate::init_instruction_registry;
+
+/// Exact policy commitments derived by isolated genesis pre-execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StagedGenesisPolicyHashes {
+    /// Nexus/AMX execution context committed by the signed genesis carrier.
+    pub nexus_amx: Hash,
+    /// Complete process-local execution policy committed by the signed genesis carrier.
+    pub execution_policy: Hash,
+}
 
 pub fn chain_id() -> ChainId {
     ChainId::from("00000000-0000-0000-0000-000000000000")
@@ -228,6 +239,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         None,
         _nexus_config,
         zk_config,
+        None,
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
@@ -247,10 +259,11 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
     pipeline_config: Option<ActualPipeline>,
     nexus_config: Option<ActualNexus>,
     zk_config: Option<ActualZk>,
+    runtime_config: Option<ActualRoot>,
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-) -> (GenesisBlock, Hash) {
+) -> (GenesisBlock, StagedGenesisPolicyHashes) {
     init_instruction_registry();
     build_minimal_genesis_with_post_topology_and_staged_hash(
         extra_transactions,
@@ -264,6 +277,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
         pipeline_config,
         nexus_config,
         zk_config,
+        runtime_config,
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
@@ -392,6 +406,7 @@ fn build_minimal_genesis_with_post_topology(
         None,
         nexus_config,
         zk_config,
+        None,
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
@@ -411,10 +426,11 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     pipeline_config: Option<ActualPipeline>,
     nexus_config: Option<ActualNexus>,
     zk_config: Option<ActualZk>,
+    runtime_config: Option<ActualRoot>,
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-) -> (GenesisBlock, Hash) {
+) -> (GenesisBlock, StagedGenesisPolicyHashes) {
     let mut extra_transactions = extra_transactions;
     let mut post_topology_transactions = post_topology_transactions;
 
@@ -445,6 +461,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
         pipeline_config.as_ref(),
         nexus_config.as_ref(),
         zk_config.as_ref(),
+        runtime_config.as_ref(),
     )
     .expect("minimal genesis must pre-execute without synthetic results");
     block.0 = signed_block;
@@ -876,6 +893,7 @@ pub(crate) fn ensure_genesis_results(
         None,
         nexus_config,
         zk_config,
+        None,
     );
 }
 
@@ -887,6 +905,7 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
     pipeline_config: Option<&ActualPipeline>,
     nexus_config: Option<&ActualNexus>,
     zk_config: Option<&ActualZk>,
+    runtime_config: Option<&ActualRoot>,
 ) {
     let tx_count = block.0.transactions_vec().len();
     let result_count = block.0.results().count();
@@ -911,6 +930,7 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
         pipeline_config,
         nexus_config,
         zk_config,
+        runtime_config,
     ) {
         Ok((new_block, _)) => block.0 = new_block,
         Err(err) => {
@@ -957,11 +977,12 @@ fn populate_genesis_results(
         None,
         nexus_config,
         zk_config,
+        None,
     )
     .map(|(block, _)| block)
 }
 
-pub(crate) fn staged_genesis_nexus_amx_context_hash(
+pub(crate) fn staged_genesis_policy_hashes(
     block: &GenesisBlock,
     genesis_account: &AccountId,
     topology: &[PeerId],
@@ -969,7 +990,8 @@ pub(crate) fn staged_genesis_nexus_amx_context_hash(
     pipeline_config: Option<&ActualPipeline>,
     nexus_config: Option<&ActualNexus>,
     zk_config: Option<&ActualZk>,
-) -> Result<Hash, Report> {
+    runtime_config: Option<&ActualRoot>,
+) -> Result<StagedGenesisPolicyHashes, Report> {
     preexecute_genesis_with_runtime_config(
         block,
         genesis_account,
@@ -978,8 +1000,9 @@ pub(crate) fn staged_genesis_nexus_amx_context_hash(
         pipeline_config,
         nexus_config,
         zk_config,
+        runtime_config,
     )
-    .map(|(_, hash)| hash)
+    .map(|(_, hashes)| hashes)
 }
 
 pub(crate) fn preexecute_genesis_with_runtime_config(
@@ -990,12 +1013,20 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     pipeline_config: Option<&ActualPipeline>,
     nexus_config: Option<&ActualNexus>,
     zk_config: Option<&ActualZk>,
-) -> Result<(iroha_data_model::block::SignedBlock, Hash), Report> {
+    runtime_config: Option<&ActualRoot>,
+) -> Result<
+    (
+        iroha_data_model::block::SignedBlock,
+        StagedGenesisPolicyHashes,
+    ),
+    Report,
+> {
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
     }
 
-    let nexus = resolve_preexec_nexus_config(nexus_config, block.0.da_proof_policies())?;
+    let effective_nexus = runtime_config.map(|config| &config.nexus).or(nexus_config);
+    let nexus = resolve_preexec_nexus_config(effective_nexus, block.0.da_proof_policies())?;
     let query_handle = LiveQueryStore::start_test();
     let effective_genesis_account = block
         .0
@@ -1010,13 +1041,30 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let mut world = World::with([genesis_domain], [genesis_account_entry], []);
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, &nexus.dataspace_catalog);
     let mut state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
-    if let Some(pipeline_config) = pipeline_config {
+    if let Some(pipeline_config) = runtime_config
+        .map(|config| &config.pipeline)
+        .or(pipeline_config)
+    {
         state.set_pipeline(pipeline_config.clone());
     }
-    if let Some(zk_config) = zk_config {
+    if let Some(config) = runtime_config {
+        state.set_crypto(config.crypto.clone());
+        state.set_oracle(config.oracle.clone());
+        state.set_fraud_monitoring(config.fraud_monitoring.clone());
+        state.set_gov(config.gov.clone());
+        state.content = config.content.clone();
+        state.set_settlement(config.settlement.clone());
+        state.set_kagemusha_release_catalog(
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+                &config.settlement.offline,
+            )
+            .map_err(|error| eyre!("load Kagemusha catalog for genesis pre-execution: {error}"))?,
+        );
+    }
+    if let Some(zk_config) = runtime_config.map(|config| &config.zk).or(zk_config) {
         state.set_zk(zk_config.clone()).map_err(Report::from)?;
     }
-    install_preexec_lane_manifests(&state)?;
+    install_preexec_lane_manifests(&state, runtime_config)?;
     let core_topology = CoreTopology::new(topology.to_vec());
     let chain = block
         .0
@@ -1072,12 +1120,16 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
             return Err(report);
         }
     };
-    let staged_hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&state_block);
+    let staged_hashes = StagedGenesisPolicyHashes {
+        nexus_amx: iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&state_block),
+        execution_policy: iroha_core::sumeragi::staged_genesis_execution_policy_hash(&state_block)
+            .map_err(Report::from)?,
+    };
     drop(state_block);
     let signed_block: iroha_data_model::block::SignedBlock = valid_block.into();
     Ok((
         rebuild_block_with_results(&signed_block, genesis_key_pair),
-        staged_hash,
+        staged_hashes,
     ))
 }
 
@@ -1157,8 +1209,33 @@ fn resolve_preexec_nexus_config(
     Ok(nexus)
 }
 
-fn install_preexec_lane_manifests(state: &State) -> Result<(), Report> {
+fn install_preexec_lane_manifests(
+    state: &State,
+    runtime_config: Option<&ActualRoot>,
+) -> Result<(), Report> {
     let nexus = state.nexus_snapshot();
+    let lane_compliance = match runtime_config {
+        Some(config) if config.nexus.compliance.enabled => {
+            let policy_dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
+                eyre!("lane compliance is enabled but no policy_dir is configured")
+            })?;
+            let engine = LaneComplianceEngine::from_directory(
+                policy_dir,
+                config.nexus.compliance.audit_only,
+            )
+            .map_err(|error| {
+                eyre!("load lane compliance policies for genesis pre-execution: {error}")
+            })?;
+            engine
+                .validate_active_catalog(&nexus.lane_catalog)
+                .map_err(|error| {
+                    eyre!("validate lane compliance policies for genesis pre-execution: {error}")
+                })?;
+            Some(Arc::new(engine))
+        }
+        _ => None,
+    };
+    state.install_lane_compliance_engine(lane_compliance);
     let lane_manifests = if nexus.enabled {
         let registry = LaneManifestRegistry::from_config(
             &nexus.lane_catalog,
@@ -1922,7 +1999,7 @@ mod tests {
             lane_id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
             dataspace_id: DataSpaceId::new(7),
             alias: "beta".to_string(),
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy0, policy1]);
 

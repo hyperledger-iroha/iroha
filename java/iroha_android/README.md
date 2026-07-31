@@ -59,6 +59,33 @@ when publishing a new compatible Kotlin transport release. An explicit
 specific properties are absent. Composite builds substitute the in-tree
 Kotlin projects while preserving these exact coordinates in generated POMs.
 
+## DA commitment and pin-intent proofs
+
+`HttpClientTransport.newDaToriiClient()` returns the Java typed DA client. It
+covers the proof-policy, commitment list/prove/verify, and pin-intent
+list/prove/verify routes. Use `DaModels.Digest32` for manifest and storage-ticket
+digests and `BigInteger` for unsigned 64-bit counters.
+
+```java
+final DaToriiClient da = transport.newDaToriiClient();
+final DaModels.PinIntentProof proof =
+    da.provePinIntent(
+            new DaModels.PinIntentQuery(
+                null,
+                DaModels.Digest32.fromHex(ticketHex),
+                null, null, null, null, null))
+        .join();
+if (proof != null) {
+  assert da.verifyPinIntent(proof).join().valid();
+}
+```
+
+Responses are decoded into closed typed models. The client rejects unknown
+fields, malformed transparent byte wrappers, invalid checksummed hashes,
+contradictory verification responses, and Merkle paths whose direction/length
+does not match the advertised bundle location. Requests are capped at 64 KiB
+and buffered responses at 8 MiB.
+
 ## Offline peer transport V1 (Java)
 
 The first-release peer transport has one wire family only: IPM1 messages,
@@ -379,6 +406,12 @@ canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs.
 
+Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
+fingerprints, never client-side proof or backend selectors.
+`ClientConfigManifestLoader` rejects those keys (and their camel-case aliases)
+at any depth. Proof construction must use Torii's committed
+`/v1/privacy/capabilities` response and the on-chain verifying-key registry.
+
 The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
 `iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
@@ -490,17 +523,34 @@ client.recordSubscriptionUsage(
 
 `HttpClientTransport` wraps Torii's `/v1/zk/vk/register` and
 `/v1/zk/vk/update` routes. The helpers validate production verifier backends,
-required signing fields, height ranges, and inline verifier-key commitments
-before sending the request:
+registry fields, height ranges, and inline verifier-key commitments before
+sending the request. Neither request accepts or transmits a private key. Torii
+returns HTTP 200 with an unsigned transaction draft. SDK `Signer`
+implementations apply Iroha's prehash themselves, so pass
+`transactionPayloadBytes()` to `Signer.sign`; use `signingMessageBytes()` only
+with a raw/HSM primitive that signs an already-prehashed message. Attach the
+signature to the transaction payload and use the standard transaction ingress.
+The `ClientConfig` used by the transport must include an immutable
+`LocalSigningContext`; read-only clients may omit it, but draft-producing
+mutation routes fail before network I/O when it is absent. The draft parser
+rejects non-canonical Norito, another chain or authority, extra/substituted
+instructions, any mismatch in the complete verifying-key record, and signing
+messages that do not match the payload prehash:
 
 ```java
+ClientConfig config =
+    ClientConfig.builder()
+        .setLocalSigningContext(new LocalSigningContext("production-chain"))
+        // Configure the Torii endpoint and other client policy here.
+        .build();
+HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 byte[] vkBytes = new byte[] {1, 2, 3};
 
-transport
+VerifyingKeyTransactionDraft registerDraft =
+    transport
     .registerVerifyingKey(
         VerifyingKeyRegisterRequest.builder()
-            .authority("alice")
-            .privateKey("ed25519:...")
+            .authority("<authority_i105>")
             .backend("halo2/ipa")
             .name("vk_main")
             .version(1L)
@@ -512,11 +562,11 @@ transport
             .build())
     .join();
 
-transport
+VerifyingKeyTransactionDraft updateDraft =
+    transport
     .updateVerifyingKey(
         VerifyingKeyUpdateRequest.builder()
-            .authority("alice")
-            .privateKey("ed25519:...")
+            .authority("<authority_i105>")
             .backend("halo2/ipa")
             .name("vk_main")
             .version(2L)
@@ -525,6 +575,13 @@ transport
             .status("Withdrawn")
             .build())
     .join();
+
+if (registerDraft.submitted()) {
+    throw new IllegalStateException("Torii must return an unsigned draft");
+}
+byte[] registerPayload = registerDraft.transactionPayloadBytes();
+byte[] registerSigningMessage = registerDraft.signingMessageBytes();
+byte[] registerSignature = signer.sign(registerPayload);
 ```
 
 ## Layout

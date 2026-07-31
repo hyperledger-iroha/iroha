@@ -43,6 +43,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
@@ -308,6 +309,17 @@ public final class HttpClientTransport implements IrohaClient {
         .setTransportExecutor(executor)
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
+        .build();
+  }
+
+  /** Creates a typed DA proof client that reuses this transport's configuration. */
+  public DaToriiClient newDaToriiClient() {
+    return DaToriiClient.builder()
+        .setExecutor(executor)
+        .setBaseUri(config.baseUri())
+        .setTimeout(config.requestTimeout())
+        .setDefaultHeaders(config.defaultHeaders())
+        .setObservers(config.observers())
         .build();
   }
 
@@ -735,20 +747,44 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list", 200);
   }
 
-  /** Registers verifier metadata via {@code POST /v1/zk/vk/register}. */
-  public CompletableFuture<ClientResponse> registerVerifyingKey(
+  /**
+   * Prepares an unsigned verifier registration transaction for local signing.
+   *
+   * <p>Requires {@link ClientConfig#localSigningContext()} and rejects any draft not bound to that
+   * chain, the requested authority, and the exact requested registry record.
+   */
+  public CompletableFuture<VerifyingKeyTransactionDraft> registerVerifyingKey(
       final VerifyingKeyRegisterRequest requestBody) {
-    final byte[] body = encodeJsonBody(buildVerifyingKeyRegisterPayload(requestBody));
+    final LocalSigningContext signingContext = config.requireLocalSigningContext();
+    final Map<String, Object> payload = buildVerifyingKeyRegisterPayload(requestBody);
+    final byte[] body = encodeJsonBody(payload);
     final TransportRequest request = buildJsonPostRequest("/v1/zk/vk/register", body);
-    return executeAccepted(request, "verifying key register", 202);
+    return fetchJson(
+        request,
+        bytes -> VerifyingKeyTransactionDraft.parseRegister(
+            bytes, signingContext.chainId(), payload),
+        "verifying key register draft",
+        200);
   }
 
-  /** Updates verifier metadata via {@code POST /v1/zk/vk/update}. */
-  public CompletableFuture<ClientResponse> updateVerifyingKey(
+  /**
+   * Prepares an unsigned verifier update transaction for local signing.
+   *
+   * <p>Requires {@link ClientConfig#localSigningContext()} and rejects any draft not bound to that
+   * chain, the requested authority, and the exact requested registry record.
+   */
+  public CompletableFuture<VerifyingKeyTransactionDraft> updateVerifyingKey(
       final VerifyingKeyUpdateRequest requestBody) {
-    final byte[] body = encodeJsonBody(buildVerifyingKeyUpdatePayload(requestBody));
+    final LocalSigningContext signingContext = config.requireLocalSigningContext();
+    final Map<String, Object> payload = buildVerifyingKeyUpdatePayload(requestBody);
+    final byte[] body = encodeJsonBody(payload);
     final TransportRequest request = buildJsonPostRequest("/v1/zk/vk/update", body);
-    return executeAccepted(request, "verifying key update", 202);
+    return fetchJson(
+        request,
+        bytes -> VerifyingKeyTransactionDraft.parseUpdate(
+            bytes, signingContext.chainId(), payload),
+        "verifying key update draft",
+        200);
   }
 
   /** Quotes the exact unsigned transaction payload before signing. */
@@ -806,27 +842,32 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
-  /** Calls a deployed contract via `POST /v1/contracts/call`. */
-  public CompletableFuture<ContractCallResponse> callContract(
+  /**
+   * Prepares an unsigned contract-call transaction for local signing.
+   *
+   * <p>Private signing material is never accepted by or sent to Torii. Sign the returned
+   * transaction scaffold locally and submit the resulting signed transaction through {@link
+   * #submitTransaction(SignedTransaction)}.
+   */
+  public CompletableFuture<ContractCallResponse> prepareContractCall(
       final String authority,
-      final String privateKey,
       final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
       final String entrypoint,
       final Object payload) {
-    final byte[] body =
-        encodeJsonBody(
-            buildContractCallPayload(
-                authority,
-                privateKey,
-                feePayment,
-                contractAddress,
-                contractAlias,
-                entrypoint,
-                payload));
+    final Map<String, Object> requestPayload =
+        buildContractCallDraftPayload(
+            authority,
+            feePayment,
+            contractAddress,
+            contractAlias,
+            entrypoint,
+            payload);
+    final byte[] body = encodeJsonBody(requestPayload);
     final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
-    return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
+    return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call draft")
+        .thenApply(response -> validateContractCallDraft(response, requestPayload));
   }
 
   /** Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`. */
@@ -2375,9 +2416,9 @@ public final class HttpClientTransport implements IrohaClient {
     return payload;
   }
 
-  static Map<String, Object> buildContractCallPayload(
+  /** Builds the secret-free request used to prepare a contract-call draft. */
+  static Map<String, Object> buildContractCallDraftPayload(
       final String authority,
-      final String privateKey,
       final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
@@ -2388,7 +2429,6 @@ public final class HttpClientTransport implements IrohaClient {
     }
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("authority", normalizeNonBlank(authority, "authority"));
-    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
     payload.putAll(buildContractTargetSelector(contractAddress, contractAlias));
     payload.put("entrypoint", normalizeNonBlank(entrypoint, "entrypoint"));
     if (payloadValue != null) {
@@ -2396,6 +2436,56 @@ public final class HttpClientTransport implements IrohaClient {
     }
     payload.put("fee_payment", feePayment.toJsonMap());
     return payload;
+  }
+
+  /** Validates that Torii returned a secret-free draft bound to the requested call. */
+  static ContractCallResponse validateContractCallDraft(
+      final ContractCallResponse response, final Map<String, Object> request) {
+    if (!response.ok()) {
+      throw new IllegalStateException("contract call draft.ok must be true");
+    }
+    if (response.submitted()) {
+      throw new IllegalStateException("contract call draft must not be submitted");
+    }
+    if (response.txHashHex() != null || response.pipelineStatus() != null) {
+      throw new IllegalStateException("contract call draft must not contain submission state");
+    }
+    if (!Objects.equals(response.entrypoint(), request.get("entrypoint"))) {
+      throw new IllegalStateException(
+          "contract call draft entrypoint is not bound to the request");
+    }
+    final ContractOperationReceipt receipt = response.operationReceipt();
+    if (!"contract_call".equals(receipt.operationKind())
+        || !"pending_signature".equals(receipt.status())) {
+      throw new IllegalStateException(
+          "contract call draft receipt must be pending_signature");
+    }
+    if (!Objects.equals(receipt.entrypoint(), response.entrypoint())
+        || receipt.txHashHex() != null) {
+      throw new IllegalStateException("contract call draft receipt is inconsistent");
+    }
+    if (response.transactionScaffoldB64() == null
+        || !response.transactionScaffoldB64().equals(response.signedTransactionB64())) {
+      throw new IllegalStateException(
+          "contract call draft must contain one exact transaction scaffold");
+    }
+    if (response.signingMessageB64() == null) {
+      throw new IllegalStateException("contract call draft must contain a signing message");
+    }
+    if (Base64.getDecoder().decode(response.signingMessageB64()).length != 32) {
+      throw new IllegalStateException("contract call draft signing message must be 32 bytes");
+    }
+    final Object expectedAddress = request.get("contract_address");
+    if (expectedAddress != null
+        && (!expectedAddress.equals(response.contractAddress())
+            || !expectedAddress.equals(receipt.contractAddress()))) {
+      throw new IllegalStateException("contract call draft address is not bound to the request");
+    }
+    final Object expectedAlias = request.get("contract_alias");
+    if (expectedAlias != null && !expectedAlias.equals(receipt.contractAlias())) {
+      throw new IllegalStateException("contract call draft alias is not bound to the request");
+    }
+    return response;
   }
 
   static Map<String, Object> buildMultisigProposePayload(
@@ -2525,8 +2615,7 @@ public final class HttpClientTransport implements IrohaClient {
     validateVerifyingKeyHeightRange(request.activationHeight(), request.withdrawHeight());
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("authority", normalizeNonBlank(request.authority(), "authority"));
-    payload.put("private_key", normalizeNonBlank(request.privateKey(), "privateKey"));
+    payload.put("authority", normalizeVerifyingKeyAuthority(request.authority()));
     payload.put("backend", backend);
     payload.put("name", normalizeVerifyingKeyName(request.name()));
     payload.put("version", normalizePositiveU32(request.version(), "version"));
@@ -2563,8 +2652,7 @@ public final class HttpClientTransport implements IrohaClient {
     validateVerifyingKeyHeightRange(request.activationHeight(), request.withdrawHeight());
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("authority", normalizeNonBlank(request.authority(), "authority"));
-    payload.put("private_key", normalizeNonBlank(request.privateKey(), "privateKey"));
+    payload.put("authority", normalizeVerifyingKeyAuthority(request.authority()));
     payload.put("backend", backend);
     payload.put("name", normalizeVerifyingKeyName(request.name()));
     payload.put("version", normalizePositiveU32(request.version(), "version"));
@@ -2659,6 +2747,26 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalized = normalizeNonBlank(value, "name");
     if (normalized.indexOf(':') >= 0) {
       throw new IllegalArgumentException("name must not contain ':' characters");
+    }
+    return normalized;
+  }
+
+  static String normalizeVerifyingKeyAuthority(final String value) {
+    final String normalized = normalizeNonBlank(value, "authority");
+    final Integer discriminant = AccountAddress.detectI105Discriminant(normalized);
+    if (discriminant == null) {
+      throw new IllegalArgumentException(
+          "authority must be a canonical I105 account literal");
+    }
+    try {
+      final AccountAddress address = AccountAddress.fromI105(normalized, discriminant);
+      if (!normalized.equals(address.toI105(discriminant))) {
+        throw new IllegalArgumentException(
+            "authority must be a canonical I105 account literal");
+      }
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalArgumentException(
+          "authority must be a canonical I105 account literal", ex);
     }
     return normalized;
   }
@@ -3023,7 +3131,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
   }
 
-  private static String verifyingKeyCommitmentHex(final String backend, final byte[] bytes) {
+  static String verifyingKeyCommitmentHex(final String backend, final byte[] bytes) {
     try {
       final MessageDigest digest = MessageDigest.getInstance("SHA-256");
       final byte[] backendBytes = backend.getBytes(StandardCharsets.UTF_8);

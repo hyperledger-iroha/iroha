@@ -486,6 +486,12 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   completion stores the full context for audit; an exact replay remains
   idempotent after a later owner or signer-policy rotation, while an old
   uncommitted completion fails.
+- A readiness deadline or a temporarily unavailable finalized-ledger query
+  marks the runtime unhealthy and defers work until the next bounded tick.
+  Dependency panics, rejected identity/qualification, archive activation
+  failures, and every non-transient reconciliation violation stop the
+  supervised child so the daemon cannot silently continue with a compromised
+  ingest boundary.
 - Completion signing has separate public deployment bindings for the governed
   signer resolver and leaf HSM/KMS signer. Configuration gives the resolver its
   own handle, non-zero revision, and non-zero public-policy digest, then binds

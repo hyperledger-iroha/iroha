@@ -613,7 +613,7 @@ where
         })?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        operation()
+        iroha_core::panic_hook::with_hook_suppressed(operation)
     })
     .await
     .map_err(|_| runtime_unavailable_response())?
@@ -634,11 +634,13 @@ where
         })?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let bytes = norito::to_bytes(&value).map_err(|_| ())?;
-        if bytes.len() > max_bytes {
-            return Err(());
-        }
-        Ok(bytes)
+        iroha_core::panic_hook::with_hook_suppressed(|| {
+            let bytes = norito::to_bytes(&value).map_err(|_| ())?;
+            if bytes.len() > max_bytes {
+                return Err(());
+            }
+            Ok(bytes)
+        })
     })
     .await
     .map_err(|_| runtime_unavailable_response())?

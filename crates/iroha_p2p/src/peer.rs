@@ -234,23 +234,19 @@ impl SoranetHandshakeConfig {
             .max(self.pow_params.min_ticket_ttl())
     }
 
-    fn pow_binding(&self) -> PowBinding<'_> {
+    fn pow_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PowBinding<'a> {
         PowBinding::new(
             self.descriptor_commit.as_slice(),
             self.relay_id.as_slice(),
-            self.resume_hash
-                .as_ref()
-                .map(|value| value.as_ref().as_slice()),
+            transcript_hash,
         )
     }
 
-    fn puzzle_binding(&self) -> PuzzleBinding<'_> {
+    fn puzzle_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PuzzleBinding<'a> {
         PuzzleBinding::new(
             self.descriptor_commit.as_slice(),
             self.relay_id.as_slice(),
-            self.resume_hash
-                .as_ref()
-                .map(|value| value.as_ref().as_slice()),
+            transcript_hash,
         )
     }
 
@@ -419,6 +415,7 @@ impl SoranetHandshakeConfig {
 
     pub(crate) fn mint_challenge_ticket<R: TryCryptoRng>(
         &self,
+        transcript_hash: &[u8; 32],
         rng: &mut R,
     ) -> Result<Option<MintedChallenge>, ChallengeMintError> {
         if let Some(token) = self.admission_token.as_ref() {
@@ -435,11 +432,11 @@ impl SoranetHandshakeConfig {
         }
         let ttl = self.effective_ticket_ttl();
         let ticket = if let Some(params) = self.puzzle_params.as_ref() {
-            let binding = self.puzzle_binding();
+            let binding = self.puzzle_binding(transcript_hash);
             puzzle::mint_ticket(params.as_ref(), &binding, ttl, rng)
                 .map_err(ChallengeMintError::Puzzle)?
         } else {
-            let binding = self.pow_binding();
+            let binding = self.pow_binding(transcript_hash);
             pow::mint_ticket(self.pow_params.as_ref(), &binding, ttl, rng)
                 .map_err(ChallengeMintError::Pow)?
         };
@@ -455,16 +452,17 @@ impl SoranetHandshakeConfig {
     pub(crate) fn verify_challenge_ticket(
         &self,
         bytes: &[u8],
+        transcript_hash: &[u8; 32],
     ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
         if !self.pow_required() {
             return Ok(None);
         }
         if let Some(public_key) = self.signed_ticket_public_key.as_deref() {
             let signed = SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?;
-            return self.verify_signed_ticket_decoded(&signed, public_key);
+            return self.verify_signed_ticket_decoded(&signed, public_key, transcript_hash);
         }
 
-        self.verify_unsigned_ticket_bytes(bytes)
+        self.verify_unsigned_ticket_bytes(bytes, transcript_hash)
     }
 
     /// Verify a signed ticket using the configured binding and revocation store.
@@ -475,18 +473,20 @@ impl SoranetHandshakeConfig {
         &self,
         bytes: &[u8],
         public_key: &[u8],
+        transcript_hash: &[u8; 32],
     ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
         if !self.pow_required() {
             return Ok(None);
         }
         let signed = SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?;
-        self.verify_signed_ticket_decoded(&signed, public_key)
+        self.verify_signed_ticket_decoded(&signed, public_key, transcript_hash)
     }
 
     fn verify_signed_ticket_decoded(
         &self,
         signed: &SignedTicket,
         public_key: &[u8],
+        transcript_hash: &[u8; 32],
     ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
         if let Some(error) = self.revocation_store_error.as_ref() {
             return Err(ChallengeVerifyError::RevocationStore(error.to_string()));
@@ -500,7 +500,7 @@ impl SoranetHandshakeConfig {
                 iroha_logger::error!("soranet pow revocation store lock poisoned");
                 ChallengeVerifyError::RevocationStore("lock_poisoned".to_string())
             })?;
-        let binding = self.pow_binding();
+        let binding = self.pow_binding(transcript_hash);
         let admission = self.admission_for_difficulty(signed.ticket.difficulty);
         pow::verify_signed_ticket(
             signed,
@@ -523,6 +523,7 @@ impl SoranetHandshakeConfig {
     fn verify_unsigned_ticket_bytes(
         &self,
         bytes: &[u8],
+        transcript_hash: &[u8; 32],
     ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
         let ticket = PowTicket::parse(bytes).map_err(ChallengeVerifyError::Pow)?;
         let admission = self
@@ -530,12 +531,12 @@ impl SoranetHandshakeConfig {
             .as_ref()
             .map_or_else(
                 || {
-                    let binding = self.pow_binding();
+                    let binding = self.pow_binding(transcript_hash);
                     pow::verify(&ticket, &binding, self.pow_params.as_ref())
                         .map_err(ChallengeVerifyError::Pow)
                 },
                 |params| {
-                    let binding = self.puzzle_binding();
+                    let binding = self.puzzle_binding(transcript_hash);
                     puzzle::verify(&ticket, &binding, params.as_ref())
                         .map_err(ChallengeVerifyError::Puzzle)
                 },
@@ -612,6 +613,14 @@ mod handshake_config_tests {
 
     use super::*;
 
+    fn test_admission_transcript() -> [u8; 32] {
+        pow::derive_admission_transcript(b"soranet-test-client-hello")
+    }
+
+    fn substituted_admission_transcript() -> [u8; 32] {
+        pow::derive_admission_transcript(b"soranet-test-client-hello-substituted")
+    }
+
     struct FailingTryRng;
 
     #[derive(Debug)]
@@ -673,6 +682,45 @@ mod handshake_config_tests {
     }
 
     #[test]
+    fn admission_transcript_binds_resumption_presence_and_value() {
+        let absent = RuntimeParams::soranet_defaults();
+        let resume_a = [0xA1; 32];
+        let resume_b = [0xB2; 32];
+        let mut present_a = absent.clone();
+        present_a.resume_hash = Some(&resume_a);
+        let mut present_b = absent.clone();
+        present_b.resume_hash = Some(&resume_b);
+
+        let seed = [0x73; 32];
+        let (hello_absent, _) =
+            build_client_hello(&absent, &mut StdRng::from_seed(seed)).expect("client hello");
+        let (hello_a, _) =
+            build_client_hello(&present_a, &mut StdRng::from_seed(seed)).expect("resumed hello a");
+        let (hello_b, _) =
+            build_client_hello(&present_b, &mut StdRng::from_seed(seed)).expect("resumed hello b");
+
+        assert_ne!(hello_absent, hello_a);
+        assert_ne!(hello_absent, hello_b);
+        assert_ne!(hello_a, hello_b);
+        assert!(
+            hello_a
+                .windows(resume_a.len())
+                .any(|window| window == resume_a.as_slice())
+        );
+        assert!(
+            hello_b
+                .windows(resume_b.len())
+                .any(|window| window == resume_b.as_slice())
+        );
+        let transcript_absent = pow::derive_admission_transcript(&hello_absent);
+        let transcript_a = pow::derive_admission_transcript(&hello_a);
+        let transcript_b = pow::derive_admission_transcript(&hello_b);
+        assert_ne!(transcript_absent, transcript_a);
+        assert_ne!(transcript_absent, transcript_b);
+        assert_ne!(transcript_a, transcript_b);
+    }
+
+    #[test]
     fn puzzle_ticket_mints_and_verifies() {
         let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
         let puzzle_params = puzzle::Parameters::new(
@@ -712,8 +760,9 @@ mod handshake_config_tests {
         assert_eq!(admission.ticket_ttl, Duration::from_secs(240));
 
         let mut rng = StdRng::from_seed([7u8; 32]);
+        let transcript = test_admission_transcript();
         let minted = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint ticket")
             .expect("ticket bytes present");
         assert_eq!(
@@ -732,6 +781,7 @@ mod handshake_config_tests {
                     .as_ref()
                     .expect("ticket bytes present")
                     .as_slice(),
+                &transcript,
             )
             .expect("verify ticket");
         assert_eq!(
@@ -744,7 +794,11 @@ mod handshake_config_tests {
         // Flipping solution bytes is probabilistic for low difficulties (it may still satisfy
         // the leading-zero predicate), so do not rely on it in tests.
         corrupted[0] ^= 0xFF;
-        assert!(config.verify_challenge_ticket(&corrupted).is_err());
+        assert!(
+            config
+                .verify_challenge_ticket(&corrupted, &transcript)
+                .is_err()
+        );
     }
 
     #[test]
@@ -772,8 +826,9 @@ mod handshake_config_tests {
         config.set_admission_token(encoded.clone());
 
         let mut rng = StdRng::from_seed([0x99; 32]);
+        let transcript = test_admission_transcript();
         let minted = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint token challenge")
             .expect("token frame present");
 
@@ -803,9 +858,10 @@ mod handshake_config_tests {
             None,
         );
         let mut rng = FailingTryRng;
+        let transcript = test_admission_transcript();
 
         let err = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect_err("failing RNG must abort challenge minting");
 
         match err {
@@ -845,20 +901,22 @@ mod handshake_config_tests {
         );
 
         let mut rng = StdRng::from_seed([0x21; 32]);
+        let transcript = test_admission_transcript();
         let minted = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint")
             .expect("ticket present");
         let ticket = minted.ticket.expect("ticket bytes");
 
         config
-            .verify_challenge_ticket(&ticket)
+            .verify_challenge_ticket(&ticket, &transcript)
             .expect("first verify");
         let err = config
-            .verify_challenge_ticket(&ticket)
+            .verify_challenge_ticket(&ticket, &transcript)
             .expect_err("replay must fail");
         assert!(matches!(err, ChallengeVerifyError::Replay));
 
+        drop(config);
         let reloaded =
             TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("reload store");
         let config_reloaded = SoranetHandshakeConfig::new(
@@ -878,7 +936,7 @@ mod handshake_config_tests {
             None,
         );
         let err = config_reloaded
-            .verify_challenge_ticket(&ticket)
+            .verify_challenge_ticket(&ticket, &transcript)
             .expect_err("replay after reload must fail");
         assert!(matches!(err, ChallengeVerifyError::Replay));
     }
@@ -910,9 +968,10 @@ mod handshake_config_tests {
         );
 
         let mut rng = StdRng::from_seed([0x27; 32]);
+        let transcript = test_admission_transcript();
         let ticket = pow::mint_ticket(
             config.pow_params.as_ref(),
-            &config.pow_binding(),
+            &config.pow_binding(&transcript),
             config.pow_ticket_ttl(),
             &mut rng,
         )
@@ -920,16 +979,17 @@ mod handshake_config_tests {
         let signed = SignedTicket::sign(
             ticket,
             &iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT,
-            None,
+            &transcript,
             keypair.secret_key(),
         )
         .expect("sign ticket");
         let signed_bytes = signed.encode();
 
         config
-            .verify_challenge_ticket(&signed_bytes)
+            .verify_challenge_ticket(&signed_bytes, &transcript)
             .expect("first verify signed ticket");
 
+        drop(config);
         let reloaded =
             TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("reload store");
         let config_reloaded = SoranetHandshakeConfig::new(
@@ -949,13 +1009,13 @@ mod handshake_config_tests {
             None,
         );
         let err = config_reloaded
-            .verify_challenge_ticket(&signed_bytes)
+            .verify_challenge_ticket(&signed_bytes, &transcript)
             .expect_err("signed ticket replay after reload must fail");
         assert!(matches!(err, ChallengeVerifyError::Replay));
     }
 
     #[test]
-    fn revocation_store_eviction_and_counts_surface() {
+    fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("revocations.norito");
@@ -979,28 +1039,37 @@ mod handshake_config_tests {
         );
 
         let mut rng = StdRng::from_seed([0x31; 32]);
+        let transcript = test_admission_transcript();
         let first = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint")
             .expect("ticket");
         let second = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint second")
             .expect("ticket");
 
         config
-            .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"))
+            .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"), &transcript)
             .expect("first verify");
         assert_eq!(config.active_revocations(), 1);
 
-        config
-            .verify_challenge_ticket(second.ticket.as_ref().expect("ticket bytes"))
-            .expect("second verify");
+        let capacity_err = config
+            .verify_challenge_ticket(second.ticket.as_ref().expect("ticket bytes"), &transcript)
+            .expect_err("full store must fail closed");
+        assert!(matches!(
+            capacity_err,
+            ChallengeVerifyError::RevocationStore(_)
+        ));
         assert_eq!(
             config.active_revocations(),
             1,
-            "capacity-one store should evict oldest entry"
+            "capacity-one store must retain the first consumption record"
         );
+        let replay_err = config
+            .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"), &transcript)
+            .expect_err("first ticket must remain consumed");
+        assert!(matches!(replay_err, ChallengeVerifyError::Replay));
 
         config.purge_expired_revocations().expect("purge succeeds");
         assert_eq!(
@@ -1035,12 +1104,13 @@ mod handshake_config_tests {
         );
 
         let mut rng = StdRng::from_seed([0x41; 32]);
+        let transcript = test_admission_transcript();
         let minted = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint")
             .expect("ticket");
         let err = config
-            .verify_challenge_ticket(minted.ticket.as_ref().expect("ticket bytes"))
+            .verify_challenge_ticket(minted.ticket.as_ref().expect("ticket bytes"), &transcript)
             .expect_err("revocation store ttl cap should reject ticket");
         assert!(matches!(err, ChallengeVerifyError::RevocationStore(_)));
     }
@@ -1086,13 +1156,17 @@ mod handshake_config_tests {
         let signed = SignedTicket {
             ticket,
             relay_id: config.relay_id.as_slice().try_into().unwrap(),
-            transcript_hash: None,
+            transcript_hash: test_admission_transcript(),
             signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
         };
         let signed_bytes = signed.encode();
 
         let err = config
-            .verify_signed_ticket(&signed_bytes, keypair.public_key())
+            .verify_signed_ticket(
+                &signed_bytes,
+                keypair.public_key(),
+                &test_admission_transcript(),
+            )
             .expect_err("invalid signature must fail");
         match err {
             ChallengeVerifyError::Pow(pow_err) => {
@@ -1128,9 +1202,10 @@ mod handshake_config_tests {
         );
 
         let mut rng = StdRng::from_seed([0x55; 32]);
+        let transcript = test_admission_transcript();
         let ticket = pow::mint_ticket(
             config.pow_params.as_ref(),
-            &config.pow_binding(),
+            &config.pow_binding(&transcript),
             config.pow_ticket_ttl(),
             &mut rng,
         )
@@ -1138,20 +1213,20 @@ mod handshake_config_tests {
         let signed = SignedTicket::sign(
             ticket,
             &iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT,
-            None,
+            &transcript,
             keypair.secret_key(),
         )
         .expect("sign ticket");
         let signed_bytes = signed.encode();
 
         let admission = config
-            .verify_challenge_ticket(&signed_bytes)
+            .verify_challenge_ticket(&signed_bytes, &transcript)
             .expect("verify signed ticket")
             .expect("admission");
         assert_eq!(admission.pow.difficulty(), pow_params.difficulty());
 
         let err = config
-            .verify_challenge_ticket(&signed_bytes)
+            .verify_challenge_ticket(&signed_bytes, &transcript)
             .expect_err("replay should be rejected");
         assert!(matches!(err, ChallengeVerifyError::Replay));
     }
@@ -1182,9 +1257,10 @@ mod handshake_config_tests {
         );
 
         let mut rng = StdRng::from_seed([0xA5; 32]);
+        let transcript = test_admission_transcript();
         let ticket = pow::mint_ticket(
             config.pow_params.as_ref(),
-            &config.pow_binding(),
+            &config.pow_binding(&transcript),
             config.pow_ticket_ttl(),
             &mut rng,
         )
@@ -1192,11 +1268,60 @@ mod handshake_config_tests {
         let ticket_bytes = ticket.to_vec();
 
         let err = config
-            .verify_challenge_ticket(&ticket_bytes)
+            .verify_challenge_ticket(&ticket_bytes, &transcript)
             .expect_err("raw ticket must fail when signed-ticket key is configured");
         assert!(matches!(
             err,
             ChallengeVerifyError::Pow(pow::Error::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn signed_challenge_ticket_rejects_client_hello_substitution_before_signature_work() {
+        let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
+        let config = SoranetHandshakeConfig::new(
+            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+            true,
+            1,
+            1,
+            None,
+            true,
+            pow_params,
+            None,
+            Duration::from_secs(120),
+            Some(vec![0x77]),
+            None,
+            None,
+        );
+        let transcript = test_admission_transcript();
+        let substituted = substituted_admission_transcript();
+        let expires_at = SystemTime::now()
+            .checked_add(Duration::from_secs(120))
+            .expect("expiry should be representable")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after the unix epoch")
+            .as_secs();
+        let signed = SignedTicket {
+            ticket: PowTicket {
+                version: PowTicket::VERSION,
+                difficulty: 1,
+                expires_at,
+                client_nonce: [0x44; 32],
+                solution: [0x55; 32],
+            },
+            relay_id: config.relay_id.as_slice().try_into().expect("relay id"),
+            transcript_hash: transcript,
+            signature: vec![0x66; MlDsaSuite::MlDsa44.signature_len()],
+        };
+
+        let err = config
+            .verify_challenge_ticket(&signed.encode(), &substituted)
+            .expect_err("signed ticket must be bound to the exact client hello");
+        assert!(matches!(
+            err,
+            ChallengeVerifyError::Pow(pow::Error::TranscriptMismatch)
         ));
     }
 }
@@ -1893,11 +2018,16 @@ impl Drop for SharedByteLease {
 /// Frame-allocation owners shared by every authenticated peer reader in one
 /// network instance. High and low streams are separate so best-effort input
 /// cannot consume progress-stream allocation capacity; each authenticated peer
-/// also has exactly one reserve shared across duplicate sessions.
+/// also has exactly one source reserve shared across duplicate sessions.
+/// Decryption reuses the source allocation, while alignment scratch is charged
+/// to separate process-wide high/low pools with the corresponding configured
+/// byte ceilings.
 #[derive(Clone, Debug)]
 pub(crate) struct InboundFrameByteBudgets {
     high: Arc<SharedByteBudget>,
     low: Arc<SharedByteBudget>,
+    high_decode_scratch: Arc<SharedByteBudget>,
+    low_decode_scratch: Arc<SharedByteBudget>,
     progress_reserve_bytes_per_peer: usize,
     source_geometry: AuthenticatedSourceGeometry,
 }
@@ -2101,13 +2231,17 @@ impl AuthenticatedSourceGeometry {
 struct InboundSourceByteBudget {
     shared: Arc<SharedByteBudget>,
     peer_reserve: Option<Arc<SharedByteBudget>>,
+    decode_scratch: Arc<SharedByteBudget>,
 }
 
 impl InboundSourceByteBudget {
     fn shared_only(shared: Arc<SharedByteBudget>) -> Self {
+        let decode_scratch = SharedByteBudget::new(shared.class_max_bytes(false), 0)
+            .expect("an existing source-byte budget has representable scratch geometry");
         Self {
             shared,
             peer_reserve: None,
+            decode_scratch,
         }
     }
 
@@ -2146,6 +2280,10 @@ impl InboundSourceByteBudget {
             lease = peer_reserve.reserve(bytes, false) => lease,
         }
     }
+
+    async fn reserve_decode_scratch(&self, bytes: usize) -> Option<SharedByteLease> {
+        self.decode_scratch.reserve(bytes, false).await
+    }
 }
 
 impl InboundFrameByteBudgets {
@@ -2172,10 +2310,16 @@ impl InboundFrameByteBudgets {
         progress_reserve_bytes_per_peer
             .checked_mul(source_geometry.max_sources)
             .and_then(|reserve| reserve.checked_add(high_max_bytes))
-            .and_then(|high| high.checked_add(low_max_bytes))?;
+            .and_then(|high| high.checked_add(low_max_bytes))
+            .and_then(|source| source.checked_add(high_max_bytes))
+            .and_then(|source_and_high_scratch| {
+                source_and_high_scratch.checked_add(low_max_bytes)
+            })?;
         Some(Self {
             high: SharedByteBudget::new(high_max_bytes, 0)?,
             low: SharedByteBudget::new(low_max_bytes, 0)?,
+            high_decode_scratch: SharedByteBudget::new(high_max_bytes, 0)?,
+            low_decode_scratch: SharedByteBudget::new(low_max_bytes, 0)?,
             progress_reserve_bytes_per_peer,
             source_geometry,
         })
@@ -2225,7 +2369,11 @@ impl InboundFrameByteBudgets {
     fn high(&self, peer_id: &PeerId) -> Option<InboundSourceByteBudget> {
         if self.progress_reserve_bytes_per_peer == 0 {
             self.source_geometry.admit_ownerless_source(peer_id)?;
-            return Some(InboundSourceByteBudget::shared_only(Arc::clone(&self.high)));
+            return Some(InboundSourceByteBudget {
+                shared: Arc::clone(&self.high),
+                peer_reserve: None,
+                decode_scratch: Arc::clone(&self.high_decode_scratch),
+            });
         }
         let peer_reserve = self
             .source_geometry
@@ -2233,11 +2381,16 @@ impl InboundFrameByteBudgets {
         Some(InboundSourceByteBudget {
             shared: Arc::clone(&self.high),
             peer_reserve: Some(peer_reserve),
+            decode_scratch: Arc::clone(&self.high_decode_scratch),
         })
     }
 
     fn low(&self) -> InboundSourceByteBudget {
-        InboundSourceByteBudget::shared_only(Arc::clone(&self.low))
+        InboundSourceByteBudget {
+            shared: Arc::clone(&self.low),
+            peer_reserve: None,
+            decode_scratch: Arc::clone(&self.low_decode_scratch),
+        }
     }
 }
 
@@ -3048,6 +3201,7 @@ mod shared_byte_budget_tests {
         let budget = InboundSourceByteBudget {
             shared: Arc::clone(&shared),
             peer_reserve: Some(peer_reserve),
+            decode_scratch: SharedByteBudget::new(2, 0).expect("decode scratch owner"),
         };
 
         let mut waiting = Box::pin(budget.reserve(2));
@@ -3071,6 +3225,7 @@ mod shared_byte_budget_tests {
         let budget = InboundSourceByteBudget {
             shared,
             peer_reserve: Some(Arc::clone(&peer_reserve)),
+            decode_scratch: SharedByteBudget::new(2, 0).expect("decode scratch owner"),
         };
 
         let mut waiting = Box::pin(budget.reserve(2));
@@ -3079,6 +3234,39 @@ mod shared_byte_budget_tests {
                 .await
                 .is_err(),
             "an undersized shared owner must not turn temporary peer saturation into rejection"
+        );
+        drop(held);
+        assert!(waiting.await.is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn inbound_decode_scratch_is_process_wide_and_priority_separated() {
+        let budgets =
+            InboundFrameByteBudgets::new(4, 3, 0, 2).expect("valid inbound byte geometry");
+        assert!(
+            budgets
+                .source_geometry
+                .install_protected_sources(HashSet::new())
+        );
+        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let second_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first = budgets.high(&first_peer).expect("first high source");
+        let second = budgets.high(&second_peer).expect("second high source");
+        let held = first
+            .reserve_decode_scratch(4)
+            .await
+            .expect("reserve entire high scratch pool");
+
+        let mut waiting = Box::pin(second.reserve_decode_scratch(1));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), waiting.as_mut())
+                .await
+                .is_err(),
+            "a second reader must not multiply the process-wide high scratch pool"
+        );
+        assert!(
+            budgets.low().reserve_decode_scratch(3).await.is_some(),
+            "low-priority decode scratch must have an independent bounded pool"
         );
         drop(held);
         assert!(waiting.await.is_some());
@@ -3203,7 +3391,7 @@ pub mod handles {
 
     /// Start Peer in `state::Connecting` state
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-    pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, K: Kex, E: Enc>(
+    pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         peer_addr: SocketAddr,
         peer_id: iroha_data_model::prelude::PeerId,
         our_public_address: SocketAddr,
@@ -3212,7 +3400,7 @@ pub mod handles {
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
         dial_timeout: Duration,
-        chain_id: Option<iroha_data_model::ChainId>,
+        chain_id: iroha_data_model::ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -3285,22 +3473,18 @@ pub mod handles {
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
         };
-        tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span())
+        tokio::task::spawn(run::run::<T, E, _>(peer).in_current_span())
     }
 
     /// Start Peer in `state::ConnectedFrom` state
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn connected_from<
-        T: Pload + crate::network::message::ClassifyTopic,
-        K: Kex,
-        E: Enc,
-    >(
+    pub(crate) fn connected_from<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         our_public_address: SocketAddr,
         key_pair: KeyPair,
         connection: Connection,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
-        chain_id: Option<iroha_data_model::ChainId>,
+        chain_id: iroha_data_model::ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -3346,7 +3530,7 @@ pub mod handles {
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
         };
-        tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span())
+        tokio::task::spawn(run::run::<T, E, _>(peer).in_current_span())
     }
 
     /// Per-topic senders for peer substreams.
@@ -4341,7 +4525,7 @@ mod run {
             topic_frame_caps: crate::network::TopicFrameCaps,
         ) -> Self {
             let framed_schema = <T as ncore::NoritoSerialize>::schema_hash();
-            let align = core::mem::align_of::<ncore::Archived<T>>();
+            let align = ncore::archived_payload_align::<T>();
             let framed_padding = if align <= 1 {
                 0
             } else {
@@ -5265,7 +5449,7 @@ mod run {
     /// Peer task.
     #[allow(clippy::too_many_lines)]
     #[log(skip_all, fields(connection = &peer.log_description(), conn_id = peer.connection_id(), peer, disambiguator))]
-    pub(super) async fn run<T: Pload + ClassifyTopic, K: Kex, E: Enc, P: Entrypoint<K, E>>(
+    pub(super) async fn run<T: Pload + ClassifyTopic, E: Enc, P: Entrypoint<E>>(
         RunPeerArgs {
             peer,
             service_message_sender,
@@ -6657,14 +6841,14 @@ mod run {
     }
 
     /// Trait for peer stages that might be used as starting point for peer's [`run`] function.
-    pub(super) trait Entrypoint<K: Kex, E: Enc>: Handshake<K, E> + Send + 'static {
+    pub(super) trait Entrypoint<E: Enc>: Handshake<E> + Send + 'static {
         fn connection_id(&self) -> ConnectionId;
 
         /// Debug description, used for logging
         fn log_description(&self) -> String;
     }
 
-    impl<K: Kex, E: Enc> Entrypoint<K, E> for Connecting {
+    impl<E: Enc> Entrypoint<E> for Connecting {
         fn connection_id(&self) -> ConnectionId {
             self.connection_id
         }
@@ -6674,7 +6858,7 @@ mod run {
         }
     }
 
-    impl<K: Kex, E: Enc> Entrypoint<K, E> for ConnectedFrom {
+    impl<E: Enc> Entrypoint<E> for ConnectedFrom {
         fn connection_id(&self) -> ConnectionId {
             self.connection.id
         }
@@ -6702,7 +6886,6 @@ mod run {
     struct MessageReader<E: Enc, M: Pload + ClassifyTopic> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
-        decrypted: Vec<u8>,
         decode_scratch: Vec<u8>,
         cryptographer: Cryptographer<E>,
         pending: VecDeque<(M, usize, InboundFrameRetention)>,
@@ -6758,12 +6941,10 @@ mod run {
             topic_frame_caps: crate::network::TopicFrameCaps,
             source_byte_budget: InboundSourceByteBudget,
         ) -> Self {
-            let prealloc = retained_message_buffer_cap(max_frame_bytes);
             // Do not preallocate from an unauthenticated length prefix. The
             // encrypted-frame buffer grows in bounded, byte-budgeted chunks.
             let capacity = DEFAULT_BUFFER_CAPACITY;
-            let decrypt_capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
-            let align = core::mem::align_of::<ncore::Archived<M>>();
+            let align = ncore::archived_payload_align::<M>();
             let framed_padding = if align <= 1 {
                 0
             } else {
@@ -6774,7 +6955,6 @@ mod run {
                 read,
                 cryptographer,
                 buffer: BytesMut::with_capacity(capacity),
-                decrypted: Vec::with_capacity(decrypt_capacity),
                 decode_scratch: Vec::new(),
                 pending: VecDeque::new(),
                 framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
@@ -6801,9 +6981,7 @@ mod run {
 
         fn shrink_consumed_frame_buffers(&mut self) {
             let retained_cap = retained_message_buffer_cap(self.max_frame_bytes);
-            self.decrypted.clear();
             self.decode_scratch.clear();
-            shrink_empty_vec_to_cap(&mut self.decrypted, retained_cap);
             shrink_empty_vec_to_cap(&mut self.decode_scratch, retained_cap);
             compact_sparse_bytes_to_cap(
                 &mut self.buffer,
@@ -6868,7 +7046,7 @@ mod run {
                 });
             }
 
-            let align = core::mem::align_of::<ncore::Archived<M>>();
+            let align = ncore::archived_payload_align::<M>();
             let mut offset = 0usize;
             let mut decoded_messages = 0usize;
             let mut frame_messages = VecDeque::new();
@@ -7120,7 +7298,7 @@ mod run {
                     self.reserve_for_frame().await?
                 };
                 // Try to get full message
-                if self.parse_next_encrypted_frame()? {
+                if self.parse_next_encrypted_frame().await? {
                     if let Some(msg) = self.pending.pop_front() {
                         return Ok(Some(msg));
                     }
@@ -7141,7 +7319,7 @@ mod run {
         /// # Errors
         /// - Fail to decrypt message
         /// - Fail to decode the encrypted envelope
-        fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
+        async fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
             enum ParsedFrame<M> {
                 Messages(VecDeque<(M, usize)>),
                 Malformed {
@@ -7153,28 +7331,46 @@ mod run {
 
             self.last_malformed_payload = None;
             self.last_topic_cap_violation = None;
-            let mut buf = &self.buffer[..];
-            if buf.remaining() < Self::U32_SIZE {
-                // Not enough data to read u32
-                return Ok(false);
-            }
-            let size = buf.get_u32() as usize;
-            if size > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
-                return Err(Error::FrameTooLarge);
-            }
-            if buf.remaining() < size {
-                // Not enough data to read the whole data
-                return Ok(false);
-            }
+            let size = {
+                let mut buf = &self.buffer[..];
+                if buf.remaining() < Self::U32_SIZE {
+                    // Not enough data to read u32
+                    return Ok(false);
+                }
+                let size = buf.get_u32() as usize;
+                if size > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
+                    return Err(Error::FrameTooLarge);
+                }
+                if buf.remaining() < size {
+                    // Not enough data to read the whole data
+                    return Ok(false);
+                }
+                size
+            };
+
+            // Decryption now happens in the source-owned ciphertext allocation. Reserve one
+            // separate process-wide, priority-classed allowance for the worst-case aligned decode
+            // scratch before mutating the frame. Holding this lease only through synchronous
+            // decode keeps cancellation safe and makes every remaining frame-sized allocation
+            // explicit in the network byte geometry.
+            let _decode_scratch_lease = self
+                .source_byte_budget
+                .reserve_decode_scratch(size)
+                .await
+                .ok_or(Error::FrameTooLarge)?;
 
             let frame_retention = self
                 .current_frame_retention
                 .take()
                 .expect("complete encrypted frame must hold its source byte lease");
 
-            let data = &buf[..size];
             let parsed = (|| -> Result<ParsedFrame<M>, Error> {
-                let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
+                let frame_end = Self::U32_SIZE
+                    .checked_add(size)
+                    .ok_or(Error::FrameTooLarge)?;
+                let decrypted = self
+                    .cryptographer
+                    .decrypt_in_place(&mut self.buffer[Self::U32_SIZE..frame_end])?;
                 // Decrypted payload may contain multiple Norito-framed messages.
                 match Self::parse_decrypted_frame_messages(
                     decrypted,
@@ -8690,7 +8886,7 @@ mod run {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
             use std::borrow::Cow;
 
-            let min_size = core::mem::size_of::<ncore::Archived<Self>>();
+            let min_size = ncore::archived_payload_size::<Self>();
             let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
                 let mut padded = Vec::with_capacity(min_size);
                 padded.extend_from_slice(bytes);
@@ -8707,7 +8903,7 @@ mod run {
     }
 
     fn norito_frame_prefix_len<T>() -> Option<usize> {
-        let align = core::mem::align_of::<ncore::Archived<T>>();
+        let align = ncore::archived_payload_align::<T>();
         let padding = if align <= 1 {
             0
         } else {
@@ -10568,7 +10764,7 @@ mod run {
         }
 
         fn framed_padding<T>() -> usize {
-            let align = core::mem::align_of::<ncore::Archived<T>>();
+            let align = ncore::archived_payload_align::<T>();
             if align <= 1 {
                 return 0;
             }
@@ -13119,7 +13315,7 @@ mod run {
 
             PREDECODE_POLICY_CALLS.store(0, Ordering::SeqCst);
             let key_byte = 29_u8;
-            let align = core::mem::align_of::<ncore::Archived<Message<PredecodeGuardedBlob>>>();
+            let align = ncore::archived_payload_align::<Message<PredecodeGuardedBlob>>();
             assert!(align > 1, "fixture must exercise the misaligned-frame path");
             let small = (0..=align * 2)
                 .map(|len| framed_message(&Message::Data(PredecodeGuardedBlob(vec![1; len]))))
@@ -13867,10 +14063,6 @@ mod run {
                 "read buffer retained oversized capacity"
             );
             assert!(
-                reader.decrypted.capacity() <= retained_message_buffer_cap(reader.max_frame_bytes),
-                "decrypted buffer retained oversized capacity"
-            );
-            assert!(
                 reader.decode_scratch.capacity()
                     <= retained_message_buffer_cap(reader.max_frame_bytes),
                 "decode scratch retained oversized capacity"
@@ -13988,7 +14180,7 @@ mod run {
 mod state {
     //! Module for peer stages.
 
-    use iroha_crypto::{KeyGenOption, KeyPair, PublicKey, Signature};
+    use iroha_crypto::{KeyPair, PublicKey, Signature};
     use iroha_data_model::peer::Peer;
     use iroha_primitives::addr::SocketAddr;
 
@@ -14240,6 +14432,13 @@ mod state {
         expected: &ConsensusConfigCaps,
         got: &ConsensusConfigCaps,
     ) -> Option<String> {
+        if expected.execution_policy_hash != got.execution_policy_hash {
+            return Some(format!(
+                "execution_policy_hash mismatch (expected 0x{}, got 0x{})",
+                hex_bytes(&expected.execution_policy_hash),
+                hex_bytes(&got.execution_policy_hash),
+            ));
+        }
         if expected.nexus_policy_digest != got.nexus_policy_digest {
             return Some(format!(
                 "nexus_policy_digest mismatch (expected 0x{}, got 0x{})",
@@ -14264,7 +14463,7 @@ mod state {
         None
     }
 
-    fn hex_bytes(bytes: &[u8]) -> String {
+    pub(super) fn hex_bytes(bytes: &[u8]) -> String {
         use core::fmt::Write as _;
 
         let mut out = String::with_capacity(bytes.len() * 2);
@@ -14384,24 +14583,46 @@ mod state {
         Ok(())
     }
 
-    pub(super) fn handshake_signature_payload<K: Kex, E: Enc>(
+    #[derive(Encode)]
+    struct HandshakeIdentityBindingV1 {
+        session_binding: [u8; iroha_crypto::Hash::LENGTH],
+        chain_id: iroha_data_model::ChainId,
+        transport_binding: Option<[u8; iroha_crypto::Hash::LENGTH]>,
+        algorithm: iroha_crypto::Algorithm,
+        public_key: Vec<u8>,
+        advertised_addr: iroha_primitives::addr::SocketAddr,
+        relay: RelayRole,
+        consensus: HandshakeConsensusMeta,
+        confidential: HandshakeConfidentialMeta,
+        crypto: HandshakeCryptoMeta,
+        trust: HandshakeTrustMeta,
+    }
+
+    pub(super) fn handshake_signature_payload<E: Enc>(
         cryptographer: &Cryptographer<E>,
-        advertised_addr: &iroha_primitives::addr::SocketAddr,
-        local_pk: &K::PublicKey,
-        remote_pk: &K::PublicKey,
-        chain_id: Option<&iroha_data_model::ChainId>,
+        hello: &HandshakeHelloV1,
+        chain_id: &iroha_data_model::ChainId,
         transport_binding: Option<&[u8; iroha_crypto::Hash::LENGTH]>,
     ) -> Vec<u8> {
-        let _ = (local_pk, remote_pk);
-        let mut data = Vec::new();
-        data.extend_from_slice(&cryptographer.disambiguator.to_be_bytes());
-        data.extend_from_slice(&advertised_addr.encode());
-        if let Some(cid) = chain_id {
-            data.extend_from_slice(&cid.encode());
+        const DOMAIN: &[u8] = b"iroha:p2p:identity-binding:v1|";
+
+        let binding = HandshakeIdentityBindingV1 {
+            session_binding: cryptographer.session_binding,
+            chain_id: chain_id.clone(),
+            transport_binding: transport_binding.copied(),
+            algorithm: hello.algorithm,
+            public_key: hello.public_key.clone(),
+            advertised_addr: hello.addr.clone(),
+            relay: hello.relay,
+            consensus: hello.consensus.clone(),
+            confidential: hello.confidential.clone(),
+            crypto: hello.crypto.clone(),
+            trust: hello.trust.clone(),
         }
-        if let Some(binding) = transport_binding {
-            data.extend_from_slice(binding);
-        }
+        .encode();
+        let mut data = Vec::with_capacity(DOMAIN.len().saturating_add(binding.len()));
+        data.extend_from_slice(DOMAIN);
+        data.extend_from_slice(&binding);
         data
     }
 
@@ -14430,9 +14651,19 @@ mod state {
         if version != HANDSHAKE_HELLO_VERSION {
             return Err(crate::Error::Format);
         }
-        let mut slice = body;
-        let hello = DecodeAll::decode_all(&mut slice)?;
+        let hello =
+            decode_handshake_body_with_limits(body, norito::canonical_decode_limits(body.len()))?;
         Ok(HandshakeHello::V1(hello))
+    }
+
+    pub(super) fn decode_handshake_body_with_limits(
+        body: &[u8],
+        limits: norito::DecodeLimits,
+    ) -> Result<HandshakeHelloV1, crate::Error> {
+        let mut slice = body;
+        Ok(norito::with_decode_limits(limits, || {
+            DecodeAll::decode_all(&mut slice)
+        })?)
     }
 
     /// Peer that is connecting. This is the initial stage of a new
@@ -14444,7 +14675,7 @@ mod state {
         pub our_public_address: SocketAddr,
         pub key_pair: KeyPair,
         pub connection_id: ConnectionId,
-        pub chain_id: Option<iroha_data_model::ChainId>,
+        pub chain_id: iroha_data_model::ChainId,
         pub consensus_caps: Option<ConsensusHandshakeCaps>,
         pub confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15031,7 +15262,7 @@ mod state {
                 our_public_address: our_public_address.into(),
                 key_pair: KeyPair::random(),
                 connection_id: 0,
-                chain_id: None,
+                chain_id: iroha_data_model::ChainId::from("test-chain"),
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
@@ -15163,7 +15394,7 @@ mod state {
         expected_peer_id: iroha_data_model::prelude::PeerId,
         key_pair: KeyPair,
         connection: Connection,
-        chain_id: Option<iroha_data_model::ChainId>,
+        chain_id: iroha_data_model::ChainId,
         consensus_caps: Option<ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15175,7 +15406,7 @@ mod state {
 
     impl ConnectedTo {
         #[allow(clippy::similar_names, clippy::too_many_lines)]
-        pub(super) async fn send_client_hello<K: Kex, E: Enc>(
+        pub(super) async fn send_client_hello<E: Enc>(
             Self {
                 our_public_address,
                 expected_peer_id,
@@ -15190,7 +15421,7 @@ mod state {
                 trust_gossip,
                 relay_role,
             }: Self,
-        ) -> Result<SendKey<K, E>, crate::Error> {
+        ) -> Result<SendKey<E>, crate::Error> {
             // Pre-handshake header: write ours, then read theirs.
             if let Err(e) = write_pre_handshake_header(&mut connection.write).await {
                 return Err(crate::Error::from(e));
@@ -15204,8 +15435,13 @@ mod state {
             let runtime_params = soranet_handshake.runtime_params();
             let mut rng = soranet_handshake_rng()?;
 
+            // The admission credential commits to the final serialized hello,
+            // so build it once and send those exact bytes after the ticket.
+            let (client_hello, client_state) = build_client_hello(&runtime_params, &mut rng)
+                .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
+            let admission_transcript = pow::derive_admission_transcript(&client_hello);
             if let Some(minted) = soranet_handshake
-                .mint_challenge_ticket(&mut rng)
+                .mint_challenge_ticket(&admission_transcript, &mut rng)
                 .map_err(|err| Error::HandshakeSoranet(err.to_string()))?
             {
                 for frame in &minted.frames {
@@ -15213,8 +15449,6 @@ mod state {
                 }
             }
 
-            let (client_hello, client_state) = build_client_hello(&runtime_params, &mut rng)
-                .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
             write_handshake_frame(&mut connection.write, &client_hello).await?;
 
             let relay_hello = read_handshake_frame(&mut connection.read).await?;
@@ -15290,15 +15524,10 @@ mod state {
                     Cryptographer::new(&secrets.session_key)?
                 }
             };
-            let kx = K::new();
-            let kx_local_pk = kx.try_keypair(KeyGenOption::Random)?.0;
-            let kx_remote_pk = kx.try_keypair(KeyGenOption::Random)?.0;
             Ok(SendKey {
                 our_public_address,
                 expected_peer_id: Some(expected_peer_id),
                 key_pair,
-                kx_local_pk,
-                kx_remote_pk,
                 connection,
                 cryptographer,
                 chain_id,
@@ -15317,7 +15546,7 @@ mod state {
         pub our_public_address: SocketAddr,
         pub key_pair: KeyPair,
         pub connection: Connection,
-        pub chain_id: Option<iroha_data_model::ChainId>,
+        pub chain_id: iroha_data_model::ChainId,
         pub consensus_caps: Option<ConsensusHandshakeCaps>,
         pub confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15329,7 +15558,7 @@ mod state {
 
     impl ConnectedFrom {
         #[allow(clippy::similar_names, clippy::too_many_lines)]
-        pub(super) async fn read_client_hello<K: Kex, E: Enc>(
+        pub(super) async fn read_client_hello<E: Enc>(
             Self {
                 our_public_address,
                 key_pair,
@@ -15343,7 +15572,7 @@ mod state {
                 trust_gossip,
                 relay_role,
             }: Self,
-        ) -> Result<SendKey<K, E>, crate::Error> {
+        ) -> Result<SendKey<E>, crate::Error> {
             // Pre-handshake header: read theirs, then write ours.
             if let Err(e) = read_and_verify_pre_handshake_header(&mut connection.read).await {
                 if e.kind() == std::io::ErrorKind::InvalidData {
@@ -15357,14 +15586,20 @@ mod state {
             let runtime_params = soranet_handshake.runtime_params();
             let mut rng = soranet_handshake_rng()?;
 
-            if soranet_handshake.pow_required() {
-                let ticket = read_handshake_frame(&mut connection.read).await?;
+            let ticket = if soranet_handshake.pow_required() {
+                Some(read_handshake_frame(&mut connection.read).await?)
+            } else {
+                None
+            };
+            // Buffering the bounded hello is cheap. Verify its admission
+            // commitment before `process_client_hello` performs ML-KEM work.
+            let client_hello = read_handshake_frame(&mut connection.read).await?;
+            if let Some(ticket) = ticket {
+                let admission_transcript = pow::derive_admission_transcript(&client_hello);
                 soranet_handshake
-                    .verify_challenge_ticket(&ticket)
+                    .verify_challenge_ticket(&ticket, &admission_transcript)
                     .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
             }
-
-            let client_hello = read_handshake_frame(&mut connection.read).await?;
             let (relay_hello, relay_state) =
                 match process_client_hello(&client_hello, &runtime_params, &key_pair, &mut rng) {
                     Ok(success) => success,
@@ -15439,15 +15674,10 @@ mod state {
                     Cryptographer::new(&secrets.session_key)?
                 }
             };
-            let kx = K::new();
-            let kx_local_pk = kx.try_keypair(KeyGenOption::Random)?.0;
-            let kx_remote_pk = kx.try_keypair(KeyGenOption::Random)?.0;
             Ok(SendKey {
                 our_public_address,
                 expected_peer_id: None,
                 key_pair,
-                kx_local_pk,
-                kx_remote_pk,
                 connection,
                 cryptographer,
                 chain_id,
@@ -15462,15 +15692,13 @@ mod state {
     }
 
     #[cfg(test)]
-    pub(super) struct SendKeyInit<K: Kex, E: Enc> {
+    pub(super) struct SendKeyInit<E: Enc> {
         pub(super) our_public_address: SocketAddr,
         pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) key_pair: KeyPair,
-        pub(super) kx_local_pk: K::PublicKey,
-        pub(super) kx_remote_pk: K::PublicKey,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
-        pub(super) chain_id: Option<iroha_data_model::ChainId>,
+        pub(super) chain_id: iroha_data_model::ChainId,
         pub(super) consensus_caps: Option<ConsensusHandshakeCaps>,
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub(super) crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15480,15 +15708,13 @@ mod state {
     }
 
     /// Peer that needs to send key.
-    pub(super) struct SendKey<K: Kex, E: Enc> {
+    pub(super) struct SendKey<E: Enc> {
         pub(super) our_public_address: SocketAddr,
         pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) key_pair: KeyPair,
-        pub(super) kx_local_pk: K::PublicKey,
-        pub(super) kx_remote_pk: K::PublicKey,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
-        pub(super) chain_id: Option<iroha_data_model::ChainId>,
+        pub(super) chain_id: iroha_data_model::ChainId,
         pub(super) consensus_caps: Option<ConsensusHandshakeCaps>,
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub(super) crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15497,15 +15723,13 @@ mod state {
         pub(super) trust_gossip: bool,
     }
 
-    impl<K: Kex, E: Enc> SendKey<K, E> {
+    impl<E: Enc> SendKey<E> {
         #[cfg(test)]
-        pub(super) fn new(init: SendKeyInit<K, E>) -> Self {
+        pub(super) fn new(init: SendKeyInit<E>) -> Self {
             let SendKeyInit {
                 our_public_address,
                 expected_peer_id,
                 key_pair,
-                kx_local_pk,
-                kx_remote_pk,
                 connection,
                 cryptographer,
                 chain_id,
@@ -15520,8 +15744,6 @@ mod state {
                 our_public_address,
                 expected_peer_id,
                 key_pair,
-                kx_local_pk,
-                kx_remote_pk,
                 connection,
                 cryptographer,
                 chain_id,
@@ -15539,8 +15761,6 @@ mod state {
                 our_public_address,
                 expected_peer_id,
                 key_pair,
-                kx_local_pk,
-                kx_remote_pk,
                 mut connection,
                 cryptographer,
                 chain_id,
@@ -15551,24 +15771,15 @@ mod state {
                 local_scion_supported,
                 trust_gossip,
             }: Self,
-        ) -> Result<GetKey<K, E>, crate::Error> {
+        ) -> Result<GetKey<E>, crate::Error> {
             let write_half = &mut connection.write;
 
             let our_addr = our_public_address;
-            let payload = handshake_signature_payload::<K, E>(
-                &cryptographer,
-                &our_addr,
-                &kx_local_pk,
-                &kx_remote_pk,
-                chain_id.as_ref(),
-                connection.transport_binding.as_ref(),
-            );
-            let signature = Signature::try_new(key_pair.private_key(), &payload)?;
             let (alg, pk_bytes) = key_pair.public_key().to_bytes();
-            let hello = HandshakeHelloV1 {
+            let mut hello = HandshakeHelloV1 {
                 algorithm: alg,
                 public_key: pk_bytes.to_vec(),
-                signature: signature.payload().to_vec(),
+                signature: Vec::new(),
                 addr: our_addr,
                 relay: relay_role,
                 consensus: build_consensus_meta(consensus_caps.as_ref()),
@@ -15576,6 +15787,15 @@ mod state {
                 crypto: build_crypto_meta(crypto_caps.as_ref()),
                 trust: build_trust_meta(trust_gossip, local_scion_supported),
             };
+            let payload = handshake_signature_payload::<E>(
+                &cryptographer,
+                &hello,
+                &chain_id,
+                connection.transport_binding.as_ref(),
+            );
+            hello.signature = Signature::try_new(key_pair.private_key(), &payload)?
+                .payload()
+                .to_vec();
             let encrypted = encode_handshake_message(&cryptographer, &hello)?;
 
             // Handshake messages can exceed 255 bytes once they include the
@@ -15594,8 +15814,6 @@ mod state {
             Ok(GetKey {
                 connection,
                 expected_peer_id,
-                kx_local_pk,
-                kx_remote_pk,
                 cryptographer,
                 chain_id,
                 consensus_caps,
@@ -15609,13 +15827,11 @@ mod state {
     }
 
     /// Peer that needs to get key.
-    pub struct GetKey<K: Kex, E: Enc> {
+    pub struct GetKey<E: Enc> {
         pub(super) connection: Connection,
         pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
-        pub(super) kx_local_pk: K::PublicKey,
-        pub(super) kx_remote_pk: K::PublicKey,
         pub(super) cryptographer: Cryptographer<E>,
-        pub(super) chain_id: Option<iroha_data_model::ChainId>,
+        pub(super) chain_id: iroha_data_model::ChainId,
         pub(super) consensus_caps: Option<ConsensusHandshakeCaps>,
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub(super) crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15624,14 +15840,12 @@ mod state {
         pub(super) trust_gossip: bool,
     }
 
-    impl<K: Kex, E: Enc> GetKey<K, E> {
+    impl<E: Enc> GetKey<E> {
         /// Read the peer's public key
         pub(super) async fn read_their_public_key(
             Self {
                 mut connection,
                 expected_peer_id,
-                kx_local_pk,
-                kx_remote_pk,
                 cryptographer,
                 chain_id,
                 consensus_caps,
@@ -15650,6 +15864,13 @@ mod state {
             let _ = read_half.read_exact(&mut data).await?;
 
             let hello = decode_handshake_message(&cryptographer, data.as_slice())?;
+            let HandshakeHello::V1(hello) = hello;
+            let payload = handshake_signature_payload::<E>(
+                &cryptographer,
+                &hello,
+                &chain_id,
+                connection.transport_binding.as_ref(),
+            );
             let (
                 algorithm,
                 public_key,
@@ -15661,8 +15882,8 @@ mod state {
                 crypto,
                 trust_gossip_remote,
                 scion_supported_remote,
-            ) = match hello {
-                HandshakeHello::V1(HandshakeHelloV1 {
+            ) = {
+                let HandshakeHelloV1 {
                     algorithm,
                     public_key,
                     signature,
@@ -15672,7 +15893,8 @@ mod state {
                     confidential,
                     crypto,
                     trust,
-                }) => (
+                } = hello;
+                (
                     algorithm,
                     public_key,
                     signature,
@@ -15683,7 +15905,7 @@ mod state {
                     crypto,
                     trust.trust_gossip,
                     trust.scion_supported,
-                ),
+                )
             };
             let remote_pub_key = match PublicKey::from_bytes(algorithm, &public_key) {
                 Ok(pk) => pk,
@@ -15700,14 +15922,6 @@ mod state {
             }
             .map_err(crate::Error::Keys)?;
 
-            let payload = handshake_signature_payload::<K, E>(
-                &cryptographer,
-                &remote_public_address,
-                &kx_remote_pk,
-                &kx_local_pk,
-                chain_id.as_ref(),
-                connection.transport_binding.as_ref(),
-            );
             signature.verify(&remote_pub_key, &payload)?;
 
             if let Some(expected_peer_id) = expected_peer_id {
@@ -15754,49 +15968,19 @@ mod state {
         pub trust_gossip: bool,
     }
 
-    #[allow(dead_code)]
-    fn create_payload<K: Kex>(kx_local_pk: &K::PublicKey, kx_remote_pk: &K::PublicKey) -> Vec<u8> {
-        let mut payload = K::encode_public_key(kx_local_pk);
-        let remote = K::encode_public_key(kx_remote_pk);
-        payload.extend_from_slice(remote.as_ref());
-        payload
-    }
-
-    /// Create a signature payload that binds ephemeral keys to the advertised address
-    /// and optionally to the chain id.
-    #[allow(dead_code)]
-    pub(super) fn create_payload_with_address<K: Kex>(
-        kx_local_pk: &K::PublicKey,
-        kx_remote_pk: &K::PublicKey,
-        addr: &iroha_primitives::addr::SocketAddr,
-        chain_id: Option<&iroha_data_model::ChainId>,
-    ) -> Vec<u8> {
-        let mut payload = create_payload::<K>(kx_local_pk, kx_remote_pk);
-        // Append Norito-encoded address bytes deterministically
-        let addr_bytes = addr.encode();
-        payload.extend_from_slice(&addr_bytes);
-        #[cfg(feature = "handshake_chain_id")]
-        if let Some(chain_id) = chain_id {
-            let chain_bytes = chain_id.encode();
-            payload.extend_from_slice(&chain_bytes);
-        }
-        #[cfg(not(feature = "handshake_chain_id"))]
-        let _ = chain_id; // suppress unused parameter warning when feature is disabled
-        payload
-    }
-
     #[cfg(test)]
     mod tests {
         #[cfg(feature = "noise_handshake")]
         use std::sync::Arc;
 
         #[cfg(feature = "noise_handshake")]
-        use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256 as KexAlgo};
+        use iroha_crypto::encryption::ChaCha20Poly1305;
 
         use super::*;
 
         fn consensus_caps(fingerprint: [u8; 32]) -> ConsensusConfigCaps {
             ConsensusConfigCaps {
+                execution_policy_hash: [0xB0; 32],
                 nexus_policy_digest: [0xC1; 32],
                 v2_config_fingerprint: fingerprint,
                 ivm_gas_schedule_hash: [0xD2; 32],
@@ -15840,7 +16024,7 @@ mod state {
                 ),
                 key_pair: key_pair_a,
                 connection: Connection::from_split(1, read_a, write_a),
-                chain_id: None,
+                chain_id: iroha_data_model::ChainId::from("test-chain"),
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
@@ -15853,7 +16037,7 @@ mod state {
                 our_public_address: addr_b,
                 key_pair: key_pair_b,
                 connection: Connection::from_split(2, read_b, write_b),
-                chain_id: None,
+                chain_id: iroha_data_model::ChainId::from("test-chain"),
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
@@ -15864,8 +16048,8 @@ mod state {
             };
 
             let (out_res, in_res) = tokio::join!(
-                ConnectedTo::send_client_hello::<KexAlgo, ChaCha20Poly1305>(outbound),
-                ConnectedFrom::read_client_hello::<KexAlgo, ChaCha20Poly1305>(inbound),
+                ConnectedTo::send_client_hello::<ChaCha20Poly1305>(outbound),
+                ConnectedFrom::read_client_hello::<ChaCha20Poly1305>(inbound),
             );
             let outbound = out_res.expect("outbound handshake");
             let inbound = in_res.expect("inbound handshake");
@@ -15873,6 +16057,10 @@ mod state {
             assert_eq!(
                 outbound.cryptographer.disambiguator, inbound.cryptographer.disambiguator,
                 "noise handshake must yield a shared disambiguator"
+            );
+            assert_eq!(
+                outbound.cryptographer.session_binding, inbound.cryptographer.session_binding,
+                "noise handshake must yield the same full identity-session binding"
             );
         }
     }
@@ -15886,11 +16074,7 @@ mod tests {
         task::{Context, Poll},
     };
 
-    use iroha_crypto::{
-        Algorithm, KeyGenOption, KeyPair, Signature,
-        encryption::ChaCha20Poly1305,
-        kex::{KeyExchangeScheme, X25519Sha256 as KexAlgo},
-    };
+    use iroha_crypto::{Algorithm, KeyPair, Signature, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::SocketAddr;
     use norito::codec::{DecodeAll, Encode};
     use tokio::io::AsyncWrite;
@@ -15900,10 +16084,22 @@ mod tests {
 
     fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         ConsensusConfigCaps {
+            execution_policy_hash: [0xB4; 32],
             nexus_policy_digest: [0xA5; 32],
             v2_config_fingerprint: [0xC3; 32],
             ivm_gas_schedule_hash: [0xE7; 32],
         }
+    }
+
+    #[test]
+    fn consensus_config_mismatch_rejects_execution_policy_drift() {
+        let expected = sample_consensus_config_caps();
+        let mut got = expected;
+        got.execution_policy_hash[0] ^= 1;
+
+        let reason = consensus_config_mismatch(&expected, &got)
+            .expect("one-bit execution-policy drift must fail the handshake");
+        assert!(reason.starts_with("execution_policy_hash mismatch"));
     }
 
     #[test]
@@ -15967,24 +16163,15 @@ mod tests {
         }
     }
 
-    async fn read_crafted_handshake_hello(
-        key_pair: &KeyPair,
-        signature: Vec<u8>,
-        addr: SocketAddr,
-        sender_kx: <KexAlgo as KeyExchangeScheme>::PublicKey,
-        receiver_kx: <KexAlgo as KeyExchangeScheme>::PublicKey,
-        cryptographer: Cryptographer<ChaCha20Poly1305>,
-    ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
-        use tokio::io::AsyncWriteExt;
-
+    fn unsigned_handshake_hello(key_pair: &KeyPair, addr: SocketAddr) -> HandshakeHelloV1 {
         let (algorithm, public_key) = key_pair
             .public_key()
             .try_to_bytes()
             .expect("fixture public key must be valid");
-        let hello = HandshakeHelloV1 {
+        HandshakeHelloV1 {
             algorithm,
             public_key: public_key.to_vec(),
-            signature,
+            signature: Vec::new(),
             addr,
             relay: RelayRole::Disabled,
             consensus: HandshakeConsensusMeta {
@@ -16007,7 +16194,15 @@ mod tests {
                 trust_gossip: true,
                 scion_supported: false,
             },
-        };
+        }
+    }
+
+    async fn read_crafted_handshake_hello(
+        hello: HandshakeHelloV1,
+        cryptographer: Cryptographer<ChaCha20Poly1305>,
+    ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
+        use tokio::io::AsyncWriteExt;
+
         let encoded =
             encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
         let hello_len = u16::try_from(encoded.len()).expect("crafted hello fits handshake frame");
@@ -16024,13 +16219,11 @@ mod tests {
             .await
             .expect("write hello bytes");
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -16071,43 +16264,249 @@ mod tests {
     }
 
     #[test]
-    fn payload_with_address_is_consistent_between_sides() {
-        // Generate ephemeral keypairs for both sides
-        let kx = KexAlgo::new();
-        let (a_pk, _a_sk) = kx.keypair(KeyGenOption::Random);
-        let (b_pk, _b_sk) = kx.keypair(KeyGenOption::Random);
+    fn handshake_signature_payload_is_consistent_between_sides() {
+        let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0xA5; 32])
+            .expect("valid key length");
 
-        // Sender uses (local=a, remote=b) and their own address
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let chain_id: Option<iroha_data_model::ChainId> = None;
-        let sender_payload =
-            create_payload_with_address::<KexAlgo>(&a_pk, &b_pk, &addr, chain_id.as_ref());
+        let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let sender_payload = handshake_signature_payload::<ChaCha20Poly1305>(
+            &cryptographer,
+            &hello,
+            &chain_id,
+            None,
+        );
 
-        // Receiver verifies using (remote=a, local=b) and the same advertised address
-        let receiver_payload =
-            create_payload_with_address::<KexAlgo>(&a_pk, &b_pk, &addr, chain_id.as_ref());
+        let receiver_payload = handshake_signature_payload::<ChaCha20Poly1305>(
+            &cryptographer,
+            &hello,
+            &chain_id,
+            None,
+        );
 
         assert_eq!(sender_payload, receiver_payload);
     }
 
     #[test]
-    fn payload_differs_when_chain_id_is_added() {
-        let kx = KexAlgo::new();
-        let (a_pk, _a_sk) = kx.keypair(KeyGenOption::Random);
-        let (b_pk, _b_sk) = kx.keypair(KeyGenOption::Random);
+    fn handshake_signature_payload_always_binds_chain_id() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
+        let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x5A; 32])
+            .expect("valid key length");
 
-        let without = create_payload_with_address::<KexAlgo>(&a_pk, &b_pk, &addr, None);
-
-        let chain_id: iroha_data_model::ChainId =
+        let chain_a: iroha_data_model::ChainId =
             "00000000-0000-0000-0000-000000000001".parse().unwrap();
-        let with = create_payload_with_address::<KexAlgo>(&a_pk, &b_pk, &addr, Some(&chain_id));
+        let chain_b: iroha_data_model::ChainId =
+            "00000000-0000-0000-0000-000000000002".parse().unwrap();
+        let payload_a =
+            handshake_signature_payload::<ChaCha20Poly1305>(&cryptographer, &hello, &chain_a, None);
+        let payload_b =
+            handshake_signature_payload::<ChaCha20Poly1305>(&cryptographer, &hello, &chain_b, None);
 
-        if cfg!(feature = "handshake_chain_id") {
-            assert_ne!(without, with);
-        } else {
-            assert_eq!(without, with);
-        }
+        assert_ne!(payload_a, payload_b);
+    }
+
+    #[test]
+    fn handshake_signature_payload_binds_the_full_session_hash() {
+        let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
+        let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x3C; 32])
+            .expect("valid key length");
+        let mut same_compact_prefix = cryptographer.clone();
+        same_compact_prefix.session_binding[iroha_crypto::Hash::LENGTH - 1] ^= 1;
+        assert_eq!(
+            cryptographer.disambiguator, same_compact_prefix.disambiguator,
+            "fixture must preserve the 64-bit operational tie-breaker"
+        );
+
+        let expected = handshake_signature_payload::<ChaCha20Poly1305>(
+            &cryptographer,
+            &hello,
+            &chain_id,
+            None,
+        );
+        let changed = handshake_signature_payload::<ChaCha20Poly1305>(
+            &same_compact_prefix,
+            &hello,
+            &chain_id,
+            None,
+        );
+
+        assert_ne!(
+            expected, changed,
+            "identity authentication must bind all 256 session-binding bits"
+        );
+    }
+
+    #[test]
+    fn handshake_signature_payload_binds_all_advertised_capabilities() {
+        let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x6D; 32])
+            .expect("valid key length");
+        let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
+        let mut hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        hello.consensus.mode_tag = Some("permissioned".to_owned());
+        hello.confidential.enabled = Some(true);
+        hello.crypto.sm_enabled = Some(false);
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let expected = handshake_signature_payload::<ChaCha20Poly1305>(
+            &cryptographer,
+            &hello,
+            &chain_id,
+            None,
+        );
+
+        let mut changed = hello.clone();
+        changed.relay = RelayRole::Hub;
+        assert_ne!(
+            expected,
+            handshake_signature_payload::<ChaCha20Poly1305>(
+                &cryptographer,
+                &changed,
+                &chain_id,
+                None,
+            ),
+            "relay capability must be authenticated"
+        );
+
+        let mut changed = hello.clone();
+        changed.consensus.mode_tag = Some("nexus".to_owned());
+        assert_ne!(
+            expected,
+            handshake_signature_payload::<ChaCha20Poly1305>(
+                &cryptographer,
+                &changed,
+                &chain_id,
+                None,
+            ),
+            "consensus capabilities must be authenticated"
+        );
+
+        let mut changed = hello.clone();
+        changed.confidential.enabled = Some(false);
+        assert_ne!(
+            expected,
+            handshake_signature_payload::<ChaCha20Poly1305>(
+                &cryptographer,
+                &changed,
+                &chain_id,
+                None,
+            ),
+            "confidential capabilities must be authenticated"
+        );
+
+        let mut changed = hello.clone();
+        changed.crypto.sm_enabled = Some(true);
+        assert_ne!(
+            expected,
+            handshake_signature_payload::<ChaCha20Poly1305>(
+                &cryptographer,
+                &changed,
+                &chain_id,
+                None,
+            ),
+            "cryptographic capabilities must be authenticated"
+        );
+
+        let mut changed = hello;
+        changed.trust.scion_supported = true;
+        assert_ne!(
+            expected,
+            handshake_signature_payload::<ChaCha20Poly1305>(
+                &cryptographer,
+                &changed,
+                &chain_id,
+                None,
+            ),
+            "trust and transport capabilities must be authenticated"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_capabilities_changed_after_signing() {
+        let key_pair = KeyPair::random();
+        let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x4E; 32])
+            .expect("valid key length");
+        let mut hello = unsigned_handshake_hello(&key_pair, addr);
+        let payload = handshake_signature_payload::<ChaCha20Poly1305>(
+            &cryptographer,
+            &hello,
+            &chain_id,
+            None,
+        );
+        hello.signature = Signature::try_new(key_pair.private_key(), &payload)
+            .expect("sign canonical handshake claims")
+            .payload()
+            .to_vec();
+
+        hello.trust.scion_supported = true;
+        let error = match read_crafted_handshake_hello(hello, cryptographer).await {
+            Ok(_) => panic!("capabilities changed after signing must fail authentication"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, crate::Error::Keys(_)),
+            "expected signature verification failure, got {error:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_peer_from_a_different_chain() {
+        let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x7C; 32])
+            .expect("valid key length");
+        let (stream_a, stream_b) = tokio::io::duplex(512);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr,
+            expected_peer_id: None,
+            key_pair,
+            connection: Connection::from_split(1, sender_read, sender_write),
+            cryptographer: cryptographer.clone(),
+            chain_id: iroha_data_model::ChainId::from("chain-a"),
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+        let get_key = GetKey::<ChaCha20Poly1305> {
+            connection: Connection::from_split(2, receiver_read, receiver_write),
+            expected_peer_id: None,
+            cryptographer,
+            chain_id: iroha_data_model::ChainId::from("chain-b"),
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+        let error = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("a handshake signature from a different chain must be rejected"),
+            Err(error) => error,
+        };
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        assert!(
+            matches!(error, crate::Error::Keys(_)),
+            "expected signature verification failure, got {error:?}"
+        );
     }
 
     #[test]
@@ -16207,9 +16606,6 @@ mod tests {
         sender_caps: Option<ConfidentialHandshakeCaps>,
         receiver_caps: Option<ConfidentialHandshakeCaps>,
     ) -> crate::Error {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1338".parse().unwrap();
         let key_pair = KeyPair::random();
         let cryptographer =
@@ -16219,15 +16615,13 @@ mod tests {
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
 
-        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
             expected_peer_id: None,
             key_pair,
-            kx_local_pk: sender_kx.clone(),
-            kx_remote_pk: receiver_kx.clone(),
             connection: Connection::from_split(21, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: sender_caps,
             crypto_caps: None,
@@ -16236,13 +16630,11 @@ mod tests {
             trust_gossip: true,
         });
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(22, receiver_read, receiver_write),
             expected_peer_id: None,
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: receiver_caps,
             crypto_caps: None,
@@ -16536,11 +16928,31 @@ mod tests {
         assert!(v1.trust.trust_gossip);
     }
 
+    #[test]
+    fn handshake_decode_honors_its_pre_auth_resource_budget() {
+        let key_pair = KeyPair::random();
+        let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
+        let hello = unsigned_handshake_hello(&key_pair, addr);
+        let body = hello.encode();
+        let no_sequence_budget = norito::DecodeLimits::new(0, body.len(), 0, body.len(), 16);
+
+        let error = decode_handshake_body_with_limits(&body, no_sequence_budget)
+            .expect_err("the handshake decoder must not widen its caller's resource budget");
+        assert!(
+            matches!(
+                error,
+                crate::Error::NoritoCodec(norito::core::Error::SequenceLengthExceeded { .. })
+                    | crate::Error::NoritoCodec(norito::core::Error::TotalElementsExceeded { .. })
+                    | crate::Error::NoritoCodec(
+                        norito::core::Error::TotalAllocationExceeded { .. }
+                    )
+            ),
+            "expected a decode-budget rejection, got {error:?}"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_fails_when_metadata_exceeds_limit() {
-        let kx = KexAlgo::new();
-        let (kx_local_pk, _kx_local_sk) = kx.keypair(KeyGenOption::Random);
-        let (kx_remote_pk, _kx_remote_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let key_pair = KeyPair::random();
         let connection = Connection::from_split(7, tokio::io::empty(), tokio::io::sink());
@@ -16555,15 +16967,13 @@ mod tests {
             verifier_backend: "halo2-ipa-".repeat(7000),
             features: None,
         };
-        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
             expected_peer_id: None,
             key_pair,
-            kx_local_pk,
-            kx_remote_pk,
             connection,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: Some(caps),
             crypto_caps: None,
@@ -16571,7 +16981,7 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         });
-        let err = match SendKey::<KexAlgo, ChaCha20Poly1305>::send_our_public_key(send_key).await {
+        let err = match SendKey::<ChaCha20Poly1305>::send_our_public_key(send_key).await {
             Ok(_) => panic!("expected HandshakeMessageTooLarge error"),
             Err(err) => err,
         };
@@ -16583,9 +16993,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_v1_defaults_to_trust_gossip() {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let key_pair = KeyPair::random();
         let cryptographer =
@@ -16595,15 +17002,13 @@ mod tests {
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
 
-        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
             expected_peer_id: None,
             key_pair,
-            kx_local_pk: sender_kx.clone(),
-            kx_remote_pk: receiver_kx.clone(),
             connection: Connection::from_split(1, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -16612,13 +17017,11 @@ mod tests {
             trust_gossip: true,
         });
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(2, receiver_read, receiver_write),
             expected_peer_id: None,
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -16660,9 +17063,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_all_zero_signature_material() {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
         let key_pair = KeyPair::random();
         let (algorithm, public_key) = key_pair
@@ -16706,13 +17106,11 @@ mod tests {
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
         write_framed_handshake(&mut sender_write, &encoded).await;
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -16747,23 +17145,16 @@ mod tests {
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
         ] {
-            let kx = KexAlgo::new();
-            let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-            let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
             let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
             let key_pair = KeyPair::random();
-            let (algorithm, public_key) = key_pair
-                .public_key()
-                .try_to_bytes()
-                .expect("fixture public key must be valid");
             let cryptographer =
                 Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
-            let payload = handshake_signature_payload::<KexAlgo, ChaCha20Poly1305>(
+            let chain_id = iroha_data_model::ChainId::from("test-chain");
+            let mut hello = unsigned_handshake_hello(&key_pair, addr);
+            let payload = handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
-                &addr,
-                &sender_kx,
-                &receiver_kx,
-                None,
+                &hello,
+                &chain_id,
                 None,
             );
             let mut signature = Signature::try_new(key_pair.private_key(), &payload)
@@ -16771,34 +17162,7 @@ mod tests {
                 .payload()
                 .to_vec();
             signature[..replacement_r.len()].copy_from_slice(&replacement_r);
-
-            let hello = HandshakeHelloV1 {
-                algorithm,
-                public_key: public_key.to_vec(),
-                signature,
-                addr,
-                relay: RelayRole::Disabled,
-                consensus: HandshakeConsensusMeta {
-                    mode_tag: None,
-                    proto_version: None,
-                    consensus_fingerprint: None,
-                    config: None,
-                },
-                confidential: HandshakeConfidentialMeta {
-                    enabled: None,
-                    assume_valid: None,
-                    verifier_backend: None,
-                    features: None,
-                },
-                crypto: HandshakeCryptoMeta {
-                    sm_enabled: None,
-                    sm_openssl_preview: None,
-                },
-                trust: HandshakeTrustMeta {
-                    trust_gossip: true,
-                    scion_supported: false,
-                },
-            };
+            hello.signature = signature;
             let encoded =
                 encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
 
@@ -16807,13 +17171,11 @@ mod tests {
             let (receiver_read, receiver_write) = tokio::io::split(stream_b);
             write_framed_handshake(&mut sender_write, &encoded).await;
 
-            let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            let get_key = GetKey::<ChaCha20Poly1305> {
                 connection: Connection::from_split(15, receiver_read, receiver_write),
                 expected_peer_id: None,
-                kx_local_pk: receiver_kx,
-                kx_remote_pk: sender_kx,
                 cryptographer,
-                chain_id: None,
+                chain_id: iroha_data_model::ChainId::from("test-chain"),
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
@@ -16835,9 +17197,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_malformed_mldsa_signature_lengths() {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
         let key_pair = KeyPair::try_from_seed(
             b"p2p-handshake-mldsa-signature-admission".to_vec(),
@@ -16846,29 +17205,23 @@ mod tests {
         .expect("derive checked ML-DSA handshake fixture keypair");
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32]).unwrap();
-        let payload = handshake_signature_payload::<KexAlgo, ChaCha20Poly1305>(
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let mut hello = unsigned_handshake_hello(&key_pair, addr);
+        let payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
-            &addr,
-            &sender_kx,
-            &receiver_kx,
-            None,
+            &hello,
+            &chain_id,
             None,
         );
         let valid_signature = Signature::try_new(key_pair.private_key(), &payload)
             .expect("checked ML-DSA handshake fixture signature")
             .payload()
             .to_vec();
+        hello.signature = valid_signature.clone();
 
-        read_crafted_handshake_hello(
-            &key_pair,
-            valid_signature.clone(),
-            addr.clone(),
-            sender_kx.clone(),
-            receiver_kx.clone(),
-            cryptographer.clone(),
-        )
-        .await
-        .expect("valid ML-DSA handshake signature must verify");
+        read_crafted_handshake_hello(hello.clone(), cryptographer.clone())
+            .await
+            .expect("valid ML-DSA handshake signature must verify");
 
         let mut short = valid_signature.clone();
         short.pop();
@@ -16880,16 +17233,9 @@ mod tests {
             ("overlong", overlong),
             ("all-zero", vec![0_u8; valid_signature.len()]),
         ] {
-            let err = match read_crafted_handshake_hello(
-                &key_pair,
-                signature,
-                addr.clone(),
-                sender_kx.clone(),
-                receiver_kx.clone(),
-                cryptographer.clone(),
-            )
-            .await
-            {
+            let mut malformed = hello.clone();
+            malformed.signature = signature;
+            let err = match read_crafted_handshake_hello(malformed, cryptographer.clone()).await {
                 Ok(_) => panic!("{label} ML-DSA handshake signature unexpectedly verified"),
                 Err(err) => err,
             };
@@ -16902,9 +17248,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_accepts_matching_transport_binding() {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
         let key_pair = KeyPair::random();
         let cryptographer =
@@ -16915,12 +17258,10 @@ mod tests {
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
 
-        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
             expected_peer_id: None,
             key_pair,
-            kx_local_pk: sender_kx.clone(),
-            kx_remote_pk: receiver_kx.clone(),
             connection: Connection::from_split_with_binding(
                 11,
                 sender_read,
@@ -16928,7 +17269,7 @@ mod tests {
                 Some(transport_binding),
             ),
             cryptographer: cryptographer.clone(),
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -16937,7 +17278,7 @@ mod tests {
             trust_gossip: true,
         });
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split_with_binding(
                 12,
                 receiver_read,
@@ -16945,10 +17286,8 @@ mod tests {
                 Some(transport_binding),
             ),
             expected_peer_id: None,
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -16975,9 +17314,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_mismatched_transport_binding() {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1446".parse().unwrap();
         let key_pair = KeyPair::random();
         let cryptographer =
@@ -16987,12 +17323,10 @@ mod tests {
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
 
-        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
             expected_peer_id: None,
             key_pair,
-            kx_local_pk: sender_kx.clone(),
-            kx_remote_pk: receiver_kx.clone(),
             connection: Connection::from_split_with_binding(
                 13,
                 sender_read,
@@ -17000,7 +17334,7 @@ mod tests {
                 Some([0x11u8; iroha_crypto::Hash::LENGTH]),
             ),
             cryptographer: cryptographer.clone(),
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -17009,7 +17343,7 @@ mod tests {
             trust_gossip: true,
         });
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split_with_binding(
                 14,
                 receiver_read,
@@ -17017,10 +17351,8 @@ mod tests {
                 Some([0x22u8; iroha_crypto::Hash::LENGTH]),
             ),
             expected_peer_id: None,
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -17051,9 +17383,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn outgoing_handshake_rejects_unexpected_peer_identity() {
-        let kx = KexAlgo::new();
-        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
-        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
         let addr: SocketAddr = "127.0.0.1:1445".parse().unwrap();
         let actual_key_pair = KeyPair::random();
         let expected_peer_id =
@@ -17065,15 +17394,13 @@ mod tests {
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
 
-        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
             expected_peer_id: None,
             key_pair: actual_key_pair,
-            kx_local_pk: sender_kx.clone(),
-            kx_remote_pk: receiver_kx.clone(),
             connection: Connection::from_split(3, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -17082,13 +17409,11 @@ mod tests {
             trust_gossip: true,
         });
 
-        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+        let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(4, receiver_read, receiver_write),
             expected_peer_id: Some(expected_peer_id.clone()),
-            kx_local_pk: receiver_kx,
-            kx_remote_pk: sender_kx,
             cryptographer,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -17140,7 +17465,7 @@ mod tests {
             our_public_address: our_addr,
             key_pair,
             connection: conn,
-            chain_id: None,
+            chain_id: iroha_data_model::ChainId::from("test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -17149,13 +17474,11 @@ mod tests {
             trust_gossip: true,
             relay_role: RelayRole::Disabled,
         };
-        let err = ConnectedFrom::read_client_hello::<
-            KexAlgo,
-            iroha_crypto::encryption::ChaCha20Poly1305,
-        >(cf)
-        .await
-        .err()
-        .expect("expected error on bad preface");
+        let err =
+            ConnectedFrom::read_client_hello::<iroha_crypto::encryption::ChaCha20Poly1305>(cf)
+                .await
+                .err()
+                .expect("expected error on bad preface");
         let _ = err; // just ensure it errs
     }
 
@@ -17188,7 +17511,7 @@ mod handshake_flow {
     use super::{state::*, *};
 
     #[async_trait]
-    pub(super) trait Stage<K: Kex, E: Enc> {
+    pub(super) trait Stage<E: Enc> {
         type NextStage;
 
         async fn advance_to_next_stage(self) -> Result<Self::NextStage, crate::Error>;
@@ -17204,7 +17527,7 @@ mod handshake_flow {
         // Internal case
         (@base $self:ident $call:expr ; $curstage:ty => $nextstage:ty ) => {
             #[async_trait]
-            impl<K: Kex, E: Enc> Stage<K, E> for $curstage {
+            impl<E: Enc> Stage<E> for $curstage {
                 type NextStage = $nextstage;
 
                 async fn advance_to_next_stage(self) -> Result<Self::NextStage, crate::Error> {
@@ -17217,13 +17540,13 @@ mod handshake_flow {
     }
 
     stage!(connect_to: Connecting => ConnectedTo);
-    stage!(send_client_hello::<K, E>: ConnectedTo => SendKey<K, E>);
-    stage!(read_client_hello::<K, E>: ConnectedFrom => SendKey<K, E>);
-    stage!(send_our_public_key: SendKey<K, E> => GetKey<K, E>);
-    stage!(read_their_public_key: GetKey<K, E> => Ready<E>);
+    stage!(send_client_hello::<E>: ConnectedTo => SendKey<E>);
+    stage!(read_client_hello::<E>: ConnectedFrom => SendKey<E>);
+    stage!(send_our_public_key: SendKey<E> => GetKey<E>);
+    stage!(read_their_public_key: GetKey<E> => Ready<E>);
 
     #[async_trait]
-    pub(super) trait Handshake<K: Kex, E: Enc> {
+    pub(super) trait Handshake<E: Enc> {
         async fn handshake(self) -> Result<Ready<E>, crate::Error>;
     }
 
@@ -17231,27 +17554,27 @@ mod handshake_flow {
         ( base_case $typ:ty ) => {
             // Base case, should be all states that lead to `Ready`
             #[async_trait]
-            impl<K: Kex, E: Enc> Handshake<K, E> for $typ {
+            impl<E: Enc> Handshake<E> for $typ {
                 #[inline]
                 async fn handshake(self) -> Result<Ready<E>, crate::Error> {
-                    <$typ as Stage<K, E>>::advance_to_next_stage(self).await
+                    <$typ as Stage<E>>::advance_to_next_stage(self).await
                 }
             }
         };
         ( $typ:ty ) => {
             #[async_trait]
-            impl<K: Kex, E: Enc> Handshake<K, E> for $typ {
+            impl<E: Enc> Handshake<E> for $typ {
                 #[inline]
                 async fn handshake(self) -> Result<Ready<E>, crate::Error> {
-                    let next_stage = <$typ as Stage<K, E>>::advance_to_next_stage(self).await?;
-                    <_ as Handshake<K, E>>::handshake(next_stage).await
+                    let next_stage = <$typ as Stage<E>>::advance_to_next_stage(self).await?;
+                    <_ as Handshake<E>>::handshake(next_stage).await
                 }
             }
         };
     }
 
-    impl_handshake!(base_case GetKey<K, E>);
-    impl_handshake!(SendKey<K, E>);
+    impl_handshake!(base_case GetKey<E>);
+    impl_handshake!(SendKey<E>);
     impl_handshake!(ConnectedFrom);
     impl_handshake!(ConnectedTo);
     impl_handshake!(Connecting);
@@ -17954,25 +18277,46 @@ mod cryptographer {
     use iroha_crypto::{SessionKey, encryption::SymmetricEncryptor};
 
     use super::*;
-    use crate::blake2b_hash;
-
     /// Peer's cryptographic primitives
     #[derive(Clone)]
     pub struct Cryptographer<E: Enc> {
-        /// Blake2b hash of the session key, used as unique shared value between two peers
+        /// Compact connection tie-breaker derived from the session binding.
         pub disambiguator: u64,
+        /// Full domain-separated hash of the negotiated session key.
+        ///
+        /// Long-term peer identity signatures bind this complete value. The
+        /// compact disambiguator is only an operational connection tie-breaker.
+        pub session_binding: [u8; iroha_crypto::Hash::LENGTH],
         /// Encryptor created from session key, that we got by Diffie-Hellman scheme
         pub encryptor: SymmetricEncryptor<E>,
     }
 
     impl<E: Enc> Cryptographer<E> {
+        fn session_binding(key_bytes: &[u8]) -> [u8; iroha_crypto::Hash::LENGTH] {
+            const DOMAIN: &[u8] = b"iroha:p2p:session-binding:v1|";
+
+            let mut preimage = Vec::with_capacity(DOMAIN.len().saturating_add(key_bytes.len()));
+            preimage.extend_from_slice(DOMAIN);
+            preimage.extend_from_slice(key_bytes);
+            iroha_crypto::Hash::new(&preimage).into()
+        }
+
+        fn disambiguator(session_binding: &[u8; iroha_crypto::Hash::LENGTH]) -> u64 {
+            const COMPACT_LEN: usize = core::mem::size_of::<u64>();
+            let mut compact = [0_u8; COMPACT_LEN];
+            compact.copy_from_slice(&session_binding[..COMPACT_LEN]);
+            u64::from_be_bytes(compact)
+        }
+
         /// Construct from raw key bytes (e.g., derived via Noise)
         #[cfg(any(feature = "noise_handshake", test))]
         pub fn new_with_raw_key_bytes(key_bytes: &[u8]) -> Result<Self, Error> {
-            let disambiguator = blake2b_hash(key_bytes);
+            let session_binding = Self::session_binding(key_bytes);
+            let disambiguator = Self::disambiguator(&session_binding);
             let encryptor = SymmetricEncryptor::<E>::new_with_key(key_bytes)?;
             Ok(Self {
                 disambiguator,
+                session_binding,
                 encryptor,
             })
         }
@@ -17997,6 +18341,16 @@ mod cryptographer {
         ) -> Result<&'a [u8], Error> {
             self.encryptor
                 .decrypt_easy_into(DEFAULT_AAD.as_ref(), data, out)
+                .map_err(Into::into)
+        }
+
+        /// Decrypt bytes directly in their source-owned envelope.
+        ///
+        /// # Errors
+        /// Forwards [`SymmetricEncryptor::decrypt_easy_in_place`] errors.
+        pub fn decrypt_in_place<'a>(&self, data: &'a mut [u8]) -> Result<&'a mut [u8], Error> {
+            self.encryptor
+                .decrypt_easy_in_place(DEFAULT_AAD.as_ref(), data)
                 .map_err(Into::into)
         }
 
@@ -18027,11 +18381,13 @@ mod cryptographer {
         /// Derives shared key from local private key and remote public key.
         #[cfg_attr(feature = "noise_handshake", allow(dead_code))]
         pub fn new(shared_key: &SessionKey) -> Result<Self, Error> {
-            let disambiguator = blake2b_hash(shared_key.payload());
+            let session_binding = Self::session_binding(shared_key.payload());
+            let disambiguator = Self::disambiguator(&session_binding);
 
             let encryptor = SymmetricEncryptor::<E>::new_from_session_key(shared_key)?;
             Ok(Self {
                 disambiguator,
+                session_binding,
                 encryptor,
             })
         }

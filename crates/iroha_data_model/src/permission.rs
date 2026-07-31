@@ -77,7 +77,11 @@ impl norito::json::JsonDeserialize for Permission {
                         return Err(norito::json::Error::duplicate_field("payload"));
                     }
                     let value = visitor.parse_value::<Value>()?;
-                    payload = Some(Json::from(value));
+                    payload = Some(Json::from_norito_value_ref(&value).map_err(|error| {
+                        norito::json::Error::Message(format!(
+                            "permission payload violates the Json bounds: {error}"
+                        ))
+                    })?);
                 }
                 _ => visitor.skip_value()?,
             }
@@ -166,6 +170,22 @@ mod tests {
             duplicate_payload
                 .to_string()
                 .contains("duplicate field `payload`")
+        );
+    }
+
+    #[test]
+    fn permission_deserialization_rejects_oversized_payload_without_panicking() {
+        let oversized = "a".repeat(iroha_primitives::json::MAX_JSON_BYTES + 1);
+        let raw = format!(r#"{{"name":"CanDoThing","payload":"{oversized}"}}"#);
+
+        let error = deserialize_permission_with_parser(&raw)
+            .expect_err("an oversized permission payload must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("permission payload violates the Json bounds"),
+            "unexpected error: {error}"
         );
     }
 }

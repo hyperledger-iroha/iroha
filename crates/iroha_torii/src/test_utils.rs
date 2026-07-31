@@ -993,6 +993,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             iso_bridge: A::IsoBridge {
                 enabled: false,
+                max_body_bytes: defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
                 dedupe_ttl_secs: defaults::torii::ISO_BRIDGE_DEDUPE_TTL_SECS,
                 default_profile: defaults::torii::ISO_BRIDGE_DEFAULT_PROFILE.to_owned(),
                 profiles: Vec::new(),
@@ -1115,7 +1116,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
             quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
             quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-            quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: A::QueryCursorMode::Ephemeral,
             query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,

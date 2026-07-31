@@ -354,15 +354,10 @@ Operator guidance:
   still uses the `PeerGossip` topic and the same caps/backoffs, so disabling trust gossip does not
   starve peer updates.
 
-Optional handshake hardening (chain-bound signatures):
-
-```bash
-# Build with chain-id included in handshake signatures
-cargo build --workspace -F iroha_p2p/handshake_chain_id
-```
-
-Notes
-- Enable `handshake_chain_id` when you want inbound and outbound peers to bind the signed handshake to a specific chain.
+Chain-bound signatures are mandatory. Every inbound and outbound peer
+handshake signs the canonical configured `ChainId`; peers configured for a
+different chain fail before entering the authenticated peer set. There is no
+feature flag or unbound mode.
 
 ### ACL: Allow/Deny (Keys and CIDRs)
 
@@ -404,7 +399,7 @@ Notes
 ### TLS-over-TCP (camouflage)
 
 - Build-time: enable `iroha_p2p/p2p_tls` to include TLS support.
-- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the signed handshake (address + optional `chain_id`).
+- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the signed handshake (address + configured `chain_id`).
 - Runtime: `tls_fallback_to_plain` (bool; default `false`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=true` to opt into plaintext fallback for outbound dials.
 - Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
 - Inbound: optionally enable a TLS listener on a separate address/port via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address while still accepting plain TCP on `[network].address`. Certificates are self‑signed per process; authentication is enforced at the application handshake.

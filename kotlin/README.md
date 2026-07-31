@@ -40,6 +40,31 @@ same intent. Proof attachments are carried by `TransactionPayload.attachments`,
 so adding, removing, or replacing an attachment changes the signature preimage
 and transaction ID.
 
+### DA commitment and pin-intent proofs
+
+`HttpClientTransport.newDaToriiClient()` returns the typed DA client. It covers
+the proof-policy, commitment list/prove/verify, and pin-intent
+list/prove/verify routes. DA digests use `DaModels.Digest32`; proof counters use
+`BigInteger` so the full unsigned 64-bit wire range remains exact.
+
+```kotlin
+val da = transport.newDaToriiClient()
+val proof = da.provePinIntent(
+    DaModels.PinIntentQuery(
+        storageTicket = DaModels.Digest32.fromHex(ticketHex),
+    ),
+).join()
+if (proof != null) {
+    check(da.verifyPinIntent(proof).join().valid)
+}
+```
+
+Responses are decoded into closed typed models. The client rejects unknown
+fields, malformed transparent byte wrappers, invalid checksummed hashes,
+contradictory verification responses, and Merkle paths whose direction/length
+does not match the advertised bundle location. Requests are capped at 64 KiB
+and buffered responses at 8 MiB.
+
 ### Offline peer transports
 
 `core-jvm` owns the portable IPM1 wire, bounded multi-stream IQR1 scanner,
@@ -365,6 +390,12 @@ canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs.
 
+Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
+fingerprints, never client-side proof or backend selectors.
+`ClientConfigManifestLoader` rejects those keys (and their camel-case aliases)
+at any depth. Proof construction must use Torii's committed
+`/v1/privacy/capabilities` response and the on-chain verifying-key registry.
+
 The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
 `iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
@@ -531,16 +562,31 @@ transport.unregisterPushDevice(request, canonicalAuth).join()
 
 `core-jvm` exposes Torii helpers for `/v1/zk/vk/register` and
 `/v1/zk/vk/update`. They validate production verifier backends, required
-signing fields, height ranges, and inline verifier-key commitments before
-sending the request:
+registry fields, height ranges, and inline verifier-key commitments before
+sending the request. Neither request accepts or transmits a private key. Torii
+returns HTTP 200 with an unsigned transaction draft. SDK `Signer`
+implementations apply Iroha's prehash themselves, so pass
+`transactionPayloadBytes()` to `Signer.sign`; use `signingMessageBytes()` only
+with a raw/HSM primitive that signs an already-prehashed message. Attach the
+signature to the transaction payload and use the standard transaction ingress.
+The `ClientConfig` used by the transport must include an immutable
+`LocalSigningContext`; read-only clients may omit it, but draft-producing
+mutation routes fail before network I/O when it is absent. The draft parser
+rejects non-canonical Norito, another chain or authority, extra/substituted
+instructions, any mismatch in the complete verifying-key record, and signing
+messages that do not match the payload prehash:
 
 ```kotlin
+val config = ClientConfig.builder()
+    .setLocalSigningContext(LocalSigningContext("production-chain"))
+    // Configure the Torii endpoint and other client policy here.
+    .build()
+val transport = HttpClientTransport.withExecutor(executor, config)
 val vkBytes = byteArrayOf(1, 2, 3)
 
-transport.registerVerifyingKey(
+val registerDraft = transport.registerVerifyingKey(
     VerifyingKeyRegisterRequest(
-        authority = "alice",
-        privateKey = "ed25519:...",
+        authority = "<authority_i105>",
         backend = "halo2/ipa",
         name = "vk_main",
         version = 1,
@@ -552,10 +598,9 @@ transport.registerVerifyingKey(
     )
 ).join()
 
-transport.updateVerifyingKey(
+val updateDraft = transport.updateVerifyingKey(
     VerifyingKeyUpdateRequest(
-        authority = "alice",
-        privateKey = "ed25519:...",
+        authority = "<authority_i105>",
         backend = "halo2/ipa",
         name = "vk_main",
         version = 2,
@@ -564,6 +609,11 @@ transport.updateVerifyingKey(
         status = "Withdrawn",
     )
 ).join()
+
+check(!registerDraft.submitted)
+val registerPayload = registerDraft.transactionPayloadBytes()
+val registerSigningMessage = registerDraft.signingMessageBytes()
+val registerSignature = signer.sign(registerPayload)
 ```
 
 ## Signing Algorithm Selection

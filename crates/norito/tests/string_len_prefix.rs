@@ -48,7 +48,7 @@ fn compact_len_str_preserves_leading_varint_byte() {
 }
 
 #[test]
-fn string_deserialize_without_ctx_preserves_full_bytes() {
+fn archived_string_requires_bounded_payload_context() {
     reset_decode_state();
     let mut raw = Vec::new();
     raw.extend_from_slice(&8u64.to_le_bytes());
@@ -61,7 +61,14 @@ fn string_deserialize_without_ctx_preserves_full_bytes() {
         s.serialize(&mut payload).expect("serialize string");
     }
     let archived = core::archived_from_slice::<String>(&payload).expect("archived string");
-    let decoded = <String as NoritoDeserialize>::deserialize(archived.archived());
+    let _flags = DecodeFlagsGuard::enter(0);
+    let error = <String as NoritoDeserialize>::try_deserialize(archived.archived())
+        .expect_err("an archived address alone must not authorize pointer reads");
+    assert!(matches!(error, core::Error::MissingPayloadContext));
+
+    let _payload = core::PayloadCtxGuard::enter(archived.bytes());
+    let decoded =
+        <String as NoritoDeserialize>::try_deserialize(archived.archived()).expect("decode string");
     assert_eq!(decoded.as_bytes(), s.as_bytes());
     reset_decode_state();
 }

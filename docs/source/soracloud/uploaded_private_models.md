@@ -60,12 +60,14 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
    must cover the exact committed roots, artifact id, weight version, dataset
    reference, policy id, and SoraFS digest.
 5. For private execution, require clients to call
-   `POST /v1/soracloud/model/upload/private/execute`, inspect the returned
-   receipt, and sign the returned
-   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction through
-   their normal transaction-signing flow. The JavaScript helper returns an
-   unsigned instruction skeleton only; raw private keys must not be embedded in
-   helper inputs, browser payloads, logs, or repository files.
+   `POST /v1/soracloud/model/upload/private/execute` and inspect the returned
+   receipt. Route the returned
+   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction to a
+   controlled `CanManageSoracloud` authority for signing and submission;
+   validators and ordinary client authorities cannot commit this privileged
+   ledger projection. The JavaScript helper returns an unsigned instruction
+   skeleton only; raw private keys must not be embedded in helper inputs,
+   browser payloads, logs, or repository files.
 6. After submission, query
    `GET /v1/soracloud/model/upload/private/receipts` with the expected service,
    model id, weight version, and `count_mode=exact` when an operator needs an
@@ -113,11 +115,12 @@ reference runtime, and returns:
   references;
 - `tx_instructions`, containing a canonical
   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction payload for
-  client signing and transaction submission.
+  signing and transaction submission by a `CanManageSoracloud` authority.
 
 Plaintext input and output are runtime-local and must not be written to chain
 state. Committed chain state stores receipt commitments and encrypted artifact
-references only.
+references only. Receipt identifiers are append-only: a later instruction
+cannot replace an already committed receipt.
 
 Committed private uploaded-model receipts can be queried with optional
 `receipt_id`, `service_name`, `model_id`, `weight_version`, `limit`, and
@@ -131,14 +134,15 @@ The JavaScript SDK exposes unsigned helpers for this V1 flow:
 `buildSoracloudPrivateUploadedModelReceiptQuery`, and
 `privateUploadedModelReceiptInstruction`. These helpers normalize the Torii
 request/query shapes, reject embedded signing secrets, and extract the returned
-receipt instruction skeleton for external transaction signing.
+receipt instruction skeleton for external transaction signing by a controlled
+`CanManageSoracloud` authority.
 
 The Kotlin core SDK and Java Android SDK mirror the client-visible response
 parsers for private execute and committed receipt-list responses. Both expose a
 helper that extracts the
 `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton from
-the Torii response so mobile clients can pass it to their normal external
-transaction signing pipeline.
+the Torii response so mobile clients can pass it to a manager-controlled
+external transaction signing pipeline.
 
 ## Production Gates
 
@@ -161,6 +165,8 @@ Focused V1 coverage should include:
 - world state contains no uploaded-model bytes;
 - deterministic quantized CPU private execution emits stable receipts and a
   receipt-recording transaction instruction;
+- receipt recording rejects validators and other authorities that do not hold
+  `CanManageSoracloud`;
 - receipt recording rejects non-deterministic uploaded-model formats and
   mismatched manifest, bundle-root, or policy bindings;
 - production config rejects missing Inrou enablement or gas asset;

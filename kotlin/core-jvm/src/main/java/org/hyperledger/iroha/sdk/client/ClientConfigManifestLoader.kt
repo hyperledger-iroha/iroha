@@ -22,9 +22,21 @@ import org.hyperledger.iroha.sdk.telemetry.TelemetryOptions
  *
  * The loader keeps the manifest structure available via [ManifestContext] so callers can
  * inspect the inputs alongside the built [ClientConfig].
+ *
+ * Genesis `confidential_features` and `zk_policy_hash` values are consensus fingerprints, not
+ * client proof policy. They are rejected at any depth so a customizer cannot accidentally treat
+ * them as authoritative; proof capabilities must come from committed Torii state and the on-chain
+ * verifying-key registry.
  */
 @OptIn(ExperimentalEncodingApi::class)
 object ClientConfigManifestLoader {
+    private val NON_AUTHORITATIVE_PRIVACY_POLICY_FIELDS =
+        setOf(
+            "confidential_features",
+            "confidentialFeatures",
+            "zk_policy_hash",
+            "zkPolicyHash",
+        )
 
     @JvmStatic @Throws(IOException::class) fun load(manifestPath: Path): LoadedClientConfig = load(manifestPath, null)
 
@@ -38,7 +50,12 @@ object ClientConfigManifestLoader {
     @JvmStatic
     internal fun parse(manifestPath: Path, payload: ByteArray, digest: String, customizer: Customizer?): LoadedClientConfig {
         val root = parseRoot(payload)
+        rejectNonAuthoritativePrivacyPolicyFields(root, "manifest")
         val builder = ClientConfig.builder()
+        optionalString(root["chain_id"], "chain_id")?.let { chainId ->
+            check(chainId.isNotEmpty()) { "chain_id must be a non-empty string" }
+            builder.setLocalSigningContext(LocalSigningContext(chainId))
+        }
         applyTorii(manifestPath, builder, root)
         applyRetry(builder, root)
         applyPendingQueue(manifestPath, builder, root)
@@ -148,6 +165,27 @@ object ClientConfigManifestLoader {
         is Map<*, *> -> Collections.unmodifiableMap(LinkedHashMap<String, Any?>().also { copy -> value.forEach { (k, v) -> if (k is String) copy[k] = immutableValue(v) } })
         is List<*> -> Collections.unmodifiableList(value.map { immutableValue(it) })
         else -> value
+    }
+
+    private fun rejectNonAuthoritativePrivacyPolicyFields(value: Any?, path: String) {
+        when (value) {
+            is Map<*, *> ->
+                value.forEach { (rawKey, nestedValue) ->
+                    val key = rawKey as? String ?: return@forEach
+                    val fieldPath = "$path.$key"
+                    check(key !in NON_AUTHORITATIVE_PRIVACY_POLICY_FIELDS) {
+                        "$fieldPath is not authoritative client proof policy; " +
+                            "use committed /v1/privacy/capabilities and the on-chain " +
+                            "verifying-key registry"
+                    }
+                    rejectNonAuthoritativePrivacyPolicyFields(nestedValue, fieldPath)
+                }
+
+            is List<*> ->
+                value.forEachIndexed { index, nestedValue ->
+                    rejectNonAuthoritativePrivacyPolicyFields(nestedValue, "$path[$index]")
+                }
+        }
     }
 
     @Suppress("UNCHECKED_CAST")

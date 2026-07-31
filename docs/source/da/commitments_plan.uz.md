@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` ostida ishlatiladigan mavjud 48 bayt nuqtadan qayta foydalanadi
-  `iroha_crypto::kzg`. Merkle yo'llari uni bo'sh qoldiradi; `kzg_bls12_381` qatorlari hozir
-  chunk ildizidan olingan deterministik BLAKE3-XOF majburiyatini olish va
-  saqlash chiptasi shuning uchun blok xeshlari tashqi proversiz barqaror qoladi.
-- `proof_scheme` chiziqli katalogdan olingan; Merkle yo'llari adashgan KZGni rad etadi
-  foydali yuklar, `kzg_bls12_381` qatorlari esa nolga teng bo'lmagan KZG majburiyatlarini talab qiladi.
-- `proof_digest` DA-5 PDP/PoTR integratsiyasini kutadi, shuning uchun bir xil rekord
-  bloblarni jonli saqlash uchun foydalaniladigan namuna olish jadvalini sanab o'tadi.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Blok sarlavhasi kengaytmasi
 
@@ -126,12 +120,7 @@ Torii haqiqiy to'plamlarni o'tkazmaguncha.
    `SignedBlockWire`; Qabul qilingan to'plamlar kvitansiya kursorlarini oldinga siljitadi (gidratlangan
    qayta ishga tushirilganda Kura'dan) va disk o'sishini bog'lash uchun eskirgan g'altakning yozuvlarini kesib tashlang.
 
-Blokni yig'ish va `BlockCreated` qabul qilish har bir majburiyatni qayta tasdiqlaydi
-yo'laklar katalogi: Merkle yo'llari adashgan KZG majburiyatlarini rad etadi, KZG yo'llari
-nolga teng bo'lmagan KZG majburiyati va nolga teng bo'lmagan `chunk_root` va noma'lum yo'llar
-tushib ketdi. Torii ning `/v1/da/commitments/verify` so'nggi nuqtasi bir xil himoyani aks ettiradi,
-va ingest endi har biriga deterministik KZG majburiyatini kiritadi
-`kzg_bls12_381` yozuvi siyosatga mos keladigan toʻplamlar blok yigʻilishiga yetib boradi.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 qabul qilish rejasida tasvirlangan manifest moslamalari manba sifatida ikki baravar ko'payadi
 majburiyat to'plami uchun haqiqat. Torii testi
@@ -210,9 +199,7 @@ ushlash tugunlariga blok jurnalidan indeksni tezda qayta tiklashga imkon beradi.
 
 ## Ochiq savollar
 
-1. **KZG va Merkle defoltlari** — Kichik bloklar har doim KZG majburiyatlarini o'tkazib yuborishi kerakmi?
-   blok hajmini kamaytirasizmi? Taklif: `kzg_commitment` ni ixtiyoriy va darvoza orqali saqlang
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Tartibli bo‘shliqlar** — Biz tartibsiz bo‘laklarga ruxsat beramizmi? Joriy reja bo'shliqlarni rad etadi
    boshqaruv favqulodda takrorlash uchun `allow_sequence_skips` ni almashtirmasa.
 3. **Light-mijoz keshi** — SDK jamoasi yengil SQLite keshini talab qildi.

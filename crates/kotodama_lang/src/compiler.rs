@@ -45,6 +45,7 @@ use iroha_data_model::{
         AccessSetHints, ContractErrorCodeDescriptor, DynamicAccessHint, EntryPointKind,
         EntrypointParamDescriptor, StateDescriptor, TriggerCallback, TriggerDescriptor,
     },
+    state_path::StatePath,
     trigger::{Trigger, TriggerId},
 };
 use norito::json;
@@ -144,8 +145,9 @@ impl AccessSets {
 
 #[derive(Clone, PartialEq, Eq)]
 enum StatePathHint {
-    Literal(String),
-    Map { base: String },
+    Path(String),
+    NameBase(String),
+    DynamicMapChild,
 }
 
 #[derive(Clone)]
@@ -162,10 +164,10 @@ struct LiteralPointerFact {
 }
 
 impl StatePathHint {
-    fn base_name(&self) -> String {
+    fn name_base(&self) -> Option<&str> {
         match self {
-            StatePathHint::Literal(name) => name.clone(),
-            StatePathHint::Map { base } => base.clone(),
+            StatePathHint::NameBase(name) => Some(name),
+            StatePathHint::Path(_) | StatePathHint::DynamicMapChild => None,
         }
     }
 }
@@ -1557,6 +1559,31 @@ fn decode_fixed32_chunks(
             out
         })
         .collect())
+}
+
+fn state_path_literal_data_key(
+    func_idx: usize,
+    path: ir::Temp,
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
+) -> Result<Option<DataKey>, String> {
+    let Some(raw) = string_map.get(&(func_idx, path)) else {
+        return Ok(None);
+    };
+    match dataref_kind_map.get(&(func_idx, path)) {
+        Some(ir::DataRefKind::NoritoBytes)
+            if state_path_from_norito_literal(raw).is_some() =>
+        {
+            Ok(Some(DataKey(DataKind::NoritoBytes, raw.clone())))
+        }
+        Some(ir::DataRefKind::NoritoBytes) => Err(
+            "durable state syscall received literal NoritoBytes that do not contain a canonical StatePath"
+                .to_owned(),
+        ),
+        other => Err(format!(
+            "durable state syscall received compiler literal `{raw}` with pointer kind {other:?}; expected NoritoBytes(StatePath)"
+        )),
+    }
 }
 
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
@@ -3581,8 +3608,8 @@ seiyaku HelperAccess {
     fn entrypoint_hints_inherit_helper_incompleteness() {
         let source = r#"
 seiyaku HelperAccess {
-  fn leaf(Name path) { let value = state::get(path); }
-  kotoage fn run(Name path)  authorize("Entry") { leaf(path); }
+  fn leaf(bytes path) { let value = state::get(path); }
+  kotoage fn run(bytes path)  authorize("Entry") { leaf(path); }
 }
 "#;
         let output = test_mode_compiler()
@@ -3607,6 +3634,45 @@ seiyaku HelperAccess {
             run.access_hints_skipped
                 .contains(&super::HINT_SKIP_DYNAMIC_STATE_PATH.to_owned())
         );
+    }
+
+    #[test]
+    fn unknown_state_path_call_before_literal_keeps_helper_hints_conservative() {
+        let source = r#"
+seiyaku HelperAccess {
+  fn leaf(bytes path) { let value = state::get(path); }
+  kotoage fn dynamic(bytes path) authorize("Entry") { leaf(path); }
+  kotoage fn literal() authorize("Entry") {
+    leaf(Name::parse("Counters").path(1));
+  }
+}
+"#;
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
+            .expect("compile mixed dynamic/literal helper calls");
+
+        for name in ["dynamic", "literal"] {
+            let entrypoint = output
+                .contract_interface
+                .entrypoints
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap_or_else(|| panic!("missing {name} entrypoint"));
+            assert_eq!(
+                entrypoint.read_keys,
+                vec![
+                    super::STATE_WILDCARD_KEY.to_owned(),
+                    format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY),
+                ],
+                "the dynamic fallback must not hide the compiler-owned test-input read"
+            );
+            assert_eq!(entrypoint.access_hints_complete, Some(false));
+            assert!(
+                entrypoint
+                    .access_hints_skipped
+                    .contains(&super::HINT_SKIP_DYNAMIC_STATE_PATH.to_owned())
+            );
+        }
     }
 
     #[test]
@@ -7756,7 +7822,18 @@ seiyaku CompilerFixture {
             "codec::to_norito",
         ]);
 
-        for name in ["path", "codec::path"] {
+        for (name, code, message) in [
+            (
+                "path",
+                "K1001",
+                "`path(...)` was removed as a free helper; use `base.path(segment)`",
+            ),
+            (
+                "codec::path",
+                "K2002",
+                "unknown function or builtin `codec::path`",
+            ),
+        ] {
             let source = format!(
                 "seiyaku CompilerFixture {{ view fn probe() -> int {{ {name}(); return 0; }} }}"
             );
@@ -7764,10 +7841,8 @@ seiyaku CompilerFixture {
                 .compile_source(&source)
                 .expect_err("retired raw path helpers must not resolve from source");
             assert!(
-                error.contains("K1001")
-                    || error.contains("K2002")
-                    || error.contains("E_INTERNAL_BUILTIN"),
-                "path helper `{name}` was rejected for the wrong reason: {error}"
+                error.contains(code) && error.contains(message),
+                "path helper `{name}` did not retain its canonical rejection: {error}"
             );
         }
     }
@@ -9249,7 +9324,7 @@ seiyaku Test {
     fn manifest_access_set_hints_preserve_state_wildcard_for_dynamic_state_path() {
         let src = r#"
 seiyaku Test {
-  kotoage fn read(Name path)  authorize("Entry") {
+  kotoage fn read(bytes path)  authorize("Entry") {
     let _x = state::get(path);
   }
 }
@@ -10728,6 +10803,12 @@ seiyaku StagedMintRequest {
                     if let ir::Instr::PointerFromNorito { dest, kind, .. } = instr {
                         dataref_kind_map.insert((func_idx, *dest), *kind);
                     }
+                    if let ir::Instr::StateGet { dest, .. }
+                    | ir::Instr::StateKeys { dest, .. }
+                    | ir::Instr::StateMapKeyAt { dest, .. } = instr
+                    {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                    }
                     if let ir::Instr::PointerToNorito { dest, value } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                         let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
@@ -11278,7 +11359,7 @@ seiyaku Test {
     fn production_accepts_dynamic_state_path_access_fallback() {
         let src = r#"
 seiyaku Test {
-  kotoage fn read(Name path)  authorize("Entry") {
+  kotoage fn read(bytes path)  authorize("Entry") {
     let _x = state::get(path);
   }
 }
@@ -11813,6 +11894,16 @@ seiyaku Test {
             super::state_path_for_norito_key(base, raw).as_deref(),
             Some("Map/6162")
         );
+    }
+
+    #[test]
+    fn state_codegen_rejects_legacy_name_literal_carrier() {
+        let path = ir::Temp(0);
+        let strings = HashMap::from([((0, path), "legacy".to_owned())]);
+        let kinds = HashMap::from([((0, path), ir::DataRefKind::Name)]);
+        let error = super::state_path_literal_data_key(0, path, &strings, &kinds)
+            .expect_err("Name must not remain a state-path carrier");
+        assert!(error.contains("expected NoritoBytes(StatePath)"), "{error}");
     }
 
     #[test]
@@ -14046,9 +14137,20 @@ impl Compiler {
                         string_map.insert((func_idx, *dest), value.clone());
                         datarefs.push((*kind, value.clone()));
                         dataref_kind_map.insert((func_idx, *dest), *kind);
-                        if matches!(kind, DRK::Name) {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Literal(value.clone()));
+                        match kind {
+                            DRK::Name => {
+                                state_path_hints.insert(
+                                    (func_idx, *dest),
+                                    StatePathHint::NameBase(value.clone()),
+                                );
+                            }
+                            DRK::NoritoBytes => {
+                                if let Some(path) = state_path_from_norito_literal(value) {
+                                    state_path_hints
+                                        .insert((func_idx, *dest), StatePathHint::Path(path));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     if let ir::Instr::PointerFromNorito { dest, kind, .. } = instr {
@@ -14140,33 +14242,47 @@ impl Compiler {
                     {
                         param_temp_map.entry((func_idx, param_idx)).or_insert(*dest);
                     }
+                    if let ir::Instr::StatePathFromName { dest, name } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                        if let Some(StatePathHint::NameBase(base)) =
+                            state_path_hints.get(&(func_idx, *name))
+                        {
+                            state_path_hints
+                                .insert((func_idx, *dest), StatePathHint::Path(base.clone()));
+                        }
+                    }
                     if let ir::Instr::PathMapKeyNorito {
                         dest,
                         base,
                         key_blob,
                     } = instr
-                        && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
                     {
-                        let map_base = base_hint.base_name();
-                        let literal_path = string_map
-                            .get(&(func_idx, *key_blob))
-                            .and_then(|raw| {
-                                dataref_kind_map
-                                    .get(&(func_idx, *key_blob))
-                                    .filter(|kind| matches!(**kind, DRK::NoritoBytes))
-                                    .and_then(|_| state_path_for_norito_key(&map_base, raw))
-                            })
-                            .or_else(|| {
-                                norito_literal_map
-                                    .get(&(func_idx, *key_blob))
-                                    .and_then(|raw| state_path_for_norito_key(&map_base, raw))
-                            });
-                        if let Some(path) = literal_path {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Literal(path));
-                        } else {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                        if let Some(map_base) = state_path_hints
+                            .get(&(func_idx, *base))
+                            .and_then(StatePathHint::name_base)
+                            .map(str::to_owned)
+                        {
+                            let literal_path = string_map
+                                .get(&(func_idx, *key_blob))
+                                .and_then(|raw| {
+                                    dataref_kind_map
+                                        .get(&(func_idx, *key_blob))
+                                        .filter(|kind| matches!(**kind, DRK::NoritoBytes))
+                                        .and_then(|_| state_path_for_norito_key(&map_base, raw))
+                                })
+                                .or_else(|| {
+                                    norito_literal_map
+                                        .get(&(func_idx, *key_blob))
+                                        .and_then(|raw| state_path_for_norito_key(&map_base, raw))
+                                });
+                            if let Some(path) = literal_path {
+                                state_path_hints
+                                    .insert((func_idx, *dest), StatePathHint::Path(path));
+                            } else {
+                                state_path_hints
+                                    .insert((func_idx, *dest), StatePathHint::DynamicMapChild);
+                            }
                         }
                     }
                     regalloc::visit_instr_defs(instr, |dest| {
@@ -14236,7 +14352,8 @@ impl Compiler {
                                             state_path_hints.insert(param_key, hint);
                                         }
                                     }
-                                } else if state_path_hints.remove(&param_key).is_some() {
+                                } else {
+                                    state_path_hints.remove(&param_key);
                                     state_path_param_unknowns.insert(param_key);
                                 }
                             }
@@ -14335,6 +14452,15 @@ impl Compiler {
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
+                    if let ir::Instr::StatePathFromName { dest, name } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                        if let Some(StatePathHint::NameBase(base)) =
+                            state_path_hints.get(&(func_idx, *name))
+                        {
+                            state_path_hints
+                                .insert((func_idx, *dest), StatePathHint::Path(base.clone()));
+                        }
+                    }
                     if let ir::Instr::PointerToNorito { dest, value } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                         let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
@@ -14351,28 +14477,33 @@ impl Compiler {
                         base,
                         key_blob,
                     } = instr
-                        && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
                     {
-                        let map_base = base_hint.base_name();
-                        let literal_path = string_map
-                            .get(&(func_idx, *key_blob))
-                            .and_then(|raw| {
-                                dataref_kind_map
-                                    .get(&(func_idx, *key_blob))
-                                    .filter(|kind| matches!(**kind, DRK::NoritoBytes))
-                                    .and_then(|_| state_path_for_norito_key(&map_base, raw))
-                            })
-                            .or_else(|| {
-                                norito_literal_map
-                                    .get(&(func_idx, *key_blob))
-                                    .and_then(|raw| state_path_for_norito_key(&map_base, raw))
-                            });
-                        if let Some(path) = literal_path {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Literal(path));
-                        } else {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                        if let Some(map_base) = state_path_hints
+                            .get(&(func_idx, *base))
+                            .and_then(StatePathHint::name_base)
+                            .map(str::to_owned)
+                        {
+                            let literal_path = string_map
+                                .get(&(func_idx, *key_blob))
+                                .and_then(|raw| {
+                                    dataref_kind_map
+                                        .get(&(func_idx, *key_blob))
+                                        .filter(|kind| matches!(**kind, DRK::NoritoBytes))
+                                        .and_then(|_| state_path_for_norito_key(&map_base, raw))
+                                })
+                                .or_else(|| {
+                                    norito_literal_map
+                                        .get(&(func_idx, *key_blob))
+                                        .and_then(|raw| state_path_for_norito_key(&map_base, raw))
+                                });
+                            if let Some(path) = literal_path {
+                                state_path_hints
+                                    .insert((func_idx, *dest), StatePathHint::Path(path));
+                            } else {
+                                state_path_hints
+                                    .insert((func_idx, *dest), StatePathHint::DynamicMapChild);
+                            }
                         }
                     }
                 }
@@ -18470,9 +18601,14 @@ impl Compiler {
                             spill_back(dest_val, rd_v, spilled_v, imm_v, &mut code)?;
                         }
                         Instr::StateGet { dest, path } => {
-                            // Load path (Name) into x10; publish into INPUT; SCALL STATE_GET; move x10 to dest
-                            if let Some(s) = string_map.get(&(func_idx, *path)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            // Load framed StatePath bytes into x10; publish into INPUT;
+                            // SCALL STATE_GET; move x10 to dest.
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *path,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
@@ -18493,9 +18629,14 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::StateSet { path, value } => {
-                            // r10=&Name path; r11=&NoritoBytes value; publish both to INPUT then SCALL
-                            if let Some(s) = string_map.get(&(func_idx, *path)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            // r10=&NoritoBytes(StatePath); r11=&NoritoBytes value;
+                            // publish both to INPUT then SCALL.
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *path,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
@@ -18527,9 +18668,13 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::StateDel { path } => {
-                            // r10=&Name path; publish; SCALL
-                            if let Some(s) = string_map.get(&(func_idx, *path)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            // r10=&NoritoBytes(StatePath); publish; SCALL.
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *path,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
@@ -18553,8 +18698,12 @@ impl Compiler {
                             limit,
                             ..
                         } => {
-                            if let Some(s) = string_map.get(&(func_idx, *prefix)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *prefix,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(prefix, scratch1, &mut code)?;
@@ -18670,8 +18819,12 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::StateHas { dest, path } => {
-                            if let Some(s) = string_map.get(&(func_idx, *path)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *path,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
@@ -18688,8 +18841,12 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::StateLen { dest, path } => {
-                            if let Some(s) = string_map.get(&(func_idx, *path)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *path,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
@@ -18706,8 +18863,12 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::StateCount { dest, prefix } => {
-                            if let Some(s) = string_map.get(&(func_idx, *prefix)) {
-                                let key = DataKey(DataKind::Name, s.clone());
+                            if let Some(key) = state_path_literal_data_key(
+                                func_idx,
+                                *prefix,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(prefix, scratch1, &mut code)?;
@@ -19337,12 +19498,43 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::StatePathFromName { dest, name } => {
+                            // r10=&Name; publish; SCALL STATE_PATH_FROM_NAME;
+                            // r10=&NoritoBytes(StatePath).
+                            if let Some(s) = string_map.get(&(func_idx, *name)) {
+                                let kind = dataref_kind_map.get(&(func_idx, *name));
+                                if kind != Some(&ir::DataRefKind::Name) {
+                                    return Err(format!(
+                                        "StatePath conversion received compiler literal `{s}` with pointer kind {kind:?}; expected Name"
+                                    ));
+                                }
+                                emit_literal_load(
+                                    &mut code,
+                                    &fixups,
+                                    10,
+                                    DataKey(DataKind::Name, s.clone()),
+                                );
+                            } else {
+                                let source = src_reg(name, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, source, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_PATH_FROM_NAME);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::PathMapKeyNorito {
                             dest,
                             base,
                             key_blob,
                         } => {
-                            // r10=&Name base; publish; r11=&NoritoBytes blob; publish; SCALL BUILD_PATH_KEY_NORITO
+                            // r10=&Name base; publish; r11=&NoritoBytes blob; publish;
+                            // SCALL BUILD_PATH_KEY_NORITO -> &NoritoBytes(StatePath).
                             if let Some(s) = string_map.get(&(func_idx, *base)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
                                 emit_literal_load(&mut code, &fixups, 10, kb);
@@ -21302,19 +21494,21 @@ fn embedded_source_location(
 
 fn render_state_value_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
-        StatePathHint::Literal(name) => Some(format!("state:{name}")),
+        StatePathHint::Path(path) => Some(format!("state:{path}")),
         // A known StateMap base does not prove the canonical runtime key.
         // Dynamic children must retain the scheduler's state-wide fallback.
-        StatePathHint::Map { .. } => None,
+        StatePathHint::NameBase(_) | StatePathHint::DynamicMapChild => None,
     }
 }
 
 fn render_state_scan_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
-        StatePathHint::Literal(name) if !name.contains('/') => Some(format!("state:{name}[*]")),
+        StatePathHint::Path(path) if !path.contains('/') => Some(format!("state:{path}[*]")),
         // Nested or computed prefixes are not represented precisely by the
         // first-release scheduler wildcard grammar.
-        StatePathHint::Literal(_) | StatePathHint::Map { .. } => None,
+        StatePathHint::Path(_) | StatePathHint::NameBase(_) | StatePathHint::DynamicMapChild => {
+            None
+        }
     }
 }
 
@@ -21331,7 +21525,14 @@ fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
     out.push_str(base);
     out.push('/');
     out.push_str(&hex::encode(bytes));
-    Some(out)
+    StatePath::try_from(out).ok().map(|path| path.to_string())
+}
+
+fn state_path_from_norito_literal(raw: &str) -> Option<String> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    ivm_abi::codec::decode_canonical_norito::<StatePath>(&bytes)
+        .ok()
+        .map(|path| path.to_string())
 }
 
 fn build_access_set_hints(
@@ -24359,6 +24560,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::StateMapKeyAt { .. }
         | ir::Instr::StateValueEncode { .. }
         | ir::Instr::DecodeInt { .. }
+        | ir::Instr::StatePathFromName { .. }
         | ir::Instr::PathMapKeyNorito { .. }
         | ir::Instr::EncodeInt { .. }
         | ir::Instr::PointerToNorito { .. }

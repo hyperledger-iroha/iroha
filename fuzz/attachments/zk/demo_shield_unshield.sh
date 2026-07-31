@@ -16,8 +16,7 @@ set -euo pipefail
 #
 # Env vars:
 #   - CLI_CONFIG: optional path to client config TOML (passed via --config)
-#   - AUTHORITY: AccountId for VK ops (e.g., sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D)
-#   - PRIVATE_KEY: ExposedPrivateKey for AUTHORITY
+#   - The configured client account and key sign VK transactions.
 #   - BACKEND: proof backend (default: halo2/ipa)
 #   - ASSET_DEFINITION_ID: canonical public asset definition id (default: 62Fk4FPcMuLvW5QjDGNF2a4jAmjM)
 #   - FROM: debit account for shield (default: sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D)
@@ -40,8 +39,6 @@ if [[ -n "${CLI_CONFIG:-}" ]]; then
   CONFIG_FLAG=(--config "$CLI_CONFIG")
 fi
 
-AUTHORITY="${AUTHORITY:-sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D}"
-PRIVATE_KEY="${PRIVATE_KEY:-ed0120...}"
 BACKEND="${BACKEND:-halo2/ipa}"
 FROM="${FROM:-sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D}"
 ASSET_DEFINITION_ID="${ASSET_DEFINITION_ID:-62Fk4FPcMuLvW5QjDGNF2a4jAmjM}"
@@ -70,14 +67,14 @@ if [[ ! -f "$reg_template" ]]; then
 fi
 
 # Register transfer VK
-jq --arg a "$AUTHORITY" --arg k "$PRIVATE_KEY" --arg b "$BACKEND" --arg n "$VK_TRANSFER_NAME" \
-  '.authority=$a | .private_key=$k | .backend=$b | .name=$n' \
+jq --arg b "$BACKEND" --arg n "$VK_TRANSFER_NAME" \
+  '.backend=$b | .name=$n' \
   "$reg_template" >"$tmp_dir/vk_transfer.json"
 iroha "${CONFIG_FLAG[@]}" zk vk register --json "$tmp_dir/vk_transfer.json"
 
 # Register unshield VK
-jq --arg a "$AUTHORITY" --arg k "$PRIVATE_KEY" --arg b "$BACKEND" --arg n "$VK_UNSHIELD_NAME" \
-  '.authority=$a | .private_key=$k | .backend=$b | .name=$n' \
+jq --arg b "$BACKEND" --arg n "$VK_UNSHIELD_NAME" \
+  '.backend=$b | .name=$n' \
   "$reg_template" >"$tmp_dir/vk_unshield.json"
 iroha "${CONFIG_FLAG[@]}" zk vk register --json "$tmp_dir/vk_unshield.json"
 

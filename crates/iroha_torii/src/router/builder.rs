@@ -24,7 +24,7 @@ use iroha_torii_shared::route_catalog::{
 };
 use tower::{Layer, Service};
 
-use crate::{SharedAppState, operator_signatures};
+use crate::{SharedAppState, enforce_required_api_token, operator_signatures};
 
 const COMPILED_ROUTE_FEATURES: &[&str] = &[
     #[cfg(feature = "app_api")]
@@ -372,9 +372,6 @@ impl LayerableAuthentication for UnauthenticatedRoute {}
 /// invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandlerAuthentication {
-    /// Exactly one configured Torii API token is required independently of the
-    /// listener-wide API-token setting.
-    RequiredApiToken,
     /// Canonical account request authentication performed by the handler.
     ///
     /// These handlers bind the request body and route to an on-ledger account,
@@ -390,7 +387,6 @@ pub(crate) enum HandlerAuthentication {
 impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
-            Self::RequiredApiToken => AuthenticationPolicy::RequiredApiToken,
             Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
             Self::OperatorCredentialExchange => AuthenticationPolicy::OperatorCredentialExchange,
             Self::ProtocolHandshake => AuthenticationPolicy::ProtocolHandshake,
@@ -474,6 +470,23 @@ where
 }
 
 impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
+    /// Apply the concrete route-specific Torii API-token middleware.
+    ///
+    /// This guard is unconditional: it requires exactly one configured token
+    /// even when listener-wide API-token authentication is disabled.
+    #[must_use]
+    pub(crate) fn authenticated_required_api_token(
+        self,
+        app_state: SharedAppState,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let layer = axum::middleware::from_fn_with_state(app_state, enforce_required_api_token);
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::RequiredApiToken),
+            inner: self.inner.layer(layer),
+        }
+    }
+
     /// Apply Torii's request-signature middleware bound to the submitted identity.
     #[must_use]
     pub(crate) fn authenticated_identity_bound(
@@ -1085,24 +1098,58 @@ mod tests {
         assert_eq!(manifest.explicit_routes(), &[ACCOUNT_AUTHENTICATED]);
     }
 
-    #[test]
-    fn required_api_token_handler_witness_matches_only_required_token_authentication() {
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn required_api_token_type_state_installs_an_unconditional_guard() {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = false;
+        state.api_tokens_set = Arc::new(std::collections::HashSet::from([
+            "route-specific-token".to_owned()
+        ]));
         let mut builder = RouterBuilder::new(
-            (),
+            app.clone(),
             RouteCatalog::new(&[API_TOKEN_REQUIRED]),
             EnabledFeatures::none(),
         )
         .expect("valid catalog");
         builder.route(
             &API_TOKEN_REQUIRED,
-            catalog_post(|| async {})
-                .authenticated_in_handler(HandlerAuthentication::RequiredApiToken),
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_required_api_token(app.clone()),
         );
 
-        let (_, manifest) = builder
+        let (router, manifest) = builder
             .finish()
-            .expect("required API-token witness must mount");
+            .expect("required API-token guard must mount");
         assert_eq!(manifest.explicit_routes(), &[API_TOKEN_REQUIRED]);
+
+        let router = router.with_state(app);
+        let missing = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(API_TOKEN_REQUIRED.path())
+                    .body(Body::from("{malformed"))
+                    .expect("missing-token request"),
+            )
+            .await
+            .expect("missing-token response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let accepted = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(API_TOKEN_REQUIRED.path())
+                    .header(crate::HEADER_API_TOKEN, "route-specific-token")
+                    .body(Body::empty())
+                    .expect("authenticated request"),
+            )
+            .await
+            .expect("authenticated response");
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
     }
 
     #[test]

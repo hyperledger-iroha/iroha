@@ -51,8 +51,6 @@ tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"], 
 
 [features]
 default = []
-# If enabled, include ChainId in the signed handshake payload.
-handshake_chain_id = []
 # If enabled, use bounded queues for peer post channel to reduce unbounded growth.
 p2p_bounded_queues = []
 # Expose opaque reply-route minting only to dependent-crate test builds.

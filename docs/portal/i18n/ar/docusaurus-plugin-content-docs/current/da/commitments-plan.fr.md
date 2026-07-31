@@ -62,9 +62,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -72,17 +71,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` يعيد استخدام النقطة 48 ثمانيًا في `iroha_crypto::kzg`.
-  عندما يكون غائبًا، في Retombe sur des Preuves Merkle الفريدة.
-- `proof_scheme` اشتقاق كتالوج الممرات؛ les Lanes Merkle rejettent les
-  الحمولات النافعة KZG tandis que les الممرات `kzg_bls12_381` تتطلب التزامات KZG
-  غير فارغة. Torii لا يقوم بإنتاج التزامات Merkle وRejette الحالية
-  الممرات التي تم تكوينها في KZG.
-- `KzgCommitment` يعيد استخدام النقطة 48 ثمانيًا في `iroha_crypto::kzg`.
-  عندما يكون غائبًا عن ممرات Merkle عند العودة إلى Merkle
-  فريدة من نوعها.
-- `proof_digest` توقع التكامل DA-5 PDP/PoTR لتسجيل الميم
-  قم بتعداد جدول أخذ العينات المستخدم للحفاظ على استمرارية النقط.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 امتداد رأس الكتلة
 
@@ -181,30 +172,7 @@ prochaine مؤقت ليه reprenne؛ قام المنشئ بتسجيل الجزء
 
 ## 7. استراتيجية الاختبارات
 
-1. **الاختبارات الوحدوية** للتشفير/فك التشفير لـ `DaCommitmentBundle` وآخرون
-   لا يوجد يوم من اشتقاق تجزئة الكتلة.
-2. **تركيبات ذهبية** sous `fixtures/da/commitments/` تلتقط البايتات
-   Canoniques du Bundle et les Preuves Merkle.
-3. **اختبارات التكامل** تحدد مدققين اثنين، وتستوعب النقطتين
-   الاختبار والتحقق من أن العقدين الجديدين متطابقان مع محتوى الحزمة
-   ردود الاستعلام/الإثبات.
-4. **اختبارات العميل الخفيف** في `integration_tests/tests/da/commitments.rs`
-   (Rust) الذي استأنف `/prove` وتحقق من صحة الأمر بدون التحدث إلى Torii.
-5. **Smoke CLI** مع `scripts/da/check_commitments.sh` لحماية الإمداد
-   عامل قابل للتكرار.
-
-## 8. خطة الطرح
-
-| المرحلة | الوصف | معايير الخروج |
-|-------|------------|---------------|
-| P0 - دمج نموذج بيانات دو | Integrer `DaCommitmentRecord`، يعرض يوم رأس الكتلة وبرامج الترميز Norito. | `cargo test -p iroha_data_model` vert avec nouvelles تركيبات. |
-| P1 - الأسلاك الأساسية/WSV | قم بربط منطق قائمة الانتظار + أداة إنشاء الكتل ومواصلة الفهارس وكشف معالجات RPC. | `cargo test -p iroha_core`، `integration_tests/tests/da/commitments.rs` تم تمريره مع تأكيدات إثبات الحزمة. |
-| P2 - مشغل الأدوات | Livrer helper CLI، لوحة المعلومات Grafana، ويعرض يوم من المستندات للتحقق من الإثبات. | `iroha_cli app da prove-commitment` يعمل على جهاز التطوير؛ تعرض لوحة القيادة البيانات مباشرة. |
-| P3 - بوابة الحكم | يتطلب تنشيط مدقق الكتل الالتزامات DA على الممرات المشار إليها في `iroha_config::nexus`. | دخول الحالة + تحديث خريطة الطريق الخاصة بـ DA-3 باسم TERMINE. |
-
-## الأسئلة المفتوحة1. **KZG vs Merkle defaults** - قم بذلك طوال الوقت متجاهلاً التزامات KZG من أجل
-   هل النقط الصغيرة قادرة على تقليل حجم الكتل؟ الاقتراح: جاردر
-   `kzg_commitment` optionnel والبوابة عبر `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **فجوات التسلسل** - التشغيل التلقائي للممرات خارج الترتيب؟ الخطة الفعلية متجددة
    الفجوات سوف تكون si la gouvernance active `allow_sequence_skips` من أجل إعادة التشغيل
    حالة الطوارئ.

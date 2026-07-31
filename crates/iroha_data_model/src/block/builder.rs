@@ -130,7 +130,7 @@ impl BlockBuilder {
 
     /// Attach a pre-built DA commitment bundle that will be embedded in the resulting block.
     pub fn set_da_commitments(&mut self, bundle: Option<DaCommitmentBundle>) {
-        self.da_commitments = bundle;
+        self.da_commitments = bundle.filter(|bundle| !bundle.is_empty());
     }
 
     /// Attach a pre-built DA proof policy bundle that will be embedded in the resulting block.
@@ -140,7 +140,18 @@ impl BlockBuilder {
 
     /// Attach a pre-built DA pin intent bundle that will be embedded in the resulting block.
     pub fn set_da_pin_intents(&mut self, bundle: Option<DaPinIntentBundle>) {
-        self.da_pin_intents = bundle;
+        self.da_pin_intents = bundle.filter(|bundle| !bundle.is_empty());
+    }
+
+    fn normalize_empty_da_bundles(&mut self) {
+        self.da_commitments = self
+            .da_commitments
+            .take()
+            .filter(|bundle| !bundle.is_empty());
+        self.da_pin_intents = self
+            .da_pin_intents
+            .take()
+            .filter(|bundle| !bundle.is_empty());
     }
 
     /// Attach previous-height roster evidence that will be embedded in the resulting block.
@@ -165,6 +176,7 @@ impl BlockBuilder {
 
     /// Build a `SignedBlock` with the provided signatures.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
+        self.normalize_empty_da_bundles();
         // Write roots into header
         self.header.merkle_root = self.entry_merkle.root();
         self.header.result_merkle_root = self.result_merkle.root();
@@ -229,6 +241,7 @@ impl BlockBuilder {
         signatory_index: u64,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
+        self.normalize_empty_da_bundles();
         // Precompute roots and header hash
         self.header.merkle_root = self.entry_merkle.root();
         self.header.result_merkle_root = self.result_merkle.root();
@@ -236,18 +249,14 @@ impl BlockBuilder {
             .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
         self.header
             .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
-        self.header.da_commitments_hash = self.da_commitments.as_ref().and_then(|bundle| {
-            if bundle.is_empty() {
-                None
-            } else {
-                Some(bundle.canonical_hash())
-            }
-        });
-        self.header.da_pin_intents_hash = self.da_pin_intents.as_ref().and_then(|bundle| {
-            bundle
-                .merkle_root()
-                .map(HashOf::<DaPinIntentBundle>::from_untyped_unchecked)
-        });
+        self.header.da_commitments_hash = self
+            .da_commitments
+            .as_ref()
+            .and_then(DaCommitmentBundle::merkle_commitment);
+        self.header.da_pin_intents_hash = self
+            .da_pin_intents
+            .as_ref()
+            .and_then(DaPinIntentBundle::merkle_commitment);
         self.header
             .set_prev_roster_evidence_hash(self.previous_roster_evidence.as_ref().map(HashOf::new));
         self.header.set_npos_effects_hash(
@@ -282,9 +291,8 @@ mod tests {
     use super::*;
     use crate::{
         da::{
-            commitment::{
-                DaCommitmentBundle, DaCommitmentRecord, DaProofPolicy, DaProofScheme, KzgCommitment,
-            },
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofPolicy, DaProofScheme},
+            pin_intent::DaPinIntentBundle,
             prelude::RetentionPolicy,
             types::{BlobDigest, StorageTicketId},
         },
@@ -408,6 +416,35 @@ mod tests {
     }
 
     #[test]
+    fn builder_normalizes_empty_da_bundles() {
+        let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+        let mut builder = BlockBuilder::new(header);
+        builder.set_da_commitments(Some(DaCommitmentBundle::default()));
+        builder.set_da_pin_intents(Some(DaPinIntentBundle::default()));
+
+        assert!(builder.da_commitments.is_none());
+        assert!(builder.da_pin_intents.is_none());
+
+        let mut unsigned_builder = builder.clone();
+        unsigned_builder.da_commitments = Some(DaCommitmentBundle::default());
+        unsigned_builder.da_pin_intents = Some(DaPinIntentBundle::default());
+        let unsigned = unsigned_builder.build(BTreeSet::new());
+        assert!(unsigned.da_commitments().is_none());
+        assert!(unsigned.header().da_commitments_hash().is_none());
+        assert!(unsigned.da_pin_intents().is_none());
+        assert!(unsigned.header().da_pin_intents_hash().is_none());
+
+        builder.da_commitments = Some(DaCommitmentBundle::default());
+        builder.da_pin_intents = Some(DaPinIntentBundle::default());
+        let keypair = checked_seeded_keypair(0xDA, Algorithm::Ed25519);
+        let signed = builder.build_with_signature(0, keypair.private_key());
+        assert!(signed.da_commitments().is_none());
+        assert!(signed.header().da_commitments_hash().is_none());
+        assert!(signed.da_pin_intents().is_none());
+        assert!(signed.header().da_pin_intents_hash().is_none());
+    }
+
+    #[test]
     fn build_with_signature_keeps_da_policy_hash_consistent() {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let policy = DaProofPolicy {
@@ -470,7 +507,6 @@ mod tests {
             ManifestDigest::new([0x22; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x33; 32]),
-            Some(KzgCommitment::new([0x44; 48])),
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),

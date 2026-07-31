@@ -195,14 +195,21 @@ Contract deployment is performed by locally signing the native code-upload,
 manifest-registration, and atomic `CommitContractDeployment` instructions;
 the client does not expose a server-side deployment wrapper.
 
-Verifying-key register/update helpers post the Torii app API payloads directly
-and validate production backends, required `authority` / `private_key` fields,
-height ranges, and inline verifier-key commitments before the request is sent:
+Verifying-key register/update helpers validate production backends, the
+required `authority`, height ranges, and inline verifier-key commitments before
+requesting an unsigned transaction draft from Torii:
 
 ```python
-client.register_zk_verifying_key({
-    "authority": "adult@is",
-    "private_key": "<multihash-private-key>",
+from iroha_python import LocalSigningContext, ToriiClient
+
+signing_client = ToriiClient(
+    "https://taira.sora.org",
+    # Immutable local-signing context. Read-only clients may omit this.
+    local_signing_context=LocalSigningContext("production-chain"),
+)
+
+register_draft = signing_client.register_zk_verifying_key({
+    "authority": "<canonical-i105-account-id>",
     "backend": "halo2/ipa",
     "name": "vk_transfer",
     "version": 1,
@@ -213,17 +220,33 @@ client.register_zk_verifying_key({
     "status": "Active",
 })
 
-client.update_zk_verifying_key({
-    "authority": "adult@is",
-    "private_key": "<multihash-private-key>",
+update_draft = signing_client.update_zk_verifying_key({
+    "authority": "<canonical-i105-account-id>",
     "backend": "halo2/ipa",
     "name": "vk_transfer",
     "version": 2,
     "circuit_id": "halo2/ipa::transfer_v1",
     "public_inputs_schema_hash_hex": "a" * 64,
+    "vk_bytes": "AQID",
     "status": "Withdrawn",
 })
+
+assert register_draft["submitted"] is False
+# Give transaction_payload_b64 and signing_message_b64 to the account's local
+# wallet, then submit the assembled signed transaction through the pipeline.
 ```
+
+These endpoints never accept private-key fields and never submit the
+transaction. Both helpers return canonical padded-base64
+`transaction_payload_b64` and `signing_message_b64` values so signing remains
+entirely inside the client wallet. Draft validation caps the transaction
+payload at 16 MiB and requires the 32-byte signing message to equal the
+canonical marker-adjusted Blake2b-256 Iroha hash of that payload. The native
+decoder then requires canonical Norito, the configured chain ID, the requested
+authority, exactly one requested register/update instruction, and exact
+equality of all 17 verifying-key record fields. Register/update fail before the
+request when `local_signing_context` is absent; there is no raw chain-ID,
+per-call, or server-derived fallback.
 
 ZK-capable assets can be registered and moved through the same transaction
 draft helpers, without shelling out to JavaScript tooling. Each
@@ -319,9 +342,8 @@ print(status.dataspace_id, status.ready)
 The same client exposes dataspace-oriented Space Directory wrappers:
 
 ```python
-client.publish_dataspace_manifest(
+publish_draft = client.publish_dataspace_manifest(
     authority="<authority-account>",
-    private_key="<multihash-private-key>",
     uaid="uaid:" + "11" * 32,
     dataspace=42,
     manifest={
@@ -330,13 +352,14 @@ client.publish_dataspace_manifest(
     },
 )
 
-client.revoke_dataspace_manifest(
+revoke_draft = client.revoke_dataspace_manifest(
     authority="<authority-account>",
-    private_key="<multihash-private-key>",
     uaid="uaid:" + "11" * 32,
     dataspace=42,
     revoked_epoch=10,
 )
+# Sign each returned draft locally and submit it through the normal transaction
+# pipeline; Torii never accepts private signing material on these routes.
 ```
 
 For dataspace-scoped balances, build the concrete asset bucket with
@@ -490,12 +513,13 @@ usage_plan = {
     },
 }
 
-client.create_subscription_plan(
+plan_draft = client.create_subscription_plan(
     authority="3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
-    private_key="provider-private-key-hex",
     plan_id="aws_compute#commerce",
     plan=usage_plan,
 )
+# Sign ``plan_draft.signing_message_b64`` locally, then submit the signed
+# transaction through the normal transaction pipeline.
 
 subscription = client.create_subscription(
     authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
@@ -504,10 +528,9 @@ subscription = client.create_subscription(
     plan_id="aws_compute#commerce",
 )
 
-client.record_subscription_usage(
+usage_draft = client.record_subscription_usage(
     "sub-001",
     authority="3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
-    private_key="provider-private-key-hex",
     unit_key="compute_ms",
     delta="3600000",
 )
@@ -1579,19 +1602,18 @@ manifests = client.list_space_directory_manifests_typed(
 for record in manifests.manifests:
     print(record.dataspace_alias, record.status, record.manifest_hash)
 
-# Publish or revoke capability manifests directly from Python.
-client.publish_space_directory_manifest(
+# Torii returns canonical transaction drafts; private signing material never
+# crosses the HTTP boundary.
+publish_draft = client.publish_space_directory_manifest(
     {
         "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "privateKeyHex": "ed0123...",
         "manifest": manifest_payload,  # matches AssetPermissionManifest JSON
         "reason": "CBDC onboarding wave",
     }
 )
-client.revoke_space_directory_manifest(
+revoke_draft = client.revoke_space_directory_manifest(
     {
         "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "privateKeyBytes": bytes.fromhex("11" * 32),
         "uaid": uaid_literal,
         "dataspace": 11,
         "revokedEpoch": 9216,
@@ -1733,8 +1755,15 @@ docker-compose topology, waits for the API to become available, and runs
 `pytest` with the `integration` marker:
 
 ```bash
+target/debug/kagami keys --out-dir target/python-integration-genesis
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/python-integration-genesis/public.key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/python-integration-genesis/private.key"
 python python/iroha_python/scripts/run_integration.py
 ```
+
+Build `kagami` first if it is not already available. The default Compose stack
+contains no genesis signing key and the harness refuses to start it without
+both runtime file paths. Never commit the private file.
 
 Use the shell wrapper for convenience:
 
@@ -1751,6 +1780,8 @@ variables:
 | `COMPOSE_FILE` | Override the compose file (defaults to `defaults/docker-compose.single.yml`). |
 | `COMPOSE_SERVICE` | Service name to start (defaults to `irohad0`). |
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
+| `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
+| `IROHA_GENESIS_PRIVATE_KEY_FILE` | Owner-held runtime genesis signing-key file required by the default Compose stack. |
 
 When running against an external environment, set `--no-start`,
 `--torii-url` (or `IROHA_TORII_URL`), and optional auth tokens

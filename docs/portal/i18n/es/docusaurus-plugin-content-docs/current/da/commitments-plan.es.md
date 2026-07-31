@@ -61,24 +61,18 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
     pub acknowledgement_sig: Signature,       // Torii DA service key
 }
-```- `KzgCommitment` reutiliza el punto de 48 bytes usado en `iroha_crypto::kzg`.
-  Cuando está ausente, se vuelve a Merkle pruebas solamente.
-- `proof_scheme` se deriva del catálogo de carriles; las lanes Merkle rechazan
-  payloads KZG mientras que las lanes `kzg_bls12_381` requieren compromisos KZG
-  sin cero. Torii actualmente solo produce compromisos Merkle y rechaza lanes
-  configuradas con KZG.
-- `KzgCommitment` reutiliza el punto de 48 bytes usado en `iroha_crypto::kzg`.
-  Cuando esta ausente en lanes Merkle se vuelve a Merkle pruebas solamente.
-- `proof_digest` anticipa la integración DA-5 PDP/PoTR para que el mismo registro
-  Enumere el cronograma de muestreo usado para mantener blobs vivos.
+```
+
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Extensión del encabezado de bloque
 
@@ -190,9 +184,7 @@ catch-up reconstruir el índice rápidamente desde el block log.
 
 ## Preguntas abiertas
 
-1. **KZG vs Merkle defaults** - Debemos omitir compromisos KZG en blobs pequeños
-   para reducir el tamano del bloque? Propuesta: mantener `kzg_commitment`
-   opcional y gatear vía `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Brechos de secuencia** - ¿Permitimos carriles fuera de orden? El plan actual rechaza
    gaps salvo que gobernanza active `allow_sequence_skips` para replay de
    emergencia.

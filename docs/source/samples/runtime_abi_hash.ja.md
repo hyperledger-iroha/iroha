@@ -17,7 +17,7 @@ translator: manual
 ```json
 {
   "policy": "V1",
-  "abi_hash_hex": "e2ca8bbdaec17330a417a248faacb6a01931245591e28e44bf3f83da98dde01f"
+  "abi_hash_hex": "2ecabe125a8a9181915f9a6b905ef0e26c73b7e4b71e44e50dbcc757e1a19f91"
 }
 ```
 

@@ -69,9 +69,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -79,15 +78,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` は `iroha_crypto::kzg` で使用している 48-byte の点を再利用します。
-  ない場合は Merkle proof のみへフォールバックします。
-- `proof_scheme` は lane カタログ由来です。Merkle lane は KZG payload を拒否し、
-  `kzg_bls12_381` lane は非ゼロの KZG commitment を要求します。Torii は現在 Merkle
-  commitment のみを生成し、KZG 設定の lane を拒否します。
-- `KzgCommitment` は `iroha_crypto::kzg` の 48-byte ポイントを再利用します。
-  Merkle lane で欠けている場合は Merkle proof のみへフォールバックします。
-- `proof_digest` は DA-5 の PDP/PoTR 統合を見据え、同一レコード内にサンプリング
-  スケジュールの hash を列挙できるようにします。
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 ブロックヘッダ拡張
 
@@ -190,9 +183,7 @@ catch-up ノードが block log から高速にインデックスを再構築で
 
 ## オープン質問
 
-1. **KZG vs Merkle defaults** - 小さな blobs では KZG commitments を常に省略して
-   ブロックサイズを削減すべきか? 提案: `kzg_commitment` をオプションのままにし、
-   `iroha_config::da.enable_kzg` でゲートする。
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Sequence gaps** - lane の順序欠落を許可するか? 現行案はガバナンスが
    `allow_sequence_skips` を緊急 replay 用に有効化しない限り拒否。
 3. **Light-client cache** - SDK チームは proofs 用の軽量 SQLite キャッシュを希望;

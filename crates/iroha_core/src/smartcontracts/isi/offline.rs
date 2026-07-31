@@ -31,7 +31,6 @@ use iroha_data_model::{
             TopUpKagemushaRecursiveV4,
         },
     },
-    name::Name,
     offline::{
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
@@ -47,6 +46,7 @@ use iroha_data_model::{
         OfflineIosAppAttestationPolicy,
     },
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
+    state_path::StatePath,
     transaction::SignedTransaction,
     zk::{BackendTag, OpenVerifyEnvelope},
 };
@@ -64,7 +64,7 @@ const CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION: &str =
     "CanManageOfflineDeviceAttestationPolicy";
 const CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION: &str =
     "CanActivateKagemushaRecursiveReleaseV4";
-static OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY: LazyLock<Name> = LazyLock::new(|| {
+static OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY: LazyLock<StatePath> = LazyLock::new(|| {
     "offline_device_attestation_policy"
         .parse()
         .expect("static Offline device attestation policy key")
@@ -370,7 +370,7 @@ fn ensure_release_qualified_kagemusha_v4_verifier_id(
 }
 
 fn decode_kagemusha_v4_consensus_release_state(
-    key: &Name,
+    key: &StatePath,
     payload: &[u8],
 ) -> Result<
     Option<(
@@ -3100,14 +3100,14 @@ pub mod isi {
     }
 
     struct KagemushaOnlineHardwareAssertionCommitPlan {
-        state_key: Name,
+        state_key: StatePath,
         previous_archive: Vec<u8>,
         updated_archive: Vec<u8>,
     }
 
     fn kagemusha_online_registration_state_key(
         registration_hash: &[u8; 32],
-    ) -> Result<Name, Error> {
+    ) -> Result<StatePath, Error> {
         format!(
             "{KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX}{}",
             hex::encode(registration_hash)
@@ -4188,7 +4188,7 @@ pub mod isi {
         })
     }
 
-    fn kagemusha_v4_topup_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+    fn kagemusha_v4_topup_anchor_state_key(operation_id: [u8; 32]) -> Result<StatePath, Error> {
         format!("kagemusha_v4_topup_anchor_{}", hex::encode(operation_id))
             .parse()
             .map_err(|err| {
@@ -4198,6 +4198,47 @@ pub mod isi {
                 )
                 .into()
             })
+    }
+
+    fn kagemusha_v4_topup_drawdown_state_key(operation_id: [u8; 32]) -> Result<StatePath, Error> {
+        format!("kagemusha_v4_topup_drawdown_{}", hex::encode(operation_id))
+            .parse()
+            .map_err(|err| {
+                labeled_invariant(
+                    "topup_drawdown_invalid",
+                    format!("failed to derive Kagemusha V4 anchor drawdown key: {err}"),
+                )
+                .into()
+            })
+    }
+
+    fn load_kagemusha_v4_topup_drawdown(
+        operation_id: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<u128, Error> {
+        let key = kagemusha_v4_topup_drawdown_state_key(operation_id)?;
+        let encoded = state_transaction
+            .world
+            .smart_contract_state
+            .get(&key)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "topup_drawdown_missing",
+                    "Kagemusha V4 top-up anchor has no drawdown balance",
+                )
+            })?;
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_drawdown(
+            operation_id,
+            Some(encoded),
+        );
+        let bytes: [u8; core::mem::size_of::<u128>()] =
+            encoded.as_slice().try_into().map_err(|_| {
+                labeled_invariant(
+                    "topup_drawdown_invalid",
+                    "Kagemusha V4 anchor drawdown must be one canonical little-endian u128",
+                )
+            })?;
+        Ok(u128::from_le_bytes(bytes))
     }
 
     fn load_kagemusha_v4_topup_anchor(
@@ -4244,15 +4285,24 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let key = kagemusha_v4_topup_anchor_state_key(operation_id)?;
+        let drawdown_key = kagemusha_v4_topup_drawdown_state_key(operation_id)?;
         let existing = state_transaction.world.smart_contract_state.get(&key);
         crate::sumeragi::witness::record_read_kagemusha_v4_topup_anchor(
             operation_id,
             existing.map(|archive| archive.as_slice()),
         );
-        if existing.is_some() {
+        let existing_drawdown = state_transaction
+            .world
+            .smart_contract_state
+            .get(&drawdown_key);
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_drawdown(
+            operation_id,
+            existing_drawdown.map(Vec::as_slice),
+        );
+        if existing.is_some() || existing_drawdown.is_some() {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V4 top-up anchor exists without its complete replay-marker set",
+                "Kagemusha V4 top-up anchor or drawdown balance exists without its complete replay-marker set",
             )
             .into());
         }
@@ -4267,11 +4317,16 @@ pub mod isi {
             .validate_public_binding()
             .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
         let key = kagemusha_v4_topup_anchor_state_key(anchor.topup_operation_id)?;
+        let drawdown_key = kagemusha_v4_topup_drawdown_state_key(anchor.topup_operation_id)?;
         let existing = state_transaction.world.smart_contract_state.get(&key);
-        if existing.is_some() {
+        let existing_drawdown = state_transaction
+            .world
+            .smart_contract_state
+            .get(&drawdown_key);
+        if existing.is_some() || existing_drawdown.is_some() {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V4 top-up operation already has a finalized anchor",
+                "Kagemusha V4 top-up operation already has a finalized anchor or drawdown balance",
             )
             .into());
         }
@@ -4289,14 +4344,28 @@ pub mod isi {
             anchor.topup_operation_id,
             &anchor.anchor_digest,
         );
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_drawdown(
+            anchor.topup_operation_id,
+            None,
+        );
+        crate::sumeragi::witness::record_write_kagemusha_v4_topup_drawdown(
+            anchor.topup_operation_id,
+            0,
+        );
         state_transaction
             .world
             .smart_contract_state
             .insert(key, archive);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(drawdown_key, 0_u128.to_le_bytes().to_vec());
         Ok(())
     }
 
-    fn kagemusha_v4_redemption_receipt_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+    fn kagemusha_v4_redemption_receipt_state_key(
+        operation_id: [u8; 32],
+    ) -> Result<StatePath, Error> {
         format!("kagemusha_v4_redemption_{}", hex::encode(operation_id))
             .parse()
             .map_err(|err| {
@@ -4337,7 +4406,7 @@ pub mod isi {
     fn ensure_kagemusha_v4_redemption_receipt_absent(
         operation_id: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Name, Error> {
+    ) -> Result<StatePath, Error> {
         let key = kagemusha_v4_redemption_receipt_state_key(operation_id)?;
         if state_transaction
             .world
@@ -4356,6 +4425,96 @@ pub mod isi {
 
     struct KagemushaV4ResolvedTopUpProvenance {
         source_asset: AssetId,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct KagemushaV4AnchorDrawdownBalance {
+        operation_id: [u8; 32],
+        capacity_atomic_units: u128,
+        redeemed_atomic_units: u128,
+    }
+
+    #[derive(Debug)]
+    struct KagemushaV4AnchorDrawdownUpdate {
+        operation_id: [u8; 32],
+        state_key: StatePath,
+        redeemed_atomic_units: u128,
+    }
+
+    fn allocate_kagemusha_v4_anchor_drawdown(
+        balances: &[KagemushaV4AnchorDrawdownBalance],
+        redemption_atomic_units: u128,
+    ) -> Option<Vec<([u8; 32], u128)>> {
+        let mut seen_operations = BTreeSet::new();
+        if redemption_atomic_units == 0
+            || balances.is_empty()
+            || balances
+                .iter()
+                .any(|balance| balance.redeemed_atomic_units > balance.capacity_atomic_units)
+            || balances
+                .iter()
+                .any(|balance| !seen_operations.insert(balance.operation_id))
+        {
+            return None;
+        }
+
+        let mut remaining = redemption_atomic_units;
+        let mut updates = Vec::with_capacity(balances.len());
+        for balance in balances {
+            if remaining == 0 {
+                break;
+            }
+            let available = balance
+                .capacity_atomic_units
+                .checked_sub(balance.redeemed_atomic_units)?;
+            let debit = available.min(remaining);
+            if debit == 0 {
+                continue;
+            }
+            let redeemed_atomic_units = balance.redeemed_atomic_units.checked_add(debit)?;
+            updates.push((balance.operation_id, redeemed_atomic_units));
+            remaining = remaining.checked_sub(debit)?;
+        }
+        (remaining == 0).then_some(updates)
+    }
+
+    fn plan_kagemusha_v4_anchor_drawdown(
+        anchor_refs: &[KagemushaRecursiveSpendTopUpAnchorRefV2],
+        redemption_atomic_units: u128,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Vec<KagemushaV4AnchorDrawdownUpdate>, Error> {
+        let mut balances = Vec::with_capacity(anchor_refs.len());
+        for anchor_ref in anchor_refs {
+            let anchor =
+                load_kagemusha_v4_topup_anchor(anchor_ref.topup_operation_id, state_transaction)?;
+            let redeemed_atomic_units =
+                load_kagemusha_v4_topup_drawdown(anchor_ref.topup_operation_id, state_transaction)?;
+            balances.push(KagemushaV4AnchorDrawdownBalance {
+                operation_id: anchor_ref.topup_operation_id,
+                capacity_atomic_units: anchor.amount.atomic_units,
+                redeemed_atomic_units,
+            });
+        }
+        let updates = allocate_kagemusha_v4_anchor_drawdown(
+            balances.as_slice(),
+            redemption_atomic_units,
+        )
+        .ok_or_else(|| {
+            labeled_invariant(
+                "topup_drawdown_exhausted",
+                "Kagemusha V4 redemption exceeds the unredeemed balance of its finalized top-up anchors",
+            )
+        })?;
+        updates
+            .into_iter()
+            .map(|(operation_id, redeemed_atomic_units)| {
+                Ok(KagemushaV4AnchorDrawdownUpdate {
+                    operation_id,
+                    state_key: kagemusha_v4_topup_drawdown_state_key(operation_id)?,
+                    redeemed_atomic_units,
+                })
+            })
+            .collect()
     }
 
     fn validate_kagemusha_v4_finalized_topup_anchors(
@@ -6822,8 +6981,9 @@ pub mod isi {
         definition_id: AssetDefinitionId,
         zk_asset_state: crate::state::ZkAssetState,
         escrow_credit: KagemushaV2EscrowCreditPlan,
+        anchor_drawdown: Vec<KagemushaV4AnchorDrawdownUpdate>,
         branch_commit: KagemushaV2BranchCommitPlan,
-        receipt_key: Name,
+        receipt_key: StatePath,
         receipt_digest: [u8; 32],
         replay_markers: [Hash; 4],
     }
@@ -6842,6 +7002,16 @@ pub mod isi {
                 .world
                 .zk_assets
                 .insert(self.definition_id, self.zk_asset_state);
+            for update in self.anchor_drawdown {
+                crate::sumeragi::witness::record_write_kagemusha_v4_topup_drawdown(
+                    update.operation_id,
+                    update.redeemed_atomic_units,
+                );
+                state_transaction.world.smart_contract_state.insert(
+                    update.state_key,
+                    update.redeemed_atomic_units.to_le_bytes().to_vec(),
+                );
+            }
             self.branch_commit.commit(state_transaction);
             state_transaction
                 .world
@@ -6857,6 +7027,8 @@ pub mod isi {
         source_asset: &'a AssetId,
         recipient: &'a AccountId,
         amount: Quantity,
+        redemption_atomic_units: u128,
+        topup_anchor_refs: &'a [KagemushaRecursiveSpendTopUpAnchorRefV2],
         current_nullifier: [u8; 32],
         consumed_claims: &'a [KagemushaRecursiveSpendBranchClaimV2],
         redemption_binding: Option<[u8; 32]>,
@@ -6943,6 +7115,11 @@ pub mod isi {
             input.change_children,
             state_transaction,
         )?;
+        let anchor_drawdown = plan_kagemusha_v4_anchor_drawdown(
+            input.topup_anchor_refs,
+            input.redemption_atomic_units,
+            state_transaction,
+        )?;
 
         if !zk_asset_state.nullifiers.insert(input.current_nullifier) {
             unreachable!("the V4 nullifier was checked before insertion into the cloned state");
@@ -6971,6 +7148,7 @@ pub mod isi {
             definition_id: input.definition_id.clone(),
             zk_asset_state,
             escrow_credit,
+            anchor_drawdown,
             branch_commit,
             receipt_key,
             receipt_digest: input.receipt_digest,
@@ -7011,6 +7189,8 @@ pub mod isi {
                 source_asset,
                 recipient: &request.recipient,
                 amount,
+                redemption_atomic_units: request.amount.atomic_units,
+                topup_anchor_refs: &statement.topup_anchor_refs,
                 current_nullifier,
                 consumed_claims: &request.redemption.parent_branch_claims,
                 redemption_binding,
@@ -7379,6 +7559,17 @@ pub mod isi {
                             state_transaction,
                         )?;
                         ensure_kagemusha_v4_anchor_matches_topup_request(&anchor, &request)?;
+                        let redeemed = load_kagemusha_v4_topup_drawdown(
+                            request.authorization.operation_id,
+                            state_transaction,
+                        )?;
+                        if redeemed > anchor.amount.atomic_units {
+                            return Err(labeled_invariant(
+                                "topup_drawdown_invalid",
+                                "Kagemusha V4 top-up drawdown exceeds its finalized anchor",
+                            )
+                            .into());
+                        }
                         return Ok(());
                     }
                     KagemushaV4ReplayStatus::Fresh(markers) => markers,
@@ -7869,6 +8060,65 @@ pub mod isi {
         };
 
         const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
+
+        #[test]
+        fn anchor_drawdown_is_canonical_bounded_and_cross_anchor() {
+            let balances = [
+                KagemushaV4AnchorDrawdownBalance {
+                    operation_id: [0x11; 32],
+                    capacity_atomic_units: 100,
+                    redeemed_atomic_units: 20,
+                },
+                KagemushaV4AnchorDrawdownBalance {
+                    operation_id: [0x22; 32],
+                    capacity_atomic_units: 50,
+                    redeemed_atomic_units: 10,
+                },
+            ];
+            assert_eq!(
+                allocate_kagemusha_v4_anchor_drawdown(&balances, 110),
+                Some(vec![([0x11; 32], 100), ([0x22; 32], 40)])
+            );
+            assert_eq!(
+                allocate_kagemusha_v4_anchor_drawdown(&balances, 120),
+                Some(vec![([0x11; 32], 100), ([0x22; 32], 50)])
+            );
+            assert!(
+                allocate_kagemusha_v4_anchor_drawdown(&balances, 121).is_none(),
+                "redemption must not exceed aggregate unredeemed provenance"
+            );
+            assert!(
+                allocate_kagemusha_v4_anchor_drawdown(&balances, 0).is_none(),
+                "zero-value drawdown must not produce a state update"
+            );
+
+            let corrupt = [KagemushaV4AnchorDrawdownBalance {
+                operation_id: [0x33; 32],
+                capacity_atomic_units: 1,
+                redeemed_atomic_units: 2,
+            }];
+            assert!(
+                allocate_kagemusha_v4_anchor_drawdown(&corrupt, 1).is_none(),
+                "a persisted drawdown above its anchor must fail closed"
+            );
+
+            let duplicate = [
+                KagemushaV4AnchorDrawdownBalance {
+                    operation_id: [0x44; 32],
+                    capacity_atomic_units: 100,
+                    redeemed_atomic_units: 0,
+                },
+                KagemushaV4AnchorDrawdownBalance {
+                    operation_id: [0x44; 32],
+                    capacity_atomic_units: 100,
+                    redeemed_atomic_units: 0,
+                },
+            ];
+            assert!(
+                allocate_kagemusha_v4_anchor_drawdown(&duplicate, 101).is_none(),
+                "duplicate anchor identities must fail closed before allocation"
+            );
+        }
 
         #[test]
         fn offline_proof_boundary_rejects_alternate_norito_layout() {
@@ -8632,7 +8882,7 @@ pub mod isi {
         fn install_android_online_registration(
             state_transaction: &mut StateTransaction<'_, '_>,
             registration: OfflineDeviceAttestationRegistration,
-        ) -> Name {
+        ) -> StatePath {
             let mut policy =
                 default_offline_device_attestation_policy().expect("built-in attestation roots");
             policy.require_android_app_policy = true;

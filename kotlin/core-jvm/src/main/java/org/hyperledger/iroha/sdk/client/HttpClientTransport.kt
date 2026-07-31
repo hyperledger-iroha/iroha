@@ -187,6 +187,13 @@ class HttpClientTransport(
     fun newEventStreamClient(): ToriiEventStreamClient = ToriiEventStreamClient.builder().setBaseUri(config.baseUri()).setTransportExecutor(executor).defaultHeaders(config.defaultHeaders()).observers(config.observers()).build()
     fun newSorafsGatewayClient(): SorafsGatewayClient = newSorafsGatewayClient(config.sorafsGatewayUri())
     fun newSorafsGatewayClient(baseUri: URI): SorafsGatewayClient = SorafsGatewayClient(executor = executor, baseUri = baseUri, timeout = config.requestTimeout(), defaultHeaders = config.defaultHeaders(), observers = config.observers())
+    fun newDaToriiClient(): DaToriiClient = DaToriiClient.builder()
+        .executor(executor)
+        .baseUri(config.baseUri())
+        .timeout(config.requestTimeout())
+        .defaultHeaders(config.defaultHeaders())
+        .observers(config.observers())
+        .build()
     fun sorafsGatewayClient(): SorafsGatewayClient = sorafsGatewayClient
     fun sorafsGatewayFetch(request: GatewayFetchRequest): CompletableFuture<ClientResponse> = sorafsGatewayClient.fetch(request)
     fun sorafsGatewayFetchSummary(request: GatewayFetchRequest): CompletableFuture<GatewayFetchSummary> = sorafsGatewayClient.fetchSummary(request)
@@ -657,14 +664,56 @@ class HttpClientTransport(
     fun listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceiptListResponse> =
         fetchJson(buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth), VpnJsonParser::parseReceiptList, "vpn receipt list", 200)
 
-    fun registerVerifyingKey(requestBody: VerifyingKeyRegisterRequest): CompletableFuture<ClientResponse> {
-        val body = encodeJsonBody(buildVerifyingKeyRegisterPayload(requestBody))
-        return executeAccepted(buildJsonPostRequest("/v1/zk/vk/register", body), "verifying key register", 202)
+    /**
+     * Prepare an unsigned verifying-key registration transaction for local signing.
+     *
+     * Requires [ClientConfig.localSigningContext] and rejects any draft not bound to that chain,
+     * the requested authority, and the exact requested registry record.
+     */
+    fun registerVerifyingKey(
+        requestBody: VerifyingKeyRegisterRequest,
+    ): CompletableFuture<VerifyingKeyTransactionDraft> {
+        val signingContext = config.requireLocalSigningContext()
+        val payload = buildVerifyingKeyRegisterPayload(requestBody)
+        val body = encodeJsonBody(payload)
+        return fetchJson(
+            buildJsonPostRequest("/v1/zk/vk/register", body),
+            { bytes ->
+                VerifyingKeyTransactionDraftParser.parseRegister(
+                    bytes,
+                    signingContext.chainId(),
+                    payload,
+                )
+            },
+            "verifying key register draft",
+            200,
+        )
     }
 
-    fun updateVerifyingKey(requestBody: VerifyingKeyUpdateRequest): CompletableFuture<ClientResponse> {
-        val body = encodeJsonBody(buildVerifyingKeyUpdatePayload(requestBody))
-        return executeAccepted(buildJsonPostRequest("/v1/zk/vk/update", body), "verifying key update", 202)
+    /**
+     * Prepare an unsigned verifying-key update transaction for local signing.
+     *
+     * Requires [ClientConfig.localSigningContext] and rejects any draft not bound to that chain,
+     * the requested authority, and the exact requested registry record.
+     */
+    fun updateVerifyingKey(
+        requestBody: VerifyingKeyUpdateRequest,
+    ): CompletableFuture<VerifyingKeyTransactionDraft> {
+        val signingContext = config.requireLocalSigningContext()
+        val payload = buildVerifyingKeyUpdatePayload(requestBody)
+        val body = encodeJsonBody(payload)
+        return fetchJson(
+            buildJsonPostRequest("/v1/zk/vk/update", body),
+            { bytes ->
+                VerifyingKeyTransactionDraftParser.parseUpdate(
+                    bytes,
+                    signingContext.chainId(),
+                    payload,
+                )
+            },
+            "verifying key update draft",
+            200,
+        )
     }
 
     /** Quote the exact unsigned transaction payload before replacing only its fee maxima. */
@@ -714,27 +763,37 @@ class HttpClientTransport(
         }
     }
 
-    fun callContract(
+    /**
+     * Prepares an unsigned contract-call transaction for local signing.
+     *
+     * Private signing material is never accepted by or sent to Torii. Sign the
+     * returned transaction scaffold locally and submit the resulting signed
+     * transaction through [submitTransaction].
+     */
+    fun prepareContractCall(
         authority: String,
-        privateKey: String,
         feePayment: FeePaymentIntent,
         contractAddress: String? = null,
         contractAlias: String? = null,
         entrypoint: String,
         payload: Any? = null,
     ): CompletableFuture<ContractCallResponse> {
-        val body = encodeJsonBody(
-            buildContractCallPayload(
-                authority = authority,
-                privateKey = privateKey,
-                feePayment = feePayment,
-                contractAddress = contractAddress,
-                contractAlias = contractAlias,
-                entrypoint = entrypoint,
-                payload = payload,
-            )
+        val requestPayload = buildContractCallDraftPayload(
+            authority = authority,
+            feePayment = feePayment,
+            contractAddress = contractAddress,
+            contractAlias = contractAlias,
+            entrypoint = entrypoint,
+            payload = payload,
         )
-        return fetchJson(buildJsonPostRequest("/v1/contracts/call", body), ContractJsonParser::parseCallResponse, "contract call")
+        val body = encodeJsonBody(requestPayload)
+        return fetchJson(
+            buildJsonPostRequest("/v1/contracts/call", body),
+            ContractJsonParser::parseCallResponse,
+            "contract call draft",
+        ).thenApply { response ->
+            validateContractCallDraft(response, requestPayload)
+        }
     }
 
     override fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
@@ -1357,9 +1416,9 @@ class HttpClientTransport(
             return payload
         }
 
-        @JvmStatic internal fun buildContractCallPayload(
+        /** Builds the secret-free request used to prepare a contract-call draft. */
+        @JvmStatic internal fun buildContractCallDraftPayload(
             authority: String,
-            privateKey: String,
             feePayment: FeePaymentIntent,
             contractAddress: String?,
             contractAlias: String?,
@@ -1369,12 +1428,57 @@ class HttpClientTransport(
             require(feePayment.gasLimit != null) { "contract feePayment must include gasLimit" }
             val normalized = LinkedHashMap<String, Any>()
             normalized["authority"] = normalizeNonBlank(authority, "authority")
-            normalized["private_key"] = normalizeNonBlank(privateKey, "privateKey")
             normalized.putAll(buildContractTargetSelector(contractAddress, contractAlias))
             normalized["entrypoint"] = normalizeNonBlank(entrypoint, "entrypoint")
             if (payload != null) normalized["payload"] = payload
             normalized["fee_payment"] = feePayment.toJsonMap()
             return normalized
+        }
+
+        /** Validates that Torii returned a secret-free draft bound to the requested call. */
+        @JvmStatic internal fun validateContractCallDraft(
+            response: ContractCallResponse,
+            request: Map<String, Any>,
+        ): ContractCallResponse {
+            check(response.ok) { "contract call draft.ok must be true" }
+            check(!response.submitted) { "contract call draft must not be submitted" }
+            check(response.txHashHex == null && response.pipelineStatus == null) {
+                "contract call draft must not contain submission state"
+            }
+            check(response.entrypoint == request["entrypoint"]) {
+                "contract call draft entrypoint is not bound to the request"
+            }
+            val receipt = response.operationReceipt
+            check(receipt.operationKind == "contract_call" && receipt.status == "pending_signature") {
+                "contract call draft receipt must be pending_signature"
+            }
+            check(receipt.entrypoint == response.entrypoint && receipt.txHashHex == null) {
+                "contract call draft receipt is inconsistent"
+            }
+            check(
+                response.transactionScaffoldB64 != null &&
+                    response.transactionScaffoldB64 == response.signedTransactionB64,
+            ) {
+                "contract call draft must contain one exact transaction scaffold"
+            }
+            val signingMessageB64 = response.signingMessageB64
+            check(signingMessageB64 != null) {
+                "contract call draft must contain a signing message"
+            }
+            check(Base64.getDecoder().decode(signingMessageB64).size == 32) {
+                "contract call draft signing message must be 32 bytes"
+            }
+            request["contract_address"]?.let { expected ->
+                check(response.contractAddress == expected && receipt.contractAddress == expected) {
+                    "contract call draft address is not bound to the request"
+                }
+            }
+            request["contract_alias"]?.let { expected ->
+                check(receipt.contractAlias == expected) {
+                    "contract call draft alias is not bound to the request"
+                }
+            }
+            return response
         }
 
         @JvmStatic internal fun buildMultisigProposePayload(request: MultisigProposeRequest): Map<String, Any> {
@@ -1472,8 +1576,7 @@ class HttpClientTransport(
             validateVerifyingKeyHeightRange(request.activationHeight, request.withdrawHeight)
 
             val payload = LinkedHashMap<String, Any>()
-            payload["authority"] = normalizeNonBlank(request.authority, "authority")
-            payload["private_key"] = normalizeNonBlank(request.privateKey, "privateKey")
+            payload["authority"] = normalizeVerifyingKeyAuthority(request.authority)
             payload["backend"] = backend
             payload["name"] = normalizeVerifyingKeyName(request.name)
             payload["version"] = normalizePositiveU32(request.version, "version")
@@ -1504,8 +1607,7 @@ class HttpClientTransport(
             validateVerifyingKeyHeightRange(request.activationHeight, request.withdrawHeight)
 
             val payload = LinkedHashMap<String, Any>()
-            payload["authority"] = normalizeNonBlank(request.authority, "authority")
-            payload["private_key"] = normalizeNonBlank(request.privateKey, "privateKey")
+            payload["authority"] = normalizeVerifyingKeyAuthority(request.authority)
             payload["backend"] = backend
             payload["name"] = normalizeVerifyingKeyName(request.name)
             payload["version"] = normalizePositiveU32(request.version, "version")
@@ -1568,6 +1670,14 @@ class HttpClientTransport(
         @JvmStatic internal fun normalizeVerifyingKeyName(value: String): String {
             val normalized = normalizeNonBlank(value, "name")
             require(!normalized.contains(':')) { "name must not contain ':' characters" }
+            return normalized
+        }
+        @JvmStatic internal fun normalizeVerifyingKeyAuthority(value: String): String {
+            val normalized = normalizeNonBlank(value, "authority")
+            org.hyperledger.iroha.sdk.address.requireCanonicalI105Address(
+                normalized,
+                "authority",
+            )
             return normalized
         }
         @JvmStatic internal fun normalizeEvenLengthHex(value: String, field: String): String {
@@ -1768,7 +1878,10 @@ class HttpClientTransport(
             }
         }
 
-        private fun verifyingKeyCommitmentHex(backend: String, bytes: ByteArray): String {
+        @JvmStatic internal fun verifyingKeyCommitmentHex(
+            backend: String,
+            bytes: ByteArray,
+        ): String {
             val digest = MessageDigest.getInstance("SHA-256")
             val backendBytes = backend.toByteArray(StandardCharsets.UTF_8)
             digest.update("iroha:zk:v1:vk".toByteArray(StandardCharsets.UTF_8))

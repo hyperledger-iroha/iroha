@@ -14,7 +14,6 @@ isi! {
     /// (e.g., `Peer`, `Domain`, `Account`, ...). It is not a heap `Box`; the
     /// "Box" suffix means "boxed-up family of variants" for easy visiting and
     /// serialization.
-    #[cfg_attr(feature = "json", norito(transparent))]
     pub struct Register<O: Registered> {
         /// The object that should be registered, should be uniquely identifiable by its id.
         pub object: O::With,

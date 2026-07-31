@@ -31,7 +31,7 @@ pub use wire::{
     ML_KEM_768_PUBLIC_KEY_BYTES_V1, PQ_MASP_AUTHORIZATION_HEADER_BYTES_V1,
     PQ_MASP_ENCRYPTED_OUTPUT_BYTES_V1, PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1,
     PQ_MASP_MAX_STARK_PROOF_BYTES_V1, PqMaspWireErrorV1, XCHACHA20_NONCE_BYTES_V1,
-    decrypt_pq_masp_note_v1, derive_pq_masp_authorization_key_digest_v1,
-    derive_pq_masp_recipient_id_v1, validate_pq_masp_encrypted_output_v1,
-    validate_pq_masp_note_encryption_key_digest_v1,
+    decrypt_pq_masp_note_v1, derive_pq_masp_authorization_key_digest_from_secret_v1,
+    derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_recipient_id_v1,
+    validate_pq_masp_encrypted_output_v1, validate_pq_masp_note_encryption_key_digest_v1,
 };

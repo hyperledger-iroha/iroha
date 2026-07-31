@@ -440,7 +440,7 @@ mod asset {
         )]
         #[getset(get = "pub")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetChanged {
             pub asset: AssetId,
@@ -457,7 +457,7 @@ mod asset {
         )]
         #[getset(get = "pub")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetTransferred {
             /// Debited asset balance.
@@ -548,7 +548,7 @@ mod asset {
         /// [`Self`] represents updated total asset quantity.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetDefinitionTotalQuantityChanged {
             pub asset_definition: AssetDefinitionId,
@@ -558,7 +558,7 @@ mod asset {
         /// [`Self`] represents updated total asset quantity.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetDefinitionOwnerChanged {
             /// Id of asset definition being updated
@@ -572,7 +572,7 @@ mod asset {
         /// exhausts its mintability budget and flips to `Mintable::Not`.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetDefinitionMintabilityChanged {
             /// Id of the asset definition that flipped to `Not`.
@@ -586,7 +586,7 @@ mod asset {
         /// Wrapper for asset-definition events that cannot be grouped under a domain event.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         #[repr(transparent)]
         pub struct StandaloneAssetDefinitionEvent {
@@ -660,7 +660,7 @@ mod nft {
         /// Event indicates that owner of the [`Nft`] is changed
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct NftOwnerChanged {
             /// Id of NFT being updated
@@ -738,7 +738,7 @@ mod rwa {
         /// Event emitted when full-lot ownership changes in place.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RwaOwnerChanged {
             /// Lot whose owner changed.
@@ -750,7 +750,7 @@ mod rwa {
         /// Event emitted when quantity is split out of a source lot into a child lot.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RwaSplit {
             /// Source lot reduced in place.
@@ -766,7 +766,7 @@ mod rwa {
         /// Event emitted when a derived lot is created from parent contributions.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RwaMerged {
             /// Child lot created by the merge.
@@ -778,7 +778,7 @@ mod rwa {
         /// Event emitted when lot quantity changes due to redemption.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RwaQuantityChanged {
             /// Lot whose quantity changed.
@@ -790,7 +790,7 @@ mod rwa {
         /// Event emitted when held quantity changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RwaHoldChanged {
             /// Lot whose held quantity changed.
@@ -802,7 +802,7 @@ mod rwa {
         /// Event emitted when a lot's control policy changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RwaControlsChanged {
             /// Lot whose controls changed.
@@ -873,7 +873,7 @@ mod role {
         /// Depending on the wrapping event, [`RolePermissionChanged`] role represents the added or removed role's permission
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct RolePermissionChanged {
             pub role: RoleId,
@@ -993,7 +993,7 @@ mod account {
         /// Depending on the wrapping event, [`AccountPermissionChanged`] role represents the added or removed account role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AccountPermissionChanged {
             pub account: AccountId,
@@ -1018,7 +1018,7 @@ mod account {
         /// Depending on the wrapping event, [`AccountRoleChanged`] represents the granted or revoked role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AccountRoleChanged {
             pub account: AccountId,
@@ -1698,10 +1698,7 @@ mod domain {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(
-            feature = "json",
-            norito(transparent, reuse_archived, decode_from_slice)
-        )]
+        #[cfg_attr(feature = "json", norito(reuse_archived, decode_from_slice))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived, decode_from_slice))]
         pub enum StreamingSoranetAccessKind {
             ReadOnly,
@@ -1731,10 +1728,7 @@ mod domain {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Default,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(
-            feature = "json",
-            norito(transparent, reuse_archived, decode_from_slice)
-        )]
+        #[cfg_attr(feature = "json", norito(reuse_archived, decode_from_slice))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived, decode_from_slice))]
         pub enum StreamingSoranetStreamTag {
             #[default]
@@ -2091,7 +2085,7 @@ mod domain {
             ffi_type(unsafe {robust})
         )]
         #[repr(transparent)]
-        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct StreamingTicketCapabilities(u32);
 
@@ -2540,7 +2534,6 @@ mod executor {
             EventSet,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-        #[cfg_attr(feature = "json", norito(untagged))] // Norito equivalent of untagged
         #[repr(transparent)]
         /// Event emitted when the executor data model is upgraded.
         pub enum ExecutorEvent {

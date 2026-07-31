@@ -38,7 +38,6 @@ use iroha_data_model::{
         smart_contract_code::{RegisterSmartContractCode, UploadSmartContractCodeChunk},
     },
     metadata::Metadata,
-    name::Name,
     nexus::{
         DataSpaceId, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
         FeeSponsorBlockBudgetWindow, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey,
@@ -54,6 +53,7 @@ use iroha_data_model::{
     query::{AnyQueryBox, QueryRequest, SingularQueryBox},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
+    state_path::StatePath,
     transaction::{
         Executable, ExecutableBatchItem, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
         SignedTransaction, executable::ContractInvocation, signed::TransactionPayload,
@@ -417,7 +417,6 @@ pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
     Executor::UserProvided(LoadedExecutor::load(raw).expect("load deny-all test executor"))
 }
 
-const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -1293,8 +1292,8 @@ impl NexusFeeAdmissionError {
 fn smart_contract_state_name(
     raw: String,
     context: &'static str,
-) -> Result<Name, NexusFeeAdmissionError> {
-    Name::from_str(&raw).map_err(|_| {
+) -> Result<StatePath, NexusFeeAdmissionError> {
+    StatePath::from_str(&raw).map_err(|_| {
         NexusFeeAdmissionError::ConfigInvalid(format!(
             "invalid smart-contract state key: {context}"
         ))
@@ -1318,7 +1317,7 @@ fn decode_verified_fee_sponsor_vault_allocation_state(
 
 fn fee_sponsor_vault_allocation_usage_state_key(
     lease_id: &iroha_crypto::Hash,
-) -> Result<Name, NexusFeeAdmissionError> {
+) -> Result<StatePath, NexusFeeAdmissionError> {
     smart_contract_state_name(
         VerifiedFeeSponsorVaultAllocation::usage_state_key_for(lease_id),
         "verified fee sponsor vault allocation usage",
@@ -1327,7 +1326,7 @@ fn fee_sponsor_vault_allocation_usage_state_key(
 
 fn fee_sponsor_vault_allocation_settled_usage_state_key(
     lease_id: &iroha_crypto::Hash,
-) -> Result<Name, NexusFeeAdmissionError> {
+) -> Result<StatePath, NexusFeeAdmissionError> {
     smart_contract_state_name(
         VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id),
         "settled verified fee sponsor vault allocation usage",
@@ -1336,7 +1335,7 @@ fn fee_sponsor_vault_allocation_settled_usage_state_key(
 
 fn fee_sponsor_vault_allocation_quantity_at(
     world: &impl WorldReadOnly,
-    key: &Name,
+    key: &StatePath,
 ) -> Result<Quantity, NexusFeeAdmissionError> {
     world.smart_contract_state().get(key).map_or_else(
         || Ok(Quantity::zero()),
@@ -2249,7 +2248,7 @@ impl ContractEntrypointAuthorizationSnapshot {
     /// movable alias. Lifecycle markers use the same address digest in their reserved namespace.
     /// Keeping this check on the snapshot prevents a valid permission for one contract from being
     /// attached to a durable write targeting another contract's namespace.
-    pub(crate) fn owns_durable_state_path(&self, path: &Name) -> bool {
+    pub(crate) fn owns_durable_state_path(&self, path: &StatePath) -> bool {
         let address = self.contract_address.to_string();
         let digest = hex::encode(iroha_crypto::Hash::new(address.as_bytes()).as_ref());
         let path: &str = path.as_ref();
@@ -3316,15 +3315,6 @@ pub(crate) fn validate_prepared_contract_lifecycle_call(
     code::validate_contract_lifecycle_call(world, contract_address, code_hash, descriptor.kind)
 }
 
-fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
-    let Some(raw) = metadata.get(EXECUTOR_ADDITIONAL_FUEL_KEY) else {
-        return Ok(0);
-    };
-    raw.try_into_any_norito::<u64>().map_err(|err| {
-        ValidationFail::NotPermitted(format!("invalid additional_fuel metadata: {err}"))
-    })
-}
-
 pub(crate) fn compute_nexus_fee_amount(
     cfg: &iroha_config::parameters::actual::NexusFees,
     tx_bytes_len: usize,
@@ -3965,25 +3955,6 @@ pub(crate) fn validate_transaction_fee_admission(
             state_transaction.current_dataspace_id,
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn configure_executor_fuel_budget(
-    executor: &Executor,
-    state_transaction: &mut StateTransaction<'_, '_>,
-    metadata: &Metadata,
-) -> Result<(), ValidationFail> {
-    if matches!(executor, Executor::UserProvided(_)) {
-        let base_fuel = state_transaction
-            .world
-            .parameters
-            .get()
-            .executor()
-            .fuel
-            .get();
-        let additional_fuel = parse_executor_additional_fuel(metadata)?;
-        state_transaction.executor_fuel_remaining = Some(base_fuel.saturating_add(additional_fuel));
     }
     Ok(())
 }
@@ -5852,7 +5823,6 @@ impl Executor {
             .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
             .map(|limit| limit.asset_definition_id.canonical_address());
         let gas_limit_md = transaction_gas_limit(&transaction);
-        configure_executor_fuel_budget(self, state_transaction, &md)?;
         let pipeline_gas = &state_transaction.pipeline.gas;
         let pipeline_gas_bound = fee_bound_for_admission(&transaction)
             .map_err(nexus_fee_admission_error_to_validation_fail)?
@@ -8007,16 +7977,7 @@ fn dispatch_instruction_with_ivm(
     };
     let instruction_id = instruction.id();
 
-    let base_fuel = state_transaction
-        .world
-        .parameters
-        .get()
-        .executor()
-        .fuel
-        .get();
-    let gas_limit = state_transaction
-        .executor_fuel_remaining
-        .unwrap_or(base_fuel);
+    let gas_limit = state_transaction.executor_fuel_remaining;
     let heap_limit = state_transaction
         .world
         .parameters
@@ -8026,9 +7987,9 @@ fn dispatch_instruction_with_ivm(
         .get();
     let report =
         run_executor_validation(executor, &payload, instruction_id, gas_limit, heap_limit)?;
-    if let Some(remaining) = state_transaction.executor_fuel_remaining.as_mut() {
-        *remaining = remaining.saturating_sub(report.gas_used);
-    }
+    state_transaction.executor_fuel_remaining = state_transaction
+        .executor_fuel_remaining
+        .saturating_sub(report.gas_used);
 
     match report.verdict {
         Ok(()) => {
@@ -8172,16 +8133,7 @@ fn consume_fixture_instruction_fuel(
         return Ok(());
     }
 
-    let base_fuel = state_transaction
-        .world
-        .parameters
-        .get()
-        .executor()
-        .fuel
-        .get();
-    let remaining = state_transaction
-        .executor_fuel_remaining
-        .get_or_insert(base_fuel);
+    let remaining = &mut state_transaction.executor_fuel_remaining;
     if *remaining < FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST {
         *remaining = 0;
         return Err(ValidationFail::TooComplex);
@@ -9742,6 +9694,40 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     false
 }
 
+fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
+    let any = instruction.as_any();
+    macro_rules! is_any {
+        ($($ty:ty),+ $(,)?) => {
+            false $(|| any.downcast_ref::<$ty>().is_some())+
+        };
+    }
+
+    // Genesis has a small, explicit bootstrap-only surface in addition to the
+    // ordinary Initial-executor surface. Never treat "genesis" as permission to
+    // execute an otherwise unclassified native instruction: several instruction
+    // families consult process-local policy and would make the signed bootstrap
+    // state depend on the node which happened to execute it.
+    is_any!(
+        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey,
+        iroha_data_model::isi::verifying_keys::UpdateVerifyingKey,
+        iroha_data_model::isi::governance::RegisterCitizen,
+        iroha_data_model::isi::soradns::PublishDirectory,
+        iroha_data_model::isi::soradns::RevokeResolver,
+        iroha_data_model::isi::soradns::UnrevokeResolver,
+        iroha_data_model::isi::soradns::AddReleaseSigner,
+        iroha_data_model::isi::soradns::RemoveReleaseSigner,
+        iroha_data_model::isi::soradns::SetDirectoryRotationPolicy,
+        iroha_data_model::isi::content::PublishContentBundle,
+        iroha_data_model::isi::content::RetireContentBundle,
+        iroha_data_model::isi::zk::RegisterZkAsset,
+        iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
+        iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
+        iroha_data_model::isi::staking::SlashPublicLaneValidator,
+        iroha_data_model::isi::staking::CancelConsensusEvidencePenalty,
+        iroha_data_model::isi::staking::RecordPublicLaneRewards,
+    )
+}
+
 #[allow(clippy::too_many_lines)]
 fn validate_initial_native_instruction_authority(
     state_transaction: &StateTransaction<'_, '_>,
@@ -9829,51 +9815,8 @@ fn validate_initial_native_instruction_authority(
     // The default executor does not admit these authority-free administrative
     // instructions. Genesis may seed their state, but post-genesis callers must use
     // the corresponding governed lifecycle instead of falling through Core Execute.
-    let default_denied_administrative_instruction = any
-        .downcast_ref::<iroha_data_model::isi::soradns::PublishDirectory>()
-        .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::soradns::RevokeResolver>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::soradns::UnrevokeResolver>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::soradns::AddReleaseSigner>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::soradns::RemoveReleaseSigner>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::content::PublishContentBundle>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::content::RetireContentBundle>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::zk::RegisterZkAsset>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::zk::RegisterAssetHiddenZkPool>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::zk::CancelConfidentialPolicyTransition>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::staking::SlashPublicLaneValidator>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::staking::RecordPublicLaneRewards>()
-            .is_some();
+    let default_denied_administrative_instruction =
+        initial_genesis_instruction_is_explicitly_admitted(instruction);
     if !is_genesis && default_denied_administrative_instruction {
         return deny("administrative instruction requires an explicit governed lifecycle");
     }
@@ -10184,7 +10127,9 @@ fn validate_initial_native_instruction_authority(
         return deny("only the asset-definition owner may change its balance policy");
     }
 
-    if !is_genesis && !initial_native_instruction_is_explicitly_admitted(instruction) {
+    if !initial_native_instruction_is_explicitly_admitted(instruction)
+        && !(is_genesis && initial_genesis_instruction_is_explicitly_admitted(instruction))
+    {
         return Err(ValidationFail::NotPermitted(format!(
             "Initial executor does not admit unclassified native instruction `{}`",
             instruction.id()
@@ -10763,6 +10708,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteTrigger",
     "CanModifyTriggerMetadata",
     "CanSetParameters",
+    "CanManageVerifyingKeys",
     "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
     "CanManageOfflineEscrow",
@@ -12617,6 +12563,83 @@ mod tests {
     }
 
     #[test]
+    fn initial_executor_genesis_rejects_unclassified_oracle_instruction() {
+        let authority = checked_account_id();
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        assert!(
+            state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty(),
+            "the regression must exercise the authenticated genesis context"
+        );
+
+        let instruction = iroha_data_model::isi::oracle::AggregateOracleFeed {
+            feed_id: "genesis_oracle".parse().expect("feed id"),
+            slot: 0,
+            request_hash: Hash::new(b"genesis oracle request"),
+            evidence_hashes: Vec::new(),
+        }
+        .into();
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .expect_err("genesis must not bypass the native instruction allowlist");
+
+        assert!(
+            matches!(
+                error,
+                ValidationFail::NotPermitted(ref message)
+                    if message.contains("does not admit unclassified native instruction")
+            ),
+            "unexpected genesis oracle rejection: {error:?}"
+        );
+    }
+
+    #[test]
+    fn initial_executor_classifies_verifying_key_bootstrap_as_genesis_only() {
+        use iroha_data_model::{
+            isi::verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey},
+            proof::{VerifyingKeyId, VerifyingKeyRecord},
+            zk::BackendTag,
+        };
+
+        let id = VerifyingKeyId::new("halo2/ipa", "genesis_vk");
+        let record = VerifyingKeyRecord::new(
+            1,
+            "genesis-vk-circuit",
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x11; 32],
+            [0x22; 32],
+        );
+        let instructions: [InstructionBox; 2] = [
+            RegisterVerifyingKey {
+                id: id.clone(),
+                record: record.clone(),
+            }
+            .into(),
+            UpdateVerifyingKey { id, record }.into(),
+        ];
+
+        for instruction in &instructions {
+            assert!(
+                initial_genesis_instruction_is_explicitly_admitted(instruction),
+                "{} must be admitted during authenticated genesis",
+                instruction.id()
+            );
+            assert!(
+                !initial_native_instruction_is_explicitly_admitted(instruction),
+                "{} must remain unavailable through the post-genesis Initial executor",
+                instruction.id()
+            );
+        }
+    }
+
+    #[test]
     fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
         let attacker = checked_account_id();
         let victim = checked_account_id();
@@ -13863,7 +13886,7 @@ mod tests {
             entrypoint: "write".to_owned(),
         };
         let digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-        let marker: Name = format!("sc/{digest}/Values/fixture")
+        let marker: StatePath = format!("sc/{digest}/Values/fixture")
             .parse()
             .expect("scoped durable state marker");
         let stored = vec![0xA5];
@@ -13962,7 +13985,7 @@ mod tests {
         drop(malformed_block);
 
         let foreign_digest = hex::encode(Hash::new(b"foreign contract namespace").as_ref());
-        let foreign_path: Name = format!("sc/{foreign_digest}/Values/fixture")
+        let foreign_path: StatePath = format!("sc/{foreign_digest}/Values/fixture")
             .parse()
             .expect("foreign scoped durable state marker");
         let foreign_replay = crate::pipeline::overlay::IvmProvedReplay {
@@ -14030,7 +14053,7 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "gas fixture".to_owned())])
         .sign(keypair.private_key());
-        let marker: Name = "proved_replay_forbidden_marker"
+        let marker: StatePath = "proved_replay_forbidden_marker"
             .parse()
             .expect("durable state marker");
         let replay = crate::pipeline::overlay::IvmProvedReplay {
@@ -15840,7 +15863,7 @@ mod tests {
     }
 
     fn insert_relay_allocation(world: &mut World, record: &VerifiedFeeSponsorVaultAllocation) {
-        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key: StatePath = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &record.program_id,
             &record.asset_definition_id,
             &record.lease_id,
@@ -15905,11 +15928,11 @@ mod tests {
             lease_b
         };
         for lease_id in [lease_a, lease_b] {
-            let executed_key: Name =
+            let executed_key: StatePath =
                 VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&lease_id)
                     .parse()
                     .expect("executed usage key");
-            let settled_key: Name =
+            let settled_key: StatePath =
                 VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(&lease_id)
                     .parse()
                     .expect("settled usage key");
@@ -16097,7 +16120,7 @@ mod tests {
             Hash::new(b"noncanonical-relay-lease"),
         );
         let mut world = World::default();
-        let key: Name =
+        let key: StatePath =
             format!("{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX}_noncanonical")
                 .parse()
                 .expect("noncanonical fixture key");
@@ -20861,23 +20884,6 @@ seiyaku IdentityRequired {
     }
 
     #[test]
-    fn parse_executor_additional_fuel_defaults_to_zero() {
-        let metadata = Metadata::default();
-        let fuel = parse_executor_additional_fuel(&metadata).expect("parse");
-        assert_eq!(fuel, 0);
-    }
-
-    #[test]
-    fn parse_executor_additional_fuel_rejects_invalid_value() {
-        let mut metadata = Metadata::default();
-        let key = Name::from_str(EXECUTOR_ADDITIONAL_FUEL_KEY).expect("static name");
-        metadata.insert(key, Json::new("not-a-number"));
-
-        let err = parse_executor_additional_fuel(&metadata).expect_err("should reject");
-        assert!(matches!(err, ValidationFail::NotPermitted(_)));
-    }
-
-    #[test]
     fn execute_transaction_rejects_authority_argument_mismatch() {
         let domain_id = DomainId::try_new("wonderland", "universal").expect("valid fixture domain");
         let world = World::with(
@@ -20915,75 +20921,60 @@ seiyaku IdentityRequired {
     }
 
     #[test]
-    fn execute_transaction_sets_executor_fuel_budget() {
+    fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         let bytecode = generate_ok_program();
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
-        let executor =
+        let user_executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let wonderland_domain_id: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let world = World::with([domain], [alice_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut state_tx = block.transaction();
-        let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
+        for (executor_name, executor) in [
+            ("initial", super::Executor::Initial),
+            ("user-provided", user_executor),
+        ] {
+            let wonderland_domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain: Domain = Domain::new(wonderland_domain_id).build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let world = World::with([domain], [alice_account], []);
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = query::store::LiveQueryStore::start_test();
+            let state =
+                State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+            let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(block_header);
+            let mut state_tx = block.transaction();
+            *state_tx.world.executor.get_mut() = executor;
+            let governed_fuel = state_tx.world.parameters.get().executor().fuel.get();
+            assert_eq!(
+                state_tx.executor_fuel_remaining, governed_fuel,
+                "{executor_name} transaction must start with the governed fuel budget"
+            );
 
-        let additional_fuel = 123_u64;
-        let mut metadata = Metadata::default();
-        let key = Name::from_str(EXECUTOR_ADDITIONAL_FUEL_KEY).expect("static name");
-        metadata.insert(key, Json::new(additional_fuel));
-        let tx = TransactionBuilder::new(
-            ChainId::from("test-chain"),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::Instructions(Vec::new().into()))
-        .sign(ALICE_KEYPAIR.private_key());
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                Name::from_str("additional_fuel").expect("static name"),
+                Json::new(u64::MAX),
+            );
+            let tx = TransactionBuilder::new(
+                ChainId::from("test-chain"),
+                ALICE_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(ALICE_KEYPAIR.private_key());
+            let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+            let executor = state_tx.world.executor.clone();
 
-        executor
-            .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect("execution");
+            executor
+                .execute_transaction(&mut state_tx, &ALICE_ID, tx, &mut ivm_cache)
+                .expect("ordinary metadata must not reject execution");
 
-        let remaining = state_tx.executor_fuel_remaining.expect("budget set");
-        assert_eq!(remaining, base_fuel.saturating_add(additional_fuel));
-    }
-
-    #[test]
-    fn configure_executor_fuel_budget_sets_remaining() {
-        let bytecode = generate_ok_program();
-        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
-        let executor =
-            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
-        let wonderland_domain_id: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let world = World::with([domain], [alice_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut state_tx = block.transaction();
-        let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
-
-        let additional_fuel = 321_u64;
-        let mut metadata = Metadata::default();
-        let key = Name::from_str(EXECUTOR_ADDITIONAL_FUEL_KEY).expect("static name");
-        metadata.insert(key, Json::new(additional_fuel));
-
-        configure_executor_fuel_budget(&executor, &mut state_tx, &metadata).expect("budget set");
-        let remaining = state_tx.executor_fuel_remaining.expect("budget set");
-        assert_eq!(remaining, base_fuel.saturating_add(additional_fuel));
+            assert_eq!(
+                state_tx.executor_fuel_remaining, governed_fuel,
+                "{executor_name} transaction metadata must not alter the governed fuel budget"
+            );
+        }
     }
 
     #[test]
@@ -21005,13 +20996,12 @@ seiyaku IdentityRequired {
         let mut block = state.block(block_header);
         let mut state_tx = block.transaction();
         let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
-        state_tx.executor_fuel_remaining = Some(base_fuel);
 
         let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
         executor
             .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
             .expect("execution");
-        let remaining = state_tx.executor_fuel_remaining.expect("budget set");
+        let remaining = state_tx.executor_fuel_remaining;
         assert!(
             remaining < base_fuel,
             "expected executor fuel budget to decrease"
@@ -21032,7 +21022,7 @@ seiyaku IdentityRequired {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_tx = block.transaction();
-        state_tx.executor_fuel_remaining = Some(0);
+        state_tx.executor_fuel_remaining = 0;
 
         let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
         let err = executor

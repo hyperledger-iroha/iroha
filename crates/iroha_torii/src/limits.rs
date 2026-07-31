@@ -283,6 +283,9 @@ impl RateLimiter {
 
 /// Internal header recording the remote IP the connection was accepted from.
 pub const REMOTE_ADDR_HEADER: &str = "x-iroha-remote-addr";
+/// Standard proxy header carrying the client/proxy address chain.
+pub const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
+const MAX_FORWARDED_FOR_HOPS: usize = 32;
 
 /// Resolve the effective client IP for downstream policy decisions.
 ///
@@ -300,26 +303,54 @@ pub fn effective_remote_ip(headers: &HeaderMap, remote: Option<IpAddr>) -> Optio
 
 /// Resolve the remote IP that ingress middleware should inject.
 ///
-/// If the transport peer belongs to a configured trusted proxy CIDR, a valid
-/// pre-existing `x-iroha-remote-addr` value is preserved as the client IP.
-/// Otherwise the accepted transport peer is used directly and any supplied
-/// header is ignored.
+/// If the transport peer belongs to a configured trusted proxy CIDR, the
+/// `X-Forwarded-For` chain is evaluated from right to left and the first
+/// untrusted address is used as the client IP. This remains safe when a proxy
+/// appends to a client-supplied chain: the proxy-observed client address is
+/// encountered before any attacker-selected prefix. Malformed or oversized
+/// chains fail closed to the accepted transport peer.
+///
+/// The internal [`REMOTE_ADDR_HEADER`] is deliberately ignored here. Ingress
+/// middleware writes that header only after this function returns, so accepting
+/// it as input would let clients behind a trusted proxy spoof their policy IP.
 pub fn ingress_remote_ip(
     headers: &HeaderMap,
     remote: Option<IpAddr>,
     trusted_proxies: &[IpNet],
 ) -> Option<IpAddr> {
-    let forwarded = headers
-        .get(REMOTE_ADDR_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse().ok());
-    match remote {
-        Some(remote_ip) if cidr_contains(trusted_proxies, remote_ip) => {
-            forwarded.or(Some(remote_ip))
-        }
-        Some(remote_ip) => Some(remote_ip),
-        None => None,
+    let remote_ip = remote?;
+    if !cidr_contains(trusted_proxies, remote_ip) {
+        return Some(remote_ip);
     }
+    let Some(forwarded) = parse_forwarded_for_chain(headers) else {
+        return Some(remote_ip);
+    };
+    Some(
+        forwarded
+            .iter()
+            .rev()
+            .copied()
+            .find(|ip| !cidr_contains(trusted_proxies, *ip))
+            .unwrap_or_else(|| forwarded[0]),
+    )
+}
+
+fn parse_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
+    let mut addresses = Vec::new();
+    for value in headers.get_all(FORWARDED_FOR_HEADER).iter() {
+        let value = value.to_str().ok()?;
+        for component in value.split(',') {
+            if addresses.len() == MAX_FORWARDED_FOR_HOPS {
+                return None;
+            }
+            let component = component.trim();
+            if component.is_empty() {
+                return None;
+            }
+            addresses.push(component.parse().ok()?);
+        }
+    }
+    (!addresses.is_empty()).then_some(addresses)
 }
 
 /// Derive a rate-limit key from headers and optional hint:
@@ -1213,6 +1244,37 @@ mod tests {
             .expect("http scheme uses global pool");
     }
 
+    #[tokio::test]
+    async fn preauth_permit_releases_every_counter_during_unwind() {
+        let gate = PreAuthGate::new(PreAuthConfig {
+            max_total: Some(1),
+            max_per_ip: Some(1),
+            rate_per_ip: None,
+            burst_per_ip: None,
+            ban_duration: None,
+            allow_nets: Vec::new(),
+            scheme_limits: vec![SchemeLimit {
+                name: "http".to_owned(),
+                max_connections: 1,
+            }],
+        });
+        let ip: IpAddr = "203.0.113.5".parse().unwrap();
+        let permit = gate
+            .acquire(Some(ip), Some("http"))
+            .await
+            .expect("first connection acquires every counter");
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _permit = permit;
+            panic!("exercise pre-auth permit unwind");
+        }));
+        assert!(unwound.is_err());
+
+        gate.acquire(Some(ip), Some("http"))
+            .await
+            .expect("unwind releases global, IP, and scheme counters exactly once");
+    }
+
     fn parse_cidrs_skips_invalid_entries() {
         let nets = parse_cidrs(&[
             "203.0.113.0/24".into(),
@@ -1292,9 +1354,9 @@ mod tests {
     }
 
     #[test]
-    fn ingress_remote_ip_preserves_trusted_forwarded_header() {
+    fn ingress_remote_ip_uses_trusted_forwarded_for_chain() {
         let mut headers = HeaderMap::new();
-        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        headers.insert(FORWARDED_FOR_HEADER, "203.0.113.55".parse().unwrap());
         let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
         assert_eq!(
             ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
@@ -1305,11 +1367,64 @@ mod tests {
     #[test]
     fn ingress_remote_ip_ignores_forwarded_header_from_untrusted_peer() {
         let mut headers = HeaderMap::new();
-        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        headers.insert(FORWARDED_FOR_HEADER, "203.0.113.55".parse().unwrap());
         let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
         assert_eq!(
             ingress_remote_ip(&headers, Some("198.51.100.10".parse().unwrap()), &trusted),
             Some("198.51.100.10".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_rejects_client_spoofed_internal_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
+            Some("127.0.0.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_ignores_attacker_prefix_before_proxy_observation() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            FORWARDED_FOR_HEADER,
+            "192.0.2.10, 198.51.100.42".parse().unwrap(),
+        );
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
+            Some("198.51.100.42".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_falls_back_to_proxy_for_malformed_chain() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            FORWARDED_FOR_HEADER,
+            "203.0.113.55, not-an-ip".parse().unwrap(),
+        );
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
+            Some("127.0.0.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_falls_back_to_proxy_for_oversized_chain() {
+        let mut headers = HeaderMap::new();
+        let forwarded = std::iter::repeat_n("203.0.113.55", MAX_FORWARDED_FOR_HOPS + 1)
+            .collect::<Vec<_>>()
+            .join(", ");
+        headers.insert(FORWARDED_FOR_HEADER, forwarded.parse().unwrap());
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
+            Some("127.0.0.1".parse().unwrap())
         );
     }
 

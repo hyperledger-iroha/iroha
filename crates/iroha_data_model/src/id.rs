@@ -29,9 +29,8 @@ mod model {
     /// The value is exact, case-sensitive ASCII. It starts and ends with an
     /// alphanumeric byte and may otherwise contain ASCII alphanumerics plus
     /// `.`, `_`, `:`, or `-`.
-    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct ChainId(Box<str>);
 
@@ -60,7 +59,7 @@ mod model {
             Ok(Self(value.into()))
         }
 
-        pub(super) fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
+        pub(super) fn decode_text_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
             let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
             if len > MAX_CHAIN_ID_BYTES {
                 return Err(NoritoError::Message(
@@ -79,6 +78,11 @@ mod model {
                 Self::parse(value).map_err(|error| NoritoError::Message(error.reason.into()))?;
             norito::core::note_payload_access(bytes, end);
             Ok((chain, end))
+        }
+
+        pub(super) fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
+            let (wire, used) = norito::core::decode_field_canonical::<ChainIdWire>(bytes)?;
+            Ok((wire.0.0, used))
         }
 
         /// Access inner string (owned).
@@ -197,19 +201,47 @@ mod model {
     }
 }
 
-impl norito::core::NoritoSerialize for ChainId {
+/// Validation-aware decoder for the text field inside the structural V1
+/// `ChainId` tuple-newtype representation.
+struct ChainIdText(ChainId);
+
+impl norito::core::NoritoSerialize for ChainIdText {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_str(), writer)
+        <&str as norito::core::NoritoSerialize>::serialize(&self.0.as_str(), writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_str())
+        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.0.as_str())
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_str())
+        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.0.as_str())
     }
 }
+
+impl<'a> norito::core::NoritoDeserialize<'a> for ChainIdText {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("ChainId text deserialization must succeed for valid archives")
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        let (chain_id, used) = ChainId::decode_text_wire(payload)?;
+        if used != payload.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        Ok(Self(chain_id))
+    }
+}
+
+/// Mirrors the single-field structural layout originally assigned to
+/// `ChainId`, while delegating its inner field to the validating decoder.
+#[derive(Encode, Decode)]
+struct ChainIdWire(ChainIdText);
 
 impl<'a> norito::core::NoritoDeserialize<'a> for ChainId {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
@@ -345,6 +377,12 @@ mod tests {
 
     use super::*;
 
+    #[derive(Encode)]
+    struct UncheckedChainIdWire(Box<str>);
+
+    #[derive(Encode)]
+    struct ChainIdEnvelope(ChainId);
+
     #[test]
     fn chain_id_from_str() {
         let id: ChainId = "test".parse().expect("valid chain id");
@@ -383,16 +421,54 @@ mod tests {
     }
 
     #[test]
+    fn chain_id_uses_one_canonical_structural_v1_wire_layout() {
+        let id = ChainId::from("test");
+        let encoded = id.encode();
+        assert_eq!(encoded, [5, 4, b't', b'e', b's', b't']);
+        assert_eq!(id.encoded_len(), encoded.len());
+        assert_eq!(
+            ChainIdEnvelope(id.clone()).encode(),
+            [6, 5, 4, b't', b'e', b's', b't']
+        );
+
+        let mut cursor = encoded.as_slice();
+        assert_eq!(ChainId::decode(&mut cursor).expect("bare roundtrip"), id);
+        assert_eq!(
+            ChainId::decode_from_slice(&encoded).expect("slice roundtrip"),
+            (id.clone(), encoded.len())
+        );
+        let framed = norito::to_bytes(&id).expect("frame ChainId");
+        assert_eq!(
+            norito::decode_from_bytes::<ChainId>(&framed).expect("framed roundtrip"),
+            id
+        );
+
+        let transparent = "test".to_owned().encode();
+        assert!(
+            ChainId::decode_from_slice(&transparent).is_err(),
+            "the transient transparent representation must not be accepted"
+        );
+
+        let mut truncated = encoded.clone();
+        truncated.pop();
+        assert!(ChainId::decode_from_slice(&truncated).is_err());
+
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(ChainId::decode_from_slice(&trailing).is_err());
+    }
+
+    #[test]
     fn chain_id_norito_decoders_cannot_bypass_validation() {
         for invalid in [
             String::new(),
             "bidi\u{202e}".to_owned(),
             "x".repeat(MAX_CHAIN_ID_BYTES + 1),
         ] {
-            // `ChainId` has the same transparent wire layout as `String`.
-            // Encode the invalid representation directly so the public
-            // constructor remains the only way to create a `ChainId`.
-            let encoded = invalid.encode();
+            // Construct the structural representation without calling the
+            // validating public constructor.
+            let unchecked = UncheckedChainIdWire(invalid.clone().into_boxed_str());
+            let encoded = unchecked.encode();
             let mut cursor = encoded.as_slice();
             assert!(
                 ChainId::decode(&mut cursor).is_err(),
@@ -402,9 +478,9 @@ mod tests {
                 ChainId::decode_from_slice(&encoded).is_err(),
                 "slice decoder accepted invalid ChainId: {invalid:?}"
             );
-            let (payload, flags) = norito::codec::encode_with_header_flags(&invalid);
+            let (payload, flags) = norito::codec::encode_with_header_flags(&unchecked);
             let framed = norito::core::frame_bare_with_header_flags::<ChainId>(&payload, flags)
-                .expect("frame invalid transparent ChainId fixture");
+                .expect("frame invalid structural ChainId fixture");
             assert!(
                 norito::decode_from_bytes::<ChainId>(&framed).is_err(),
                 "framed decoder accepted invalid ChainId: {invalid:?}"
@@ -414,11 +490,17 @@ mod tests {
 
     #[test]
     fn chain_id_decoder_rejects_declared_oversize_before_body_access() {
+        let mut inner = Vec::new();
+        norito::core::write_len_to_vec(
+            &mut inner,
+            u64::try_from(MAX_CHAIN_ID_BYTES + 1).expect("chain id limit fits u64"),
+        );
         let mut declared_oversize = Vec::new();
         norito::core::write_len_to_vec(
             &mut declared_oversize,
-            u64::try_from(MAX_CHAIN_ID_BYTES + 1).expect("chain id limit fits u64"),
+            u64::try_from(inner.len()).expect("inner header length fits u64"),
         );
+        declared_oversize.extend_from_slice(&inner);
 
         let error = ChainId::decode_from_slice(&declared_oversize)
             .expect_err("oversized declared ChainId must fail before reading the body");

@@ -4799,6 +4799,7 @@ mod source_link_tests {
             validators,
             VotingMode::Permissioned,
             Digest::repeat(0x94),
+            Digest::repeat(0x97),
             Digest::repeat(0x95),
             Digest::repeat(0x96),
         )

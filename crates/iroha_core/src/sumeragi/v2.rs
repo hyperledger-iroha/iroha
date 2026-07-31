@@ -343,6 +343,7 @@ impl VerifiedHeightContext {
             || context.chain_id != parent_artifact.height_context.chain_id
             || context.mode != parent_artifact.height_context.mode
             || context.da_layout != parent_artifact.height_context.da_layout
+            || context.execution_policy_hash != parent_artifact.height_context.execution_policy_hash
             || parent_qc.subject != parent_artifact.subject
             || parent_receipt.height() != parent_artifact.height
             || parent_receipt.context_id() != parent_artifact.context_id()
@@ -7328,6 +7329,7 @@ impl WireRegistry {
         );
         let chain_id = reducer::ChainId::new(Hash::new(context.chain_id.encode()).into());
         let nexus_hash = reducer::Digest::new(*context.nexus_amx_context_hash.as_ref());
+        let execution_policy_hash = reducer::Digest::new(*context.execution_policy_hash.as_ref());
         let da_hash = reducer::Digest::new(Hash::new(context.da_layout.encode()).into());
         let leader_seed = reducer::Digest::new(leader_height_seed.into());
         if context.snapshot_bootstrap.is_some() {
@@ -7339,6 +7341,7 @@ impl WireRegistry {
                 roster,
                 mode,
                 nexus_hash,
+                execution_policy_hash,
                 da_hash,
                 leader_seed,
             )
@@ -7352,6 +7355,7 @@ impl WireRegistry {
                 roster,
                 mode,
                 nexus_hash,
+                execution_policy_hash,
                 da_hash,
                 leader_seed,
             )
@@ -8504,13 +8508,12 @@ fn verify_quorum_certificate(
     })
 }
 
-/// Verify one certificate against an immutable context record reopened for
-/// historical certified-body service.
+/// Verify one certificate against immutable historical context authority.
 ///
 /// This deliberately reuses the exact production roster-PoP and aggregate
 /// verifier used by live reducer ingress; block sync does not maintain a
 /// second certificate-validation implementation.
-pub(crate) fn verify_persisted_quorum_certificate(
+pub(crate) fn verify_historical_quorum_certificate(
     context: &wire::HeightContext,
     proofs_of_possession: &[Vec<u8>],
     certificate: &wire::QuorumCertificate,
@@ -8694,6 +8697,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -8900,6 +8904,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -9103,6 +9108,20 @@ mod tests {
             &proofs,
         )
         .expect("durable verified parent anchors successor");
+
+        let mut substituted_execution_policy = successor.clone();
+        substituted_execution_policy.execution_policy_hash =
+            Hash::new(b"substituted successor execution policy");
+        assert!(matches!(
+            VerifiedHeightContext::successor(
+                substituted_execution_policy,
+                proofs.clone(),
+                &artifact,
+                &receipt,
+                &proofs,
+            ),
+            Err(AdapterError::ParentContextMismatch)
+        ));
 
         let mut substituted_successor_pops = proofs.clone();
         substituted_successor_pops.swap(0, 1);

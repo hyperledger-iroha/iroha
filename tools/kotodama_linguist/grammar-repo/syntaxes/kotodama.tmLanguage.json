@@ -95,7 +95,7 @@
     "memberCalls": {
       "patterns": [
         {
-          "match": "(?<=\\.)(?:len|get|try_set|try_push|pop|contains|take|enumerate|div_round|ratio_round|get_or_default|get_or|ensure|remove|get_int|get_decimal|get_quantity|get_json|get_name|get_account_id|get_asset_definition_id|get_nft_id|get_blob_hex)(?=\\s*\\()",
+          "match": "(?<=\\.)(?:len|get|try_set|try_push|pop|contains|take|enumerate|div_round|ratio_round|get_or_default|get_or|ensure|remove|path|get_int|get_decimal|get_quantity|get_json|get_name|get_account_id|get_asset_definition_id|get_nft_id|get_blob_hex)(?=\\s*\\()",
           "name": "support.function.method.kotodama"
         }
       ]

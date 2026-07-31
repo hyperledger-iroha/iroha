@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,15 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` `iroha_crypto::kzg` میں استعمال ہونے والے 48 بائٹ ڈاٹ کو دوبارہ استعمال کرتا ہے۔
-  جب غیر حاضر رہتے ہیں تو ، یہ صرف مرکل کے ثبوتوں پر پڑتا ہے۔
-- `proof_scheme` لین کیٹلاگ سے ماخوذ ہے۔ مرکل لینز کے زیڈ جی پے لوڈ کو مسترد کرتے ہیں
-  جبکہ `kzg_bls12_381` لینوں کو غیر صفر KZG وعدوں کی ضرورت ہوتی ہے۔ Torii فی الحال
-  صرف مرکل کے وعدے پیدا کرتا ہے اور KZG کے ساتھ تشکیل شدہ لینوں کو مسترد کرتا ہے۔
-- `KzgCommitment` `iroha_crypto::kzg` میں استعمال ہونے والے 48 بائٹ ڈاٹ کو دوبارہ استعمال کرتا ہے۔
-  جب مرکل لین سے غیر حاضر رہتے ہیں تو ، یہ صرف مرکل کی آزمائشوں میں گر جاتا ہے۔
-- `proof_digest` DA-5 PDP/POTR انضمام کی توقع کرتا ہے تاکہ وہی ریکارڈ ہوں
-  بلابز کو زندہ رکھنے کے لئے استعمال ہونے والے نمونے لینے کے شیڈول کی فہرست بنائیں۔
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 بلاک ہیڈر توسیع
 
@@ -173,30 +166,7 @@ Torii ماؤنٹ ہینڈلر کے ساتھ ساتھ موجودہ دا انیس 
 
 ## 7. جانچ کی حکمت عملی
 
-1. ** یونٹ ٹیسٹ ** `DaCommitmentBundle` اور انکوڈنگ/ضابطہ کشائی کے لئے
-   بلاک ہیش اخذ کردہ تازہ کاریوں کو۔
-2
-   بنڈل اور مرکل کے ثبوتوں کا۔
-3.
-   چیک کرنا کہ ہم دونوں بنڈل اور جوابات کے مواد پر متفق ہیں
-   استفسار/ثبوت
-4. ** ہلکے کلائنٹ ٹیسٹ ** `integration_tests/tests/da/commitments.rs` پر
-   (زنگ) جو `/prove` پر کال کرتا ہے اور Torii سے بات کیے بغیر ثبوت کی جانچ پڑتال کرتا ہے۔
-5
-   تولیدی آپریٹرز۔
-
-## 8. رول آؤٹ پلان
-
-| مرحلہ | تفصیل | باہر نکلنے کے معیارات |
-| ------ | ----------- | --------------------- |
-| P0 - ڈیٹا ماڈل انضمام | `DaCommitmentRecord` ، بلاک ہیڈر کی تازہ کاریوں اور Norito کوڈیکس کو مربوط کریں۔ | نئے فکسچر کے ساتھ `cargo test -p iroha_data_model` گرین۔ |
-| P1 - وائرنگ کور/WSV | چین قطار منطق + بلاک بلڈر ، انڈیکس کو برقرار رکھیں اور آر پی سی ہینڈلرز کو بے نقاب کریں۔ | `cargo test -p iroha_core` ، `integration_tests/tests/da/commitments.rs` بنڈل پروف کے دعوے کے ساتھ پاس کریں۔ |
-| P2 - آپریٹر ٹولنگ | سی ایل آئی مددگار ، Grafana ڈیش بورڈ اور پروف تصدیقی دستاویز کی تازہ کاریوں کی تازہ کاری کریں۔ | `iroha_cli app da prove-commitment` ڈیونیٹ کے خلاف کام کرتا ہے۔ ڈیش بورڈ براہ راست ڈیٹا دکھاتا ہے۔ |
-| P3 - گورننس گیٹ | اس بلاک کی توثیق کنندہ کو فعال کریں جس کے لئے `iroha_config::nexus` میں نشان زد لینوں میں DA وعدوں کی ضرورت ہوتی ہے۔ | اسٹیٹس انٹری + روڈ میپ اپ ڈیٹ DA-3 کو مکمل طور پر نشان زد کرتا ہے۔ |
-
-## سوالات کھولیں1.
-   بلاک سائز کو کم کرنے کے لئے چھوٹا؟ تجویز: `kzg_commitment` رکھیں
-   اختیاری اور گیٹ `iroha_config::da.enable_kzg` کے ذریعے۔
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. ** تسلسل کے فرق موجودہ منصوبہ خلا کو مسترد کرتا ہے
    جب تک کہ انتظامیہ ہنگامی ری پلے کے لئے `allow_sequence_skips` کو چالو نہ کرے۔
 3.

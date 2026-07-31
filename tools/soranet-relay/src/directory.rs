@@ -44,9 +44,6 @@ pub struct DirectoryBuildConfig {
     /// Optional validity window end (UNIX seconds).
     #[norito(default)]
     pub valid_until_unix: Option<i64>,
-    /// Optional validation phase label (phase1_allow_single|phase2_prefer_dual|phase3_require_dual).
-    #[norito(default)]
-    pub validation_phase: Option<String>,
     /// Issuer public keys included in the snapshot.
     pub issuers: Vec<IssuerConfig>,
     /// Certificate bundles included in the snapshot.
@@ -74,9 +71,9 @@ pub struct IssuerConfig {
     pub label: Option<String>,
     /// Hex-encoded Ed25519 public key.
     pub ed25519_hex: String,
-    /// Optional hex-encoded ML-DSA public key.
+    /// Hex-encoded ML-DSA-65 public key.
     #[norito(default)]
-    pub mldsa_hex: Option<String>,
+    pub mldsa_hex: String,
 }
 
 /// Certificate bundle path supplied by the configuration.
@@ -232,10 +229,6 @@ pub enum DirectoryBuildError {
     NoIssuers,
     #[error("no certificate bundles supplied in configuration")]
     NoBundles,
-    #[error(
-        "invalid validation phase `{value}` (expected phase1_allow_single, phase2_prefer_dual, or phase3_require_dual)"
-    )]
-    InvalidPhase { value: String },
     #[error("invalid hex in {field}: {source}")]
     Hex {
         field: String,
@@ -248,11 +241,8 @@ pub enum DirectoryBuildError {
         expected: usize,
         found: usize,
     },
-    #[error("issuer {label} missing ML-DSA public key for validation phase {phase:?}")]
-    IssuerMissingMlDsa {
-        label: String,
-        phase: CertificateValidationPhase,
-    },
+    #[error("issuer {label} missing ML-DSA-65 public key required by the first-release policy")]
+    IssuerMissingMlDsa { label: String },
     #[error("duplicate issuer fingerprint {fingerprint}")]
     DuplicateIssuer { fingerprint: String },
     #[error("issuer {label} contained an invalid Ed25519 public key: {source}")]
@@ -334,6 +324,10 @@ pub enum DirectoryRotateError {
     MultipleIssuers { found: usize },
     #[error("snapshot validation phase {phase} is not recognised")]
     UnknownPhase { phase: u8 },
+    #[error(
+        "snapshot validation phase {phase:?} is not accepted; the first release requires phase 3 dual signatures"
+    )]
+    UnsupportedReleasePhase { phase: CertificateValidationPhase },
     #[error("snapshot contained no relay certificates to rotate")]
     NoCertificates,
     #[error("issuer public key invalid: {source}")]
@@ -479,8 +473,8 @@ fn build_snapshot(
         return Err(DirectoryBuildError::NoBundles);
     }
 
-    let validation_phase = parse_validation_phase(config.validation_phase.as_deref())?;
-    let issuers = load_issuers(&config.issuers, validation_phase)?;
+    let validation_phase = CertificateValidationPhase::Phase3RequireDual;
+    let issuers = load_issuers(&config.issuers)?;
 
     let mut issuer_map: HashMap<[u8; 32], LoadedIssuer> = HashMap::new();
     for issuer in &issuers {
@@ -689,6 +683,11 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
             phase: snapshot.validation_phase,
         },
     )?;
+    if validation_phase != CertificateValidationPhase::Phase3RequireDual {
+        return Err(DirectoryRotateError::UnsupportedReleasePhase {
+            phase: validation_phase,
+        });
+    }
 
     let issuer = &snapshot.issuers[0];
     let verifying_key = checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public)
@@ -870,10 +869,7 @@ struct LoadedIssuer {
     fingerprint: [u8; 32],
 }
 
-fn load_issuers(
-    configs: &[IssuerConfig],
-    phase: CertificateValidationPhase,
-) -> Result<Vec<LoadedIssuer>, DirectoryBuildError> {
+fn load_issuers(configs: &[IssuerConfig]) -> Result<Vec<LoadedIssuer>, DirectoryBuildError> {
     let mut loaded = Vec::with_capacity(configs.len());
     for config in configs {
         let ed_bytes = decode_hex_array::<32>(&config.ed25519_hex, "issuers[].ed25519_hex")?;
@@ -888,8 +884,7 @@ fn load_issuers(
                     reason,
                 }
             })?;
-        let mldsa_public =
-            decode_mldsa_bytes(config.mldsa_hex.as_deref(), phase, label_display.clone())?;
+        let mldsa_public = decode_mldsa_bytes(&config.mldsa_hex, label_display.clone())?;
         let fingerprint =
             compute_issuer_fingerprint(&ed_bytes, &mldsa_public).map_err(|source| {
                 DirectoryBuildError::IssuerFingerprint {
@@ -1048,50 +1043,14 @@ pub fn collect_guard_pinning_proofs_from_directory(
         .map_err(|source| GuardPinningCollectError::Build(Box::new(source)))
 }
 
-fn decode_mldsa_bytes(
-    value: Option<&str>,
-    phase: CertificateValidationPhase,
-    label: String,
-) -> Result<Vec<u8>, DirectoryBuildError> {
-    match value {
-        Some(hex_value) => hex::decode(hex_value).map_err(|source| DirectoryBuildError::Hex {
-            field: "issuers[].mldsa_hex".to_string(),
-            source,
-        }),
-        None => {
-            if matches!(
-                phase,
-                CertificateValidationPhase::Phase2PreferDual
-                    | CertificateValidationPhase::Phase3RequireDual
-            ) {
-                Err(DirectoryBuildError::IssuerMissingMlDsa { label, phase })
-            } else {
-                Ok(Vec::new())
-            }
-        }
+fn decode_mldsa_bytes(value: &str, label: String) -> Result<Vec<u8>, DirectoryBuildError> {
+    if value.is_empty() {
+        return Err(DirectoryBuildError::IssuerMissingMlDsa { label });
     }
-}
-
-fn parse_validation_phase(
-    value: Option<&str>,
-) -> Result<CertificateValidationPhase, DirectoryBuildError> {
-    let Some(raw) = value else {
-        return Ok(CertificateValidationPhase::Phase2PreferDual);
-    };
-    match raw.to_ascii_lowercase().as_str() {
-        "phase1_allow_single" | "phase1" | "allow_single" => {
-            Ok(CertificateValidationPhase::Phase1AllowSingle)
-        }
-        "phase2_prefer_dual" | "phase2" | "prefer_dual" => {
-            Ok(CertificateValidationPhase::Phase2PreferDual)
-        }
-        "phase3_require_dual" | "phase3" | "require_dual" => {
-            Ok(CertificateValidationPhase::Phase3RequireDual)
-        }
-        other => Err(DirectoryBuildError::InvalidPhase {
-            value: other.to_string(),
-        }),
-    }
+    hex::decode(value).map_err(|source| DirectoryBuildError::Hex {
+        field: "issuers[].mldsa_hex".to_string(),
+        source,
+    })
 }
 
 fn parse_optional_hash(value: Option<&str>) -> Result<Option<[u8; 32]>, DirectoryBuildError> {
@@ -1200,11 +1159,10 @@ mod tests {
             published_at_unix: None,
             valid_after_unix: None,
             valid_until_unix: None,
-            validation_phase: Some("phase1_allow_single".to_string()),
             issuers: vec![IssuerConfig {
                 label: Some("zero-issuer".to_string()),
                 ed25519_hex: hex::encode([0u8; 32]),
-                mldsa_hex: None,
+                mldsa_hex: String::new(),
             }],
             bundles: vec![BundleConfig {
                 path: PathBuf::from("unused.cbor"),
@@ -1226,6 +1184,43 @@ mod tests {
             }
             other => panic!("unexpected directory build error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_snapshot_requires_mldsa65_issuer_key() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("directory.json");
+        let issuer_ed25519 = SigningKey::from_bytes(&[0x45; 32])
+            .verifying_key()
+            .to_bytes();
+        let config = DirectoryBuildConfig {
+            directory_hash_hex: None,
+            published_at_unix: None,
+            valid_after_unix: None,
+            valid_until_unix: None,
+            issuers: vec![IssuerConfig {
+                label: Some("governance".to_string()),
+                ed25519_hex: hex::encode(issuer_ed25519),
+                mldsa_hex: String::new(),
+            }],
+            bundles: vec![BundleConfig {
+                path: PathBuf::from("unused.cbor"),
+            }],
+            guard_pinning_proofs_dir: None,
+            guard_pinning_proofs: Vec::new(),
+        };
+        write_directory_config(&config_path, &config);
+
+        let err = build_snapshot_from_config(&config_path)
+            .expect_err("the first-release directory builder must require ML-DSA-65");
+        assert!(
+            matches!(
+                &err,
+                DirectoryBuildError::IssuerMissingMlDsa { label }
+                    if label == "governance"
+            ),
+            "unexpected directory build error: {err:?}"
+        );
     }
 
     #[test]
@@ -1255,11 +1250,10 @@ mod tests {
             published_at_unix: Some(bundle.certificate.published_at),
             valid_after_unix: Some(bundle.certificate.valid_after),
             valid_until_unix: Some(bundle.certificate.valid_until),
-            validation_phase: Some("phase3_require_dual".to_string()),
             issuers: vec![IssuerConfig {
                 label: Some("governance".to_string()),
                 ed25519_hex: hex::encode(ed_public),
-                mldsa_hex: Some(hex::encode(issuer_keys.public_key())),
+                mldsa_hex: hex::encode(issuer_keys.public_key()),
             }],
             bundles: vec![BundleConfig {
                 path: bundle_path.clone(),
@@ -1296,11 +1290,10 @@ mod tests {
             published_at_unix: None,
             valid_after_unix: None,
             valid_until_unix: None,
-            validation_phase: Some("phase1_allow_single".to_string()),
             issuers: vec![IssuerConfig {
                 label: Some("weak-issuer".to_string()),
                 ed25519_hex: hex::encode(SMALL_ORDER_ED25519_POINT),
-                mldsa_hex: None,
+                mldsa_hex: String::new(),
             }],
             bundles: vec![BundleConfig {
                 path: PathBuf::from("unused.cbor"),
@@ -1356,11 +1349,10 @@ mod tests {
             published_at_unix: Some(bundle.certificate.published_at),
             valid_after_unix: Some(bundle.certificate.valid_after),
             valid_until_unix: Some(bundle.certificate.valid_until),
-            validation_phase: Some("phase3_require_dual".to_string()),
             issuers: vec![IssuerConfig {
                 label: Some("governance".to_string()),
                 ed25519_hex: hex::encode(ed_public),
-                mldsa_hex: Some(hex::encode(issuer_keys.public_key())),
+                mldsa_hex: hex::encode(issuer_keys.public_key()),
             }],
             bundles: vec![BundleConfig {
                 path: bundle_path.clone(),
@@ -1451,11 +1443,10 @@ mod tests {
             published_at_unix: Some(bundle.certificate.published_at),
             valid_after_unix: Some(bundle.certificate.valid_after),
             valid_until_unix: Some(bundle.certificate.valid_until),
-            validation_phase: Some("phase3_require_dual".to_string()),
             issuers: vec![IssuerConfig {
                 label: Some("governance".to_string()),
                 ed25519_hex: hex::encode(ed_public),
-                mldsa_hex: Some(hex::encode(issuer_keys.public_key())),
+                mldsa_hex: hex::encode(issuer_keys.public_key()),
             }],
             bundles: vec![BundleConfig {
                 path: bundle_path.clone(),
@@ -1539,11 +1530,10 @@ mod tests {
             published_at_unix: Some(bundle.certificate.published_at),
             valid_after_unix: Some(bundle.certificate.valid_after),
             valid_until_unix: Some(bundle.certificate.valid_until),
-            validation_phase: Some("phase3_require_dual".to_string()),
             issuers: vec![IssuerConfig {
                 label: Some("governance".to_string()),
                 ed25519_hex: hex::encode(ed_public),
-                mldsa_hex: Some(hex::encode(issuer_keys.public_key())),
+                mldsa_hex: hex::encode(issuer_keys.public_key()),
             }],
             bundles: vec![BundleConfig {
                 path: bundle_path.clone(),
@@ -1646,6 +1636,51 @@ mod tests {
                 )
                 .expect("verify");
         }
+    }
+
+    #[test]
+    fn rotate_snapshot_rejects_pre_release_validation_phase() {
+        let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+        let signing_key = SigningKey::from_bytes(&[0x57; 32]);
+        let ed_public = signing_key.verifying_key().to_bytes();
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
+        let certificate = sample_certificate(fingerprint);
+        let bundle = certificate
+            .clone()
+            .issue(&signing_key, issuer_keys.secret_key())
+            .expect("issue");
+        let snapshot = GuardDirectorySnapshotV2 {
+            version: GUARD_DIRECTORY_VERSION_V2,
+            directory_hash: certificate.directory_hash,
+            published_at_unix: certificate.published_at,
+            valid_after_unix: certificate.valid_after,
+            valid_until_unix: certificate.valid_until,
+            validation_phase: encode_validation_phase(CertificateValidationPhase::Phase2PreferDual),
+            issuers: vec![GuardDirectoryIssuerV1 {
+                fingerprint,
+                ed25519_public: ed_public,
+                mldsa65_public: issuer_keys.public_key().to_vec(),
+            }],
+            relays: vec![GuardDirectoryRelayEntryV2 {
+                certificate: bundle.to_cbor(),
+            }],
+        };
+        let bytes = snapshot.to_bytes().expect("encode snapshot");
+        let mut rng = StdRng::seed_from_u64(0xBAD_CAFE);
+
+        let err = rotate_snapshot(&bytes, &mut rng)
+            .expect_err("rotation must not preserve a pre-release validation policy");
+        assert!(
+            matches!(
+                &err,
+                DirectoryRotateError::UnsupportedReleasePhase {
+                    phase: CertificateValidationPhase::Phase2PreferDual
+                }
+            ),
+            "unexpected directory rotation error: {err:?}"
+        );
     }
 
     #[test]

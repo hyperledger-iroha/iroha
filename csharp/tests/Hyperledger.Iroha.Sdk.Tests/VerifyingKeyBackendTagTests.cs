@@ -108,11 +108,8 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("halo2/ipa")]
     [InlineData("halo2/pasta/kaigi-roster-v1")]
     [InlineData("halo2/pasta/kaigi-usage-v1")]
-    [InlineData("halo2/pasta/ivm-overlay-bind")]
     [InlineData("halo2/pasta/ivm-execution-v1")]
     [InlineData("halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3")]
-    [InlineData("halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2")]
-    [InlineData("halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2")]
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
@@ -154,6 +151,9 @@ public sealed class VerifyingKeyBackendTagTests
             "halo2/pasta/ipa/ivm-execution-v1",
             "halo2/ipa:ivm-execution-v1",
             "halo2/ipa::ivm-execution-v1",
+            "halo2/pasta/ivm-overlay-bind",
+            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "stark",
             "STARK/FRI",
             "stark/fri/",
@@ -304,9 +304,6 @@ public sealed class VerifyingKeyBackendTagTests
             "halo2/ipa:f-a-k-e",
             "halo2/ipa:stub",
             "halo2/ipa:s-a-m-p-l-e",
-            "halo2/pasta/asset-hidden-transfer-public-test",
-            "halo2/ipa/asset-hidden-transfer-public-test",
-            "halo2/ipa:asset-hidden-transfer-public-test",
             "halo2/pasta/tiny-add",
             "halo2/ipa/tiny-add",
             "halo2/ipa:tiny-add",

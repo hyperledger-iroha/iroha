@@ -1634,7 +1634,12 @@ final class ToriiClientTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        return ToriiClient(baseURL: baseURL, session: session, defaultHeaders: defaultHeaders)
+        return ToriiClient(
+            baseURL: baseURL,
+            session: session,
+            defaultHeaders: defaultHeaders,
+            localSigningContext: try! ToriiLocalSigningContext(chainId: "test-chain")
+        )
     }
 
     private func assertToriiInvalidPayload(
@@ -14010,6 +14015,147 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 }
 
+    private func verifyingKeyDraftResponse(
+        payload: Data? = nil
+    ) -> Data {
+        let payload = payload ?? canonicalVerifyingKeyTransactionPayload()
+        return try! JSONSerialization.data(withJSONObject: [
+            "submitted": false,
+            "transaction_payload_b64": payload.base64EncodedString(),
+            "signing_message_b64": IrohaHash.hash(payload).base64EncodedString(),
+        ])
+    }
+
+    private func canonicalVerifyingKeyTransactionPayload(
+        wireName: String =
+            "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+        chainId: String = "test-chain",
+        authority: String =
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+        backend: String = "halo2/ipa",
+        name: String = "vk_main",
+        version: UInt32 = 1,
+        circuitId: String = "halo2/ipa::transfer_v1",
+        schemaHash: Data = Data(repeating: 0xee, count: 32),
+        gasScheduleId: String? = "halo2_default",
+        keyBytes: Data? = Data([0x01, 0x02, 0x03]),
+        recordVersion: UInt32? = nil
+    ) -> Data {
+        func string(_ value: String) -> Data {
+            CompactNorito.encodeString(value)
+        }
+        func option(_ value: Data?) -> Data {
+            var writer = CompactNoritoWriter()
+            guard let value else {
+                writer.writeUInt8(0)
+                return writer.data
+            }
+            writer.writeUInt8(1)
+            writer.writeField(value)
+            return writer.data
+        }
+        func byteVector(_ value: Data) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt64LE(UInt64(value.count))
+            writer.writeBytes(value)
+            return writer.data
+        }
+        func uint32(_ value: UInt32) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt32LE(value)
+            return writer.data
+        }
+        func uint64(_ value: UInt64) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt64LE(value)
+            return writer.data
+        }
+        func structure(_ fields: [Data]) -> Data {
+            var writer = CompactNoritoWriter()
+            for field in fields {
+                writer.writeField(field)
+            }
+            return writer.data
+        }
+
+        let commitment: Data
+        if let keyBytes {
+            let backendBytes = Data(backend.utf8)
+            var preimage = Data("iroha:zk:v1:vk".utf8)
+            var backendLength = UInt64(backendBytes.count).bigEndian
+            var keyLength = UInt64(keyBytes.count).bigEndian
+            preimage.append(withUnsafeBytes(of: &backendLength) { Data($0) })
+            preimage.append(backendBytes)
+            preimage.append(withUnsafeBytes(of: &keyLength) { Data($0) })
+            preimage.append(keyBytes)
+            commitment = Data(SHA256.hash(data: preimage))
+        } else {
+            commitment = Data(repeating: 0x44, count: 32)
+        }
+        let id = structure([string(backend), string(name)])
+        let inlineKey = keyBytes.map {
+            structure([string(backend), byteVector($0)])
+        }
+        let record = structure([
+            uint32(recordVersion ?? version),
+            string(circuitId),
+            option(nil),
+            string("core"),
+            uint32(backend.hasPrefix("stark/") ? 1 : 0),
+            string("unknown"),
+            schemaHash,
+            commitment,
+            uint32(UInt32(keyBytes?.count ?? 1)),
+            uint32(0),
+            option(gasScheduleId.map(string)),
+            option(nil),
+            option(nil),
+            option(nil),
+            option(nil),
+            option(inlineKey),
+            Data([1]),
+        ])
+        let instructionBody = structure([id, record])
+        let archive = noritoEncode(
+            typeName: wireName,
+            payload: instructionBody,
+            flags: NoritoHeader.compactLen
+        )
+        let instruction = structure([string(wireName), byteVector(archive)])
+        var sequence = CompactNoritoWriter()
+        sequence.writeUInt64LE(1)
+        sequence.writeField(instruction)
+        var executable = CompactNoritoWriter()
+        executable.writeUInt32LE(0)
+        executable.writeField(sequence.data)
+
+        var chain = CompactNoritoWriter()
+        chain.writeField(string(chainId))
+        let authorityPayload = try! AccountAddress.parseEncoded(authority)
+            .compactNoritoAccountControllerPayload()
+        var feeAuthority = CompactNoritoWriter()
+        feeAuthority.writeField(uint64(0))
+        feeAuthority.writeField(Data([0]))
+        var feePayment = CompactNoritoWriter()
+        feePayment.writeUInt32LE(0)
+        feePayment.writeField(feeAuthority.data)
+        var payload = CompactNoritoWriter()
+        for field in [
+            chain.data,
+            authorityPayload,
+            uint64(0),
+            executable.data,
+            option(uint64(100_000)),
+            Data([0]),
+            feePayment.data,
+            uint64(0),
+            Data([0]),
+        ] {
+            payload.writeField(field)
+        }
+        return payload.data
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeMetricsAsync() async throws {
         let payload = """
@@ -14745,10 +14891,9 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterVerifyingKeyPostsSignedPayload() async throws {
+    func testRegisterVerifyingKeyReturnsUnsignedTransactionDraft() async throws {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:register-private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14765,25 +14910,27 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, requestBody.authority)
-            XCTAssertEqual(body["private_key"] as? String, "ed25519:register-private-key")
+            XCTAssertNil(body["private_key"])
             XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
             XCTAssertEqual(body["name"] as? String, "vk_main")
             XCTAssertEqual(body["vk_bytes"] as? String, "AQID")
             XCTAssertEqual(body["vk_len"] as? Int, 3)
             let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
+                                           statusCode: 200,
                                            httpVersion: nil,
-                                           headerFields: nil)!
-            return (response, nil)
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, self.verifyingKeyDraftResponse())
         }
-        try await makeClient().registerVerifyingKey(requestBody)
+        let draft = try await makeClient().registerVerifyingKey(requestBody)
+        XCTAssertFalse(draft.submitted)
+        XCTAssertEqual(draft.transactionPayload, canonicalVerifyingKeyTransactionPayload())
+        XCTAssertEqual(draft.signingMessage, IrohaHash.hash(draft.transactionPayload))
         XCTAssertTrue(didSendRequest)
     }
 
     func testRegisterVerifyingKeyRejectsInvalidSchemaHash() {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14798,10 +14945,263 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVerifyingKeyTransactionDraftRejectsMalformedOrRetiredFields() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        let payload = canonicalVerifyingKeyTransactionPayload()
+        let payloadB64 = payload.base64EncodedString()
+        let signingB64 = IrohaHash.hash(payload).base64EncodedString()
+        let cases: [(String, [String: Any])] = [
+            (
+                "submitted transaction",
+                [
+                    "submitted": true,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": signingB64,
+                ]
+            ),
+            (
+                "retired private key",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": signingB64,
+                    "private_key": "ed25519:must-not-be-accepted",
+                ]
+            ),
+            (
+                "missing signing message",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                ]
+            ),
+            (
+                "noncanonical payload base64",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": "AQI",
+                    "signing_message_b64": signingB64,
+                ]
+            ),
+            (
+                "noncanonical transaction payload",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": Data([0x01, 0x02, 0x03]).base64EncodedString(),
+                    "signing_message_b64": IrohaHash.hash(Data([0x01, 0x02, 0x03])).base64EncodedString(),
+                ]
+            ),
+            (
+                "wrong-size signing message",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": Data(repeating: 0x01, count: 31).base64EncodedString(),
+                ]
+            ),
+            (
+                "mismatched signing message",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": Data(repeating: 0x02, count: 32).base64EncodedString(),
+                ]
+            ),
+        ]
+
+        for (label, object) in cases {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, data)
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().registerVerifyingKey(request),
+                label
+            ) { _ in }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVerifyingKeyDraftRequiresImmutableLocalSigningContextBeforeDispatch() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session
+        )
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        var didDispatch = false
+        StubURLProtocol.handler = { request in
+            didDispatch = true
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 500,
+                                httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await client.registerVerifyingKey(request)
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("ToriiLocalSigningContext"))
+        }
+        XCTAssertFalse(didDispatch)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyRejectsSemanticallySubstitutedDrafts() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        let cases: [(label: String, payload: Data, expectedReason: String)] = [
+            (
+                "wrong operation",
+                canonicalVerifyingKeyTransactionPayload(
+                    wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"
+                ),
+                "requested registry operation"
+            ),
+            (
+                "wrong identifier",
+                canonicalVerifyingKeyTransactionPayload(name: "vk_substituted"),
+                "identifier does not match"
+            ),
+            (
+                "wrong full record",
+                canonicalVerifyingKeyTransactionPayload(recordVersion: 2),
+                "full requested record"
+            ),
+            (
+                "wrong chain",
+                canonicalVerifyingKeyTransactionPayload(chainId: "other-chain"),
+                "configured chain"
+            ),
+            (
+                "wrong authority",
+                canonicalVerifyingKeyTransactionPayload(
+                    authority: "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE"
+                ),
+                "requested authority"
+            ),
+        ]
+
+        for item in cases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    response,
+                    self.verifyingKeyDraftResponse(payload: item.payload)
+                )
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().registerVerifyingKey(request),
+                item.label
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error, got \(error)")
+                }
+                XCTAssertTrue(reason.contains(item.expectedReason), "\(item.label): \(reason)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyRequiresHttp200AndUniqueResponseFields() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01])
+        )
+        StubURLProtocol.handler = { urlRequest in
+            let response = HTTPURLResponse(
+                url: urlRequest.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, self.verifyingKeyDraftResponse())
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().registerVerifyingKey(request)
+        ) { error in
+            guard case let ToriiClientError.httpStatus(code, _, _) = error else {
+                return XCTFail("Expected HTTP status error, got \(error)")
+            }
+            XCTAssertEqual(code, 202)
+        }
+
+        StubURLProtocol.handler = { urlRequest in
+            let response = HTTPURLResponse(
+                url: urlRequest.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let payload = self.canonicalVerifyingKeyTransactionPayload()
+            let signing = IrohaHash.hash(payload)
+            let duplicate = """
+            {"submitted":false,"submitted":false,"transaction_payload_b64":"\(payload.base64EncodedString())","signing_message_b64":"\(signing.base64EncodedString())"}
+            """
+            return (response, Data(duplicate.utf8))
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().registerVerifyingKey(request)
+        ) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error, got \(error)")
+            }
+        }
+    }
+
     func testRegisterVerifyingKeyRejectsPaddedSelectorMetadata() {
         let base = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14853,7 +15253,6 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsVkLengthMismatch() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14873,7 +15272,6 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsLengthOnlyVerifierMaterial() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14894,7 +15292,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         let bytes = Data([0x01, 0x02, 0x03])
         var registerRequest = ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14913,7 +15310,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         var updateRequest = ToriiVerifyingKeyUpdateRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -14932,7 +15328,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         let bytes = Data([0x01, 0x02, 0x03])
         var registerRequest = ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14952,7 +15347,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         var updateRequest = ToriiVerifyingKeyUpdateRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -14994,7 +15388,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         for backend in unsupported {
             let registerRequest = ToriiVerifyingKeyRegisterRequest(
                 authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                privateKey: "ed25519:private-key",
                 backend: backend,
                 name: "vk_main",
                 version: 1,
@@ -15011,7 +15404,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
                 authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                privateKey: "ed25519:private-key",
                 backend: backend,
                 name: "vk_main",
                 version: 2,
@@ -15033,7 +15425,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         for name in blankNames {
             let registerRequest = ToriiVerifyingKeyRegisterRequest(
                 authority: "alice",
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: name,
                 version: 1,
@@ -15051,7 +15442,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
                 authority: "alice",
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: name,
                 version: 2,
@@ -15068,13 +15458,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
-    func testVerifyingKeyRequestsRejectBlankSigningFieldsBeforeEncoding() {
+    func testVerifyingKeyRequestsRejectBlankAuthorityBeforeEncoding() {
         let blankValues = ["", "   ", "\t", "\n"]
 
         for blank in blankValues {
             let registerWithBlankAuthority = ToriiVerifyingKeyRegisterRequest(
                 authority: blank,
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: "vk_main",
                 version: 1,
@@ -15090,27 +15479,8 @@ final class ToriiClientHeaderTests: XCTestCase {
                 XCTAssertTrue(reason.contains("authority must be a non-empty string"))
             }
 
-            let registerWithBlankPrivateKey = ToriiVerifyingKeyRegisterRequest(
-                authority: "alice",
-                privateKey: blank,
-                backend: "halo2/ipa",
-                name: "vk_main",
-                version: 1,
-                circuitId: "halo2/ipa::transfer_v1",
-                publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-                gasScheduleId: "halo2_default"
-            )
-            XCTAssertThrowsError(try JSONEncoder().encode(registerWithBlankPrivateKey),
-                                 "register must reject blank private_key \(String(reflecting: blank))") { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload error")
-                }
-                XCTAssertTrue(reason.contains("private_key must be a non-empty string"))
-            }
-
             let updateWithBlankAuthority = ToriiVerifyingKeyUpdateRequest(
                 authority: blank,
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: "vk_main",
                 version: 2,
@@ -15124,31 +15494,13 @@ final class ToriiClientHeaderTests: XCTestCase {
                 }
                 XCTAssertTrue(reason.contains("authority must be a non-empty string"))
             }
-
-            let updateWithBlankPrivateKey = ToriiVerifyingKeyUpdateRequest(
-                authority: "alice",
-                privateKey: blank,
-                backend: "halo2/ipa",
-                name: "vk_main",
-                version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
-                publicInputsSchemaHashHex: String(repeating: "b", count: 64)
-            )
-            XCTAssertThrowsError(try JSONEncoder().encode(updateWithBlankPrivateKey),
-                                 "update must reject blank private_key \(String(reflecting: blank))") { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload error")
-                }
-                XCTAssertTrue(reason.contains("private_key must be a non-empty string"))
-            }
         }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testUpdateVerifyingKeyPostsSignedPayload() async throws {
+    func testUpdateVerifyingKeyReturnsUnsignedTransactionDraft() async throws {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:update-private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -15168,26 +15520,46 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, requestBody.authority)
-            XCTAssertEqual(body["private_key"] as? String, "ed25519:update-private-key")
+            XCTAssertNil(body["private_key"])
             XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
             XCTAssertEqual(body["name"] as? String, "vk_main")
             XCTAssertEqual(body["commitment_hex"] as? String, requestBody.commitmentHex)
             XCTAssertEqual(body["vk_bytes"] as? String, "qg==")
             XCTAssertEqual(body["vk_len"] as? Int, 1)
             let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
+                                           statusCode: 200,
                                            httpVersion: nil,
-                                           headerFields: nil)!
-            return (response, nil)
+                                           headerFields: ["Content-Type": "application/json"])!
+            let payload = self.canonicalVerifyingKeyTransactionPayload(
+                wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                schemaHash: Data(repeating: 0xff, count: 32),
+                gasScheduleId: nil,
+                keyBytes: Data([0xAA])
+            )
+            return (response, self.verifyingKeyDraftResponse(payload: payload))
         }
-        try await makeClient().updateVerifyingKey(requestBody)
+        let draft = try await makeClient().updateVerifyingKey(requestBody)
+        XCTAssertFalse(draft.submitted)
+        XCTAssertEqual(
+            draft.transactionPayload,
+            canonicalVerifyingKeyTransactionPayload(
+                wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                schemaHash: Data(repeating: 0xff, count: 32),
+                gasScheduleId: nil,
+                keyBytes: Data([0xAA])
+            )
+        )
+        XCTAssertEqual(draft.signingMessage, IrohaHash.hash(draft.transactionPayload))
         XCTAssertTrue(didSendRequest)
     }
 
     func testUpdateVerifyingKeyRejectsInvalidCommitmentHex() {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,

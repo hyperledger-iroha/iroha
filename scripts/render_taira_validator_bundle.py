@@ -105,6 +105,12 @@ class SharedSecrets:
     torii_faucet_authority: str | None = None
     torii_faucet_private_key: str | None = None
     kagemusha_commands_private_key: str | None = None
+    soracloud_runtime_signer_handle: str | None = None
+    soracloud_runtime_signer_authority: str | None = None
+    soracloud_runtime_signer_algorithm: str | None = None
+    soracloud_runtime_signer_public_key_hex: str | None = None
+    soracloud_runtime_signer_revision: int | None = None
+    soracloud_runtime_signer_policy_digest_hex: str | None = None
     offline_asset_alias: str | None = None
     offline_asset_definition_id: str | None = None
     offline_asset_scale: int | None = None
@@ -309,7 +315,7 @@ def _encode_taira_i105(canonical: bytes) -> str:
     )
 
 
-def _validate_taira_i105_account(value: str, context: str) -> None:
+def _decode_taira_i105_account(value: str, context: str) -> bytes:
     if not value.startswith("test") or value != value.strip() or "@" in value:
         raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
     payload = value[len("test") :]
@@ -326,6 +332,11 @@ def _validate_taira_i105_account(value: str, context: str) -> None:
         raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
     if _encode_taira_i105(canonical) != value:
         raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
+    return canonical
+
+
+def _validate_taira_i105_account(value: str, context: str) -> None:
+    _decode_taira_i105_account(value, context)
 
 
 def _validate_asset_definition_id(value: str, context: str) -> None:
@@ -492,6 +503,132 @@ def _validate_account_onboarding_secrets(
             raise ValueError(
                 f"{context} BOI/Taira onboarding dataspace must be exactly `is`"
             )
+
+
+def _validate_mandatory_soracloud_runtime_signer(
+    shared: SharedSecrets, context: str
+) -> None:
+    required = {
+        "soracloud_runtime_signer_handle": shared.soracloud_runtime_signer_handle,
+        "soracloud_runtime_signer_authority": shared.soracloud_runtime_signer_authority,
+        "soracloud_runtime_signer_algorithm": shared.soracloud_runtime_signer_algorithm,
+        "soracloud_runtime_signer_public_key_hex": (
+            shared.soracloud_runtime_signer_public_key_hex
+        ),
+        "soracloud_runtime_signer_revision": shared.soracloud_runtime_signer_revision,
+        "soracloud_runtime_signer_policy_digest_hex": (
+            shared.soracloud_runtime_signer_policy_digest_hex
+        ),
+    }
+    missing = [key for key, value in required.items() if value is None]
+    if missing:
+        raise ValueError(
+            f"{context} production Soracloud runtime signer is mandatory; missing "
+            + ", ".join(missing)
+        )
+    placeholders = [
+        key
+        for key, value in required.items()
+        if isinstance(value, str) and value.startswith("REPLACE_WITH_")
+    ]
+    if placeholders:
+        raise ValueError(
+            f"{context} Soracloud runtime signer still contains placeholders: "
+            + ", ".join(placeholders)
+        )
+
+    handle = shared.soracloud_runtime_signer_handle or ""
+    allowed_handle_bytes = set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-"
+    )
+    rejected_components = {
+        "null",
+        "mock",
+        "test",
+        "dev",
+        "fake",
+        "dummy",
+        "placeholder",
+    }
+    if (
+        not handle
+        or len(handle.encode("utf-8")) > 256
+        or not handle.isascii()
+        or any(character not in allowed_handle_bytes for character in handle)
+        or any(
+            component in rejected_components
+            for component in re.split(r"[^a-z0-9]+", handle.lower())
+        )
+    ):
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_handle must be a credential-free "
+            "production provider handle"
+        )
+
+    authority = shared.soracloud_runtime_signer_authority or ""
+    canonical_authority = _decode_taira_i105_account(
+        authority,
+        f"{context} soracloud_runtime_signer_authority",
+    )
+    algorithm = shared.soracloud_runtime_signer_algorithm
+    public_key_hex = shared.soracloud_runtime_signer_public_key_hex or ""
+    if (
+        not public_key_hex
+        or len(public_key_hex) > 16 * 1024
+        or len(public_key_hex) % 2
+        or public_key_hex != public_key_hex.lower()
+        or any(character not in "0123456789abcdef" for character in public_key_hex)
+    ):
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_public_key_hex must be bounded "
+            "canonical lowercase hexadecimal"
+        )
+    public_key = bytes.fromhex(public_key_hex)
+    if not any(public_key):
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_public_key_hex must be nonzero"
+        )
+    if algorithm == "ed25519":
+        if len(public_key) != 32:
+            raise ValueError(
+                f"{context} Ed25519 Soracloud runtime signer public key must be 32 bytes"
+            )
+        expected_authority = bytes((2, 0, 1, len(public_key))) + public_key
+    elif algorithm == "ml_dsa":
+        if len(public_key) != 1_952:
+            raise ValueError(
+                f"{context} ML-DSA Soracloud runtime signer public key must be 1952 bytes"
+            )
+        expected_authority = (
+            bytes((2, 2, 4)) + len(public_key).to_bytes(2, "big") + public_key
+        )
+    else:
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_algorithm must be exactly "
+            "`ed25519` or `ml_dsa`"
+        )
+    if canonical_authority != expected_authority:
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_authority must be derived from "
+            "soracloud_runtime_signer_public_key_hex"
+        )
+
+    revision = shared.soracloud_runtime_signer_revision
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision <= 0:
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_revision must be a positive integer"
+        )
+    policy_digest = shared.soracloud_runtime_signer_policy_digest_hex or ""
+    if (
+        len(policy_digest) != 64
+        or policy_digest != policy_digest.lower()
+        or any(character not in "0123456789abcdef" for character in policy_digest)
+        or set(policy_digest) == {"0"}
+    ):
+        raise ValueError(
+            f"{context} soracloud_runtime_signer_policy_digest_hex must be a "
+            "canonical nonzero 32-byte lowercase digest"
+        )
 
 
 def _validate_mandatory_offline_secrets(
@@ -735,6 +872,34 @@ def load_secret_material(path: Path) -> SecretMaterial:
         kagemusha_commands_private_key=_optional_string(
             shared_raw, "kagemusha_commands_private_key", f"secrets file `{path}`"
         ),
+        soracloud_runtime_signer_handle=_optional_string(
+            shared_raw,
+            "soracloud_runtime_signer_handle",
+            f"secrets file `{path}`",
+        ),
+        soracloud_runtime_signer_authority=_optional_string(
+            shared_raw,
+            "soracloud_runtime_signer_authority",
+            f"secrets file `{path}`",
+        ),
+        soracloud_runtime_signer_algorithm=_optional_string(
+            shared_raw,
+            "soracloud_runtime_signer_algorithm",
+            f"secrets file `{path}`",
+        ),
+        soracloud_runtime_signer_public_key_hex=_optional_string(
+            shared_raw,
+            "soracloud_runtime_signer_public_key_hex",
+            f"secrets file `{path}`",
+        ),
+        soracloud_runtime_signer_revision=shared_raw.get(
+            "soracloud_runtime_signer_revision"
+        ),
+        soracloud_runtime_signer_policy_digest_hex=_optional_string(
+            shared_raw,
+            "soracloud_runtime_signer_policy_digest_hex",
+            f"secrets file `{path}`",
+        ),
         offline_asset_alias=_optional_string(
             shared_raw, "offline_asset_alias", f"secrets file `{path}`"
         ),
@@ -760,6 +925,9 @@ def load_secret_material(path: Path) -> SecretMaterial:
             f"secrets file `{path}` must configure both torii_faucet_authority "
             "and torii_faucet_private_key"
         )
+    _validate_mandatory_soracloud_runtime_signer(
+        shared, f"secrets file `{path}`"
+    )
     _validate_mandatory_offline_secrets(shared, f"secrets file `{path}`")
     return SecretMaterial(
         validators=secrets,
@@ -834,8 +1002,9 @@ def render_genesis_template(
 
     The matching private validator keys are intentionally absent. ``kagami
     genesis sign --config`` stages this template, derives the signed Nexus/AMX
-    height-context commitment from the chosen validator config, and only then
-    emits the final Norito genesis block.
+    and execution-policy height-context commitments from the chosen validator
+    config, persists that exact bound manifest, and only then emits the final
+    Norito genesis block.
     """
 
     payload = json.loads(base_genesis_path.read_text(encoding="utf-8"))
@@ -964,6 +1133,8 @@ def render_genesis_template(
                 "--config",
                 str(output_dir / validators[0].slug / "config.toml"),
                 "--private-key \"$TAIRA_GENESIS_PRIVATE_KEY\"",
+                "--bound-manifest-out",
+                str(target),
                 "--out-file",
                 str(output_dir / "genesis.signed.nrt"),
             ]
@@ -1226,6 +1397,27 @@ def render_validator_config(
                 f'private_key = {_quote_toml(shared.kagemusha_commands_private_key)}'
             )
             continue
+        if current_section == "[soracloud_runtime.submission.signer]":
+            signer_values = {
+                "handle": shared.soracloud_runtime_signer_handle,
+                "authority": shared.soracloud_runtime_signer_authority,
+                "algorithm": shared.soracloud_runtime_signer_algorithm,
+                "public_key_hex": shared.soracloud_runtime_signer_public_key_hex,
+                "policy_digest_hex": (
+                    shared.soracloud_runtime_signer_policy_digest_hex
+                ),
+            }
+            field = stripped.partition("=")[0].strip()
+            if field == "revision":
+                rendered.append(
+                    f"revision = {shared.soracloud_runtime_signer_revision}"
+                )
+                continue
+            if field in signer_values:
+                rendered.append(
+                    f"{field} = {_quote_toml(signer_values[field] or '')}"
+                )
+                continue
         if (
             current_section == "[settlement.offline]"
             and stripped.startswith("escrow_accounts = ")

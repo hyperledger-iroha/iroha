@@ -103,8 +103,15 @@ ANDROID_SDK_ROOT=~/Library/Android/sdk \
 Start the provided Docker Compose network:
 
 ```bash
+cargo run --bin kagami -- keys --out-dir target/compose-genesis
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/public.key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
 docker compose -f defaults/docker-compose.yml up
 ```
+
+The checked-in Compose files are development manifests and contain no genesis
+signing key. Kagami creates fresh owner-only custody and Compose fails closed
+when either runtime key-file path is missing.
 
 Use the CLI against the default client config:
 

@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` ხელახლა იყენებს არსებულ 48 ბაიტიან წერტილს, რომელიც გამოიყენება
-  `iroha_crypto::kzg`. მერკლის ბილიკები მას ცარიელი ტოვებს; `kzg_bls12_381` ზოლები ახლა
-  მიიღოს დეტერმინისტული BLAKE3-XOF ვალდებულება, რომელიც მიღებულია ნატეხი ფესვიდან და
-  შენახვის ბილეთი, ასე რომ, ბლოკის ჰეშები სტაბილური რჩება გარე პროვერის გარეშე.
-- `proof_scheme` მიღებულია ზოლის კატალოგიდან; მერკლის შესახვევები უარყოფენ მაწანწალა KZG-ს
-  ტვირთამწეობა, ხოლო `kzg_bls12_381` ზოლები მოითხოვს არანულოვან KZG ვალდებულებებს.
-- `proof_digest` მოელის DA-5 PDP/PoTR ინტეგრაციას, ასე რომ იგივე ჩანაწერი
-  ჩამოთვლის შერჩევის გრაფიკს, რომელიც გამოიყენება ბლომების ცოცხალი შესანარჩუნებლად.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 სათაურის გაფართოების დაბლოკვა
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`; ჩადენილი ჩალიჩები წინ უსწრებს ქვითრის კურსორებს (ჰიდრატირებული
    კურადან გადატვირთვისას) და გახეხეთ შემორჩენილი კოჭის ჩანაწერები შეკრული დისკის ზრდისთვის.
 
-ბლოკის შეკრება და `BlockCreated` მიღება ხელახლა ადასტურებს თითოეულ ვალდებულებას
-ზოლის კატალოგი: მერკლის ზოლები უარყოფს მაწანწალა KZG ვალდებულებებს, KZG ზოლები მოითხოვს
-არანულოვანი KZG ვალდებულება და არანულოვანი `chunk_root` და უცნობი ზოლები არის
-დაეცა. Torii-ის `/v1/da/commitments/verify` ბოლო წერტილი ასახავს იმავე მცველს,
-და ingest now threads deterministic KZG ვალდებულება ყველა
-`kzg_bls12_381` ჩაიწერება ისე, რომ პოლიტიკის შესაბამისმა პაკეტებმა მიაღწიონ ბლოკის შეკრებას.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 მიღების გეგმაში აღწერილი მანიფესტის მოწყობილობები ორმაგდება, როგორც წყარო
 სიმართლე ვალდებულებების შეფუთვისთვის. Torii ტესტი
@@ -210,9 +199,7 @@ WSV ინახავს ვალდებულებებს მიძღ�
 
 ## ღია კითხვები
 
-1. **KZG vs Merkle-ის ნაგულისხმევი** — უნდა გამოტოვოთ თუ არა პატარა ბლოკები KZG-ის ვალდებულებებს.
-   შევამციროთ ბლოკის ზომა? წინადადება: შეინახეთ `kzg_commitment` სურვილისამებრ და კარიბჭის გავლით
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **მიმდევრობის ხარვეზები** — ვუშვებთ თუ არა მწყობრიდან გამოსული ზოლები? მიმდინარე გეგმა უარყოფს ხარვეზებს
    თუ მმართველობა არ გადართავს `allow_sequence_skips`-ს გადაუდებელი გამეორებისთვის.
 3. **Light-client cache** — SDK გუნდმა მოითხოვა მსუბუქი SQLite ქეში ამისთვის

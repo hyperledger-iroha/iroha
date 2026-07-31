@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment`-ը վերօգտագործում է գոյություն ունեցող 48 բայթ կետը, որն օգտագործվում է տակ
-  `iroha_crypto::kzg`. Մերկլի ուղիները թողնում են այն դատարկ; `kzg_bls12_381` գոտիներ հիմա
-  ստանալ դետերմինիստական BLAKE3-XOF պարտավորություն, որը բխում է բուն արմատից և
-  պահեստավորման տոմս, որպեսզի բլոկի հեշերը կայուն մնան առանց արտաքին պրովերի:
-- `proof_scheme`-ը բխում է գծերի կատալոգից; Մերկլի ուղիները մերժում են թափառող KZG-ն
-  օգտակար բեռներ, մինչդեռ `kzg_bls12_381` գոտիները պահանջում են ոչ զրոյական KZG պարտավորություններ:
-- `proof_digest`-ն ակնկալում է DA-5 PDP/PoTR ինտեգրում, այնպես որ նույն ռեկորդը
-  թվարկում է նմուշառման ժամանակացույցը, որն օգտագործվում է բշտիկները կենդանի պահելու համար:
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Արգելափակել վերնագրի ընդլայնումը
 
@@ -126,12 +120,7 @@ pub struct DaCommitmentBundle {
    `SignedBlockWire`; պարտավորված փաթեթները առաջ են տանում անդորրագրի կուրսորները (ջրացված
    Kura-ից՝ վերագործարկման ժամանակ) և կտրել հնացած կծիկի մուտքերը՝ կապված սկավառակի աճին:
 
-Արգելափակման հավաքումը և `BlockCreated`-ի ընդունումը վերահաստատում են յուրաքանչյուր պարտավորություն
-Գոտիների կատալոգ. Մերկլի ուղիները մերժում են մոլորված KZG պարտավորությունները, KZG գոտիները պահանջում են
-ոչ զրոյական KZG պարտավորություն և ոչ զրոյական `chunk_root`, և անհայտ գոտիները
-ընկել է. Torii-ի `/v1/da/commitments/verify` վերջնակետը արտացոլում է նույն պահակը,
-and ingest now threads the deterministic KZG-ի պարտավորությունը յուրաքանչյուրի մեջ
-`kzg_bls12_381` գրանցում է, որպեսզի քաղաքականությանը համապատասխանող փաթեթները հասնեն բլոկի հավաքմանը:
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 ընդունման պլանում նկարագրված մանիֆեստային հարմարանքները կրկնապատկվում են որպես աղբյուր
 ճշմարտություն պարտավորությունների փաթեթի համար: Torii թեստը
@@ -210,9 +199,7 @@ WSV-ն պահում է պարտավորությունները հատուկ սյ�
 
 ## Բաց Հարցեր
 
-1. **KZG vs Merkle լռելյայն** — Արդյո՞ք փոքր բշտիկները միշտ պետք է բաց թողնեն KZG-ի պարտավորությունները:
-   նվազեցնել բլոկի չափը Առաջարկ՝ պահել `kzg_commitment`-ը կամընտիր և մուտք գործել
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Հաջորդականության բացեր** — Արդյո՞ք մենք թույլ ենք տալիս շարքից դուրս երթուղիներ: Ընթացիկ պլանը մերժում է բացերը
    եթե կառավարումը չմիացնի `allow_sequence_skips`-ը արտակարգ իրավիճակների վերարտադրման համար:
 3. **Light-client cache** — SDK թիմը խնդրել է թեթև SQLite քեշ

@@ -101,6 +101,10 @@ Soracloud host syscalls are ABI-listed and access-described; dedicated
 Soracloud handler execution uses `irohad`'s `SoracloudIvmHost`, while ordinary
 `CoreHostImpl` contract execution validates their request TLV, schema,
 operation, and payload variant, then fails closed with metered `NotImplemented`.
+`SoracloudIvmHost` has no ledger world-state snapshot and therefore excludes
+the complete state-backed AXT syscall family from its advertised host surface;
+AXT execution remains confined to production `CoreHostImpl` instances backed
+by replicated ledger state and a Space Directory policy snapshot.
 
 2. Syscall surface vs. ISI/Data Model naming and coverage
 

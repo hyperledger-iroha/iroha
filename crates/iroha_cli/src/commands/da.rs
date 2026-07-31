@@ -23,7 +23,7 @@ use iroha::data_model::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::DaIngestReceipt,
         manifest::DaManifestV1,
-        pin_intent::DaPinIntentWithLocation,
+        pin_intent::{DaPinIntentProof, DaPinIntentWithLocation},
         types::{
             BlobCodec, BlobDigest, DaRentLedgerProjection, DaRentPolicyV1, DaRentQuote,
             ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
@@ -422,17 +422,20 @@ impl PinIntentQueryArgs {
 
 #[derive(Args, Debug)]
 pub struct PinIntentVerifyArgs {
-    /// Path to a JSON-encoded `DaPinIntentWithLocation`.
+    /// Path to a JSON-encoded `DaPinIntentProof`.
     #[arg(long = "proof-json", value_name = "PATH")]
     pub proof_json: PathBuf,
 }
 
 impl PinIntentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let proof =
-            load_json_payload::<DaPinIntentWithLocation>(&self.proof_json, "DA pin intent proof")?;
+        let proof = load_json_payload::<DaPinIntentProof>(&self.proof_json, "DA pin intent proof")?;
         let response = context.client_from_config().verify_da_pin_intent(&proof)?;
-        let text = render_da_verify_text("DA pin intent verification", response.valid, None);
+        let text = render_da_verify_text(
+            "DA pin intent verification",
+            response.valid,
+            response.error.as_deref(),
+        );
         print_with_optional_text(context, Some(text), &response)
     }
 }
@@ -1249,7 +1252,7 @@ fn render_da_pin_intents_list_text(response: &[DaPinIntentWithLocation]) -> Stri
     out
 }
 
-fn render_da_pin_intent_prove_text(response: &Option<DaPinIntentWithLocation>) -> String {
+fn render_da_pin_intent_prove_text(response: &Option<DaPinIntentProof>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA pin intent proof");
     match response {
@@ -1809,7 +1812,7 @@ mod tests {
     use super::*;
     use iroha::{
         config::{self, Config},
-        crypto::KeyPair,
+        crypto::{Hash, HashOf, KeyPair},
         data_model::{
             Metadata,
             prelude::{AccountId, ChainId},
@@ -1819,7 +1822,7 @@ mod tests {
     use iroha_data_model::da::{
         commitment::DaProofPolicyBundle,
         manifest::{ChunkCommitment, ChunkRole},
-        pin_intent::DaPinIntent,
+        pin_intent::{DaPinIntent, DaPinIntentBundle},
         types::{
             BlobClass, BlobDigest, DaRentQuote, ErasureProfile, ExtraMetadata, FecScheme,
             GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy, StorageTicketId,
@@ -2438,12 +2441,18 @@ mod tests {
             StorageTicketId::new([0x44; 32]),
             ManifestDigest::new([0x55; 32]),
         );
-        let proof = DaPinIntentWithLocation {
+        let proof = DaPinIntentProof {
             intent,
             location: iroha::data_model::da::commitment::DaCommitmentLocation {
                 block_height: 4,
                 index_in_bundle: 1,
             },
+            bundle_hash: HashOf::<DaPinIntentBundle>::from_untyped_unchecked(Hash::prehashed(
+                [0x66; Hash::LENGTH],
+            )),
+            bundle_len: 2,
+            root: Hash::prehashed([0x77; Hash::LENGTH]),
+            path: Vec::new(),
         };
         let tmp = NamedTempFile::new().expect("temp file");
         fs::write(
@@ -2451,7 +2460,7 @@ mod tests {
             norito::json::to_vec(&proof).expect("encode pin intent proof"),
         )
         .expect("write json payload");
-        let decoded: DaPinIntentWithLocation =
+        let decoded: DaPinIntentProof =
             load_json_payload(tmp.path(), "DA pin intent proof").expect("decode payload");
         assert_eq!(decoded, proof);
     }

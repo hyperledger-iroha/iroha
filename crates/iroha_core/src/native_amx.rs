@@ -2775,7 +2775,7 @@ pub fn validate_native_amx_qc(
     {
         return Err(NativeAmxQcValidationError::InvalidValidatorSet);
     }
-    if qc.validator_set != validator_set {
+    if qc.validator_set() != validator_set {
         return Err(NativeAmxQcValidationError::ValidatorSetMismatch);
     }
     if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
@@ -2799,10 +2799,7 @@ pub fn validate_native_amx_qc(
         );
     }
 
-    if qc.validator_set_pops.len() != validator_set.len() {
-        return Err(NativeAmxQcValidationError::InvalidProofOfPossession);
-    }
-    for (validator, embedded_pop) in validator_set.iter().zip(&qc.validator_set_pops) {
+    for (validator, embedded_pop) in qc.validators_with_pops() {
         if !peer_uses_bls_normal(validator) {
             return Err(NativeAmxQcValidationError::SignerNotBlsNormal);
         }
@@ -2926,7 +2923,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             }
             let common_qc_shape = |qc: &NativeAmxAttestationQcV2, phase: NativeAmxPhase| {
                 let body = &qc.body;
-                let validator_count = qc.validator_set.len();
+                let validator_count = qc.validator_set().len();
                 let expected_quorum =
                     crate::sumeragi::network_topology::commit_quorum_from_len(validator_count)
                         .max(1);
@@ -2991,13 +2988,12 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                     && advertised_validator_count == validator_count
                     && advertised_min_quorum == expected_quorum
                     && qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
-                    && qc.validator_set_hash == HashOf::new(&qc.validator_set)
+                    && qc.validator_set_hash == qc.computed_validator_set_hash()
                     && qc.validator_set_hash == body.participant_validator_set_hash
-                    && qc.validator_set.windows(2).all(|pair| pair[0] < pair[1])
-                    && qc.validator_set.iter().all(peer_uses_bls_normal)
-                    && qc.validator_set_pops.len() == validator_count
+                    && qc.validator_set().windows(2).all(|pair| pair[0] < pair[1])
+                    && qc.validator_set().iter().all(peer_uses_bls_normal)
                     && qc
-                        .validator_set_pops
+                        .validator_set_pops()
                         .iter()
                         .all(|pop| pop.len() == NATIVE_AMX_BLS_PROOF_BYTES)
                     && qc.signers_bitmap.len() == validator_count.div_ceil(8)
@@ -3007,8 +3003,8 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             };
             if !common_qc_shape(prepare, NativeAmxPhase::Prepare)
                 || !common_qc_shape(commit, NativeAmxPhase::Commit)
-                || prepare.validator_set != commit.validator_set
-                || prepare.validator_set_pops != commit.validator_set_pops
+                || prepare.validator_set() != commit.validator_set()
+                || prepare.validator_set_pops() != commit.validator_set_pops()
                 || prepare.validator_set_hash != commit.validator_set_hash
             {
                 return false;
@@ -3166,15 +3162,17 @@ pub fn aggregate_votes_to_qc(
     let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .map_err(|_| NativeAmxQcBuildError::SignatureAggregate)?;
 
-    Ok(NativeAmxAttestationQcV2 {
+    let validator_set_hash = HashOf::new(&validator_set);
+    NativeAmxAttestationQcV2::try_new(
         body,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&validator_set),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash,
         validator_set,
         validator_set_pops,
         signers_bitmap,
         bls_aggregate_signature,
-    })
+    )
+    .map_err(|_| NativeAmxQcBuildError::InvalidProofOfPossession)
 }
 
 #[derive(Default)]
@@ -5092,8 +5090,8 @@ mod tests {
         .expect("valid quorum should aggregate");
 
         assert_eq!(qc.body, body);
-        assert_eq!(qc.validator_set, validator_set);
-        assert_eq!(qc.validator_set_pops, validator_set_pops);
+        assert_eq!(qc.validator_set(), validator_set.as_slice());
+        assert_eq!(qc.validator_set_pops(), validator_set_pops.as_slice());
         let mut expected_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
         for keypair in [&keypairs[2], &keypairs[0], &keypairs[1]] {
             let signer = PeerId::new(keypair.public_key().clone());

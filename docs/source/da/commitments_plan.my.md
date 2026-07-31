@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` သည် အောက်ရှိ ရှိပြီးသား 48-byte point ကို ပြန်သုံးသည်
-  `iroha_crypto::kzg`။ Merkle လမ်းသွားများသည် ၎င်းကို ကွက်လပ်ထားခဲ့သည်။ ယခု `kzg_bls12_381` လမ်းသွယ်
-  အတုံးအမြစ်မှ ဆင်းသက်လာသော အဆုံးအဖြတ်ပေးသော BLAKE3-XOF ကတိကဝတ်ကို လက်ခံရယူပါ။
-  သိုလှောင်မှုလက်မှတ်သည် ပြင်ပသက်သေမပါဘဲ ပိတ်ဆို့ထားသော ဟက်ရှ်များ တည်ငြိမ်နေပါသည်။
-- `proof_scheme` သည် လမ်းသွားကတ်တလောက်မှ ဆင်းသက်လာသည်။ Merkle လမ်းကြောများ သည် KZG မှ လမ်းလွဲခြင်းကို ငြင်းပယ်သည်။
-  `kzg_bls12_381` လမ်းကြောများသည် KZG ကတိကဝတ်များ သုညမဟုတ်သော လိုအပ်ပါသည်။
-- `proof_digest` သည် DA-5 PDP/PoTR ပေါင်းစပ်မှုကို မျှော်လင့်ထားသောကြောင့် တူညီသောစံချိန်
-  blobs အသက်ရှင်နေစေရန်အသုံးပြုသည့်နမူနာအချိန်ဇယားကိုရေတွက်သည်။
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 ခေါင်းစီးတိုးချဲ့မှုကို ပိတ်ဆို့ခြင်း။
 
@@ -126,12 +120,7 @@ Torii တိုင်အောင် မှန်ကန်သော အစုအ
    `SignedBlockWire`; ကတိပြုထားသောအစုအဝေးများသည် ပြေစာကာဆာများကို ကြိုပေးသည် (hydrated
    ပြန်လည်စတင်ချိန်တွင် Kura မှ) နှင့် ဒစ်ခ်ကြီးထွားမှုကို ချည်နှောင်ထားသော stale spool entries များကို သုတ်သင်ပါ။
 
-စည်းဝေးပွဲကို ပိတ်ဆို့ပြီး `BlockCreated` ကို ထည့်သွင်းခြင်းသည် ကတိကဝတ်တစ်ခုစီကို ပြန်လည်အတည်ပြုသည်
-လမ်းသွားကတ်တလောက်- Merkle လမ်းကြောများသည် လမ်းလွဲနေသော KZG ကတိကဝတ်များကို ငြင်းပယ်သည်၊ KZG လမ်းကြောများ လိုအပ်သည်
-သုညမဟုတ်သော KZG ကတိကဝတ်နှင့် သုညမဟုတ်သော `chunk_root`၊ နှင့် အမည်မသိလမ်းများဖြစ်ကြသည်
-ကျဆင်းသွားသည်။ Torii ၏ `/v1/da/commitments/verify` အဆုံးမှတ်သည် တူညီသော အစောင့်အကြပ်ကို မှန်များ၊
-နှင့် ယခုထည့်သွင်းလိုက်ခြင်းသည် တစ်ခုချင်းစီတွင် အဆုံးအဖြတ်ပေးသော KZG ကတိကဝတ်ကို ပေါင်းစပ်ထားသည်။
-`kzg_bls12_381` မှတ်တမ်းကြောင့် မူဝါဒနှင့်ကိုက်ညီသော အစုအဝေးများသည် ပိတ်ဆို့စုဝေးမှုကို ရောက်ရှိစေပါသည်။
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 စားသုံးမှုအစီအစဉ်တွင် ဖော်ပြထားသော သရုပ်ပြပစ္စည်းများသည် အရင်းအမြစ်အဖြစ် နှစ်ဆဖြစ်သည်။
 ကတိကဝတ်အစုအဝေးအတွက် အမှန်တရား။ Torii စမ်းသပ်မှု
@@ -210,9 +199,7 @@ block log မှ အညွှန်းကိန်းကို လျင်မ�
 
 ## မေးခွန်းများဖွင့်ပါ။
 
-1. **KZG vs Merkle ပုံသေများ** — သေးငယ်သော blobs များသည် KZG ကတိကဝတ်များကို အမြဲကျော်သွားသင့်သည်
-   ဘလောက်အရွယ်အစားကို လျှော့ချမလား။ အဆိုပြုချက်- `kzg_commitment` ကို ရွေးချယ်နိုင်ပြီး ဂိတ်မှတစ်ဆင့် ထားရှိပါ။
-   `iroha_config::da.enable_kzg`။
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **တစ်ဆက်တည်း ကွာဟချက်များ** — ကျွန်ုပ်တို့သည် အစီအစဥ်မရှိသော လမ်းကြောများကို ခွင့်ပြုပါသလား။ လက်ရှိအစီအစဉ်သည် ကွက်လပ်များကို ပယ်ချပါသည်။
    အရေးပေါ်ပြန်ဖွင့်ရန်အတွက် အုပ်ချုပ်ရေးသည် `allow_sequence_skips` ကို ပြောင်းမထားပါ။
 3. **Light-client cache** — SDK အဖွဲ့သည် ပေါ့ပါးသော SQLite cache အတွက် တောင်းဆိုခဲ့သည်

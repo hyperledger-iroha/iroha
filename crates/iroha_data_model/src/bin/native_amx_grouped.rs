@@ -312,15 +312,15 @@ fn qc(
     for index in 0..MIN_QUORUM {
         signers_bitmap[index / 8] |= 1_u8 << (index % 8);
     }
-    Ok(NativeAmxAttestationQcV2 {
+    Ok(NativeAmxAttestationQcV2::try_new(
         body,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: context.validator_set_hash,
-        validator_set: context.validators.clone(),
-        validator_set_pops: context.validator_set_pops.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        context.validator_set_hash,
+        context.validators.clone(),
+        context.validator_set_pops.clone(),
         signers_bitmap,
-        bls_aggregate_signature: aggregate_signature,
-    })
+        aggregate_signature,
+    )?)
 }
 
 fn leg(
@@ -1061,12 +1061,9 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
         control(
             "zero_aggregate_signature",
             mutation(
-                "repeat",
+                "replace",
                 &format!("{prepare}/bls_aggregate_signature"),
-                Some(norito::json!({
-                    "source_index": 71,
-                    "count": (BLS_PROOF_BYTES)
-                })),
+                Some(norito::json!(vec![0_u64; BLS_PROOF_BYTES])),
             ),
         ),
         control(
@@ -1500,10 +1497,10 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
                 );
             }
             for qc in [&leg.prepare_qc, &leg.commit_qc] {
-                if qc.validator_set.windows(2).any(|pair| pair[0] >= pair[1])
-                    || qc.validator_set_pops.len() != VALIDATOR_COUNT
+                if qc.validator_set().windows(2).any(|pair| pair[0] >= pair[1])
+                    || qc.validator_set_pops().len() != VALIDATOR_COUNT
                     || qc
-                        .validator_set_pops
+                        .validator_set_pops()
                         .iter()
                         .any(|pop| pop.len() != BLS_PROOF_BYTES)
                     || qc.bls_aggregate_signature.len() != BLS_PROOF_BYTES

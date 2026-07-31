@@ -66,9 +66,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -76,16 +75,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` 重用下使用的现有 48 字节点
-  `iroha_crypto::kzg`。当缺席时，我们仅使用 Merkle 证明。
-- `proof_scheme`源自车道目录； Merkle Lanes 拒绝 KZG
-  有效负载，而 `kzg_bls12_381` 通道需要非零 KZG 承诺。 Torii
-  目前仅产生 Merkle 承诺并拒绝 KZG 配置的通道。
-- `KzgCommitment` 重用下使用的现有 48 字节点
-  `iroha_crypto::kzg`。当默克尔通道缺席时，我们会退回到默克尔证明
-  仅。
-- `proof_digest` 预计 DA-5 PDP/PoTR 集成，因此记录相同
-  枚举用于保持 blob 存活的采样计划。
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 区块头扩展
 
@@ -203,9 +195,7 @@ WSV 将承诺存储在由 `manifest_hash` 键入的专用列族中。
 
 ## 开放问题
 
-1. **KZG 与 Merkle 默认值** — 小斑点是否应该始终跳过 KZG 的承诺
-   减小块大小？建议：保留 `kzg_commitment` 可选并通过gate via
-   `iroha_config::da.enable_kzg`。
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **序列间隙** — 我们是否允许无序通道？目前的计划拒绝存在差距
    除非治理切换 `allow_sequence_skips` 进行紧急重播。
 3. **轻客户端缓存** — SDK 团队请求轻量级 SQLite 缓存

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { ToriiClient } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
 import { KotodamaQuantity, NumericV1 } from "../src/numericV1.js";
+import { blake2b256 } from "../src/blake2b.js";
 
 const BASE_URL = "https://localhost:8080";
 const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({ publicKey: Buffer.from(
@@ -51,12 +52,24 @@ function asUrl(input) {
   return typeof input === "string" ? new URL(input) : new URL(input.toString());
 }
 
+function transactionDraft(extra = {}) {
+  const payload = Buffer.from([1, 2, 3]);
+  const signingMessage = Buffer.from(blake2b256(payload));
+  signingMessage[signingMessage.length - 1] |= 1;
+  return {
+    submitted: false,
+    transaction_payload_b64: payload.toString("base64"),
+    signing_message_b64: signingMessage.toString("base64"),
+    ...extra,
+  };
+}
+
 test("subscription plan and create endpoints send normalized payloads", async () => {
   const captured = [];
   const responses = new Map([
     [
       "/v1/subscriptions/plans",
-      { ok: true, plan_id: "plan#subs", tx_hash_hex: "tx-plan" },
+      transactionDraft({ plan_id: "plan#subs" }),
     ],
     [
       "/v1/subscriptions",
@@ -80,7 +93,6 @@ test("subscription plan and create endpoints send normalized payloads", async ()
 
   const planRequest = {
     authority: SAMPLE_ACCOUNT_ID,
-    privateKey: "ed25519:deadbeef",
     planId: "plan#subs",
     plan: { provider: SAMPLE_ACCOUNT_ID, pricing: { kind: "fixed" } },
   };
@@ -88,7 +100,7 @@ test("subscription plan and create endpoints send normalized payloads", async ()
   assert.equal(planResponse.plan_id, "plan#subs");
   const planBody = JSON.parse(captured[0].init.body);
   assert.equal(planBody.authority, SAMPLE_ACCOUNT_ID);
-  assert.equal(planBody.private_key, "ed25519:deadbeef");
+  assert.equal("private_key" in planBody, false);
   assert.equal(planBody.plan_id, "plan#subs");
   assert.deepEqual(planBody.plan, planRequest.plan);
 
@@ -182,6 +194,14 @@ test("subscription action endpoints send normalized payloads", async () => {
   const fetchImpl = async (url, init = {}) => {
     const parsed = asUrl(url);
     captured.set(parsed.pathname, JSON.parse(init.body));
+    if (parsed.pathname.endsWith("/usage")) {
+      return createResponse({
+        status: 200,
+        jsonData: transactionDraft({
+          subscription_id: "sub-1$subscriptions",
+        }),
+      });
+    }
     return createResponse({
       status: 200,
       jsonData: {
@@ -212,7 +232,6 @@ test("subscription action endpoints send normalized payloads", async () => {
   });
   await client.recordSubscriptionUsage(subscriptionId, {
     authority: SAMPLE_ACCOUNT_ID,
-    privateKey: "ed25519:deadbeef",
     unitKey: "compute_ms",
     delta: "12.5",
     usageTriggerId: "sub-usage",
@@ -237,6 +256,7 @@ test("subscription action endpoints send normalized payloads", async () => {
 
   const usageBody = captured.get(`/v1/subscriptions/${encodedId}/usage`);
   assert.equal(usageBody.unit_key, "compute_ms");
+  assert.equal("private_key" in usageBody, false);
   assert.equal(usageBody.delta, "12.5");
   assert.equal(usageBody.usage_trigger_id, "sub-usage");
 });
@@ -247,17 +267,14 @@ test("subscription usage delta uses the canonical Quantity boundary", async () =
     submittedDeltas.push(JSON.parse(init.body).delta);
     return createResponse({
       status: 200,
-      jsonData: {
-        ok: true,
+      jsonData: transactionDraft({
         subscription_id: "sub-1$subscriptions",
-        tx_hash_hex: "tx-usage",
-      },
+      }),
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const request = {
     authority: SAMPLE_ACCOUNT_ID,
-    privateKey: "ed25519:deadbeef",
     unitKey: "compute_ms",
   };
   const scale28 = `0.${"0".repeat(27)}1`;
@@ -309,6 +326,34 @@ test("subscription usage delta uses the canonical Quantity boundary", async () =
     submittedDeltas.length,
     canonical.length,
     "invalid Quantity inputs must fail before the request is sent",
+  );
+});
+
+test("subscription plan and usage drafts reject inline private-key fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch must not run for a secret-bearing request");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.createSubscriptionPlan({
+        authority: SAMPLE_ACCOUNT_ID,
+        privateKey: "secret",
+        planId: "plan#subs",
+        plan: { provider: SAMPLE_ACCOUNT_ID, pricing: { kind: "fixed" } },
+      }),
+    /does not accept private-key fields/,
+  );
+  await assert.rejects(
+    () =>
+      client.recordSubscriptionUsage("sub-1$subscriptions", {
+        authority: SAMPLE_ACCOUNT_ID,
+        private_key_hex: "11".repeat(32),
+        unitKey: "compute_ms",
+        delta: "1",
+      }),
+    /does not accept private-key fields/,
   );
 });
 

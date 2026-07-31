@@ -175,6 +175,12 @@ exclusive-cursor filters; operators construct governance-only policy,
 registration, rent, and lifecycle instructions through the normal transaction
 tooling or the supervised worker.
 
+The event-stream authority is not a connection-time capability. Torii checks
+the subscriber account against the current reserve policy before every query
+page and before emitting every buffered or live event. A policy rotation that
+removes the account therefore terminates SSE with a final authorization error
+and closes WebSocket delivery without releasing any later event.
+
 ## Durable signing, submission, and reconciliation
 
 Generated operations enter the bounded reserve transaction forwarder before

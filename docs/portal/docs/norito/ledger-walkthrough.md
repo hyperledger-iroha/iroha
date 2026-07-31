@@ -13,8 +13,8 @@ SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
 
 ## Prerequisites
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
+- Follow the [quickstart](./quickstart.md) to create fresh owner-only genesis
+  custody and boot the single-peer development network.
 - Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
   peer using `defaults/client.toml`.
 - Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the

@@ -982,22 +982,30 @@ fn da_paths() -> Map {
     );
     paths.insert(
         "/v1/da/proof-policies".to_owned(),
-        Value::Object(json_get_operation(
-            "DataAvailability",
-            "List DA proof policies.",
-            "Return the configured DA proof policy set.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(operation_with_id(
+            json_get_operation(
+                "DataAvailability",
+                "List DA proof policies.",
+                "Return the configured DA proof policy set.",
+                "#/components/schemas/DaProofPolicyBundle",
+                Vec::new(),
+            ),
+            "get",
+            "daProofPoliciesList",
         )),
     );
     paths.insert(
         "/v1/da/proof-policies/snapshot".to_owned(),
-        Value::Object(json_get_operation(
-            "DataAvailability",
-            "Fetch the DA proof policy snapshot.",
-            "Return the active DA proof policy snapshot bundle.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(operation_with_id(
+            json_get_operation(
+                "DataAvailability",
+                "Fetch the DA proof policy snapshot.",
+                "Return the active DA proof policy snapshot bundle.",
+                "#/components/schemas/DaProofPolicyBundle",
+                Vec::new(),
+            ),
+            "get",
+            "daProofPolicySnapshot",
         )),
     );
     paths.insert(
@@ -1014,38 +1022,62 @@ fn da_paths() -> Map {
     );
     paths.insert(
         "/v1/da/pin-intents".to_owned(),
-        Value::Object(json_post_operation(
-            "DataAvailability",
-            "List DA pin intents.",
-            "List pin intent commitments indexed by the node.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(operation_with_id(
+            json_post_operation(
+                "DataAvailability",
+                "List DA pin intents.",
+                "List pin intent commitments indexed by the node.",
+                "#/components/schemas/DaPinIntentQueryRequest",
+                "#/components/schemas/DaPinIntentWithLocationList",
+                Vec::new(),
+            ),
+            "post",
+            "daPinIntentsList",
         )),
     );
     paths.insert(
         "/v1/da/pin-intents/prove".to_owned(),
-        Value::Object(json_post_operation(
-            "DataAvailability",
-            "Fetch indexed DA pin intent location data.",
-            "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return the indexed block location payload.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(operation_with_id(
+            json_post_operation(
+                "DataAvailability",
+                "Build a DA pin-intent Merkle proof.",
+                "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return a Merkle membership proof bound to the V1 tree descriptor recorded in its canonical locally stored block header.",
+                "#/components/schemas/DaPinIntentQueryRequest",
+                "#/components/schemas/DaPinIntentProofResponse",
+                Vec::new(),
+            ),
+            "post",
+            "daPinIntentsProve",
         )),
     );
     paths.insert(
         "/v1/da/pin-intents/verify".to_owned(),
-        Value::Object(json_post_operation(
-            "DataAvailability",
-            "Verify indexed DA pin intent location data.",
-            "Check that a provided DA pin intent location payload matches the node's current pin-intent index.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(operation_with_id(
+            json_post_operation(
+                "DataAvailability",
+                "Verify a DA pin-intent Merkle proof.",
+                "Load the referenced canonical block from local Kura and verify a DA pin-intent Merkle membership proof against the V1 tree descriptor (version, leaf count, and Merkle root) recorded in its header. This endpoint does not return or independently verify block-finality material.",
+                "#/components/schemas/DaPinIntentProof",
+                "#/components/schemas/DaPinIntentVerifyResponse",
+                Vec::new(),
+            ),
+            "post",
+            "daPinIntentsVerify",
         )),
     );
     paths
+}
+
+fn operation_with_id(mut methods: Map, method: &str, operation_id: &str) -> Map {
+    methods
+        .get_mut(method)
+        .and_then(Value::as_object_mut)
+        .expect("OpenAPI operation helper must emit the requested method")
+        .insert(
+            "operationId".to_owned(),
+            Value::String(operation_id.to_owned()),
+        );
+    methods
 }
 
 fn musubi_paths() -> Map {
@@ -3123,9 +3155,9 @@ fn proof_paths() -> Map {
         "/v1/proofs/query".to_owned(),
         Value::Object(json_post_operation(
             "Proofs",
-            "Query proof records.",
-            "Query proof records with a JSON envelope.",
-            "#/components/schemas/JsonValue",
+            "Execute a locally signed proof-record query.",
+            "Decode a canonical versioned SignedQuery, require FindProofRecordById, verify its signature and authority, and execute it without accepting signing secrets.",
+            "#/components/schemas/ProofFindByIdSignedQueryRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3216,10 +3248,10 @@ fn contracts_paths() -> Map {
         "/v1/contracts/aliases".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
-            "Bind or clear a contract alias.",
-            "Bind, update, or clear the on-chain alias for a deployed contract instance.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Prepare a contract-alias transaction draft.",
+            "Validate and quote an alias bind, update, or clear operation and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
+            "#/components/schemas/ContractAliasDraftRequestV1",
+            "#/components/schemas/ContractAliasDraftResponseV1",
             Vec::new(),
         )),
     );
@@ -3454,7 +3486,7 @@ fn zk_paths() -> Map {
         Value::Object(json_post_operation(
             "ZK",
             "Fetch ZK roots.",
-            "Fetch zero-knowledge roots bound to one exact committed snapshot.",
+            "Fetch roots for an asset bound to the canonical confidential-v2 transfer verifier and one exact committed snapshot.",
             "#/components/schemas/ZkRootsGetRequest",
             "#/components/schemas/ZkRootsGetResponse",
             Vec::new(),
@@ -3468,28 +3500,6 @@ fn zk_paths() -> Map {
             "Fetch current confidential-v2 commitment inclusion paths bound to one exact committed snapshot.",
             "#/components/schemas/ZkMerklePathGetRequest",
             "#/components/schemas/ZkMerklePathGetResponse",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/zk/verify".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Verify a ZK proof.",
-            "Verify a zero-knowledge proof envelope.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/zk/submit-proof".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Submit a ZK proof.",
-            "Submit a proof for verification and recording.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
@@ -4960,13 +4970,21 @@ fn subscription_paths() -> Map {
             Some("uint64"),
         ),
     ];
-    let plans = json_get_operation(
+    let mut plans = json_get_operation(
         "Subscriptions",
         "List subscription plans.",
         "List subscription plans by provider.",
         "#/components/schemas/JsonValue",
         plan_query_params,
     );
+    plans.extend(json_post_operation(
+        "Subscriptions",
+        "Build a subscription-plan transaction draft.",
+        "Validate and quote a plan-registration request and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
+        "#/components/schemas/SubscriptionPlanDraftRequestV1",
+        "#/components/schemas/SubscriptionPlanDraftResponseV1",
+        Vec::new(),
+    ));
     paths.insert("/v1/subscriptions/plans".to_owned(), Value::Object(plans));
 
     let subscription_query_params = vec![
@@ -5056,6 +5074,17 @@ fn subscription_paths() -> Map {
             )),
         );
     }
+    paths.insert(
+        "/v1/subscriptions/{subscription_id}/usage".to_owned(),
+        Value::Object(json_post_operation(
+            "Subscriptions",
+            "Build a subscription-usage transaction draft.",
+            "Validate and quote a usage-trigger request and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
+            "#/components/schemas/SubscriptionUsageDraftRequestV1",
+            "#/components/schemas/SubscriptionUsageDraftResponseV1",
+            vec![sub_param],
+        )),
+    );
     paths
 }
 
@@ -5076,6 +5105,28 @@ fn parameter_paths() -> Map {
 
 fn space_directory_paths() -> Map {
     let mut paths = Map::new();
+    paths.insert(
+        "/v1/space-directory/manifests".to_owned(),
+        Value::Object(json_post_operation(
+            "SpaceDirectory",
+            "Build a manifest-publication transaction draft.",
+            "Validate and quote a manifest publication and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
+            "#/components/schemas/SpaceDirectoryManifestPublishDraftRequestV1",
+            "#/components/schemas/AppApiTransactionDraftV1",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/space-directory/manifests/revoke".to_owned(),
+        Value::Object(json_post_operation(
+            "SpaceDirectory",
+            "Build a manifest-revocation transaction draft.",
+            "Validate and quote a manifest revocation and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
+            "#/components/schemas/SpaceDirectoryManifestRevokeDraftRequestV1",
+            "#/components/schemas/AppApiTransactionDraftV1",
+            Vec::new(),
+        )),
+    );
     paths.insert(
         "/v1/space-directory/uaids/{uaid}".to_owned(),
         Value::Object(json_get_operation(
@@ -7891,7 +7942,7 @@ fn soracloud_paths() -> Map {
         Value::Object(json_post_operation(
             "Soracloud",
             "Execute a private uploaded model.",
-            "Run the deterministic quantized CPU V1 private uploaded-model evaluator against an approved finalized SoraFS-backed bundle. The response contains only commitments, encrypted artifact references, and an unsigned `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton for external signing.",
+            "Run the deterministic quantized CPU V1 private uploaded-model evaluator against an approved finalized SoraFS-backed bundle. The response contains only commitments, encrypted artifact references, and an unsigned `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton for signing by a `CanManageSoracloud` authority.",
             "#/components/schemas/PrivateUploadedModelExecuteRequest",
             "#/components/schemas/PrivateUploadedModelExecuteResponse",
             Vec::new(),
@@ -11485,7 +11536,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/pipeline/transactions/status"
                     | "/v1/zk/merkle-path"
                     | "/v1/zk/roots"
-                    | "/v1/zk/verify"
                     | "/v1/zk/verify-batch"
                     | "/v1/zk/vote/tally"
             ))
@@ -12978,12 +13028,12 @@ fn da_commitments_verify_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Stateless verification helper for DA commitments.".to_owned()),
+        Value::String("Verify a DA commitment against locally stored block state.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Validates a provided DA commitment Merkle proof against the node's indexed bundle, block header commitment hash, and configured lane proof policy."
+            "Loads the referenced canonical block from local Kura and validates the DA commitment Merkle proof against that block's header commitment and historical proof-policy sidecar. This endpoint does not return or independently verify block-finality material."
                 .to_owned(),
         ),
     );
@@ -12993,7 +13043,7 @@ fn da_commitments_verify_operation() -> Map {
     );
     operation.insert(
         "requestBody".into(),
-        da_commitment_request_body_with_schema("DaCommitmentWithLocation"),
+        da_commitment_request_body_with_schema("DaCommitmentProof"),
     );
     operation.insert(
         "responses".into(),
@@ -13031,7 +13081,7 @@ fn da_commitments_list_responses() -> Map {
         "200".to_owned(),
         json_response(
             "Commitments retrieved.",
-            schema_ref("DaCommitmentWithLocationList"),
+            schema_ref("DaCommitmentListResponse"),
         ),
     );
     responses.insert(
@@ -13653,11 +13703,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "halo2/ipa",
                     "halo2/pasta/kaigi-roster-v1",
                     "halo2/pasta/kaigi-usage-v1",
-                    "halo2/pasta/ivm-overlay-bind",
                     "halo2/pasta/ivm-execution-v1",
                     "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-                    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-                    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
                     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
                     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -13695,12 +13742,10 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "leaf_index": { "type": "integer", "format": "uint32", "minimum": 0 },
                     "audit_path": {
                         "type": "array",
-                        "items": {
-                            "oneOf": [
-                                { "$ref": "#/components/schemas/OfflineHashLiteral" },
-                                { "type": "null" }
-                            ]
-                        }
+                        "minItems": 1,
+                        "maxItems": 255,
+                        "items": { "$ref": "#/components/schemas/OfflineHashLiteral" },
+                        "description": "Complete leaf-to-root path. Lane privacy proofs require at least one sibling and reject omitted/null siblings."
                     }
                 }
             }),
@@ -13717,17 +13762,6 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
-            "OfflineLanePrivacySnarkWitness",
-            norito::json!({
-                "type": "object",
-                "required": ["public_inputs", "proof"],
-                "properties": {
-                    "public_inputs": { "$ref": "#/components/schemas/OfflineBase64Bytes" },
-                    "proof": { "$ref": "#/components/schemas/OfflineBase64Bytes" }
-                }
-            }),
-        ),
-        (
             "OfflineLanePrivacyWitness",
             norito::json!({
                 "oneOf": [
@@ -13737,14 +13771,6 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                         "properties": {
                             "kind": { "type": "string", "enum": ["merkle"] },
                             "payload": { "$ref": "#/components/schemas/OfflineLanePrivacyMerkleWitness" }
-                        }
-                    },
-                    {
-                        "type": "object",
-                        "required": ["kind", "payload"],
-                        "properties": {
-                            "kind": { "type": "string", "enum": ["snark"] },
-                            "payload": { "$ref": "#/components/schemas/OfflineLanePrivacySnarkWitness" }
                         }
                     }
                 ],
@@ -14045,8 +14071,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "type": "object",
                 "required": [
                     "context_id", "chain_id", "protocol_version", "height", "epoch",
-                    "epoch_end_height", "mode", "nexus_amx_context_hash", "da_layout",
-                    "leader_seed"
+                    "epoch_end_height", "mode", "nexus_amx_context_hash",
+                    "execution_policy_hash", "da_layout", "leader_seed"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -14064,6 +14090,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                         "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                     },
                     "nexus_amx_context_hash": { "$ref": "#/components/schemas/Hash" },
+                    "execution_policy_hash": { "$ref": "#/components/schemas/Hash" },
                     "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
                     "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
                 }
@@ -17077,8 +17104,8 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "chain_id", "protocol_version", "height", "epoch", "epoch_end_height",
-                "mode", "roster", "quorum", "nexus_amx_context_hash", "da_layout",
-                "leader_seed"
+                "mode", "roster", "quorum", "nexus_amx_context_hash",
+                "execution_policy_hash", "da_layout", "leader_seed"
             ],
             "additionalProperties": false,
             "properties": {
@@ -17111,6 +17138,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 },
                 "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" },
                 "nexus_amx_context_hash": { "$ref": "#/components/schemas/Hash" },
+                "execution_policy_hash": { "$ref": "#/components/schemas/Hash" },
                 "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
             },
@@ -18293,6 +18321,186 @@ fn tagged_unit_schema(tag: &str, values: &[&str]) -> Value {
     let mut schema = Map::new();
     schema.insert("oneOf".to_owned(), Value::Array(cases));
     Value::Object(schema)
+}
+
+fn app_api_local_signing_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "AppApiTransactionDraftV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "submitted",
+                "transaction_payload_b64",
+                "signing_message_b64"
+            ],
+            "properties": {
+                "submitted": {
+                    "type": "boolean",
+                    "const": false,
+                    "description": "Torii has not submitted the transaction."
+                },
+                "transaction_payload_b64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "description": "Canonical padded-base64 Norito TransactionPayload bytes."
+                },
+                "signing_message_b64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "description": "Canonical padded-base64 HashOf<TransactionPayload> signing message."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ProofFindByIdSignedQueryRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["signed_query_b64"],
+            "properties": {
+                "signed_query_b64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "description": "Canonical padded-base64 versioned Norito SignedQuery constrained to FindProofRecordById."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractAliasDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "contract_address"],
+            "properties": {
+                "authority": { "type": "string", "minLength": 1 },
+                "contract_address": { "type": "string", "minLength": 1 },
+                "contract_alias": { "type": ["string", "null"] },
+                "lease_expiry_ms": {
+                    "type": ["integer", "null"],
+                    "format": "uint64",
+                    "minimum": 0
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractAliasDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "submitted",
+                "contract_address",
+                "dataspace",
+                "transaction_payload_b64",
+                "signing_message_b64"
+            ],
+            "properties": {
+                "submitted": { "type": "boolean", "const": false },
+                "contract_alias": { "type": "string", "minLength": 1 },
+                "contract_address": { "type": "string", "minLength": 1 },
+                "dataspace": { "type": "string", "minLength": 1 },
+                "transaction_payload_b64": { "type": "string", "minLength": 4 },
+                "signing_message_b64": { "type": "string", "minLength": 4 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SpaceDirectoryManifestPublishDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "manifest"],
+            "properties": {
+                "authority": { "type": "string", "minLength": 1 },
+                "manifest": { "type": "object" },
+                "reason": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SpaceDirectoryManifestRevokeDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "uaid", "dataspace", "revoked_epoch"],
+            "properties": {
+                "authority": { "type": "string", "minLength": 1 },
+                "uaid": { "type": "string", "minLength": 64 },
+                "dataspace": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "revoked_epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "reason": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SubscriptionPlanDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "plan_id", "plan"],
+            "properties": {
+                "authority": { "type": "string", "minLength": 1 },
+                "plan_id": { "type": "string", "minLength": 1 },
+                "plan": { "type": "object" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SubscriptionPlanDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "submitted",
+                "plan_id",
+                "transaction_payload_b64",
+                "signing_message_b64"
+            ],
+            "properties": {
+                "submitted": { "type": "boolean", "const": false },
+                "plan_id": { "type": "string", "minLength": 1 },
+                "transaction_payload_b64": { "type": "string", "minLength": 4 },
+                "signing_message_b64": { "type": "string", "minLength": 4 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SubscriptionUsageDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "unit_key", "delta"],
+            "properties": {
+                "authority": { "type": "string", "minLength": 1 },
+                "unit_key": { "type": "string", "minLength": 1 },
+                "delta": { "type": "string", "minLength": 1 },
+                "usage_trigger_id": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SubscriptionUsageDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "submitted",
+                "subscription_id",
+                "transaction_payload_b64",
+                "signing_message_b64"
+            ],
+            "properties": {
+                "submitted": { "type": "boolean", "const": false },
+                "subscription_id": { "type": "string", "minLength": 1 },
+                "transaction_payload_b64": { "type": "string", "minLength": 4 },
+                "signing_message_b64": { "type": "string", "minLength": 4 }
+            }
+        }),
+    );
 }
 
 fn subscription_schemas(schemas: &mut Map) {
@@ -20638,6 +20846,7 @@ fn openapi_schemas() -> Map {
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
     validation_fee_schemas(&mut schemas);
+    app_api_local_signing_schemas(&mut schemas);
     subscription_schemas(&mut schemas);
     schemas.insert(
         "ZkSnapshotBlockHash".to_owned(),
@@ -21904,7 +22113,12 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
-                "alias": { "type": "string" },
+                "alias": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "x-iroha-maxUtf8Bytes": 256,
+                    "description": "Exact alias lookup key; the server enforces at most 256 UTF-8 bytes."
+                },
                 "governance": { "type": ["string", "null"] },
                 "manifest_required": { "type": "boolean" },
                 "manifest_ready": { "type": "boolean" },
@@ -27230,21 +27444,89 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "DaDigest32".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "description": "Canonical Norito JSON layout for a transparent 32-byte digest wrapper.",
+            "items": {
+                "type": "array",
+                "minItems": 32,
+                "maxItems": 32,
+                "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+            }
+        }),
+    );
+    schemas.insert(
+        "DaIrohaHash".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+            "description": "Canonical checksummed Iroha hash literal. Decoders also verify the CRC-16 checksum and marked-hash bit."
+        }),
+    );
+    schemas.insert(
+        "DaTaggedProofScheme".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["type", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "type": { "type": "string", "enum": ["MerkleSha256"] },
+                "value": { "type": "null" }
+            },
+            "description": "First-release DA V1 supports MerkleSha256 only; unknown proof-scheme discriminants are rejected."
+        }),
+    );
+    schemas.insert(
+        "DaProofPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "dataspace_id", "alias", "proof_scheme"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "type": "integer", "format": "uint32" },
+                "dataspace_id": { "type": "integer", "format": "uint64" },
+                "alias": { "type": "string" },
+                "proof_scheme": { "$ref": "#/components/schemas/DaTaggedProofScheme" }
+            }
+        }),
+    );
+    schemas.insert(
+        "DaProofPolicyBundle".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "policy_hash", "policies"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "policy_hash": { "$ref": "#/components/schemas/DaIrohaHash" },
+                "policies": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/DaProofPolicy" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "DaPagination".to_owned(),
         norito::json!({
             "type": "object",
+            "required": ["offset"],
             "additionalProperties": false,
             "properties": {
                 "limit": {
                     "type": "integer",
                     "format": "uint64",
                     "nullable": true,
-                    "description": "Maximum number of commitments to return."
+                    "minimum": 1,
+                    "description": "Maximum number of records to return; the server caps it at 1000."
                 },
                 "offset": {
                     "type": "integer",
                     "format": "uint64",
-                    "description": "Number of commitments to skip from the start of the ordered index."
+                    "description": "Number of records to skip from the ordered index."
                 }
             }
         }),
@@ -27255,29 +27537,55 @@ fn openapi_schemas() -> Map {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "manifest_hash": {
-                    "type": "string",
-                    "description": "Hex-encoded manifest digest to look up."
-                },
-                "lane_id": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Lane identifier for the commitment."
-                },
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Epoch number for the commitment."
-                },
-                "sequence": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Monotonic sequence within the lane/epoch."
-                },
-                "pagination": {
-                    "$ref": "#/components/schemas/DaPagination"
-                }
+                "manifest_hash": { "$ref": "#/components/schemas/DaDigest32" },
+                "lane_id": { "type": "integer", "format": "uint32" },
+                "epoch": { "type": "integer", "format": "uint64" },
+                "sequence": { "type": "integer", "format": "uint64" },
+                "pagination": { "$ref": "#/components/schemas/DaPagination" }
             }
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentQueryRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "manifest_hash": { "$ref": "#/components/schemas/DaDigest32" },
+                "storage_ticket": { "$ref": "#/components/schemas/DaDigest32" },
+                "alias": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "x-iroha-maxUtf8Bytes": 256,
+                    "description": "Pin-alias lookup key; at most 256 UTF-8 bytes."
+                },
+                "lane_id": { "type": "integer", "format": "uint32" },
+                "epoch": { "type": "integer", "format": "uint64" },
+                "sequence": { "type": "integer", "format": "uint64" },
+                "pagination": { "$ref": "#/components/schemas/DaPagination" }
+            }
+        }),
+    );
+    schemas.insert(
+        "DaTaggedStorageClass".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["type", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "type": { "type": "string", "enum": ["Hot", "Warm", "Cold"] },
+                "value": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "DaGovernanceTag".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": { "type": "string" },
+            "description": "Canonical Norito JSON layout for the transparent governance-tag wrapper."
         }),
     );
     schemas.insert(
@@ -27287,30 +27595,11 @@ fn openapi_schemas() -> Map {
             "required": ["hot_retention_secs", "cold_retention_secs", "required_replicas", "storage_class", "governance_tag"],
             "additionalProperties": false,
             "properties": {
-                "hot_retention_secs": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Retention period in seconds for the hot tier."
-                },
-                "cold_retention_secs": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Retention period in seconds for the cold tier."
-                },
-                "required_replicas": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Replica count requested for the blob."
-                },
-                "storage_class": {
-                    "type": "string",
-                    "enum": ["Hot", "Warm", "Cold"],
-                    "description": "Storage class requested for the primary replicas."
-                },
-                "governance_tag": {
-                    "type": "string",
-                    "description": "Governance tag anchoring the retention decision."
-                }
+                "hot_retention_secs": { "type": "integer", "format": "uint64" },
+                "cold_retention_secs": { "type": "integer", "format": "uint64" },
+                "required_replicas": { "type": "integer", "format": "uint16" },
+                "storage_class": { "$ref": "#/components/schemas/DaTaggedStorageClass" },
+                "governance_tag": { "$ref": "#/components/schemas/DaGovernanceTag" }
             }
         }),
     );
@@ -27319,51 +27608,31 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": [
-                "lane_id",
-                "epoch",
-                "sequence",
-                "client_blob_id",
-                "manifest_hash",
-                "chunk_root",
-                "retention_class",
-                "storage_ticket",
-                "acknowledgement_sig"
+                "lane_id", "epoch", "sequence", "client_blob_id", "manifest_hash",
+                "proof_scheme", "chunk_root", "proof_digest",
+                "retention_class", "storage_ticket", "acknowledgement_sig"
             ],
             "additionalProperties": false,
             "properties": {
                 "lane_id": { "type": "integer", "format": "uint32" },
                 "epoch": { "type": "integer", "format": "uint64" },
                 "sequence": { "type": "integer", "format": "uint64" },
-                "client_blob_id": {
-                    "type": "string",
-                    "description": "Hex-encoded blob identifier."
-                },
-                "manifest_hash": {
-                    "type": "string",
-                    "description": "Hex-encoded manifest digest (BLAKE3-256)."
-                },
-                "chunk_root": {
-                    "type": "string",
-                    "description": "Hex-encoded Merkle root over blob chunks."
-                },
-                "kzg_commitment": {
-                    "anyOf": [ { "type": "string" }, { "type": "null" } ],
-                    "description": "Optional KZG commitment in compressed hex form."
-                },
+                "client_blob_id": { "$ref": "#/components/schemas/DaDigest32" },
+                "manifest_hash": { "$ref": "#/components/schemas/DaDigest32" },
+                "proof_scheme": { "$ref": "#/components/schemas/DaTaggedProofScheme" },
+                "chunk_root": { "$ref": "#/components/schemas/DaIrohaHash" },
                 "proof_digest": {
-                    "anyOf": [ { "type": "string" }, { "type": "null" } ],
-                    "description": "Optional digest covering PDP/PoTR scheduling metadata."
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/DaIrohaHash" },
+                        { "type": "null" }
+                    ]
                 },
-                "retention_class": {
-                    "$ref": "#/components/schemas/DaRetentionPolicy"
-                },
-                "storage_ticket": {
-                    "type": "string",
-                    "description": "Hex-encoded storage ticket binding the blob to SoraFS."
-                },
+                "retention_class": { "$ref": "#/components/schemas/DaRetentionPolicy" },
+                "storage_ticket": { "$ref": "#/components/schemas/DaDigest32" },
                 "acknowledgement_sig": {
                     "type": "string",
-                    "description": "Hex-encoded Torii acknowledgement signature."
+                    "pattern": "^[0-9A-F]{128}$",
+                    "description": "Canonical uppercase Ed25519 acknowledgement signature."
                 }
             }
         }),
@@ -27378,6 +27647,7 @@ fn openapi_schemas() -> Map {
                 "block_height": {
                     "type": "integer",
                     "format": "uint64",
+                    "minimum": 1,
                     "description": "Height of the block that sealed the commitment."
                 },
                 "index_in_bundle": {
@@ -27408,11 +27678,31 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "DaCommitmentListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["policies", "commitments"],
+            "additionalProperties": false,
+            "properties": {
+                "policies": { "$ref": "#/components/schemas/DaProofPolicyBundle" },
+                "commitments": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/DaCommitmentWithLocation" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "MerkleDirection".to_owned(),
         norito::json!({
-            "type": "string",
-            "enum": ["Left", "Right"],
-            "description": "Position of the sibling hash within the Merkle path."
+            "type": "object",
+            "required": ["direction", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "direction": { "type": "string", "enum": ["Left", "Right"] },
+                "value": { "type": "null" }
+            },
+            "description": "Canonical tagged Norito JSON direction of a sibling node."
         }),
     );
     schemas.insert(
@@ -27423,8 +27713,7 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "sibling": {
-                    "type": "string",
-                    "description": "Hex-encoded sibling hash for this tree level."
+                    "$ref": "#/components/schemas/DaIrohaHash"
                 },
                 "direction": { "$ref": "#/components/schemas/MerkleDirection" }
             }
@@ -27440,20 +27729,19 @@ fn openapi_schemas() -> Map {
                 "commitment": { "$ref": "#/components/schemas/DaCommitmentRecord" },
                 "location": { "$ref": "#/components/schemas/DaCommitmentLocation" },
                 "bundle_hash": {
-                    "type": "string",
-                    "description": "Hash of the full DA commitment bundle embedded in the block."
+                    "allOf": [{ "$ref": "#/components/schemas/DaIrohaHash" }],
+                    "description": "Header commitment to the V1 tree version, leaf count, and Merkle root; this is not a hash of the full encoded bundle."
                 },
                 "bundle_len": {
                     "type": "integer",
                     "format": "uint32",
+                    "minimum": 1,
                     "description": "Total number of commitments in the bundle."
                 },
-                "root": {
-                    "type": "string",
-                    "description": "Merkle root over the bundle commitments."
-                },
+                "root": { "$ref": "#/components/schemas/DaIrohaHash" },
                 "path": {
                     "type": "array",
+                    "maxItems": 32,
                     "items": { "$ref": "#/components/schemas/MerklePathItem" },
                     "description": "Merkle path proving inclusion of the commitment."
                 }
@@ -27461,10 +27749,22 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "DaCommitmentProofPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["policies", "proof"],
+            "additionalProperties": false,
+            "properties": {
+                "policies": { "$ref": "#/components/schemas/DaProofPolicyBundle" },
+                "proof": { "$ref": "#/components/schemas/DaCommitmentProof" }
+            }
+        }),
+    );
+    schemas.insert(
         "DaCommitmentProofResponse".to_owned(),
         norito::json!({
             "anyOf": [
-                { "$ref": "#/components/schemas/DaCommitmentProof" },
+                { "$ref": "#/components/schemas/DaCommitmentProofPayload" },
                 { "type": "null" }
             ]
         }),
@@ -27472,20 +27772,144 @@ fn openapi_schemas() -> Map {
     schemas.insert(
         "DaCommitmentVerifyResponse".to_owned(),
         norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["valid", "error"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "valid": { "const": true },
+                        "error": { "type": "null" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["valid", "error"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "valid": { "const": false },
+                        "error": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Deterministic commitment-proof verification failure."
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "DaPinIntent".to_owned(),
+        norito::json!({
             "type": "object",
-            "required": ["valid"],
+            "required": [
+                "lane_id", "epoch", "sequence", "storage_ticket", "manifest_hash",
+                "alias", "owner"
+            ],
             "additionalProperties": false,
             "properties": {
-                "valid": {
-                    "type": "boolean",
-                    "description": "Whether the supplied commitment matches the node's index."
-                },
-                "error": {
+                "lane_id": { "type": "integer", "format": "uint32" },
+                "epoch": { "type": "integer", "format": "uint64" },
+                "sequence": { "type": "integer", "format": "uint64" },
+                "storage_ticket": { "$ref": "#/components/schemas/DaDigest32" },
+                "manifest_hash": { "$ref": "#/components/schemas/DaDigest32" },
+                "alias": {
                     "type": "string",
                     "nullable": true,
-                    "description": "Optional error string describing the verification failure."
+                    "maxLength": 256,
+                    "x-iroha-maxUtf8Bytes": 256,
+                    "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes."
+                },
+                "owner": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional canonical I105 universal account identifier."
                 }
             }
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentWithLocation".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["intent", "location"],
+            "additionalProperties": false,
+            "properties": {
+                "intent": { "$ref": "#/components/schemas/DaPinIntent" },
+                "location": { "$ref": "#/components/schemas/DaCommitmentLocation" }
+            }
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentWithLocationList".to_owned(),
+        norito::json!({
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DaPinIntentWithLocation" }
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentProof".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["intent", "location", "bundle_hash", "bundle_len", "root", "path"],
+            "additionalProperties": false,
+            "properties": {
+                "intent": { "$ref": "#/components/schemas/DaPinIntent" },
+                "location": { "$ref": "#/components/schemas/DaCommitmentLocation" },
+                "bundle_hash": {
+                    "allOf": [{ "$ref": "#/components/schemas/DaIrohaHash" }],
+                    "description": "Header commitment to the V1 tree version, leaf count, and Merkle root; this is not a hash of the full encoded bundle."
+                },
+                "bundle_len": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1
+                },
+                "root": { "$ref": "#/components/schemas/DaIrohaHash" },
+                "path": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": { "$ref": "#/components/schemas/MerklePathItem" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentProofResponse".to_owned(),
+        norito::json!({
+            "anyOf": [
+                { "$ref": "#/components/schemas/DaPinIntentProof" },
+                { "type": "null" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentVerifyResponse".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["valid", "error"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "valid": { "const": true },
+                        "error": { "type": "null" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["valid", "error"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "valid": { "const": false },
+                        "error": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Deterministic pin-intent proof verification failure."
+                        }
+                    }
+                }
+            ]
         }),
     );
     schemas.insert(
@@ -35580,11 +36004,8 @@ mod tests {
             "halo2/ipa",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kaigi-usage-v1",
-            "halo2/pasta/ivm-overlay-bind",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -35954,12 +36375,15 @@ mod tests {
             property_ref(schemas, "OfflineBranchClaim", "transition_tags"),
             "#/components/schemas/OfflineBase64Bytes"
         );
-        for property in ["public_inputs", "proof"] {
-            assert_eq!(
-                property_ref(schemas, "OfflineLanePrivacySnarkWitness", property),
-                "#/components/schemas/OfflineBase64Bytes"
-            );
-        }
+        let audit_path = component_properties(schemas, "OfflineMerkleProof")
+            .get("audit_path")
+            .and_then(Value::as_object)
+            .expect("lane merkle audit_path schema");
+        assert_eq!(audit_path.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            audit_path.get("maxItems").and_then(Value::as_u64),
+            Some(255)
+        );
         assert_eq!(
             schemas
                 .get("OfflineFixed8Bytes")
@@ -36018,13 +36442,13 @@ mod tests {
                 "OfflineSpendTransition",
                 "transition",
                 "value",
-                ["peer_split", "redemption_change"],
+                vec!["peer_split", "redemption_change"],
             ),
             (
                 "OfflineLanePrivacyWitness",
                 "kind",
                 "payload",
-                ["merkle", "snark"],
+                vec!["merkle"],
             ),
         ] {
             let schema = schemas
@@ -36074,9 +36498,9 @@ mod tests {
 
     #[test]
     fn offline_json_adapter_schemas_match_actual_norito_serializers() {
-        use iroha_crypto::privacy::LaneCommitmentId;
+        use iroha_crypto::{MerkleProof, privacy::LaneCommitmentId};
         use iroha_data_model::{
-            nexus::{LanePrivacySnarkWitness, LanePrivacyWitness},
+            nexus::{LanePrivacyMerkleWitness, LanePrivacyWitness},
             offline::{
                 KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
                 KagemushaRecursiveSpendBranchV2,
@@ -36129,19 +36553,28 @@ mod tests {
             Some(8)
         );
 
-        let lane_witness = LanePrivacyWitness::Snark(LanePrivacySnarkWitness {
-            public_inputs: vec![0, 1, 2],
-            proof: vec![0xff],
+        let lane_witness = LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
+            leaf: [7; 32],
+            proof: MerkleProof::from_audit_path_bytes(0, vec![[9; 32]]),
         });
+        let lane_witness =
+            norito::json::to_value(&lane_witness).expect("serialize lane privacy witness");
         assert_eq!(
-            norito::json::to_value(&lane_witness).expect("serialize lane privacy witness"),
-            norito::json!({
-                "kind": "snark",
-                "payload": {
-                    "public_inputs": "AAEC",
-                    "proof": "/w=="
-                }
-            })
+            lane_witness
+                .as_object()
+                .and_then(|value| value.get("kind"))
+                .and_then(Value::as_str),
+            Some("merkle")
+        );
+        assert_eq!(
+            lane_witness
+                .as_object()
+                .and_then(|value| value.get("payload"))
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("leaf"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(32)
         );
 
         let attachment = ProofAttachment::new_ref(
@@ -38608,6 +39041,7 @@ mod tests {
                 "roster",
                 "quorum",
                 "nexus_amx_context_hash",
+                "execution_policy_hash",
                 "da_layout",
                 "leader_seed",
             ],
@@ -38623,6 +39057,7 @@ mod tests {
                 "roster",
                 "quorum",
                 "nexus_amx_context_hash",
+                "execution_policy_hash",
                 "da_layout",
                 "leader_seed",
             ],
@@ -42022,5 +42457,311 @@ mod tests {
             .and_then(Value::as_array)
             .expect("exact cancellation mode cases");
         assert_eq!(cancel_mode.len(), 2);
+    }
+
+    #[test]
+    fn local_signing_openapi_contracts_are_closed_and_secret_free() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        for path in [
+            "/v1/contracts/aliases",
+            "/v1/proofs/query",
+            "/v1/space-directory/manifests",
+            "/v1/space-directory/manifests/revoke",
+            "/v1/subscriptions/plans",
+            "/v1/subscriptions/{subscription_id}/usage",
+        ] {
+            assert!(
+                paths
+                    .get(path)
+                    .and_then(Value::as_object)
+                    .and_then(|item| item.get("post"))
+                    .is_some(),
+                "missing local-signing POST `{path}`",
+            );
+        }
+
+        let schemas = document
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("OpenAPI schemas");
+        for request in [
+            "ProofFindByIdSignedQueryRequestV1",
+            "ContractAliasDraftRequestV1",
+            "SpaceDirectoryManifestPublishDraftRequestV1",
+            "SpaceDirectoryManifestRevokeDraftRequestV1",
+            "SubscriptionPlanDraftRequestV1",
+            "SubscriptionUsageDraftRequestV1",
+        ] {
+            let schema = schemas
+                .get(request)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{request}`"));
+            assert_eq!(
+                schema.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("request properties");
+            assert!(
+                !properties.contains_key("private_key"),
+                "`{request}` must not advertise private_key",
+            );
+        }
+    }
+
+    #[test]
+    fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
+        fn operation_schema_ref<'a>(paths: &'a Map, path: &str, request: bool) -> &'a str {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("post"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing DA POST `{path}`"));
+            let media = if request {
+                operation
+                    .get("requestBody")
+                    .and_then(Value::as_object)
+                    .and_then(|body| body.get("content"))
+            } else {
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .and_then(|responses| responses.get("200"))
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("content"))
+            };
+            media
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|json| json.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("missing DA schema reference for `{path}`"))
+        }
+
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/commitments", true),
+            "#/components/schemas/DaCommitmentProofRequest"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/commitments", false),
+            "#/components/schemas/DaCommitmentListResponse"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/commitments/prove", false),
+            "#/components/schemas/DaCommitmentProofResponse"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/commitments/verify", true),
+            "#/components/schemas/DaCommitmentProof"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/pin-intents", true),
+            "#/components/schemas/DaPinIntentQueryRequest"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/pin-intents", false),
+            "#/components/schemas/DaPinIntentWithLocationList"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/pin-intents/prove", false),
+            "#/components/schemas/DaPinIntentProofResponse"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/pin-intents/verify", true),
+            "#/components/schemas/DaPinIntentProof"
+        );
+        for (path, method, operation_id) in [
+            ("/v1/da/proof-policies", "get", "daProofPoliciesList"),
+            (
+                "/v1/da/proof-policies/snapshot",
+                "get",
+                "daProofPolicySnapshot",
+            ),
+            ("/v1/da/pin-intents", "post", "daPinIntentsList"),
+            ("/v1/da/pin-intents/prove", "post", "daPinIntentsProve"),
+            ("/v1/da/pin-intents/verify", "post", "daPinIntentsVerify"),
+        ] {
+            assert_eq!(
+                paths
+                    .get(path)
+                    .and_then(Value::as_object)
+                    .and_then(|item| item.get(method))
+                    .and_then(Value::as_object)
+                    .and_then(|operation| operation.get("operationId"))
+                    .and_then(Value::as_str),
+                Some(operation_id),
+                "{path}"
+            );
+        }
+
+        let schemas = component_schemas(&document);
+        let digest = schemas
+            .get("DaDigest32")
+            .and_then(Value::as_object)
+            .expect("DA digest schema");
+        assert_eq!(digest.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(digest.get("maxItems").and_then(Value::as_u64), Some(1));
+        let digest_bytes = digest
+            .get("items")
+            .and_then(Value::as_object)
+            .expect("DA digest byte-array schema");
+        assert_eq!(
+            digest_bytes.get("minItems").and_then(Value::as_u64),
+            Some(32)
+        );
+        assert_eq!(
+            digest_bytes.get("maxItems").and_then(Value::as_u64),
+            Some(32)
+        );
+        assert!(
+            !schemas.contains_key("DaBytes48"),
+            "removed KZG wire values must not remain in the first-release schema"
+        );
+        let proof_scheme = schemas
+            .get("DaTaggedProofScheme")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("type"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("DA proof-scheme enum");
+        assert_eq!(
+            proof_scheme
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec!["MerkleSha256"]
+        );
+        let commitment_record = schemas
+            .get("DaCommitmentRecord")
+            .and_then(Value::as_object)
+            .expect("DA commitment record schema");
+        assert!(
+            !commitment_record
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key("kzg_commitment")),
+            "removed KZG commitments must not remain in DA record properties"
+        );
+        assert!(
+            !commitment_record
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| {
+                    required
+                        .iter()
+                        .any(|field| field.as_str() == Some("kzg_commitment"))
+                }),
+            "removed KZG commitments must not remain in DA record requirements"
+        );
+
+        let direction = schemas
+            .get("MerkleDirection")
+            .and_then(Value::as_object)
+            .expect("DA Merkle direction schema");
+        assert_eq!(
+            direction.get("type").and_then(Value::as_str),
+            Some("object")
+        );
+        assert_eq!(
+            direction
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|required| required
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()),
+            Some(vec!["direction", "value"])
+        );
+
+        for proof in ["DaCommitmentProof", "DaPinIntentProof"] {
+            let properties = schemas
+                .get(proof)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{proof}` properties"));
+            assert_eq!(
+                properties
+                    .get("bundle_hash")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("allOf"))
+                    .and_then(Value::as_array)
+                    .and_then(|schemas| schemas.first())
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/DaIrohaHash")
+            );
+            assert!(
+                properties
+                    .get("bundle_hash")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("description"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| description.contains("tree version")),
+                "{proof}.bundle_hash must describe the committed tree descriptor"
+            );
+            assert_eq!(
+                properties
+                    .get("path")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maxItems"))
+                    .and_then(Value::as_u64),
+                Some(32)
+            );
+        }
+
+        for (schema, field) in [
+            ("DaPinIntentQueryRequest", "alias"),
+            ("DaPinIntent", "alias"),
+        ] {
+            let alias = schemas
+                .get(schema)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{schema}.{field}` schema"));
+            assert_eq!(alias.get("maxLength").and_then(Value::as_u64), Some(256));
+            assert_eq!(
+                alias.get("x-iroha-maxUtf8Bytes").and_then(Value::as_u64),
+                Some(256)
+            );
+        }
+
+        for verify in ["DaCommitmentVerifyResponse", "DaPinIntentVerifyResponse"] {
+            assert_eq!(
+                schemas
+                    .get(verify)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("oneOf"))
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                Some(2),
+                "{verify}"
+            );
+        }
     }
 }

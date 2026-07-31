@@ -23,6 +23,7 @@ use iroha_data_model::{
     isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
     metadata::Metadata,
     permission::Permission,
+    prelude::QueryBuilderExt,
     privacy::{
         PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
         PrivacyCompiledProfileSnapshotV1, PrivacyParameterDigestV1, PrivacyProposedLifecycleV1,

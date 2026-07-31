@@ -10,12 +10,12 @@
 //! initial value IDs, 457 verifier-owned constants, 393 input owners, 14,828
 //! arithmetic result IDs, window table IDs, and inverse relations are
 //! regenerated here.  Constants are derived from protocol constants and the
-//! fixed generator table, never from proof-supplied metadata.  The only values
-//! left for a future byte-I/O adapter are the typed public-key, signature, and
-//! digest endpoints exposed by [`P256UnresolvedByteIoManifestV1`].
+//! fixed generator table, never from proof-supplied metadata. Typed public-key,
+//! signature, and digest endpoints are resolved by the MAIN byte-I/O
+//! registration exposed through [`P256UnresolvedByteIoManifestV1`].
 //!
-//! This module remains unreferenced and inactive until the aggregate zk-X509
-//! STARK commits every source trace before evaluating these equalities.
+//! The aggregate zk-X509 STARK commits every source trace before evaluating
+//! these equalities; this AIR has no standalone activation path.
 
 use p256::{ProjectivePoint, Scalar, elliptic_curve::sec1::ToEncodedPoint as _};
 use thiserror::Error;
@@ -44,9 +44,9 @@ use super::{
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Stable descriptor for the inactive first-release external-binding AIR.
+/// Stable descriptor for the aggregate-only external-binding AIR.
 pub(crate) const ZK_X509_P256_EXTERNAL_BINDING_AIR_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-external-binding-air-v1-incompatible:one-signature:exact850-initial-values:457-verifier-owned-constants:393-owned-inputs:three-explicit-inverse-auxiliaries:typed-unresolved-qx-qy-r-s-digest-byte-io:128-windows-u1-then-u2:all-window-candidate-and-output-limbs:both-reduction-outputs:result-x-reduction-source:wallet-only-low-s:deterministic-pointwise-equality:three-equalities-per-row:canonical-inactive-padding:verifier-regenerated-addresses:activation=false";
+    b"zk-x509-p256-external-binding-air-v1-incompatible:one-signature:exact850-initial-values:457-verifier-owned-constants:393-owned-inputs:three-explicit-inverse-auxiliaries:typed-unresolved-qx-qy-r-s-digest-byte-io:128-windows-u1-then-u2:all-window-candidate-and-output-limbs:both-reduction-outputs:result-x-reduction-source:wallet-only-low-s:deterministic-pointwise-equality:three-equalities-per-row:canonical-inactive-padding:verifier-regenerated-addresses:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
 /// Pointwise equalities packed into one physical row.
 pub(crate) const P256_EXTERNAL_BINDINGS_PER_ROW_V1: usize = 3;
@@ -379,7 +379,7 @@ pub(crate) struct P256ExternalBindingTraceV1 {
     pub(crate) role: P256EcdsaRoleV1,
     /// Exactly 37,275 wallet rows or 37,270 certificate rows.
     pub(crate) rows: Vec<P256ExternalBindingRowV1>,
-    /// Qx, Qy, r, s, and digest endpoints for the future byte adapter.
+    /// Qx, Qy, r, s, and digest endpoints bound by the MAIN byte-I/O adapter.
     pub(crate) byte_io: P256UnresolvedByteIoManifestV1,
     /// Complete committed byte selection feeding the fixed P-256 instance.
     pub(crate) input_selection: P256OptionalCertificateSelectionV1,

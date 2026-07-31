@@ -203,7 +203,6 @@ fn test_enum_with_norito_rename_all() {
             Halo2IpaPasta,
             #[norito(rename = "halo2-bn254")]
             Halo2Bn254,
-            #[norito(other)]
             Unsupported,
         },
         BackendTag,

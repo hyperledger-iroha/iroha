@@ -89,6 +89,13 @@ Torii forwards inbound auth-related headers for tool dispatch:
 Clients can also supply additional per-call headers via `arguments.headers`.
 `content-length`, `host`, and `connection` from `arguments.headers` are ignored.
 
+Route output is untrusted data. Torii reparses JSON route bodies into a Norito
+JSON value before placing them under `structuredContent`; malformed JSON and
+non-JSON UTF-8 bodies are represented as escaped JSON strings. Successful
+`content[].text` summaries contain only the HTTP status, never ledger metadata
+or route body text. Clients should keep `structuredContent` in the data plane
+and must not treat its strings as instructions.
+
 ## Error model
 
 HTTP layer:
@@ -119,6 +126,10 @@ An OpenAPI entry by itself does not create a tool. Feature-disabled,
 diagnostic, streaming, and non-projected operations fail closed. Calls must use
 an exact name returned by `tools/list`; `operationId` and retired convenience
 spellings are not accepted as hidden aliases.
+
+Streaming exclusion is based on both the route catalog and the OpenAPI response
+contract. Operations advertising `text/event-stream` or HTTP `101` are not
+ordinary MCP tools even when their path does not use an `/sse` suffix.
 
 Musubi package-registry aliases are exposed under `iroha.musubi.*`:
 

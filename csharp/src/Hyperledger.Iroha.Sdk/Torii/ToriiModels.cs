@@ -274,15 +274,13 @@ public sealed record class ToriiAccountFaucetResponse
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiVerifyingKeyRegisterRequest
 {
     private byte[]? verifyingKeyBytes;
 
     [JsonPropertyName("authority")]
     public string? Authority { get; init; }
-
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
 
     [JsonPropertyName("backend")]
     public string? Backend { get; init; }
@@ -337,15 +335,13 @@ public sealed record class ToriiVerifyingKeyRegisterRequest
     public string? Status { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiVerifyingKeyUpdateRequest
 {
     private byte[]? verifyingKeyBytes;
 
     [JsonPropertyName("authority")]
     public string? Authority { get; init; }
-
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
 
     [JsonPropertyName("backend")]
     public string? Backend { get; init; }
@@ -398,6 +394,54 @@ public sealed record class ToriiVerifyingKeyUpdateRequest
 
     [JsonPropertyName("status")]
     public string? Status { get; init; }
+}
+
+/// <summary>
+/// Exact unsigned transaction draft returned by verifying-key register/update routes.
+/// </summary>
+public sealed class ToriiVerifyingKeyTransactionDraft
+{
+    private readonly byte[] transactionPayload;
+    private readonly byte[] signingMessage;
+
+    internal ToriiVerifyingKeyTransactionDraft(
+        string transactionPayloadBase64,
+        string signingMessageBase64,
+        byte[] transactionPayload,
+        byte[] signingMessage)
+    {
+        Submitted = false;
+        TransactionPayloadBase64 = transactionPayloadBase64;
+        SigningMessageBase64 = signingMessageBase64;
+        this.transactionPayload = transactionPayload.ToArray();
+        this.signingMessage = signingMessage.ToArray();
+    }
+
+    /// <summary>
+    /// Always <see langword="false"/> because the server never signs or submits the transaction.
+    /// </summary>
+    [JsonPropertyName("submitted")]
+    public bool Submitted { get; }
+
+    /// <summary>Canonical padded base64 containing the Norito <c>TransactionPayload</c>.</summary>
+    [JsonPropertyName("transaction_payload_b64")]
+    public string TransactionPayloadBase64 { get; }
+
+    /// <summary>Canonical padded base64 containing the 32-byte Iroha payload prehash.</summary>
+    [JsonPropertyName("signing_message_b64")]
+    public string SigningMessageBase64 { get; }
+
+    /// <summary>
+    /// Canonical Norito payload bytes for SDK signers that apply the Iroha prehash themselves.
+    /// </summary>
+    [JsonIgnore]
+    public byte[] TransactionPayload => transactionPayload.ToArray();
+
+    /// <summary>
+    /// Already-prehashed bytes for raw signature primitives and HSM integrations.
+    /// </summary>
+    [JsonIgnore]
+    public byte[] SigningMessage => signingMessage.ToArray();
 }
 
 [JsonConverter(typeof(ToriiAccountFaucetPuzzleJsonConverter))]

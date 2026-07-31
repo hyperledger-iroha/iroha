@@ -1402,8 +1402,8 @@ async fn prover_reports_ttl_gc_deletes_old_reports() {
     }
     std::fs::write(&report_path, norito::json::to_vec_pretty(&rep).unwrap()).unwrap();
     // Force GC to rebuild summaries from edited report payloads.
-    let reports_index_path = data_dir.path().join("zk_prover").join("reports_index.json");
-    let _ = std::fs::remove_file(reports_index_path);
+    let report_index_dir = data_dir.path().join("zk_prover").join("report_index");
+    let _ = std::fs::remove_dir_all(report_index_dir);
 
     // Run GC once with default TTL; should delete the old report
     let deleted = iroha_torii::zk_prover::gc_reports_once();

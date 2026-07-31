@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,15 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` `iroha_crypto::kzg` سے 48 بائٹ پوائنٹ کو دوبارہ استعمال کرتا ہے۔
-  اگر دستیاب نہیں ہے تو ، صرف مرکل کے ثبوت استعمال کریں۔
-- `proof_scheme` لین ڈائرکٹری سے لیا گیا ہے۔ مرکل لینز کے زیڈ جی پے لوڈ کو مسترد کرتے ہیں ،
-  اور `kzg_bls12_381` لینوں کو غیر صفر KZG وعدوں کی ضرورت ہوتی ہے۔ Torii اب
-  صرف مرکل کے وعدے پیدا کرتا ہے اور KZG ترتیب کے ساتھ لینوں کو مسترد کرتا ہے۔
-- `KzgCommitment` `iroha_crypto::kzg` سے 48 بائٹ پوائنٹ کو دوبارہ استعمال کرتا ہے۔
-  اگر کوئی مرکل لین نہیں ہے تو ، ہم صرف مرکل کے ثبوت استعمال کرتے ہیں۔
-- `proof_digest` DA-5 PDP/POTR انضمام فراہم کرتا ہے تاکہ ریکارڈنگ پر مشتمل ہو
-  نمونے لینے کا شیڈول بلبس کو برقرار رکھنے کے لئے استعمال ہوتا ہے۔
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 بلاک ہیڈر توسیع
 
@@ -192,9 +185,7 @@ Torii تین اختتامی نکات فراہم کرتا ہے:
 
 ## سوالات کھولیں
 
-1.
-   بلاک سائز کو کم کرنے کے لئے کے زیڈ جی کے وعدے؟ تجویز: چھوڑ دو
-   `kzg_commitment` اختیاری اور گیٹنگ `iroha_config::da.enable_kzg` کے ذریعے۔
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. ** تسلسل کے فرق ** - کیا ترتیب کے وقفے کی اجازت دی جانی چاہئے؟ موجودہ منصوبہ
    جب تک کہ گورننس `allow_sequence_skips` کے قابل نہ بنائے
    ایمرجنسی ری پلے۔

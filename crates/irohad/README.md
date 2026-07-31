@@ -276,36 +276,37 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
 ### Docker
 
-We provide a sample configuration for Docker in [`docker-compose.yml`](../../defaults/docker-compose.yml). We highly recommend that you adjust the `config.json` to include a set of new key pairs.
+We provide a development-only sample configuration in
+[`docker-compose.yml`](../../defaults/docker-compose.yml). It contains no
+genesis signing key. Create fresh owner-only custody and export only its paths
+before evaluating the manifest:
 
-[Generate the keys](#generating-keys) and put them into `services.*.environment` in `docker-compose.yml`. Update `TRUSTED_PEERS` **and** provide matching `TRUSTED_PEERS_POP` entries (PoPs for every validator key, including the local one).
+```bash
+cargo run --bin kagami -- keys --out-dir target/compose-genesis
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/public.key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
+docker compose -f defaults/docker-compose.yml up --build
+```
 
-- Build images:
+Compose mounts the verifier key into every peer and the signing key into only
+the genesis-submitting peer. Missing files and mismatched keys fail closed. For
+a deployed network, generate validator identities and matching
+`TRUSTED_PEERS_POP` entries with Kagami rather than inheriting the sample
+validator credentials. To keep containers running after closing the terminal,
+use the `-d` (*detached*) flag:
 
-    ```bash
-    docker-compose build
-    ```
-
-- Run containers:
-
-    ```bash
-    docker-compose up
-    ```
-
-  To keep containers up and running after closing the terminal, use the `-d` (*detached*) flag:
-
-    ```bash
-    docker-compose up -d
-    ```
+```bash
+docker compose -f defaults/docker-compose.yml up --build -d
+```
 
 - Stop containers:
 
     ```bash
-    docker-compose stop
+    docker compose -f defaults/docker-compose.yml stop
     ```
 
 - Remove containers:
 
     ```bash
-    docker-compose down
+    docker compose -f defaults/docker-compose.yml down
     ```

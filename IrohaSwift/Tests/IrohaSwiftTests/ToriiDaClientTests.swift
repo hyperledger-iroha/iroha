@@ -137,7 +137,7 @@ final class ToriiDaClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "GET")
             let body = try JSONSerialization.data(withJSONObject: [
                 "version": 1,
-                "policy_hash": String(repeating: "a", count: 64),
+                "policy_hash": canonicalDaHash,
                 "policies": []
             ], options: [.sortedKeys])
             return (200, ["Content-Type": "application/json"], body)
@@ -145,11 +145,8 @@ final class ToriiDaClientTests: XCTestCase {
 
         let client = makeHTTPClient()
         let value = try await client.getDaProofPolicies()
-        guard case .object(let object) = value else {
-            XCTFail("expected object response")
-            return
-        }
-        XCTAssertEqual(object["version"]?.normalizedUInt64, 1)
+        XCTAssertEqual(value.version, 1)
+        XCTAssertEqual(value.policyHash.literal, canonicalDaHash)
     }
 
     func testListDaCommitmentsPostsNormalizedRequest() async throws {
@@ -159,12 +156,14 @@ final class ToriiDaClientTests: XCTestCase {
             let payload = requestBodyData(from: request)
             XCTAssertFalse(payload.isEmpty)
             let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
-            XCTAssertEqual(json?["manifest_hash"] as? String, String(repeating: "1", count: 64))
+            let manifestWrapper = json?["manifest_hash"] as? [[Int]]
+            XCTAssertEqual(manifestWrapper?.count, 1)
+            XCTAssertEqual(manifestWrapper?.first, Array(repeating: 0x11, count: 32))
             XCTAssertEqual(json?["lane_id"] as? Int, 7)
             let response = try JSONSerialization.data(withJSONObject: [
                 "policies": [
                     "version": 1,
-                    "policy_hash": String(repeating: "a", count: 64),
+                    "policy_hash": canonicalDaHash,
                     "policies": []
                 ],
                 "commitments": []
@@ -188,6 +187,10 @@ final class ToriiDaClientTests: XCTestCase {
         ToriiDaStubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/da/pin-intents/prove")
             XCTAssertEqual(request.httpMethod, "POST")
+            let payload = requestBodyData(from: request)
+            let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            let ticketWrapper = json?["storage_ticket"] as? [[Int]]
+            XCTAssertEqual(ticketWrapper?.first, Array(repeating: 0x22, count: 32))
             return (200, ["Content-Type": "application/json"], Data("null".utf8))
         }
 
@@ -206,15 +209,129 @@ final class ToriiDaClientTests: XCTestCase {
             XCTAssertFalse(payload.isEmpty)
             let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
             XCTAssertEqual(json?["bundle_len"] as? Int, 1)
-            let body = Data(#"{"valid":true}"#.utf8)
+            let commitment = try XCTUnwrap(json?["commitment"] as? [String: Any])
+            XCTAssertNil(commitment["kzg_commitment"])
+            XCTAssertTrue(commitment["proof_digest"] is NSNull)
+            let body = Data(#"{"valid":true,"error":null}"#.utf8)
             return (200, ["Content-Type": "application/json"], body)
         }
 
         let client = makeHTTPClient()
-        let proof = ToriiJSONValue.object(["bundle_len": .number(1)])
+        let proof = try sampleCommitmentProof()
         let response = try await client.verifyDaCommitment(proof: proof)
         XCTAssertTrue(response.valid)
         XCTAssertNil(response.error)
+    }
+
+    func testTypedDaProofPreservesU64MaxAndExplicitOptionalFields() throws {
+        let proof = try sampleCommitmentProof()
+        let encoded = try JSONEncoder().encode(proof)
+        let original = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        let maximumEpoch = original.replacingOccurrences(
+            of: "\"epoch\":2",
+            with: "\"epoch\":18446744073709551615"
+        )
+        XCTAssertNotEqual(maximumEpoch, original)
+
+        let decoded = try JSONDecoder().decode(
+            ToriiDaCommitmentProof.self,
+            from: Data(maximumEpoch.utf8)
+        )
+        XCTAssertEqual(decoded.commitment.epoch, UInt64.max)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let commitment = try XCTUnwrap(object["commitment"] as? [String: Any])
+        XCTAssertNil(commitment["kzg_commitment"])
+        XCTAssertTrue(commitment["proof_digest"] is NSNull)
+    }
+
+    func testTypedDaModelsRejectBadHashPathAndVerifyInvariant() throws {
+        let badChecksum = String(canonicalDaHash.dropLast()) + "A"
+        XCTAssertThrowsError(try ToriiDaHash(badChecksum))
+        let emptyGovernanceTag = ToriiDaRetentionPolicy(
+            hotRetentionSecs: 0,
+            coldRetentionSecs: 0,
+            requiredReplicas: 0,
+            storageClass: .hot,
+            governanceTag: ""
+        )
+        let emptyTagWire = try JSONEncoder().encode(emptyGovernanceTag)
+        XCTAssertEqual(
+            try JSONDecoder()
+                .decode(ToriiDaRetentionPolicy.self, from: emptyTagWire)
+                .governanceTag,
+            ""
+        )
+
+        let proof = try sampleCommitmentProof()
+        let encodedProof = try JSONEncoder().encode(proof)
+        let encodedText = try XCTUnwrap(String(data: encodedProof, encoding: .utf8))
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaCommitmentProof.self,
+                from: Data(
+                    encodedText
+                        .replacingOccurrences(
+                            of: "MerkleSha256",
+                            with: "KzgBls12_381"
+                        )
+                        .utf8
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try ToriiDaCommitmentProof(
+                commitment: proof.commitment,
+                location: proof.location,
+                bundleHash: proof.bundleHash,
+                bundleLength: 2,
+                root: proof.root,
+                path: []
+            )
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaCommitmentVerifyResponse.self,
+                from: Data(#"{"valid":false,"error":null}"#.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaPinIntentVerifyResponse.self,
+                from: Data(#"{"valid":true,"error":null,"ignored":1}"#.utf8)
+            )
+        )
+    }
+
+    func testPinIntentAliasUsesServerUtf8ByteBound() throws {
+        let empty = ToriiDaPinIntentQueryRequest(alias: "")
+        _ = try JSONEncoder().encode(empty)
+
+        let exact = ToriiDaPinIntentQueryRequest(alias: String(repeating: "é", count: 128))
+        _ = try JSONEncoder().encode(exact)
+
+        let oversized = ToriiDaPinIntentQueryRequest(alias: String(repeating: "é", count: 129))
+        XCTAssertThrowsError(try JSONEncoder().encode(oversized))
+
+        let digest = try ToriiDaDigest32(bytes: Array(repeating: 0x22, count: 32))
+        let intent = try ToriiDaPinIntent(
+            laneId: 1,
+            epoch: 2,
+            sequence: 3,
+            storageTicket: digest,
+            manifestHash: digest,
+            alias: nil,
+            owner: nil
+        )
+        let encodedIntent = try JSONEncoder().encode(intent)
+        let intentObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedIntent) as? [String: Any]
+        )
+        XCTAssertTrue(intentObject["alias"] is NSNull)
+        XCTAssertTrue(intentObject["owner"] is NSNull)
     }
 
     // MARK: - Helpers
@@ -265,6 +382,39 @@ final class ToriiDaClientTests: XCTestCase {
             streamTokenB64: Data([0x01, 0x02]).base64EncodedString()
         )
     }
+
+    private func sampleCommitmentProof() throws -> ToriiDaCommitmentProof {
+        let digest = [Array(repeating: 0x11, count: 32)]
+        let record: [String: Any] = [
+            "lane_id": 1,
+            "epoch": 2,
+            "sequence": 3,
+            "client_blob_id": digest,
+            "manifest_hash": digest,
+            "proof_scheme": ["type": "MerkleSha256", "value": NSNull()],
+            "chunk_root": canonicalDaHash,
+            "proof_digest": NSNull(),
+            "retention_class": [
+                "hot_retention_secs": 10,
+                "cold_retention_secs": 20,
+                "required_replicas": 1,
+                "storage_class": ["type": "Hot", "value": NSNull()],
+                "governance_tag": ["da.default"],
+            ],
+            "storage_ticket": digest,
+            "acknowledgement_sig": String(repeating: "A", count: 128),
+        ]
+        let payload: [String: Any] = [
+            "commitment": record,
+            "location": ["block_height": 4, "index_in_bundle": 0],
+            "bundle_hash": canonicalDaHash,
+            "bundle_len": 1,
+            "root": canonicalDaHash,
+            "path": [],
+        ]
+        let encoded = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        return try JSONDecoder().decode(ToriiDaCommitmentProof.self, from: encoded)
+    }
 }
 
 private func requestBodyData(from request: URLRequest) -> Data {
@@ -287,6 +437,9 @@ private func requestBodyData(from request: URLRequest) -> Data {
     }
     return data
 }
+
+private let canonicalDaHash =
+    "hash:0F923F0F972DB7373EFB38439B74651907459ECE1EF94564CCECF063F8893D85#C1CB"
 
 private final class ToriiDaStubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (Int, [String: String], Data))?

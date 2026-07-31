@@ -18,11 +18,13 @@ It exposes five HTTP endpoints:
 - `GET /healthz` – liveness probe.
 - `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
   from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
-  `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  requests a shorter TTL (clamped to the policy window), binds the ticket to a
-  transcript hash, and returns a relay-signed ticket + signature fingerprint
-  when signing keys are configured.
+- `POST /v1/puzzle/mint` – mints an Argon2 ticket. Its JSON body requires a
+  non-zero 32-byte `"transcript_hash_hex"`; `"ttl_secs"` and `"signed"` are
+  optional:
+  `{ "transcript_hash_hex": "<32-byte hex>", "ttl_secs": <u64>, "signed": true }`.
+  The service clamps TTL overrides to the policy window and returns a
+  relay-signed ticket plus signature fingerprint when signing keys are
+  configured.
 - `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
   admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
   and the merged revocation set).
@@ -81,8 +83,9 @@ revocation store; raw 74-byte PoW tickets remain valid when the signed-ticket ve
 configured. Pass the signer secret via `--signed-ticket-secret-hex` or
 `--signed-ticket-secret-path` when launching the puzzle service; startup rejects mismatched
 keypairs if the secret does not validate against `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` accepts `"signed": true` (and optional `"transcript_hash_hex"`) to
-return a Norito-encoded signed ticket alongside the raw ticket bytes; responses include
+`POST /v1/puzzle/mint` accepts `"signed": true` together with the required,
+non-zero `"transcript_hash_hex"` to return a Norito-encoded signed ticket
+alongside the raw ticket bytes; responses include
 `signed_ticket_b64` and `signed_ticket_fingerprint_hex` to help track replay fingerprints.
 Requests with `signed = true` are rejected if the signer secret is not configured.
 
@@ -99,23 +102,25 @@ Requests with `signed = true` are rejected if the signer secret is not configure
 3. **Stage the restart.** Reload the systemd unit or container once governance
    announces the rotation cutover. The service has no hot-reload support; a
    restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
+4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` with a fresh,
+   non-zero `transcript_hash_hex` and confirm the
    returned `difficulty` and `expires_at` match the new policy. The soak report
    (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
    bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
    ensure the advertised issuer fingerprint and revocation count match the
    expected values.
 
-## Emergency disable procedure
+## Emergency hardening procedure
 
-1. Set `pow.puzzle.enabled = false` in the shared relay configuration. Keep
-   `pow.required = true` if hashcash fallback tickets must remain mandatory.
+1. Keep `pow.required = true`, use a non-zero difficulty, and leave the Argon2
+   puzzle gate enabled. First-release startup rejects attempts to make
+   admission optional, set zero difficulty, or disable the puzzle.
 2. Optionally enforce `pow.emergency` entries to reject stale descriptors while
-   the Argon2 gate is offline.
-3. Restart both the relay and the puzzle service to apply the change.
-4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
-   the expected hashcash value, and verify `/v1/puzzle/config` reports
-   `puzzle = null`.
+   the service is degraded.
+3. Restart both the relay and the puzzle service after policy changes.
+4. Monitor `soranet_handshake_pow_difficulty` and verify
+   `/v1/puzzle/config` reports the expected non-zero difficulty and puzzle
+   parameters.
 
 ## Monitoring and alerting
 

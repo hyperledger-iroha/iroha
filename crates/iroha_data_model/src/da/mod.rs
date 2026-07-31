@@ -25,7 +25,7 @@ pub mod prelude {
         commitment::{
             DaCommitmentBundle, DaCommitmentKey, DaCommitmentLocation, DaCommitmentProof,
             DaCommitmentRecord, DaCommitmentWithLocation, DaProofPolicy, DaProofPolicyBundle,
-            DaProofScheme, KzgCommitment, MerkleDirection, MerklePathItem, RetentionClass,
+            DaProofScheme, MerkleDirection, MerklePathItem, RetentionClass,
         },
         confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         ingest::{

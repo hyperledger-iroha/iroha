@@ -1015,14 +1015,17 @@
             coordinator_lane_block_view: origin.descriptor.lane_block_view,
             coordinator_proposal_hash: origin.proposal_hash,
         };
-        let native_qc = |body| iroha_data_model::block::consensus::NativeAmxAttestationQcV2 {
-            body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: participant_validator_set_hash,
-            validator_set: participant_validator_set.clone(),
-            validator_set_pops: Vec::new(),
-            signers_bitmap: Vec::new(),
-            bls_aggregate_signature: Vec::new(),
+        let native_qc = |body| {
+            iroha_data_model::block::consensus::NativeAmxAttestationQcV2::try_new(
+                body,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                participant_validator_set_hash,
+                participant_validator_set.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("preflight fixture validator set and proofs must align")
         };
         let prepare_qc = native_qc(prepare_body);
         prepare_body.phase = iroha_data_model::block::consensus::NativeAmxPhase::Commit;
@@ -2880,4 +2883,3 @@
             "preflight failure must not stage a new recovery sidecar"
         );
     }
-

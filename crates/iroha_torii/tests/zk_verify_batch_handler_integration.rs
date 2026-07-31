@@ -6,6 +6,8 @@ use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
+const TEST_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 fn sample_pallas_envelope(label: &str) -> iroha_zkp_halo2::OpenVerifyEnvelope {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
@@ -62,6 +64,7 @@ async fn post_batch_with_limits(
                     headers,
                     body,
                     open_limits,
+                    TEST_MAX_BODY_BYTES,
                     max_batch,
                     max_envelope_bytes,
                     enforce_transcript_label_ascii,
@@ -94,7 +97,16 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
         "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch(headers, body).await
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    iroha_zkp_halo2::OpenVerifyLimits::default(),
+                    TEST_MAX_BODY_BYTES,
+                    16,
+                    1024 * 1024,
+                    false,
+                )
+                .await
             },
         ),
     );
@@ -154,7 +166,16 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
         "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch(headers, body).await
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    iroha_zkp_halo2::OpenVerifyLimits::default(),
+                    TEST_MAX_BODY_BYTES,
+                    16,
+                    1024 * 1024,
+                    false,
+                )
+                .await
             },
         ),
     );
@@ -199,7 +220,7 @@ async fn zk_verify_batch_norito_accepts_empty_batch() {
         norito::to_bytes(&Vec::<iroha_zkp_halo2::OpenVerifyEnvelope>::new())
             .expect("encode empty batch"),
         "application/x-norito",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         false,
@@ -244,10 +265,8 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
                 iroha_torii::handle_v1_zk_verify_batch_with_limits(
                     headers,
                     body,
-                    h2::OpenVerifyLimits {
-                        max_k: Some(3),
-                        max_transcript_label_len: Some(64),
-                    },
+                    h2::OpenVerifyLimits::new(3, 64),
+                    TEST_MAX_BODY_BYTES,
                     1,
                     usize::MAX,
                     true,
@@ -280,10 +299,8 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
                 iroha_torii::handle_v1_zk_verify_batch_with_limits(
                     headers,
                     body,
-                    h2::OpenVerifyLimits {
-                        max_k: Some(3),
-                        max_transcript_label_len: Some(4),
-                    },
+                    h2::OpenVerifyLimits::new(3, 4),
+                    TEST_MAX_BODY_BYTES,
                     1,
                     usize::MAX,
                     true,
@@ -322,7 +339,7 @@ async fn zk_verify_batch_json_preserves_false_statuses_for_bad_entries() {
     let body = format!(r#"["{encoded}","not base64",7]"#);
     let v = post_json_batch_with_limits(
         body,
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         usize::MAX,
         false,
     )
@@ -350,7 +367,7 @@ async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
     let body = format!(r#"["{encoded}"]"#);
     let v = post_json_batch_with_limits(
         body,
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         encoded_bytes.len() - 1,
         false,
     )
@@ -371,7 +388,7 @@ async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
     let body = format!(r#"["{encoded}"]"#);
     let v = post_json_batch_with_limits(
         body,
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         usize::MAX,
         true,
     )
@@ -395,10 +412,7 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
     let body = format!(r#"["{encoded}"]"#);
     let v = post_json_batch_with_limits(
         body,
-        iroha_zkp_halo2::OpenVerifyLimits {
-            max_k: Some(2),
-            max_transcript_label_len: Some(64),
-        },
+        iroha_zkp_halo2::OpenVerifyLimits::new(2, 64),
         usize::MAX,
         false,
     )
@@ -425,7 +439,7 @@ async fn zk_verify_batch_rejects_retired_text_json_alias() {
     let v = post_batch_with_limits(
         body.into_bytes(),
         "text/json",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         false,
@@ -446,7 +460,7 @@ async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
     let v = post_batch_with_limits(
         br#"["not base64","also not base64"]"#.to_vec(),
         "application/json",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         1,
         usize::MAX,
         false,
@@ -463,6 +477,45 @@ async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
 }
 
 #[tokio::test]
+async fn zk_verify_batch_rejects_oversized_body_before_norito_decode() {
+    let app = Router::new().route(
+        "/v1/zk/verify-batch",
+        post(
+            |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    iroha_zkp_halo2::OpenVerifyLimits::default(),
+                    4,
+                    16,
+                    1024,
+                    false,
+                )
+                .await
+            },
+        ),
+    );
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/verify-batch")
+        .header(http::header::CONTENT_TYPE, "application/x-norito")
+        .body(axum::body::Body::from(vec![0_u8; 5]))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("error").and_then(|x| x.as_str()),
+        Some("body_too_large")
+    );
+    assert_eq!(v.get("max").and_then(|x| x.as_u64()), Some(4));
+    assert_eq!(v.get("actual").and_then(|x| x.as_u64()), Some(5));
+}
+
+#[tokio::test]
 async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
     let good = sample_pallas_envelope("torii-norito-good");
     let non_ascii_label = String::from_utf8(vec![b't', b'o', b'r', b'i', b'i', b'-', 0xc2, 0xb5])
@@ -473,7 +526,7 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
     let v = post_batch_with_limits(
         body,
         "application/x-norito",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         true,
@@ -493,7 +546,7 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
     let v = post_batch_with_limits(
         norito::to_bytes(&vec![good]).expect("encode batch"),
         "application/x-norito",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         encoded_good.len() - 1,
         false,
@@ -513,7 +566,7 @@ async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
     let v = post_batch_with_limits(
         b"not norito".to_vec(),
         "application/x-norito",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         false,
@@ -528,7 +581,7 @@ async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
     let v = post_batch_with_limits(
         br#"{"not":"an array"}"#.to_vec(),
         "application/json",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         false,
@@ -539,7 +592,7 @@ async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
     let v = post_batch_with_limits(
         br#"["unterminated""#.to_vec(),
         "application/json",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         false,
@@ -550,7 +603,7 @@ async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
     let v = post_batch_with_limits(
         b"ignored".to_vec(),
         "text/plain",
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,
         false,
@@ -563,7 +616,7 @@ async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
 async fn zk_verify_batch_json_accepts_empty_batch() {
     let v = post_json_batch_with_limits(
         "[]".to_owned(),
-        iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
         usize::MAX,
         false,
     )
@@ -590,7 +643,16 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
         "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch(headers, body).await
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    iroha_zkp_halo2::OpenVerifyLimits::default(),
+                    TEST_MAX_BODY_BYTES,
+                    16,
+                    1024 * 1024,
+                    false,
+                )
+                .await
             },
         ),
     );
@@ -650,7 +712,16 @@ async fn zk_verify_batch_endpoint_rejects_bound_metadata_tampering() {
         "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch(headers, body).await
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    iroha_zkp_halo2::OpenVerifyLimits::default(),
+                    TEST_MAX_BODY_BYTES,
+                    16,
+                    1024 * 1024,
+                    false,
+                )
+                .await
             },
         ),
     );

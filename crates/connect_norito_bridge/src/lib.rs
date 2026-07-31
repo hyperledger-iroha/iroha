@@ -16271,6 +16271,7 @@ mod kagemusha_bridge_tests {
                 quorum,
                 roster: roster.clone(),
                 nexus_amx_context_hash: Hash::new(b"receiver-offer size fixture nexus context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
                     encoding: PayloadEncoding::Plain,
                     chunk_size_bytes: 1_024,
@@ -19156,6 +19157,7 @@ mod kagemusha_bridge_tests {
             quorum: DualQuorum::from_roster(&window.validator_set)
                 .expect("production top-up finality quorum"),
             nexus_amx_context_hash: Hash::new(b"production SBD acceptance nexus"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1_024,
@@ -19251,6 +19253,7 @@ mod kagemusha_bridge_tests {
             parent_commit_qc: context.parent_commit_qc.clone(),
             snapshot_bootstrap: context.snapshot_bootstrap,
             nexus_amx_context_hash: context.nexus_amx_context_hash,
+            execution_policy_hash: context.execution_policy_hash,
             da_layout: context.da_layout,
             leader_seed: context.leader_seed,
         };

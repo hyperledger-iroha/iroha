@@ -627,8 +627,6 @@ mod tests {
         changed_settlement.settlement = Some("net".to_owned());
         let mut changed_storage = base.clone();
         changed_storage.storage = LaneStorageProfile::SplitReplica;
-        let mut changed_proof_scheme = base.clone();
-        changed_proof_scheme.proof_scheme = DaProofScheme::KzgBls12_381;
         let mut changed_metadata_value = base.clone();
         changed_metadata_value
             .metadata
@@ -647,7 +645,6 @@ mod tests {
             ("governance", changed_governance),
             ("settlement", changed_settlement),
             ("storage", changed_storage),
-            ("proof_scheme", changed_proof_scheme),
             ("metadata value", changed_metadata_value),
             ("metadata entries", changed_metadata_entries),
         ] {
@@ -671,7 +668,7 @@ mod tests {
             governance: Some("boi".to_owned()),
             settlement: Some("gross".to_owned()),
             storage: LaneStorageProfile::SplitReplica,
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
             metadata: BTreeMap::new(),
         };
         lane.metadata

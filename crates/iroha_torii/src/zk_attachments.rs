@@ -36,7 +36,12 @@ use sha2::{Digest as _, Sha256};
 use tokio::{sync::Mutex, task};
 use zstd::stream::read::Decoder as ZstdDecoder;
 
-use crate::{NoritoQuery, routing::MaybeTelemetry, utils::NORITO_MIME_TYPE};
+use crate::{
+    NoritoQuery,
+    routing::MaybeTelemetry,
+    utils::NORITO_MIME_TYPE,
+    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
+};
 
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
@@ -49,7 +54,9 @@ const JSON_MIME_TYPE: &str = "application/json";
 const ATTACHMENT_SANITIZER_ENV: &str = "IROHA_ATTACHMENT_SANITIZER";
 const ATTACHMENT_SANITIZER_MAX_INPUT_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_MAX_INPUT_BYTES";
 const ATTACHMENT_SANITIZER_SANDBOXED_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_OS_SANDBOXED";
+const ATTACHMENT_SANITIZER_BINARY_STEM: &str = "attachment_sanitizer";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
+const SANITIZER_RESPONSE_OVERHEAD_BYTES: usize = 64 * 1024;
 const ATTACHMENT_META_SCAN_MAX_FILES: usize = 20_000;
 const TAG_FILTER_LEGACY_SCAN_CAP: usize = 128;
 
@@ -763,7 +770,7 @@ fn run_sanitizer_subprocess(
     timeout: Duration,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let exe = sanitizer_executable()?;
-    validate_sanitizer_executable(&exe)?;
+    let exe = validate_sanitizer_executable(&exe)?;
     let request_bytes = norito::to_bytes(&request).map_err(|err| {
         SanitizeError::new(
             SanitizeRejectReason::Sandbox,
@@ -775,7 +782,10 @@ fn run_sanitizer_subprocess(
         .saturating_add(1024)
         .max(1024)
         .to_string();
-    let mut cmd = sandboxed_sanitizer_command(&exe, &max_input_bytes);
+    let max_output_bytes = usize::try_from(request.max_expanded_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(SANITIZER_RESPONSE_OVERHEAD_BYTES);
+    let mut cmd = sandboxed_sanitizer_command(&exe, &max_input_bytes)?;
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -808,8 +818,7 @@ fn run_sanitizer_subprocess(
         })?;
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let mut buf = Vec::new();
-            let result = stdout.read_to_end(&mut buf).map(|_| buf);
+            let result = read_sanitizer_stdout_limited(&mut stdout, max_output_bytes);
             let _ = tx.send(result);
         });
 
@@ -850,12 +859,7 @@ fn run_sanitizer_subprocess(
                     "attachment sanitizer output timeout exceeded",
                 )
             })?
-            .map_err(|err| {
-                SanitizeError::new(
-                    SanitizeRejectReason::Sandbox,
-                    format!("attachment sanitizer stdout read failed: {err}"),
-                )
-            })?;
+            .map_err(|err| SanitizeError::new(SanitizeRejectReason::Sandbox, err))?;
         decode_sanitizer_response_bytes(&stdout_bytes)
     })();
 
@@ -869,8 +873,36 @@ fn run_sanitizer_subprocess(
     result
 }
 
-fn validate_sanitizer_executable(exe: &Path) -> Result<(), SanitizeError> {
-    let metadata = fs::metadata(exe).map_err(|err| {
+fn read_sanitizer_stdout_limited(
+    stdout: &mut impl std::io::Read,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let read = stdout
+            .read(&mut chunk)
+            .map_err(|err| format!("attachment sanitizer stdout read failed: {err}"))?;
+        if read == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(read) > max_bytes {
+            return Err(format!(
+                "attachment sanitizer output exceeds {max_bytes} bytes"
+            ));
+        }
+        output.extend_from_slice(&chunk[..read]);
+    }
+}
+
+fn validate_sanitizer_executable(exe: &Path) -> Result<PathBuf, SanitizeError> {
+    let canonical = fs::canonicalize(exe).map_err(|err| {
+        SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            format!("attachment sanitizer spawn failed: {err}"),
+        )
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|err| {
         SanitizeError::new(
             SanitizeRejectReason::Sandbox,
             format!("attachment sanitizer spawn failed: {err}"),
@@ -881,11 +913,49 @@ fn validate_sanitizer_executable(exe: &Path) -> Result<(), SanitizeError> {
             SanitizeRejectReason::Sandbox,
             format!(
                 "attachment sanitizer spawn failed: {} is not a file",
-                exe.display()
+                canonical.display()
             ),
         ));
     }
-    Ok(())
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                format!(
+                    "attachment sanitizer spawn failed: {} is not executable",
+                    canonical.display()
+                ),
+            ));
+        }
+    }
+    let current_exe = env::current_exe()
+        .and_then(fs::canonicalize)
+        .map_err(|err| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                format!("current node executable unavailable: {err}"),
+            )
+        })?;
+    if canonical == current_exe {
+        return Err(SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            "attachment sanitizer must be a dedicated executable, not the node binary",
+        ));
+    }
+    let expected_name = format!(
+        "{ATTACHMENT_SANITIZER_BINARY_STEM}{}",
+        env::consts::EXE_SUFFIX
+    );
+    if canonical.file_name() != Some(OsStr::new(&expected_name)) {
+        return Err(SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            format!("attachment sanitizer executable must be named {expected_name}"),
+        ));
+    }
+    Ok(canonical)
 }
 
 fn decode_sanitizer_response_bytes(stdout_bytes: &[u8]) -> Result<SanitizerOutcome, SanitizeError> {
@@ -939,28 +1009,48 @@ fn sanitizer_executable_with_override(
     if let Some(path) = override_path {
         return Ok(path);
     }
-    env::current_exe().map_err(|err| {
+    let current_exe = env::current_exe().map_err(|err| {
         SanitizeError::new(
             SanitizeRejectReason::Sandbox,
             format!("attachment sanitizer executable unavailable: {err}"),
         )
-    })
+    })?;
+    let directory = current_exe.parent().ok_or_else(|| {
+        SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            format!(
+                "attachment sanitizer executable unavailable: {} has no parent directory",
+                current_exe.display()
+            ),
+        )
+    })?;
+    Ok(directory.join(format!(
+        "{ATTACHMENT_SANITIZER_BINARY_STEM}{}",
+        env::consts::EXE_SUFFIX
+    )))
 }
 
-fn sandboxed_sanitizer_command(exe: &Path, max_input_bytes: &str) -> Command {
-    let search_path = env::var_os("PATH");
-    sandboxed_sanitizer_command_for_search_path(exe, max_input_bytes, search_path.as_deref())
+fn sandboxed_sanitizer_command(
+    exe: &Path,
+    max_input_bytes: &str,
+) -> Result<Command, SanitizeError> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let search_path = Some(OsStr::new("/usr/bin:/bin"));
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let search_path = None;
+    sandboxed_sanitizer_command_for_search_path(exe, max_input_bytes, search_path)
 }
 
 fn sandboxed_sanitizer_command_for_search_path(
     exe: &Path,
     max_input_bytes: &str,
     search_path: Option<&OsStr>,
-) -> Command {
+) -> Result<Command, SanitizeError> {
     #[cfg(target_os = "linux")]
     {
         if let Some(bubblewrap) = find_executable_in_search_path(search_path, "bwrap") {
             let mut cmd = Command::new(bubblewrap);
+            set_clean_sanitizer_environment(&mut cmd, max_input_bytes);
             cmd.args([
                 "--die-with-parent",
                 "--new-session",
@@ -969,14 +1059,16 @@ fn sandboxed_sanitizer_command_for_search_path(
                 "--unshare-net",
                 "--unshare-uts",
                 "--unshare-ipc",
-                "--ro-bind",
-                "/",
+                "--clearenv",
+                "--tmpfs",
                 "/",
                 "--dev",
                 "/dev",
                 "--proc",
                 "/proc",
                 "--tmpfs",
+                "/tmp",
+                "--chdir",
                 "/tmp",
                 "--setenv",
                 ATTACHMENT_SANITIZER_ENV,
@@ -988,63 +1080,116 @@ fn sandboxed_sanitizer_command_for_search_path(
                 ATTACHMENT_SANITIZER_SANDBOXED_ENV,
                 "1",
             ]);
-            cmd.arg(exe);
-            return cmd;
+            add_bwrap_runtime_path(&mut cmd, Path::new("/usr"))?;
+            add_bwrap_runtime_path(&mut cmd, Path::new("/lib"))?;
+            add_bwrap_runtime_path(&mut cmd, Path::new("/lib64"))?;
+            cmd.arg("--ro-bind")
+                .arg(exe)
+                .arg("/attachment_sanitizer")
+                .arg("/attachment_sanitizer");
+            return Ok(cmd);
         }
     }
 
     #[cfg(target_os = "macos")]
     {
         if let Some(sandbox_exec) = find_executable_in_search_path(search_path, "sandbox-exec") {
-            let profile = r#"(version 1)
+            let executable_literal = macos_sandbox_literal(exe)?;
+            let profile = format!(
+                r#"(version 1)
 (deny default)
-(allow process*)
-(allow file-read*)
-(allow mach-lookup)
+(allow process-exec (literal "{executable_literal}"))
+(allow file-read-metadata)
+(allow file-read-data
+    (literal "{executable_literal}")
+    (subpath "/System/Library")
+    (subpath "/usr/lib")
+    (subpath "/private/var/db/dyld"))
 (allow sysctl-read)
-(deny network*)"#;
+(deny network*)"#
+            );
             let mut cmd = Command::new(sandbox_exec);
-            cmd.arg("-p")
-                .arg(profile)
-                .arg(exe)
-                .env(ATTACHMENT_SANITIZER_ENV, "1")
-                .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
-                .env(ATTACHMENT_SANITIZER_SANDBOXED_ENV, "1");
-            return cmd;
+            set_clean_sanitizer_environment(&mut cmd, max_input_bytes);
+            cmd.arg("-p").arg(profile).arg(exe);
+            return Ok(cmd);
         }
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = search_path;
 
-    // Fall back to a dedicated subprocess even when the platform-specific
-    // wrapper is unavailable. The child still applies resource limits before
-    // sanitizing and remains isolated from the main Torii process.
-    direct_sanitizer_command(exe, max_input_bytes)
+    Err(SanitizeError::new(
+        SanitizeRejectReason::Sandbox,
+        "attachment sanitizer OS sandbox unavailable",
+    ))
 }
 
-fn direct_sanitizer_command(exe: &Path, max_input_bytes: &str) -> Command {
-    let mut cmd = Command::new(exe);
-    cmd.env(ATTACHMENT_SANITIZER_ENV, "1")
+#[cfg(target_os = "linux")]
+fn add_bwrap_runtime_path(cmd: &mut Command, path: &Path) -> Result<(), SanitizeError> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(path).map_err(|err| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                format!(
+                    "attachment sanitizer sandbox cannot resolve {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        cmd.arg("--symlink").arg(target).arg(path);
+    } else if metadata.is_dir() {
+        cmd.arg("--ro-bind").arg(path).arg(path);
+    }
+    Ok(())
+}
+
+fn set_clean_sanitizer_environment(cmd: &mut Command, max_input_bytes: &str) {
+    cmd.env_clear()
+        .env(ATTACHMENT_SANITIZER_ENV, "1")
         .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
         .env(ATTACHMENT_SANITIZER_SANDBOXED_ENV, "1");
-    cmd
 }
 
-fn find_executable_in_path(name: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH");
-    find_executable_in_search_path(path.as_deref(), name)
+#[cfg(target_os = "macos")]
+fn macos_sandbox_literal(path: &Path) -> Result<String, SanitizeError> {
+    let raw = path.to_str().ok_or_else(|| {
+        SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            "attachment sanitizer path is not valid UTF-8",
+        )
+    })?;
+    Ok(raw.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn find_executable_in_search_path(search_path: Option<&OsStr>, name: &str) -> Option<PathBuf> {
     let path = search_path?;
     for dir in env::split_paths(path) {
         let candidate = dir.join(name);
-        if candidate.is_file() {
+        if executable_file(&candidate) {
             return Some(candidate);
         }
     }
     None
+}
+
+fn executable_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        return metadata.permissions().mode() & 0o111 != 0;
+    }
+    #[cfg(not(unix))]
+    true
 }
 
 fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bool {
@@ -1186,6 +1331,21 @@ pub async fn handle_post_attachment(
         )
             .into_response();
     }
+    let zk1_tags = if sanitized_body.starts_with(b"ZK1\0") {
+        match parse_zk1_tags(&sanitized_body) {
+            Ok(tags) => (!tags.is_empty()).then_some(tags),
+            Err(error) => {
+                telemetry.with_metrics(|tel| tel.inc_torii_attachment_reject("format"));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid ZK1 envelope: {error}"),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        None
+    };
     let id = {
         let h = iroha_crypto::Hash::new(&sanitized_body);
         hex::encode::<[u8; 32]>(h.into())
@@ -1225,7 +1385,7 @@ pub async fn handle_post_attachment(
                 sandboxed: sanitized_summary.sandboxed,
             },
         }),
-        zk1_tags: zk1_extract_tags(&sanitized_body),
+        zk1_tags,
     };
     if let Err(e) = persist_body(&tenant, &id, &sanitized_body) {
         return (
@@ -1481,7 +1641,10 @@ fn backfill_attachment_tags(
     }
     let clean = sanitize_attachment_id(&meta.id)?;
     let bytes = std::fs::read(bin_path(tenant, &clean)).ok()?;
-    let tags = zk1_extract_tags(&bytes)?;
+    let tags = parse_zk1_tags(&bytes).ok()?;
+    if tags.is_empty() {
+        return None;
+    }
     let mut updated = meta.clone();
     updated.zk1_tags = Some(tags.clone());
     let _ = save_meta(tenant, &updated);
@@ -1521,60 +1684,7 @@ fn attachment_meta_tag_match(
 }
 
 fn zk1_bytes_has_tag(bytes: &[u8], tag: &str) -> bool {
-    if bytes.len() < 8 {
-        return false;
-    }
-    if &bytes[..4] != b"ZK1\0" {
-        return false;
-    }
-    let mut pos = 4usize;
-    while pos + 8 <= bytes.len() {
-        let tag_bytes = &bytes[pos..pos + 4];
-        let len = u32::from_le_bytes([
-            bytes[pos + 4],
-            bytes[pos + 5],
-            bytes[pos + 6],
-            bytes[pos + 7],
-        ]) as usize;
-        pos += 8;
-        if pos + len > bytes.len() {
-            return false;
-        }
-        // Compare tag (ASCII). Unknowns ignored.
-        if let Ok(tag_str) = core::str::from_utf8(tag_bytes) {
-            if tag_str == tag {
-                return true;
-            }
-        }
-        pos += len;
-    }
-    false
-}
-
-fn zk1_extract_tags(bytes: &[u8]) -> Option<Vec<String>> {
-    if bytes.len() < 8 || &bytes[..4] != b"ZK1\0" {
-        return None;
-    }
-    let mut tags = Vec::new();
-    let mut pos = 4usize;
-    while pos + 8 <= bytes.len() {
-        let tag_bytes = &bytes[pos..pos + 4];
-        let len = u32::from_le_bytes([
-            bytes[pos + 4],
-            bytes[pos + 5],
-            bytes[pos + 6],
-            bytes[pos + 7],
-        ]) as usize;
-        pos += 8;
-        if pos + len > bytes.len() {
-            return None;
-        }
-        if let Ok(tag) = core::str::from_utf8(tag_bytes) {
-            tags.push(tag.to_string());
-        }
-        pos += len;
-    }
-    if tags.is_empty() { None } else { Some(tags) }
+    parse_zk1_tags(bytes).is_ok_and(|tags| tags.iter().any(|existing| existing == tag))
 }
 
 fn needs_export_sanitization(meta: &AttachmentMeta) -> bool {
@@ -1878,7 +1988,9 @@ fn sanitize_timeout_cfg() -> Duration {
 
 /// Run the attachment sanitizer process if requested via environment.
 pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
-    env::var_os(ATTACHMENT_SANITIZER_ENV)?;
+    if env::var_os(ATTACHMENT_SANITIZER_ENV).as_deref() != Some(OsStr::new("1")) {
+        return None;
+    }
     let exit_code = match run_sanitizer_process() {
         Ok(()) => 0,
         Err(err) => {
@@ -1890,11 +2002,28 @@ pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
 }
 
 fn run_sanitizer_process() -> Result<(), SanitizeError> {
-    let sandboxed = env::var_os(ATTACHMENT_SANITIZER_SANDBOXED_ENV).is_some();
+    if env::var_os(ATTACHMENT_SANITIZER_SANDBOXED_ENV).as_deref() != Some(OsStr::new("1")) {
+        return Err(SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            "attachment sanitizer refuses to run outside its OS sandbox",
+        ));
+    }
     let max_input = env::var(ATTACHMENT_SANITIZER_MAX_INPUT_ENV)
+        .map_err(|_| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                "attachment sanitizer max input limit is missing",
+            )
+        })?
+        .parse::<usize>()
         .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(MAX_ATTACHMENT_BYTES_FALLBACK.saturating_mul(4));
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                "attachment sanitizer max input limit is invalid",
+            )
+        })?;
     let payload = read_stdin_limited(max_input)?;
     let archived = match norito::from_bytes::<SanitizerRequest>(&payload) {
         Ok(request) => request,
@@ -1926,16 +2055,11 @@ fn run_sanitizer_process() -> Result<(), SanitizeError> {
         timeout: Duration::from_millis(request.timeout_ms.max(1)),
         mode: AttachmentSanitizerMode::InProcess,
     };
-    if let Err(err) = apply_sanitizer_limits(cfg.max_expanded_bytes, cfg.timeout) {
-        debug!(
-            error = %err.message,
-            "attachment sanitizer resource limits unavailable"
-        );
-    }
+    apply_sanitizer_limits(cfg.max_expanded_bytes, cfg.timeout)?;
     let response =
         match sanitize_attachment_sync(request.declared_type.as_deref(), &request.body, &cfg) {
             Ok(mut outcome) => {
-                outcome.summary.sandboxed = sandboxed;
+                outcome.summary.sandboxed = true;
                 SanitizerResponse {
                     ok: true,
                     summary: Some(outcome.summary),
@@ -2066,7 +2190,7 @@ fn quota_lock() -> &'static Mutex<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, fs, path::PathBuf};
+    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
 
     use axum::http::HeaderMap;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -2085,8 +2209,8 @@ mod tests {
 
     use super::{
         AttachmentHashes, AttachmentMeta, AttachmentProvenance, AttachmentSanitizerMode,
-        AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, json,
-        sanitize_attachment_id, sanitize_attachment_sync,
+        AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, ZK1_MAX_TLV_COUNT, json,
+        parse_zk1_tags, sanitize_attachment_id, sanitize_attachment_sync,
     };
 
     fn test_sanitizer_config(max_expanded_bytes: u64, max_archive_depth: u32) -> SanitizerConfig {
@@ -2305,14 +2429,22 @@ mod tests {
     }
 
     #[test]
-    fn sanitizer_executable_defaults_to_current_exe() {
-        let resolved = super::sanitizer_executable_with_override(None).expect("current exe");
+    fn sanitizer_executable_defaults_to_dedicated_sibling() {
+        let resolved = super::sanitizer_executable_with_override(None).expect("sanitizer path");
         let current = std::env::current_exe().expect("current exe");
-        assert_eq!(resolved, current);
+        assert_ne!(resolved, current);
+        assert_eq!(
+            resolved,
+            current.parent().expect("binary directory").join(format!(
+                "{}{}",
+                super::ATTACHMENT_SANITIZER_BINARY_STEM,
+                std::env::consts::EXE_SUFFIX
+            ))
+        );
     }
 
     #[test]
-    fn validate_sanitizer_executable_rejects_missing_or_non_file_path() {
+    fn validate_sanitizer_executable_rejects_missing_non_file_or_node_path() {
         let temp = tempfile::tempdir().expect("temp dir");
         let missing = temp.path().join("missing-sanitizer");
         let err =
@@ -2324,15 +2456,26 @@ mod tests {
             super::validate_sanitizer_executable(temp.path()).expect_err("directory path rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("is not a file"));
+
+        let current = std::env::current_exe().expect("current executable");
+        let err = super::validate_sanitizer_executable(&current)
+            .expect_err("node executable must be rejected");
+        assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
+        assert!(err.message.contains("dedicated executable"));
     }
 
     #[test]
-    fn direct_sanitizer_command_sets_required_env() {
-        let exe = PathBuf::from("attachment_sanitizer");
-        let cmd = super::direct_sanitizer_command(&exe, "4096");
-        assert_eq!(cmd.get_program(), exe.as_os_str());
+    fn sanitizer_command_environment_is_an_explicit_allowlist() {
+        let mut cmd = Command::new("attachment_sanitizer");
+        cmd.env("PRIVATE_KEY", "must-not-survive");
+        super::set_clean_sanitizer_environment(&mut cmd, "4096");
 
         let envs: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(envs.len(), 3);
+        assert!(
+            envs.iter()
+                .all(|(key, _)| *key != OsStr::new("PRIVATE_KEY"))
+        );
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
         }));
@@ -2347,19 +2490,16 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_sanitizer_command_falls_back_without_wrapper_in_search_path() {
+    fn sandboxed_sanitizer_command_fails_closed_without_wrapper_in_search_path() {
         let exe = PathBuf::from("attachment_sanitizer");
-        let cmd = super::sandboxed_sanitizer_command_for_search_path(
+        let err = super::sandboxed_sanitizer_command_for_search_path(
             &exe,
             "4096",
             Some(OsStr::new("/definitely/missing")),
-        );
-        assert_eq!(cmd.get_program(), exe.as_os_str());
-
-        let envs: Vec<_> = cmd.get_envs().collect();
-        assert!(envs.iter().any(|(key, value)| {
-            *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
-        }));
+        )
+        .expect_err("missing sandbox wrapper must reject");
+        assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
+        assert!(err.message.contains("OS sandbox unavailable"));
     }
 
     #[cfg(target_os = "macos")]
@@ -2368,13 +2508,22 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let sandbox_exec = temp.path().join("sandbox-exec");
         fs::write(&sandbox_exec, "").expect("write fake sandbox-exec");
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = fs::metadata(&sandbox_exec)
+                .expect("sandbox-exec metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&sandbox_exec, permissions).expect("make sandbox-exec executable");
+        }
 
         let exe = PathBuf::from("attachment_sanitizer");
         let cmd = super::sandboxed_sanitizer_command_for_search_path(
             &exe,
             "4096",
             Some(temp.path().as_os_str()),
-        );
+        )
+        .expect("sandbox command");
         assert_eq!(cmd.get_program(), sandbox_exec.as_os_str());
 
         let args: Vec<_> = cmd.get_args().collect();
@@ -2383,8 +2532,8 @@ mod tests {
             args.get(1)
                 .and_then(|arg| arg.to_str())
                 .is_some_and(|profile| profile.contains("(deny network*)")
-                    && profile.contains("(allow mach-lookup)")
-                    && profile.contains("(allow sysctl-read)"))
+                    && profile.contains("(allow sysctl-read)")
+                    && !profile.contains("(allow file-read*)"))
         );
         assert_eq!(args.last().copied(), Some(exe.as_os_str()));
 
@@ -2404,13 +2553,22 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let bubblewrap = temp.path().join("bwrap");
         fs::write(&bubblewrap, "").expect("write fake bwrap");
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = fs::metadata(&bubblewrap)
+                .expect("bwrap metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&bubblewrap, permissions).expect("make bwrap executable");
+        }
 
         let exe = PathBuf::from("attachment_sanitizer");
         let cmd = super::sandboxed_sanitizer_command_for_search_path(
             &exe,
             "4096",
             Some(temp.path().as_os_str()),
-        );
+        )
+        .expect("sandbox command");
         assert_eq!(cmd.get_program(), bubblewrap.as_os_str());
 
         let args: Vec<_> = cmd.get_args().collect();
@@ -2418,8 +2576,32 @@ mod tests {
             args.iter()
                 .any(|arg| *arg == OsStr::new("--die-with-parent"))
         );
+        assert!(args.iter().any(|arg| *arg == OsStr::new("--clearenv")));
         assert!(args.iter().any(|arg| *arg == OsStr::new("--setenv")));
-        assert_eq!(args.last().copied(), Some(exe.as_os_str()));
+        assert_eq!(
+            args.last().copied(),
+            Some(OsStr::new("/attachment_sanitizer"))
+        );
+        assert!(
+            !args.windows(3).any(|window| {
+                window == [OsStr::new("--ro-bind"), OsStr::new("/"), OsStr::new("/")]
+            }),
+            "the sandbox must not expose the host root"
+        );
+    }
+
+    #[test]
+    fn sanitizer_stdout_reader_rejects_oversized_response() {
+        let mut within_limit = io::Cursor::new(b"1234".as_slice());
+        assert_eq!(
+            super::read_sanitizer_stdout_limited(&mut within_limit, 4).expect("bounded output"),
+            b"1234"
+        );
+
+        let mut oversized = io::Cursor::new(b"12345".as_slice());
+        let err = super::read_sanitizer_stdout_limited(&mut oversized, 4)
+            .expect_err("oversized output rejected");
+        assert!(err.contains("output exceeds 4 bytes"));
     }
 
     struct AlwaysErrReader;
@@ -2615,8 +2797,23 @@ mod tests {
         bytes.extend_from_slice(b"IPAK");
         bytes.extend_from_slice(&4u32.to_le_bytes());
         bytes.extend_from_slice(&[1, 2, 3, 4]);
-        let tags = super::zk1_extract_tags(&bytes).expect("zk1 tags");
+        let tags = parse_zk1_tags(&bytes).expect("zk1 tags");
         assert_eq!(tags, vec!["PROF".to_string(), "IPAK".to_string()]);
+    }
+
+    #[test]
+    fn zk1_attachment_tag_extraction_rejects_excess_tlvs_without_partial_metadata() {
+        let mut bytes = b"ZK1\0".to_vec();
+        for _ in 0..ZK1_MAX_TLV_COUNT {
+            bytes.extend_from_slice(b"PROF");
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert_eq!(parse_zk1_tags(&bytes), Ok(vec!["PROF".to_owned()]));
+
+        bytes.extend_from_slice(b"IPAK");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_zk1_tags(&bytes).is_err());
+        assert!(!super::zk1_bytes_has_tag(&bytes, "PROF"));
     }
 
     #[test]
@@ -2734,6 +2931,38 @@ mod tests {
         );
         assert_eq!(provenance.sanitizer.verdict, "accepted");
         assert_eq!(provenance.sanitizer.archive_depth, 0);
+    }
+
+    #[tokio::test]
+    async fn post_attachment_rejects_over_cardinality_zk1_before_persistence() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+
+        let mut envelope = b"ZK1\0".to_vec();
+        for _ in 0..=ZK1_MAX_TLV_COUNT {
+            envelope.extend_from_slice(b"PROF");
+            envelope.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/x-zk1"),
+        );
+
+        let response = super::handle_post_attachment(
+            super::AttachmentTenant::anonymous(),
+            headers,
+            axum::body::Bytes::from(envelope),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            super::list_all_ids(&super::AttachmentTenant::anonymous()).is_empty(),
+            "a rejected envelope must not create attachment state"
+        );
     }
 
     #[tokio::test]

@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,15 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- يتم إعادة استخدام `KzgCommitment` أو استخدام 48 بايت في `iroha_crypto::kzg`.
-  عندما يكون الأمر كذلك، لمعرفة كيفية اختبار ميركل فقط.
-- `proof_scheme` مشتق من كتالوج الممرات؛ ممرات Merkle rejeitam حمولات KZG
-  enquanto ممرات `kzg_bls12_381` exigem التزامات KZG nao صفر. Torii في الوقت الحالي
-  لذلك يتم إنتاج تسويات Merkle وإعادة إنشاء الممرات التي تم تكوينها بواسطة KZG.
-- `KzgCommitment` يتم إعادة استخدامه أو استخدام 48 بايت في `iroha_crypto::kzg`.
-  عندما يقترب من ممرات Merkle، لمعرفة كيفية اختبار Merkle فقط.
-- `proof_digest` يتوقع دمج DA-5 PDP/PoTR لتسجيل نفس الشيء
-  تعداد أو جدول أخذ العينات المستخدم للحفاظ على النقط الحية.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 امتداد رأس الكتلة
 
@@ -200,9 +193,7 @@ Torii يقوم بمعالجة نظام التشغيل من خلال نقاط ا�
 
 ## Perguntas abertas
 
-1. **KZG vs Merkle defaults** - Devemos semper Pular التزامات KZG em blobs
-   pequenos para reduzir o tamanho do bloco؟ الاقتراح: manter `kzg_commitment`
-   بوابة اختيارية عبر `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **فجوات التسلسل** - هل تسمح للممرات بالترتيب؟ يا بلانو الثغرات rejeita الفعلية
    يتم إطلاق النار على إدارة تشغيل `allow_sequence_skips` لإعادة تشغيل الطوارئ.
 3. ** ذاكرة التخزين المؤقت للعميل الخفيف ** - حان الوقت لتنزيل ذاكرة التخزين المؤقت لـ SDK من SQLite للإثباتات؛

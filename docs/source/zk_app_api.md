@@ -13,20 +13,26 @@ decode-only/demo work, see [ZK Audit Matrix](zk_audit_matrix.md).
 
 ## Direct verifier convenience endpoints
 
-Torii exposes a small `/v1/zk/*` convenience surface in addition to the
-runtime-critical ledger paths:
+Torii exposes one diagnostic verifier in addition to the runtime-critical
+ledger paths:
 
-- `POST /v1/zk/verify` is decode-only. It accepts Norito or JSON and returns
-  `{ "ok": true|false }` based on payload shape, not on cryptographic proof
-  validity.
-- `POST /v1/zk/submit-proof` is also demo-only. It mirrors the decode check and
-  returns a deterministic body hash as `id`, but it does not verify, persist,
-  or register the proof with the ledger verifier.
-- `POST /v1/zk/verify-batch` (feature `zk-verify-batch`) does perform
+- `POST /v1/zk/verify-batch` (feature `zk-verify-batch`) performs
   cryptographic verification, but only for the standalone native IPA
   `iroha_zkp_halo2::OpenVerifyEnvelope` format. It does not consult the
   verifying-key registry, does not enforce ledger circuit/schema policy, and is
   not a substitute for `iroha_core::zk::verify_backend_with_timing_guardrails`.
+  The generator vectors carried for transparent reproducibility must equal the
+  deterministic V1 derivation for the advertised curve and `n`; callers cannot
+  select another parameter set. The complete canonical parameter fingerprint
+  is absorbed into the opening transcript. Torii applies the configured total
+  body ceiling before decoding, then applies finite batch, per-envelope,
+  curve-`k`, and transcript-label ceilings. The embedding API requires those
+  limits explicitly; the no-limit Torii handler has been removed.
+
+The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof` routes
+were removed. To request ledger-authoritative proof verification, submit a
+signed transaction containing `VerifyProof` (or the applicable proof-bearing
+instruction) through the ordinary transaction pipeline.
 
 Runtime-critical surfaces such as governance ballots/tallies, confidential
 assets, `IvmProved`, and registry-backed STARK/Halo2 flows continue to use the
@@ -147,7 +153,7 @@ The background prover worker (disabled by default) scans attachments and produce
 
 - Norito (`application/x-norito`): the body must decode as `ProofAttachment` or `ProofAttachmentList`.
 - JSON (`application/json`): the body must decode as a `ProofAttachment` object, a `ProofAttachmentList` (base64 string), or a JSON array of `ProofAttachment`.
-- ZK1/TLV envelopes are not accepted as top‑level attachment payloads; they are tagged (`zk1_tags`) but reported as `ok=false`.
+- ZK1/TLV envelopes are not accepted as top‑level attachment payloads; they are tagged (`zk1_tags`) but reported as `ok=false`. The first-release structural profile rejects envelopes with more than 64 TLVs, and report metadata stores each repeated tag only once.
 
 Verification rules:
 - `vk_ref` is resolved via the WSV verifying‑key registry. When a registry entry omits inline key bytes, Torii loads the key bytes from `torii.zk_prover_keys_dir` (see storage layout below).
@@ -196,6 +202,13 @@ When an attachment carries multiple proofs, the report includes a `proofs` array
 
 Storage layout:
 - Reports: `storage/torii/zk_prover/reports/<id>.json`
+- Bounded report query summaries:
+  `storage/torii/zk_prover/report_index/<id>.json`. Each report owns one
+  atomically replaced summary shard, so report creation has constant index
+  write amplification and never rewrites a global index. Summary shards are
+  capped at 64 KiB; projected errors are capped at 4 KiB, content types at 256
+  bytes, and tag metadata at 64 unique bounded strings. Full report bodies
+  remain available from the report endpoint.
 - Prover key store: `storage/torii/zk_prover/keys/<backend>__<name>.vk` (sanitized components; override via `torii.zk_prover_keys_dir`).
 
 Retention:
@@ -218,7 +231,7 @@ attachments_allowed_mime_types = ["application/x-norito", "application/json", "a
 attachments_max_expanded_bytes = 16_777_216    # 16 MiB expanded payload cap
 attachments_max_archive_depth = 2              # max nested gzip/zstd layers
 attachments_sanitize_timeout_ms = 1000         # sanitizer timeout (ms)
-attachments_sanitizer_mode = "subprocess"      # subprocess or in_process
+attachments_sanitizer_mode = "subprocess"      # production default; in_process has no OS isolation
 
 # Background prover (non-consensus)
 zk_prover_enabled = false             # disabled by default
@@ -255,6 +268,13 @@ proof_retry_after_secs = 1            # Retry-After value returned on throttling
 proof_egress_bytes_per_sec = 8_388_608 # optional steady-state egress budget (bytes/sec)
 proof_egress_burst_bytes = 67_108_864 # optional egress burst budget (64 MiB; covers worst-case SCCP JSON expansion)
 ```
+
+In subprocess mode, install the dedicated `attachment_sanitizer` executable in the same directory
+as the node binary. The node never re-executes itself as a sanitizer. It clears inherited
+environment variables, bounds both sides of the helper protocol, and refuses the request if the
+helper is missing, has the wrong name, aliases the node executable, or cannot be placed in an OS
+sandbox. Linux requires `bwrap`; macOS uses `sandbox-exec`. Official release bundles and container
+images include the helper, and Linux images include Bubblewrap.
 
 Configuration must be set via `iroha_config` files. Environment variable overrides exist for developer tooling but are not intended for operator-facing deployments.
 
@@ -293,8 +313,7 @@ Use the CLI to interact with the app API (requires Torii URL and any API token i
   - `iroha app zk attachments get --id <ID> --out <PATH>`
   - `iroha app zk attachments delete --id <ID>`
 - Verification helpers:
-  - `iroha app zk verify --json <PATH>` or `--norito <PATH>`
-  - `iroha app zk submit-proof --json <PATH>` or `--norito <PATH>`
+  - `iroha app zk verify-batch --json <PATH>` or `--norito <PATH>`
 - IVM prove:
   - `iroha app zk ivm prove --json <PATH> [--wait]`
   - `iroha app zk ivm get --job-id <JOB_ID>`
@@ -303,13 +322,31 @@ Use the CLI to interact with the app API (requires Torii URL and any API token i
 
 ## Verifying Key Registry (App API)
 
-Torii exposes convenience endpoints to manage the on‑chain Verifying Key registry by submitting signed transactions or reading records. These endpoints are app‑facing shims; they build and submit ISIs on your behalf.
+Torii exposes convenience endpoints that validate registry inputs, quote fees, and prepare canonical
+unsigned transactions. Torii never accepts a signing key and never submits these drafts. The client
+must validate the returned draft, sign it locally, construct the signed transaction, and submit that
+transaction through the ordinary transaction pipeline.
 
 Endpoints:
-- `POST /v1/zk/vk/register` — Submit `RegisterVerifyingKey`
-- `POST /v1/zk/vk/update` — Submit `UpdateVerifyingKey` (version must increase)
-- `POST /v1/zk/vk/deprecate` — Submit `DeprecateVerifyingKey`
+- `POST /v1/zk/vk/register` — Prepare `RegisterVerifyingKey` for local signing
+- `POST /v1/zk/vk/update` — Prepare `UpdateVerifyingKey` for local signing (version must increase)
 - `GET  /v1/zk/vk/{backend}/{name}` — Get a verifying key record as JSON
+
+Both POST schemas are strict. They accept the public `authority` that will sign the transaction but
+reject `private_key` and every other unknown field. A successful request returns HTTP 200 with
+exactly this draft:
+
+```json
+{
+  "submitted": false,
+  "transaction_payload_b64": "<canonical padded-base64 TransactionPayload>",
+  "signing_message_b64": "<padded-base64 HashOf<TransactionPayload>>"
+}
+```
+
+SDK draft decoders reject non-canonical base64, oversized payloads, a signing-message hash that does
+not match the payload, the wrong chain or authority, extra instructions, and any registry record
+that does not exactly match the request. Only after these checks should a client sign and submit.
 
 `GET` responses normalise the data to:
 
@@ -343,20 +380,22 @@ DTOs (POST bodies, JSON):
   - `vk_bytes` (base64) — full verifying key bytes; Torii computes the commitment and validates it against `commitment_hex` when present. `vk_len` is optional here but, when provided, must match the byte length.
   - `commitment_hex` (hex, 64) — commitment only; when bytes are omitted you must supply `vk_len` so the record captures verifier size metadata.
 
-CLI wrappers:
+CLI commands build and sign the equivalent registry transaction locally with the active client
+configuration; their JSON files contain public registry data only:
+
 - Register: `iroha app zk vk register --json ./vk_register.json`
 - Update: `iroha app zk vk update --json ./vk_update.json`
-- Deprecate: `iroha app zk vk deprecate --json ./vk_deprecate.json`
 - Get: `iroha app zk vk get --backend <backend> --name <name>`
 
 Example `vk_register.json`:
 ```json
 {
   "authority": "<i105-account-id>",
-  "private_key": "ed0120...",
   "backend": "halo2/ipa",
   "name": "vk_main",
   "version": 1,
+  "circuit_id": "transfer-v1",
+  "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "gas_schedule_id": "halo2_default",
   "max_proof_bytes": 8192,
   "metadata_uri_cid": "ipfs://CID_FOR_METADATA",
@@ -368,7 +407,8 @@ Example `vk_register.json`:
 
 Notes:
 - Commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`
-  domain plus length-prefixed backend and VK bytes, and are verified on submit.
+  domain plus length-prefixed backend and VK bytes, and are checked while preparing the draft and
+  again during ledger execution.
 
 ### Subscribing to Verifying Key Registry Events
 
@@ -422,7 +462,9 @@ iroha ledger trigger register \
 
 ## Governance Endpoints (ZK Ballots)
 
-For submitting ZK ballots and building transaction skeletons, refer to the Governance App API document. Torii submits the ballot when `private_key` is provided; otherwise it returns a skeleton for clients to sign and submit:
+For submitting ZK ballots and building transaction skeletons, refer to the
+Governance App API document. These strict request schemas do not accept
+`private_key`; Torii returns a skeleton for clients to sign locally and submit:
 - POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.

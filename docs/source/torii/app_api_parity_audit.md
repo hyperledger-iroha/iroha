@@ -91,19 +91,37 @@ val headers = CanonicalRequestSigner.buildHeaders(
   transaction pipeline. Runtime calls are by-reference `ContractCall`
   executions that accept exactly one of `contract_address` or
   `contract_alias`; Torii exposes no server-side deployment or activation
-  shortcut.
+  shortcut. Contract-call and multisig DTOs accept either a detached public-key
+  signature or return an unsigned preparation response; they never accept a
+  private key. Alias writes return a canonical `AppApiTransactionDraftDto`
+  payload for local signing.
+
+#### Local signing boundary for app mutations — Covered
+- Unsigned transaction drafts: contract aliases, verifying-key registration
+  and updates, subscription plan and usage writes, and space-directory manifest
+  publication and revocation.
+- Signed-query envelopes: `POST /v1/proofs/query` accepts only canonical
+  versioned `SignedQuery` bytes constrained to `FindProofRecordById`.
+- All corresponding request DTOs use `deny_unknown_fields`, so a retired
+  `private_key` member is rejected during extraction rather than ignored.
+- Draft responses set `submitted: false` and return canonical padded-base64
+  `TransactionPayload` bytes plus the exact payload-hash signing message. The
+  caller validates, signs, constructs a `SignedTransaction`, and submits through
+  the ordinary transaction endpoint.
 
 #### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
-- Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
-  (`crates/iroha_torii/src/routing.rs:4282-4382`) and `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
-- DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
-  (`crates/iroha_torii/src/routing.rs:3619-4279`).
-- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Handlers: `handle_post_vk_register`, `handle_post_vk_update`, and `handle_get_vk`.
+- DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `AppApiTransactionDraftDto`, `VkListQuery`,
+  and `ProofFindByIdQueryDto`.
+- Router binding: `Torii::add_contracts_and_vk_routes`.
 - Tests: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
+  `crates/iroha_torii/tests/zk_vk_post_integration.rs`,
   `crates/iroha_torii/tests/zk_verify_handler_integration.rs`,
   `crates/iroha_torii/tests/zk_vote_tally_handler.rs`.
 - Owner: ZK Working Group with Torii Platform support.
-- Notes: DTOs align with Norito schemas referenced by SDKs; rate limiting enforced via `limits.rs`.
+- Notes: The strict POST DTOs reject signing secrets and unknown fields. Torii returns a canonical
+  unsigned transaction draft bound to the request and never signs or submits it; SDKs validate,
+  sign, and submit locally. Rate limiting is enforced via `limits.rs`.
 
 #### Nexus Connect (`/v1/connect/*`) — Covered (feature `connect`)
 - Handlers: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,

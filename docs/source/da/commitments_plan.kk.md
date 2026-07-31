@@ -58,9 +58,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -68,14 +67,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` астында пайдаланылатын бар 48 байт нүктені қайта пайдаланады
-  `iroha_crypto::kzg`. Merkle жолақтары оны бос қалдырады; `kzg_bls12_381` жолақтары қазір
-  кесінді түбірінен алынған детерминирленген BLAKE3-XOF міндеттемесін алу және
-  сақтау билеті, сондықтан блок хэштері сыртқы проверсіз тұрақты болып қалады.
-- `proof_scheme` жолақтар каталогынан алынған; Merkle жолақтары адасып кеткен KZG-ді қабылдамайды
-  пайдалы жүктемелер, ал `kzg_bls12_381` жолақтары теңгеге тең емес міндеттемелерді талап етеді.
-- `proof_digest` DA-5 PDP/PoTR интеграциясын күтеді, сондықтан бірдей жазба
-  блобтарды тірі қалдыру үшін пайдаланылатын іріктеу кестесін санайды.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Блок тақырыбының кеңейтімі
 
@@ -126,12 +120,7 @@ Torii нақты бумаларды таратқанша.
    `SignedBlockWire`; бекітілген байламдар түбіртек курсорларын алға жылжытады (гидратталған
    Қайта іске қосу кезінде Курадан) және байланыстырылған дискінің өсуі үшін ескі катушка жазбаларын кесіңіз.
 
-Блок құрастыру және `BlockCreated` қабылдау әрбір міндеттемені қайта растайды
-жолақтар каталогы: Merkle жолақтары адасқан KZG міндеттемелерін қабылдамайды, KZG жолақтары
-теңгеге тең емес міндеттеме және нөлге тең емес `chunk_root` және белгісіз жолақтар
-түсіп қалды. Torii `/v1/da/commitments/verify` соңғы нүктесі бірдей қорғанысты көрсетеді,
-және ingest қазір детерминирленген KZG міндеттемесін әр адамға біріктіреді
-`kzg_bls12_381` жазбасы саясатқа сәйкес келетін бумалар блок жинағына жетеді.
+Block assembly and `BlockCreated` ingestion re-validate each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero `chunk_root`, and rejects unknown lanes. Because the data model has no KZG variant or field, neither Torii nor a lifecycle transition can construct or sign a KZG policy/record; an unknown wire discriminant fails decoding. `/v1/da/commitments/verify` applies the same V1 policy to historical proofs and does not independently verify signatures or finality.
 
 DA-2 қабылдау жоспарында сипатталған манифест құрылғылары көзі ретінде екі еселенеді
 міндеттеме пакеті үшін шындық. Torii сынағы
@@ -210,9 +199,7 @@ WSV `manifest_hash` арқылы кілттелген арнайы бағанд�
 
 ## Ашық сұрақтар
 
-1. **KZG және Merkle әдепкілері** — Кішкентай блобтар әрқашан KZG міндеттемелерін өткізіп жіберуі керек пе
-   блок өлшемін азайту керек пе? Ұсыныс: `kzg_commitment` қосымшасын қалдырыңыз және қақпа арқылы өтіңіз
-   `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **Кезектілік аралықтары** — Біз тәртіптен тыс жолақтарға жол береміз бе? Ағымдағы жоспар олқылықтарды жоққа шығарады
    егер басқару төтенше жағдайда қайта ойнату үшін `allow_sequence_skips` ауыстырмаса.
 3. **Жеңіл-клиент кэші** — SDK тобы жеңіл SQLite кэшін сұрады.

@@ -14,8 +14,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigArg = @()
 if ($env:CLI_CONFIG) { $ConfigArg = @('--config', $env:CLI_CONFIG) }
 
-$AUTHORITY = if ($env:AUTHORITY) { $env:AUTHORITY } else { 'sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D' }
-$PRIVATE_KEY = if ($env:PRIVATE_KEY) { $env:PRIVATE_KEY } else { 'ed0120...' }
 $BACKEND = if ($env:BACKEND) { $env:BACKEND } else { 'halo2/ipa' }
 $FROM = if ($env:FROM) { $env:FROM } else { 'sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D' }
 $ASSET_DEFINITION_ID = if ($env:ASSET_DEFINITION_ID) { $env:ASSET_DEFINITION_ID } else { '62Fk4FPcMuLvW5QjDGNF2a4jAmjM' }
@@ -44,8 +42,6 @@ $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath()) -Nam
 try {
   # Register transfer VK
   $reg = Get-Content -Raw -Path $regPath | ConvertFrom-Json
-  $reg.authority = $AUTHORITY
-  $reg.private_key = $PRIVATE_KEY
   $reg.backend = $BACKEND
   $reg.name = $VK_TRANSFER_NAME
   $reg | ConvertTo-Json -Depth 8 | Set-Content -NoNewline -Path (Join-Path $tmp.FullName 'vk_transfer.json')
@@ -53,8 +49,6 @@ try {
 
   # Register unshield VK
   $reg = Get-Content -Raw -Path $regPath | ConvertFrom-Json
-  $reg.authority = $AUTHORITY
-  $reg.private_key = $PRIVATE_KEY
   $reg.backend = $BACKEND
   $reg.name = $VK_UNSHIELD_NAME
   $reg | ConvertTo-Json -Depth 8 | Set-Content -NoNewline -Path (Join-Path $tmp.FullName 'vk_unshield.json')

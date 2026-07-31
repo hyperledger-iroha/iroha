@@ -415,9 +415,7 @@ pub enum ReputationFinalizedArchiveRetentionRequestErrorV1 {
 #[repr(transparent)]
 #[cfg_attr(
     feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(transparent),
-    norito(with = "crate::json_helpers::fixed_bytes")
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ReputationJournalSourceIdV1(pub [u8; 32]);
 
@@ -469,9 +467,7 @@ impl ReputationJournalSourceIdV1 {
 #[repr(transparent)]
 #[cfg_attr(
     feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(transparent),
-    norito(with = "crate::json_helpers::fixed_bytes")
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ReputationJournalEventIdV1(pub [u8; 32]);
 
@@ -1226,9 +1222,7 @@ pub fn derive_stream_token_gateway_id_v1(
 #[repr(transparent)]
 #[cfg_attr(
     feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(transparent),
-    norito(with = "crate::json_helpers::fixed_bytes")
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct StreamTokenExactHeaderDigestV1([u8; 32]);
 
@@ -1658,6 +1652,7 @@ impl StreamTokenValidationRequestContextV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct StreamTokenValidationBindingV1 {
     /// Stable authenticated identity of the regional gateway.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -1718,6 +1713,7 @@ impl StreamTokenValidationBindingV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct StreamTokenValidationOutcomeV1 {
     /// Durable gateway sequence and request-context binding.
     pub binding: StreamTokenValidationBindingV1,
@@ -3961,6 +3957,22 @@ mod tests {
             );
             norito::json::value::from_value::<StreamTokenValidationOutcomeV1>(aliased)
                 .expect_err("legacy token identity aliases must be rejected beside the binding");
+
+            let mut nested_alias =
+                norito::json::to_value(&accepted).expect("serialize token validation outcome");
+            nested_alias
+                .as_object_mut()
+                .expect("token outcome object")
+                .get_mut("binding")
+                .expect("binding field")
+                .as_object_mut()
+                .expect("binding object")
+                .insert(
+                    "validation_id".to_owned(),
+                    norito::json::Value::String("11".repeat(32)),
+                );
+            norito::json::value::from_value::<StreamTokenValidationOutcomeV1>(nested_alias)
+                .expect_err("legacy token identity aliases must be rejected inside the binding");
 
             let mut legacy =
                 norito::json::to_value(&accepted).expect("serialize token validation outcome");

@@ -61,9 +61,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -71,15 +70,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reutiliza o ponto de 48 bytes usado em `iroha_crypto::kzg`.
-  Quando ausente, cai para provas Merkle apenas.
-- `proof_scheme` deriva do catalogo de lanes; נתיבים Merkle rejeitam מטענים KZG
-  נתיבי enquanto `kzg_bls12_381` התחייבויות חריגות KZG נאו אפס. Torii אטואלמנטה
-  אז תיצור פשרה של Merkle e rejeita lanes configuradas com KZG.
-- `KzgCommitment` reutiliza o ponto de 48 bytes usado em `iroha_crypto::kzg`.
-  Quando ausente em lanes Merkle, cai para provas Merkle apenas.
-- `proof_digest` antecipa a integracao DA-5 PDP/PoTR para que o mesmo record
-  ציין את לוח הזמנים של דגימה בארה"ב עבור כתמים חיים.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 Extensao do header de bloco
 
@@ -173,30 +166,7 @@ reconstruam o indice rapidamente a partir do block log.
 
 ## 7. אסטרטגיה דה אשכים
 
-1. **בדיקות יחידות** עבור קידוד/פענוח de `DaCommitmentBundle` e
-   atualizacoes de derivacao לעשות hash de bloco.
-2. **מתקן זהוב** יפח `fixtures/da/commitments/` capturando bytes canonicos
-   do bundle e provas Merkle.
-3. **מבחני אינטגרה** com dois validadores, ingerindo blobs de exemplo e
-   verificando que ambos os nos concordam no conteudo do bundle e nas respostas
-   השאילתה/הוכחה.
-4. **בדיקות של לקוחות ברמה** em `integration_tests/tests/da/commitments.rs`
-   (חלודה) que chamam `/prove` e verificam a prova sem falar com Torii.
-5. **Smoke CLI** com `scripts/da/check_commitments.sh` para manter tooling de
-   מפעילי שחזור.
-
-## 8. Plano de rollout
-
-| פאזה | תיאור | קריטריון דה אמר |
-|------|----------------|----------------|
-| P0 - מיזוג מודל נתונים | אינטגרר `DaCommitmentRecord`, קודקים כותרתיים וקודקים Norito. | גופי `cargo test -p iroha_data_model` verde com novas. |
-| P1 - ליבת חיווט/WSV | Encadear logica de fila + בונה בלוקים, מתמידים אינדקסים ו-RPC של מטפלי אקספור. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` פאסאם com assertions de bundle proof. |
-| P2 - Tooling de Operadores | Entregar helpers CLI, לוח המחוונים Grafana ועדכוני מסמכים אימות ההוכחה. | `iroha_cli app da prove-commitment` funciona contra devnet; o לוח המחוונים מוסטרה dados ao vivo. |
-| P3 - שער דה גוברננקה | הבעלים או validador de blocos que requer compromissos DA nas lanes marcadas em `iroha_config::nexus`. | כניסה לסטטוס + עדכון מפת הדרכים מרקם DA-3 como COMPLETADO. |
-
-## Perguntas abertas1. **KZG vs Merkle ברירת מחדל** - Devemos semper pular התחייבויות KZG em blobs
-   pequenos para reduzir o tamanho do bloco? הצעה: manter `kzg_commitment`
-   gatear אופציונלי דרך `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **פערים ברצף** - Permitimos lanes fora de ordem? O plano atual rejeita פערים
    salvo se a governanca ativar `allow_sequence_skips` עבור שידור חוזר של חירום.
 3. **מטמון קליינט קל** - O time de SDK pediu um cache SQLite level para proofs;

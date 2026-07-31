@@ -63,9 +63,8 @@ pub struct DaCommitmentRecord {
     pub sequence: u64,
     pub client_blob_id: BlobDigest,
     pub manifest_hash: ManifestDigest,        // BLAKE3 over DaManifestV1 bytes
-    pub proof_scheme: DaProofScheme,          // lane policy (merkle_sha256 or kzg_bls12_381)
+    pub proof_scheme: DaProofScheme,          // V1 lane policy (merkle_sha256 only)
     pub chunk_root: Hash,                     // Merkle root of chunk digests
-    pub kzg_commitment: Option<KzgCommitment>,
     pub proof_digest: Option<Hash>,           // hash of PDP/PoTR schedule
     pub retention_class: RetentionClass,      // mirrors DA-2 retention policy
     pub storage_ticket: StorageTicketId,
@@ -73,16 +72,9 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` يعيد استخدام النقطة 48 بايت المستخدمة في `iroha_crypto::kzg`.
-  عندما يكون الأمر كذلك، قم برؤية إثباتات Merkle بهدوء.
-- `proof_scheme` مشتق من كتالوج الممرات؛ لاس لاينز ميركل ريشازان
-  الحمولات النافعة KZG تتطلب التزامات KZG
-  لا سيرو. Torii يقوم حاليًا بإنتاج تسويات منفردة لخطوط Merkle و Rechaza
-  التكوينات مع KZG.
-- `KzgCommitment` يعيد استخدام النقطة 48 بايت المستخدمة في `iroha_crypto::kzg`.
-  عندما تنظر إلى ممرات ميركل مباشرة، فإنها تنظر إلى إثباتات ميركل بهدوء.
-- `proof_digest` يتوقع التكامل DA-5 PDP/PoTR لتسجيل نفس الشيء
-  تعداد الجدول الزمني لأخذ العينات المستخدمة للحفاظ على النقط الحية.
+- **V1 protocol invariant:** V1 contains only the `merkle_sha256` proof scheme. It has no KZG variant, commitment field, setup, generation, or verification path; unsupported configuration is rejected before node startup.
+- A future KZG design requires a separately reviewed protocol version and an explicit wire-layout change. Hash expansion is not an elliptic-curve commitment.
+- The verification endpoint checks commitment consistency against a caller-authenticated canonical block header and committed policy sidecar; it does not independently authenticate block signatures or finality.
 
 ### 1.2 امتداد رأس الكتلة
 
@@ -181,30 +173,7 @@ WSV Almacena يتنازل عن عمود عائلي مخصص بمفتاح
 
 ## 7. استراتيجية الاختبار
 
-1. **الاختبارات الوحدوية** للتشفير/فك التشفير `DaCommitmentBundle` y
-   تحديثات اشتقاق تجزئة الكتلة.
-2. **التركيبات الذهبية** bajo `fixtures/da/commitments/` التي تلتقط البايتات
-   Canonicos del Bundle و Merkle.
-3. **اختبارات التكامل** تقتضي من المصادقين إدخال النقط
-   عرض والتحقق من أن جميع العقد متفق عليها في محتوى الحزمة
-   las respuestas de Consulta/prueba.
-4. **اختبارات العميل الخفيفة** في `integration_tests/tests/da/commitments.rs`
-   (Rust) اتصل بـ `/prove` وتحقق من الاختبار بدون التحدث مع Torii.
-5. **Smoke de CLI** مع `scripts/da/check_commitments.sh` لأدوات الصيانة
-   مشغلي قابلة للتكرار.
-
-## 8. خطة الطرح
-
-| فاس | الوصف | معيار الخروج |
-|------|----------------------------|----|
-| P0 - دمج نموذج البيانات | دمج `DaCommitmentRecord`، وتحديث رأس الكتلة وبرامج الترميز Norito. | `cargo test -p iroha_data_model` أخضر مع تركيبات جديدة. |
-| P1 - كابلادو كور/WSV | تعلم منطق الكولا + منشئ الكتل والفهارس المستمرة ومعالجات RPC. | `cargo test -p iroha_core`، `integration_tests/tests/da/commitments.rs` يعتمد على تأكيدات إثبات الحزمة. |
-| P2 - أدوات التشغيل | يساعد Lanzar في CLI ولوحة المعلومات Grafana وتحديث مستندات التحقق من الإثبات. | `iroha_cli app da prove-commitment` وظيفة مكافحة devnet; لوحة القيادة تعرض البيانات في الجسم الحي. |
-| P3 - بوابة غوبيرنانزا | قم بتأهيل مدقق الكتل التي تتطلب اختراق DA في علامات الممرات في `iroha_config::nexus`. | تم إدخال الحالة + تحديث خريطة الطريق لعلامة DA-3 كـ COMPLETADO. |
-
-## أسئلة مفتوحة1. **KZG vs Merkle defaults** - يجب علينا حذف تسويات KZG والنقط الصغيرة
-   لتقليل حجم الكتلة؟ العرض: الصيانة `kzg_commitment`
-   اختياري وبوابة عبر `iroha_config::da.enable_kzg`.
+1. **Future KZG protocol** — KZG is not part of V1. A separately reviewed later protocol version must specify polynomial encoding, setup provenance, commitment/opening algorithms, consensus verification, deterministic test vectors, and a versioned wire-layout change. V1 has no enable toggle or reserved accepted value.
 2. **فجوات التسلسل** - هل تسمح للممرات بالنظام؟ El Plan Rechaza الفعلي
    الثغرات التي تطلقها gobernanza active `allow_sequence_skips` لإعادة التشغيل
    الطوارئ.
