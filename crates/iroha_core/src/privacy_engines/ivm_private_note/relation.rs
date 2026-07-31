@@ -38,7 +38,7 @@ pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-tree.node.v1";
 
 /// Exact relation and wire-independent engine descriptor.
-pub(crate) const IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:tree=sha256-depth32-exact-ledger-domains:program=IPN1-v1-fixed16x8:registers=8xu128:r4=reserved-zero:producer=typed-redacted-witness+relation-preflight+rand0.9-trycrypto-health64-exact-replay-policy-v1+self-verify:wallet=x25519+xchacha20poly1305-fallible-health-checked:successor=validator-derived-only:legacy=unrepresentable";
+pub(crate) const IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:tree=sha256-depth32-exact-ledger-domains:program=IPN1-v1-fixed16x8:registers=8xu128:r4=reserved-zero:producer=typed-redacted-witness+relation-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+self-verify:wallet=x25519+xchacha20poly1305-fallible-health-checked:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact hash framing used inside the AIR and native differential oracle.
 pub(crate) const IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:program-id+authority+commitment+stable-pool-program-nullifier:proof-managed-leaf-and-level-node-exact-v1";
 

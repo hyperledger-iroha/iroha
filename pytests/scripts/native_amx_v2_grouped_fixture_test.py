@@ -576,6 +576,21 @@ def test_grouped_native_amx_v2_fixture_matches_current_openapi() -> None:
     assert fixture["golden"]["ordered_source_ids"] == [
         receipt["source_id"] for receipt in group["native_amx_receipts"]
     ]
+    expected_settlement_hashes = {
+        (7, 11): "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+        (8, 12): "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+    }
+    for leg in group["native_amx_receipts"][0]["legs"]:
+        expected = expected_settlement_hashes[
+            (leg["lane_id"], leg["dataspace_id"])
+        ]
+        assert leg["participant_settlement_hash"] == expected
+        assert (
+            compute_native_amx_participant_settlement_hash(
+                leg["participant_settlement"]
+            )
+            == expected
+        )
     _validate_receipt_group(fixture)
     _validate_application_evidence(fixture)
 

@@ -7,12 +7,10 @@ use iroha_data_model::{
     domain::DomainId,
     name::Name,
     privacy::{
-        PqMaspStarkStatementV1, PrivacyAuthorizationKeyDigestV1, PrivacyEngineManifestDigestV1,
-        PrivacyNoteEncryptionKeyDigestV1, PrivacyNullifierV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPoolIdV1, PrivacyPqAuthorizationProfileV1,
-        PrivacyPqNoteEncryptionProfileV1, PrivacyRecipientIdV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        PqMaspStarkStatementV1, PrivacyAuthorizationKeyDigestV1, PrivacyNoteEncryptionKeyDigestV1,
+        PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyPqAuthorizationProfileV1,
+        PrivacyPqNoteEncryptionProfileV1, PrivacyProtocolIdV1, PrivacyRecipientIdV1, PrivacyRootV1,
+        PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
     },
 };
 use rand::TryCryptoRng;
@@ -22,6 +20,8 @@ use soranet_pq::{
     generate_mlkem_keypair_from_seed,
 };
 use zeroize::Zeroizing;
+
+use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 
 use super::{
     PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1,
@@ -69,19 +69,27 @@ fn fixture_keygen_seed_v1(
     Ok(seed)
 }
 
-fn context() -> PrivacyStatementContextV1 {
+fn context_from_compiled_profile_v1(
+    profile: &CompiledPrivacyProfileV1,
+) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
         chain_id: "taira-pq-masp-release-v1"
             .parse()
             .expect("fixed release chain id is canonical"),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
-        parameter_id: PrivacyParameterIdV1::new(raw(2)),
-        parameter_digest: PrivacyParameterDigestV1::new(raw(3)),
-        verifier_digest: PrivacyVerifierDigestV1::new(raw(4)),
-        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(5)),
-        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
     }
+}
+
+fn context() -> Result<PrivacyStatementContextV1, PqMaspReleaseFixtureErrorV1> {
+    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
+        .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    Ok(context_from_compiled_profile_v1(&profile))
 }
 
 fn empty_authentication_path_v1()
@@ -193,7 +201,7 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
         Name::from_str("pq_note").map_err(|_| PqMaspReleaseFixtureErrorV1)?,
     );
     let mut statement = PqMaspStarkStatementV1 {
-        context: context(),
+        context: context()?,
         asset_definition_id,
         pool_id: PrivacyPoolIdV1::new(raw(7)),
         anchor: PrivacyRootV1::new(raw(8)),
@@ -360,10 +368,38 @@ mod tests {
     use crate::privacy_engines::pq_masp::relation::validate_pq_masp_relation_v1;
 
     #[test]
+    fn release_context_binds_every_compiled_profile_digest() {
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
+            .expect("compiled PQ-MASP profile");
+        let baseline =
+            norito::encode_canonical(&context_from_compiled_profile_v1(&profile)).expect("context");
+        let mutations: [fn(&mut CompiledPrivacyProfileV1); 5] = [
+            |profile| profile.parameter_id.0[0] ^= 1,
+            |profile| profile.parameter_digest.0[0] ^= 1,
+            |profile| profile.verifier_digest.0[0] ^= 1,
+            |profile| profile.statement_schema_digest.0[0] ^= 1,
+            |profile| profile.engine_manifest_digest.0[0] ^= 1,
+        ];
+        for mutate in mutations {
+            let mut changed = profile;
+            mutate(&mut changed);
+            assert_ne!(
+                norito::encode_canonical(&context_from_compiled_profile_v1(&changed))
+                    .expect("changed context"),
+                baseline
+            );
+        }
+    }
+
+    #[test]
     fn shared_normal_maximum_and_invalid_path_fixtures_are_exact() {
         let mut normal_rng = StdRng::from_seed(raw(0xd1));
         let normal =
             pq_masp_release_fixture_v1(false, raw(0xe1), &mut normal_rng).expect("normal fixture");
+        assert_eq!(
+            normal.statement.context,
+            context().expect("compiled release context")
+        );
         validate_pq_masp_relation_v1(&normal.statement, &normal.witness).expect("normal relation");
         assert_eq!(normal.witness.inputs().len(), 1);
         assert_eq!(normal.witness.outputs().len(), 1);

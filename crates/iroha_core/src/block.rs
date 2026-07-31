@@ -21401,6 +21401,7 @@ pub(crate) mod valid {
         fn validate_da_sidecars_rejects_missing_policy_body_under_signed_hash() {
             let signer = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut block: SignedBlock = BlockBuilder::new(Vec::new())
+                .chain(0, None)
                 .sign(signer.private_key())
                 .unpack(|_| {})
                 .into();
@@ -21422,6 +21423,7 @@ pub(crate) mod valid {
         fn validate_da_sidecars_rejects_policy_body_substitution() {
             let signer = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut block: SignedBlock = BlockBuilder::new(Vec::new())
+                .chain(0, None)
                 .sign(signer.private_key())
                 .unpack(|_| {})
                 .into();

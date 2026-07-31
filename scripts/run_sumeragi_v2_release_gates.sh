@@ -1948,6 +1948,8 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_manifest_artifact_rejects_leaf_or_proof_tampering
   kura::tests::native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash
   kura::tests::native_amx_retention_window_advances_base_and_bounds_index
+  kura::tests::native_amx_startup_retention_waits_for_complete_post_wsv_evidence
+  kura::tests::native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup
   kura::tests::native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning
   kura::tests::native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scanning
   kura::tests::native_amx_latest_index_startup_truncates_unindexed_append_tail
@@ -2003,6 +2005,7 @@ required_multilane_core_focus_tests=(
   state::tests::autonomous_lane_diagnostic_queue_finalization_is_terminal
   sumeragi::v2_lane_work::tests::autonomous_local_author_reserves_fifo_before_durable_hint_free_publication
   sumeragi::v2_lane_work::tests::autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner
+  sumeragi::v2_apply::tests::native_amx_prepublication_failure_leaves_wsv_unchanged
   sumeragi::v2_apply::tests::live_merge_publication_persists_application_receipt_before_retry
   sumeragi::v2_apply::tests::committed_merge_reservation_is_finalized_exactly_once
   sumeragi::v2_apply::tests::startup_reconciliation_consumes_replayed_committed_merge_reservation
@@ -2259,7 +2262,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=299
+readonly expected_multilane_focus_test_count=302
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2430,7 +2433,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 299-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 302-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2538,8 +2541,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 300 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 299 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 303 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 302 focused tests" >&2
     exit 1
   fi
 fi
@@ -3727,4 +3730,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 299/299 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 302/302 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

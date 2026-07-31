@@ -21,7 +21,7 @@ use super::{
         ca_accumulator_subproof_binding_from_proof_v1, ca_profile_digest_v1, ca_public_digest_v1,
         prove_zk_x509_ca_accumulator_stark_v1_with_rng,
     },
-    air::ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1,
+    air::{ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1, ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1},
     codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1, ZkX509CredentialPreAuxErrorV1,
@@ -80,13 +80,13 @@ use crate::privacy_state::{
 
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
-const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 28;
+const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 
-// Independently encoded and SHA-256 checked from the exact ordered 28-field
-// release manifest after all six algebraic schedules passed their release
-// KATs. There is no provisional, root-bearing, or certificate-bearing profile
-// in the first-release protocol.
+// Independently encoded and SHA-256 checked from the exact ordered 29-field
+// release manifest after the compact-CA descriptor and all six algebraic
+// schedules passed their release KATs. There is no provisional, root-bearing,
+// or certificate-bearing profile in the first-release protocol.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
     0x31, 0x36, 0x4b, 0xf9, 0x8e, 0x76, 0xa8, 0x84, 0xea, 0xf1, 0x05, 0x65, 0x3c, 0x33, 0x4f, 0xfd,
     0x6d, 0x6c, 0x2e, 0x28, 0x95, 0x41, 0x8c, 0x37, 0x9d, 0x98, 0x38, 0xb7, 0x7c, 0x73, 0x45, 0x89,
@@ -193,10 +193,10 @@ pub(crate) enum ZkX509EngineErrorV1 {
     /// The canonical P-256 algebraic compiler or schedule rejected its profile.
     #[error(transparent)]
     P256FixedAlgebraic(#[from] ZkX509P256FixedAlgebraicErrorV1),
-    /// The complete 28-field release manifest has not been pinned.
+    /// The complete 29-field release manifest has not been pinned.
     #[error("zk-X509 compiled profile is not release-pinned")]
     CompiledProfileUnpinned,
-    /// Recomputed 28-field manifest digest differs from the consensus pin.
+    /// Recomputed 29-field manifest digest differs from the consensus pin.
     #[error("zk-X509 compiled profile digest mismatch")]
     CompiledProfileMismatch,
 }
@@ -459,6 +459,7 @@ fn compiled_profile_fields_v1<'a>(
         ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
         ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1,
         ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1,
+        &ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1,
         ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
         ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
         ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
@@ -489,7 +490,7 @@ fn compiled_profile_schedule_digests_v1()
     Ok((sha, p256))
 }
 
-/// Recompute the sole exact 28-field compiled-profile digest.
+/// Recompute the sole exact 29-field compiled-profile digest.
 pub(crate) fn recompute_zk_x509_compiled_profile_digest_v1() -> Result<[u8; 32], ZkX509EngineErrorV1>
 {
     let (sha, p256) = compiled_profile_schedule_digests_v1()?;
@@ -545,12 +546,12 @@ mod tests {
     }
 
     #[test]
-    fn compiled_profile_manifest_has_the_exact_28_field_order() {
+    fn compiled_profile_manifest_has_the_exact_29_field_order() {
         let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
             core::array::from_fn(|shape| [u8::try_from(0x31 + shape).expect("five shapes"); 32]);
         let p256_digest = [0x41; 32];
         let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
-        let original_fields: [&[u8]; 19] = [
+        let original_fields: [&[u8]; 20] = [
             ZK_X509_SUITE_V1,
             ZK_X509_SOURCE_PROFILE_V1,
             ZK_X509_RFC5280_PROFILE_V1,
@@ -565,38 +566,64 @@ mod tests {
             ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
             ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1,
             ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1,
+            &ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1,
             ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
             ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
             ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
             ZK_X509_IO_AIR_DESCRIPTOR_V1,
             REFERENCE_PREPARATION_SCHEMA_V1,
         ];
-        assert_eq!(fields.len(), 28);
-        assert_eq!(&fields[..19], &original_fields);
-        assert_eq!(fields[19], ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
+        assert_eq!(fields.len(), 29);
+        assert_eq!(&fields[..20], &original_fields);
+        assert_eq!(fields[20], ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
         assert_eq!(
-            fields[20],
+            fields[21],
             ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1
         );
         for (shape, digest) in sha_digests.iter().enumerate() {
-            assert_eq!(fields[21 + shape], digest);
+            assert_eq!(fields[22 + shape], digest);
         }
-        assert_eq!(fields[26], ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
-        assert_eq!(fields[27], p256_digest);
+        assert_eq!(fields[27], ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
+        assert_eq!(fields[28], p256_digest);
         assert!(
             fields[12]
                 .windows(b"post-base-challenges=exact272-goldilocks-fields".len())
                 .any(|window| window == b"post-base-challenges=exact272-goldilocks-fields")
         );
         assert!(
-            fields[16]
+            fields[17]
                 .windows(b"main-common-lde-log25".len())
                 .any(|window| window == b"main-common-lde-log25")
         );
         assert!(
-            !fields[16]
+            !fields[17]
                 .windows(b"common-lde-log22".len())
                 .any(|window| window == b"common-lde-log22")
+        );
+    }
+
+    #[test]
+    fn compiled_profile_digest_exactly_binds_compact_ca_subproof_descriptor_pin() {
+        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x71 + shape).expect("five shapes"); 32]);
+        let p256_digest = [0x81; 32];
+        let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        assert_eq!(
+            canonical_fields[14],
+            ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1.as_slice()
+        );
+        let canonical = independent_compiled_profile_digest_v1(&canonical_fields);
+
+        let mut changed = canonical_fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        changed[14][0] ^= 1;
+        let changed_fields = changed.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        assert_ne!(
+            independent_compiled_profile_digest_v1(&changed_fields),
+            canonical,
+            "the compact-CA prover/verifier descriptor pin must rotate the compiled profile"
         );
     }
 
@@ -612,7 +639,7 @@ mod tests {
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
 
-        for field in 19..COMPILED_PROFILE_FIELD_COUNT_V1 {
+        for field in 20..COMPILED_PROFILE_FIELD_COUNT_V1 {
             let mut changed = owned.clone();
             changed[field][0] ^= 1;
             let changed_fields = changed.iter().map(Vec::as_slice).collect::<Vec<_>>();
@@ -624,7 +651,7 @@ mod tests {
         }
 
         let mut reordered = owned;
-        reordered.swap(21, 22);
+        reordered.swap(22, 23);
         let reordered_fields = reordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
         assert_ne!(
             independent_compiled_profile_digest_v1(&reordered_fields),

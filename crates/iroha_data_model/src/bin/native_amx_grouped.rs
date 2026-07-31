@@ -27,10 +27,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, Value};
 
-pub const FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-);
+pub const FIXTURE_BASENAME: &str = "native_amx_v2_grouped.json";
 
 const GROUP_SOURCE_COUNT: usize = 2;
 const GROUP_SOURCE_LIMIT: usize = 4_096;
@@ -650,9 +647,7 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
     }
 
     let forged_proposal_hash = Hash::new(b"native-amx-v2-negative-forged-proposal-hash");
-    let forged_settlement_hash = HashOf::<LaneBlockCommitment>::from_untyped_unchecked(Hash::new(
-        b"native-amx-v2-negative-forged-settlement-hash",
-    ));
+    let retired_plain_settlement_hash = HashOf::new(&remote_leg.participant_settlement);
     vec![
         controls(
             "coherent_forged_validator_set_hash",
@@ -847,24 +842,24 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
                     "replace",
                     &format!("{leg}/participant_settlement_hash"),
                     Some(
-                        json::to_value(&forged_settlement_hash)
-                            .expect("forged settlement hash serializes"),
+                        json::to_value(&retired_plain_settlement_hash)
+                            .expect("retired plain settlement hash serializes"),
                     ),
                 ),
                 mutation(
                     "replace",
                     &format!("{prepare}/body/participant_settlement_commitment"),
                     Some(
-                        json::to_value(&Hash::from(forged_settlement_hash))
-                            .expect("forged prepare settlement hash serializes"),
+                        json::to_value(&Hash::from(retired_plain_settlement_hash))
+                            .expect("retired plain prepare settlement hash serializes"),
                     ),
                 ),
                 mutation(
                     "replace",
                     &format!("{commit}/body/participant_settlement_commitment"),
                     Some(
-                        json::to_value(&Hash::from(forged_settlement_hash))
-                            .expect("forged commit settlement hash serializes"),
+                        json::to_value(&Hash::from(retired_plain_settlement_hash))
+                            .expect("retired plain commit settlement hash serializes"),
                     ),
                 ),
             ],
@@ -1561,21 +1556,22 @@ fn document() -> Result<Value, Box<dyn Error>> {
     }))
 }
 
-pub fn write_fixture(check_only: bool) -> Result<(), Box<dyn Error>> {
+pub fn write_fixture(path: &Path, check_only: bool) -> Result<(), Box<dyn Error>> {
     let rendered = format!("{}\n", json::to_string_pretty(&document()?)?);
     if check_only {
-        let existing = fs::read_to_string(FIXTURE_PATH)?;
+        let existing = fs::read_to_string(path)?;
         if existing != rendered {
             return Err(format!(
-                "fixture {FIXTURE_PATH} is stale; run cargo run -p iroha_data_model --bin sumeragi_v2_wire_fixtures"
+                "fixture {} is stale; run cargo run -p iroha_data_model --bin sumeragi_v2_wire_fixtures",
+                path.display(),
             )
             .into());
         }
         return Ok(());
     }
-    if let Some(parent) = Path::new(FIXTURE_PATH).parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(FIXTURE_PATH, rendered)?;
+    fs::write(path, rendered)?;
     Ok(())
 }

@@ -237,6 +237,10 @@ remain outside its scope.
 The canonical first-release implementation, validation, documentation,
 authority-removal, and rollout-evidence mapping is
 [`specs/sorafs/v1_closure_ledger.md`](./specs/sorafs/v1_closure_ledger.md).
+Canonical implementation-coupled SoraFS plans and fixture notes live in this
+repository under `specs/` and `fixtures/`. Public and localized mirrors belong
+to the optional sibling `iroha-docs` repository; they are not hashed release
+inputs or static-contract scan targets here.
 Repository conformance and production promotion are separate: the current
 production aggregate remains blocked with zero recognized lane summaries and
 no trusted foundational envelope. Promotion requires one reviewed production
@@ -265,17 +269,21 @@ Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
 cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects
-JUnit skips. Its static workflow-file contract is green at 9/9. Clean native
-rebuilds and source-bound provenance across all five release targets remain
-open. Kotlin/JVM and mirrored Java Android now require both exact bridge ABI 21
-and `NativeSignerBridge` JNI contract revision 1 before making any native signer
-call; the Android artifact gate requires both revision-probe exports, preventing
-a stale same-ABI JNI descriptor from passing package qualification. The
-separate SoraFS pin-register SDK workflow, runner, and guard are also
-exact Python 3.12 and install only the hash-locked, binary-only
-`requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is green at 3/3,
-including positive static coverage and version/resolver/major/workflow/lock
-negative controls.
+JUnit skips. Its static workflow-file contract is green at 9/9. The closed
+reference inventory currently binds 82 payload artifacts, 32 exact
+`ValidationOutcomeV1` files, and 38 negative payload vectors; all eight
+appeal-finance `CancelAssetLock` files are mandatory. Available native outputs
+are stale or mixed and no native-dependent SDK suite is qualified. Clean native
+rebuilds, unskipped fixture replay, and source-bound provenance across all five
+release targets remain open. Kotlin/JVM and mirrored Java Android now require
+both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 1 before
+making any native signer call; the Android artifact gate requires both
+revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
+package qualification. The separate SoraFS pin-register SDK workflow, runner,
+and guard are also exact Python 3.12 and install only the hash-locked,
+binary-only `requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is
+green at 3/3, including positive static coverage and
+version/resolver/major/workflow/lock negative controls.
 
 Provider ingest is now an opt-in supervised `irohad` worker over one immutable,
 bounded finalized replication-order snapshot. Its durable single-writer
@@ -3500,8 +3508,8 @@ excluded from the first release.
   than adding compatibility aliases.
 - The SoraFS gateway DNS owner runbook family now uses governed cutover
   runtime tokens and reviewed sample ticket IDs instead of fixed March 2025
-  command examples; the rollout static contract scans canonical and localized
-  copies for stale `OPS-XXXX`/`SNS-DF-XXXX` tickets, dated 2025 cutover
+  command examples; the rollout static contract scans the canonical `specs/`
+  runbook for stale `OPS-XXXX`/`SNS-DF-XXXX` tickets, dated 2025 cutover
   examples, date-coded DNS tags, and reopened kickoff wording.
 - SoraFS gateway direct-mode enable now keeps `require_manifest_envelope`,
   `enforce_admission`, and `enforce_capabilities` enabled in the emitted Torii
@@ -3705,12 +3713,12 @@ excluded from the first release.
 		  SoraFS so only the contract test's negative controls may retain those
 		  literals. The tracked `todo_list.txt` inventory now has stale closed
 		  SoraFS rows removed and a contract guard preventing active-marker rows
-		  for SoraFS from reappearing. Completed localized root-roadmap
-		  SoraFS/SoraNet portal translation rows use `Completed:` instead of
-		  the unfinished-marker form, and the stale
-		  rollout-gate wording guard now scans canonical plus localized SoraFS
-		  plan mirrors before any `Add fail-closed ... rollout evidence gate`
-		  wording can reappear, so
+		  for SoraFS from reappearing. The in-repository localization mirrors
+		  were removed by the documentation split; the stale rollout-gate
+		  wording guard now scans canonical SoraFS plans under `specs/` before
+		  any `Add fail-closed ... rollout evidence gate` wording can reappear,
+		  while public and localized copies remain sibling `iroha-docs`
+		  responsibilities, so
 		  first-release unfinished-work drift cannot re-enter unnoticed. Shared SoraFS
 		  evidence sensitivity checks also treat
 	  API/auth/session/x-api/id/OAuth/refresh/JWT tokens, cookies, passwords,
@@ -4972,16 +4980,17 @@ excluded from the first release.
   deployed-only reputation spellings such as `reputation ingest`,
   `reputation publisher`, `reputation graphql`, and `reputation promote`, while
   preserving the read-only local `reputation snapshot|fetch|watch|verify` and
-  canary commands. The SF-3 node
-  implementation plan, localized mirrors, and
-  canonical plus localized portal mirrors now document the current
-  OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface,
-  reject legacy unversioned `/sorafs/*` prototype endpoint names and the removed
-  `sorafs-storage` feature-flag wording, keep node-storage readback routes on
-  the OpenAPI `{manifest_id}` parameter, retire the unauthenticated local PoR
-  sampling route in favor of authenticated `/v1/sorafs/proof/stream`, and
-  carry a rollout static contract that keeps those docs and route labels
-  aligned with the OpenAPI route strings. The grouped Torii SoraFS storage tests
+  canary commands. The canonical SF-3 node implementation plan documents the
+  current OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route
+  surface, rejects legacy unversioned `/sorafs/*` prototype endpoint names and
+  the removed `sorafs-storage` feature-flag wording, keeps node-storage readback
+  routes on the OpenAPI `{manifest_id}` parameter, retires the unauthenticated
+  local PoR sampling route in favor of authenticated
+  `/v1/sorafs/proof/stream`, and carries a rollout static contract that keeps
+  those docs and route labels
+  aligned with the OpenAPI route strings. Public and localized copies are
+  maintained separately in the sibling `iroha-docs` repository. The grouped
+  Torii SoraFS storage tests
   now canonicalize temporary storage roots before exercising the backend,
   preserving the production no-symlink parent-chain guard while keeping the
   storage-pin/fetch/PoR round-trip green on symlinked system temp roots.
@@ -6083,10 +6092,10 @@ excluded from the first release.
   rejecting `x...`, `not-...`, `/...`, `/internal/...`, and canary/evidence/
   local/fixture suffixed fragments so diagnostic command text cannot satisfy an
   exact warning-only exposure check. Those warning-only command scans now cover
-  top-level SoraFS source docs, nested `specs/sorafs/**` docs,
-  portal SoraFS docs, and portal i18n SoraFS mirrors, so reserved operator
-  commands cannot be published through mirrored runbooks outside the top-level
-  plan files. It now also pins deployed AI
+  top-level SoraFS plans under `specs/` and nested `specs/sorafs/**` docs, so
+  reserved operator commands cannot be published through the repository-local
+  implementation-coupled documentation. Public and localized mirrors belong
+  in the sibling `iroha-docs` repository. It now also pins deployed AI
   pre-screening workflow promotion
   surfaces for deployed runner/committee promotion, deployed juror notification
   transport, deployed commit/reveal executor, end-to-end release workflow, and
@@ -6269,10 +6278,11 @@ excluded from the first release.
   such as `/v1/transparency-canary/*` stay local without weakening the generic
   public-route block. The warning-only public
   route scan now shares the broad SoraFS docs path inventory used by reserved
-  operator-command checks, covering top-level source docs, nested
-  `specs/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
-  mirrors before mirrored public evidence routes can be published outside the
-  reviewed warning context. The same static contract now also pins the
+  operator-command checks, covering top-level SoraFS plans under `specs/` and
+  nested `specs/sorafs/**` docs before repository-local public evidence routes
+  can be published outside the reviewed warning context. Public and localized
+  mirrors remain sibling `iroha-docs` inputs. The same static contract now also
+  pins the
   deployed-only SFM-4c source-entry producer, GAR/moderation/appeal/legal-hold/
   redaction/evidence-viewer producer, publisher-identity/anchoring, public
   receipt explorer, proof-token issuance producer/explorer-linking,
@@ -7252,9 +7262,10 @@ excluded from the first release.
 	  now also requires a left boundary so prefixed internal paths cannot satisfy
 	  reserved public route checks, and the SoraFS docs warning-only scan covers
 	  the unshipped voting-contract, ballot-orchestrator, juror portal, and
-	  deployed ballot-service names across canonical, localized, nested, portal,
-	  and portal-i18n docs before those names can appear outside an explicit
-	  do-not-document-as-shipped warning. SFM-4b4 still
+	  deployed ballot-service names across top-level `specs/` plans and nested
+	  `specs/sorafs/**` docs before those names can appear outside an explicit
+	  do-not-document-as-shipped warning. Public and localized copies belong in
+	  sibling `iroha-docs`. SFM-4b4 still
 	  needs production orchestration, on-chain or ledger recording, scheduled
   no-show dispatch/settlement handoff, production juror portal flows, public
   decision/challenge DAG

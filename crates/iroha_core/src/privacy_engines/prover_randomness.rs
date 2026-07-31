@@ -3,8 +3,8 @@
 //! The wrapper samples the source in canonical 64-byte blocks, rejects a
 //! catastrophic initial constant or short-period stream, and serves every API
 //! through one bounded reservoir. Honest source bytes are therefore invariant
-//! under caller chunking. A failed refill zeroizes the caller buffer and
-//! permanently poisons the wrapper before witness-dependent proving.
+//! under caller chunking. A failed or unwinding refill zeroizes the caller
+//! buffer and permanently poisons the wrapper before witness-dependent proving.
 
 use rand::{TryCryptoRng, TryRngCore};
 use rand_core_06::{CryptoRng, RngCore};
@@ -17,9 +17,9 @@ const HEALTH_HALF_BYTES_V1: usize = HEALTH_PREFIX_BYTES_V1 / 2;
 const PROHIBITED_PERIODS_V1: [usize; 6] = [1, 2, 4, 8, 16, 32];
 
 /// Canonical producer policy committed by every curve-engine manifest.
-pub(crate) const CURVE_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error:v1";
+pub(crate) const CURVE_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error-or-unwind:v1";
 /// Canonical rand 0.9 `TryCryptoRng` producer and seed-bridge policy.
-pub(crate) const TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"prover-rng-api=rand0.9-TryCryptoRng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error:seed-bridge=sha256-domain+all64+exact-initial64+fresh-fixed64:v1";
+pub(crate) const TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"prover-rng-api=rand0.9-TryCryptoRng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-reservoir-tail-max63+initial-block64-until-phase-transition:zeroize+poison-on-error-or-unwind:seed-bridge=sha256-domain+all64+exact-initial64+fresh-fixed64:partition=initial64-replay+fresh64-seed:v1";
 
 const TRY_CRYPTO_DERIVED_SEED_DOMAIN_V1: &[u8] =
     b"iroha:privacy:try-crypto-prover:derived-entropy-seed:v1";
@@ -83,6 +83,32 @@ fn drain_reservoir_v1(
     copied
 }
 
+struct DestinationZeroizeGuardV1<'a> {
+    destination: &'a mut [u8],
+    armed: bool,
+}
+
+impl<'a> DestinationZeroizeGuardV1<'a> {
+    fn new(destination: &'a mut [u8]) -> Self {
+        Self {
+            destination,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for DestinationZeroizeGuardV1<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.destination.zeroize();
+        }
+    }
+}
+
 fn core_unavailable_error_v1() -> rand_core_06::Error {
     rand_core_06::Error::new(ProverRandomnessErrorV1::Unavailable)
 }
@@ -116,12 +142,26 @@ where
         })
     }
 
-    fn fail_refill(&mut self, destination: &mut [u8]) -> rand_core_06::Error {
+    fn try_refill_v1(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
         self.reservoir.zeroize();
         self.cursor = HEALTH_PREFIX_BYTES_V1;
         self.poisoned = true;
-        destination.zeroize();
-        core_unavailable_error_v1()
+        let mut next = Zeroizing::new([0_u8; HEALTH_PREFIX_BYTES_V1]);
+        let result;
+        {
+            let mut guard = DestinationZeroizeGuardV1::new(destination);
+            result = self.source.try_fill_bytes(next.as_mut());
+            if result.is_ok() {
+                guard.disarm();
+            }
+        }
+        if result.is_err() {
+            return Err(core_unavailable_error_v1());
+        }
+        self.reservoir.copy_from_slice(next.as_slice());
+        self.cursor = 0;
+        self.poisoned = false;
+        Ok(())
     }
 
     fn try_fill_canonical_v1(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
@@ -132,10 +172,7 @@ where
         let mut offset = 0;
         while offset < destination.len() {
             if self.cursor == HEALTH_PREFIX_BYTES_V1 {
-                if self.source.try_fill_bytes(&mut *self.reservoir).is_err() {
-                    return Err(self.fail_refill(destination));
-                }
-                self.cursor = 0;
+                self.try_refill_v1(destination)?;
             }
             offset +=
                 drain_reservoir_v1(&mut self.reservoir, &mut self.cursor, destination, offset);
@@ -216,6 +253,33 @@ where
         destination.zeroize();
     }
 
+    fn try_refill_v1(
+        &mut self,
+        destination: &mut [u8],
+    ) -> Result<(), TryCryptoProverRandomnessErrorV1> {
+        self.reservoir.zeroize();
+        self.initial_block.zeroize();
+        self.cursor = HEALTH_PREFIX_BYTES_V1;
+        self.source_blocks = self.source_blocks.saturating_add(1);
+        self.poisoned = true;
+        let mut next = Zeroizing::new([0_u8; HEALTH_PREFIX_BYTES_V1]);
+        let result;
+        {
+            let mut guard = DestinationZeroizeGuardV1::new(destination);
+            result = self.source.try_fill_bytes(next.as_mut());
+            if result.is_ok() {
+                guard.disarm();
+            }
+        }
+        if result.is_err() {
+            return Err(TryCryptoProverRandomnessErrorV1::Unavailable);
+        }
+        self.reservoir.copy_from_slice(next.as_slice());
+        self.cursor = 0;
+        self.poisoned = false;
+        Ok(())
+    }
+
     fn try_fill_canonical_v1(
         &mut self,
         destination: &mut [u8],
@@ -227,13 +291,7 @@ where
         let mut offset = 0;
         while offset < destination.len() {
             if self.cursor == HEALTH_PREFIX_BYTES_V1 {
-                if self.source.try_fill_bytes(self.reservoir.as_mut()).is_err() {
-                    self.poison(destination);
-                    return Err(TryCryptoProverRandomnessErrorV1::Unavailable);
-                }
-                self.cursor = 0;
-                self.source_blocks = self.source_blocks.saturating_add(1);
-                self.initial_block.zeroize();
+                self.try_refill_v1(destination)?;
             }
             let copied =
                 drain_reservoir_v1(&mut self.reservoir, &mut self.cursor, destination, offset);
@@ -245,7 +303,7 @@ where
         Ok(())
     }
 
-    /// Draw a separately health-checked seed after the replay prefix is spent.
+    /// Draw a separately health-checked seed after exactly block one is spent.
     ///
     /// The fresh block must not repeat the initial prover prefix. This catches
     /// a source that cycles between otherwise non-periodic 64-byte blocks.
@@ -262,22 +320,57 @@ where
         {
             return Err(TryCryptoProverRandomnessErrorV1::Unhealthy);
         }
+        let initial_block = Zeroizing::new(*self.initial_block);
+        self.initial_block.zeroize();
+        self.reservoir.zeroize();
+        self.cursor = HEALTH_PREFIX_BYTES_V1;
+        self.source_blocks = 2;
+        self.poisoned = true;
         let mut entropy = Zeroizing::new([0_u8; HEALTH_PREFIX_BYTES_V1]);
         if self.source.try_fill_bytes(entropy.as_mut()).is_err() {
             self.poison(entropy.as_mut());
             return Err(TryCryptoProverRandomnessErrorV1::Unavailable);
         }
-        self.source_blocks = 2;
-        if prefix_is_unhealthy_v1(&entropy) || entropy.as_slice() == self.initial_block.as_slice() {
+        if prefix_is_unhealthy_v1(&entropy) || entropy.as_slice() == initial_block.as_slice() {
             self.poison(entropy.as_mut());
             return Err(TryCryptoProverRandomnessErrorV1::Unhealthy);
         }
-        self.initial_block.zeroize();
-        let seed = derive_try_crypto_seed_from_block_v1(&entropy, purpose);
-        if seed.is_err() {
-            self.poison(entropy.as_mut());
+        match derive_try_crypto_seed_from_block_v1(&entropy, purpose) {
+            Ok(seed) => {
+                self.poisoned = false;
+                Ok(seed)
+            }
+            Err(error) => {
+                self.poison(entropy.as_mut());
+                Err(error)
+            }
         }
-        seed
+    }
+
+    /// Reserve a fresh independent seed and replay block one to a prover.
+    pub(crate) fn partition_initial_block_with_independent_seed_v1(
+        mut self,
+        purpose: &[u8],
+    ) -> Result<
+        (PartitionedProverTryCryptoRngV1<'a, R>, Zeroizing<[u8; 32]>),
+        TryCryptoProverRandomnessErrorV1,
+    > {
+        if self.poisoned || self.cursor != 0 || self.source_blocks != 1 || self.emitted_bytes != 0 {
+            return Err(TryCryptoProverRandomnessErrorV1::Unhealthy);
+        }
+        let retained_initial_block = Zeroizing::new(*self.initial_block);
+        let mut consumed_initial_block = Zeroizing::new([0_u8; HEALTH_PREFIX_BYTES_V1]);
+        self.try_fill_canonical_v1(consumed_initial_block.as_mut())?;
+        if consumed_initial_block.as_slice() != retained_initial_block.as_slice() {
+            self.poison(consumed_initial_block.as_mut());
+            return Err(TryCryptoProverRandomnessErrorV1::Unhealthy);
+        }
+        let independent_seed = self.derive_independent_seed_v1(purpose)?;
+        self.reservoir
+            .copy_from_slice(retained_initial_block.as_slice());
+        self.cursor = 0;
+        self.emitted_bytes = 0;
+        Ok((PartitionedProverTryCryptoRngV1(self), independent_seed))
     }
 }
 
@@ -305,6 +398,36 @@ where
 }
 
 impl<R> TryCryptoRng for HealthCheckedTryCryptoRngV1<'_, R> where R: TryCryptoRng + ?Sized {}
+
+/// One-way prover phase after block two is reserved for an independent seed.
+pub(crate) struct PartitionedProverTryCryptoRngV1<'a, R: ?Sized>(
+    HealthCheckedTryCryptoRngV1<'a, R>,
+);
+
+impl<R> TryRngCore for PartitionedProverTryCryptoRngV1<'_, R>
+where
+    R: TryCryptoRng + ?Sized,
+{
+    type Error = TryCryptoProverRandomnessErrorV1;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        let mut bytes = [0_u8; 4];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        let mut bytes = [0_u8; 8];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+        self.0.try_fill_bytes(destination)
+    }
+}
+
+impl<R> TryCryptoRng for PartitionedProverTryCryptoRngV1<'_, R> where R: TryCryptoRng + ?Sized {}
 
 /// Draw and domain-derive one 32-byte seed from an independent healthy block.
 ///
@@ -434,6 +557,7 @@ mod tests {
         cursor: usize,
         requests: Vec<usize>,
         fail_on_request: Option<usize>,
+        panic_on_request: Option<usize>,
     }
 
     impl RecordingStream {
@@ -442,6 +566,16 @@ mod tests {
                 cursor: 0,
                 requests: Vec::new(),
                 fail_on_request,
+                panic_on_request: None,
+            }
+        }
+
+        fn panicking_on(request: usize) -> Self {
+            Self {
+                cursor: 0,
+                requests: Vec::new(),
+                fail_on_request: None,
+                panic_on_request: Some(request),
             }
         }
 
@@ -455,8 +589,9 @@ mod tests {
 
         fn fill(&mut self, destination: &mut [u8]) -> Result<(), RecordingError> {
             self.requests.push(destination.len());
+            let panicking = self.panic_on_request == Some(self.requests.len());
             let failing = self.fail_on_request == Some(self.requests.len());
-            let written = if failing {
+            let written = if failing || panicking {
                 destination.len().min(17)
             } else {
                 destination.len()
@@ -464,6 +599,9 @@ mod tests {
             for byte in destination.iter_mut().take(written) {
                 *byte = Self::byte(self.cursor);
                 self.cursor += 1;
+            }
+            if panicking {
+                panic!("injected canonical-block panic");
             }
             if failing { Err(RecordingError) } else { Ok(()) }
         }
@@ -593,6 +731,51 @@ mod tests {
         destination.fill(0x5A);
         assert!(checked.try_fill_bytes(&mut destination).is_err());
         assert_eq!(destination, [0; 65]);
+        assert_eq!(checked.source.0.requests, [64, 64]);
+    }
+
+    #[test]
+    fn refill_panics_zeroize_and_permanently_poison_both_wrappers() {
+        let mut core_source = CoreRecordingRng(RecordingStream::panicking_on(2));
+        let mut core =
+            HealthCheckedCryptoRngV1::new(&mut core_source).expect("healthy first block");
+        let mut core_destination = [0xA5; 65];
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                core.try_fill_bytes(&mut core_destination).ok();
+            }))
+            .is_err()
+        );
+        assert_eq!(core_destination, [0; 65]);
+        assert!(core.poisoned);
+        assert_eq!(*core.reservoir, [0; HEALTH_PREFIX_BYTES_V1]);
+        assert_eq!(core.source.0.requests, [64, 64]);
+        core_destination.fill(0x5A);
+        assert!(core.try_fill_bytes(&mut core_destination).is_err());
+        assert_eq!(core_destination, [0; 65]);
+        assert_eq!(core.source.0.requests, [64, 64]);
+
+        let mut try_source = TryRecordingRng(RecordingStream::panicking_on(2));
+        let mut checked =
+            HealthCheckedTryCryptoRngV1::new(&mut try_source).expect("healthy first block");
+        let mut try_destination = [0xA5; 65];
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                checked.try_fill_bytes(&mut try_destination).ok();
+            }))
+            .is_err()
+        );
+        assert_eq!(try_destination, [0; 65]);
+        assert!(checked.poisoned);
+        assert_eq!(*checked.reservoir, [0; HEALTH_PREFIX_BYTES_V1]);
+        assert_eq!(*checked.initial_block, [0; HEALTH_PREFIX_BYTES_V1]);
+        assert_eq!(checked.source.0.requests, [64, 64]);
+        try_destination.fill(0x5A);
+        assert_eq!(
+            checked.try_fill_bytes(&mut try_destination),
+            Err(TryCryptoProverRandomnessErrorV1::Unavailable)
+        );
+        assert_eq!(try_destination, [0; 65]);
         assert_eq!(checked.source.0.requests, [64, 64]);
     }
 
@@ -990,6 +1173,65 @@ mod tests {
                     Err(expected)
                 );
             }
+        }
+
+        #[test]
+        fn independent_seed_panic_zeroizes_poisoned_state_and_never_reenters_source() {
+            let mut source = TryRecordingRng(RecordingStream::panicking_on(2));
+            let mut checked =
+                HealthCheckedTryCryptoRngV1::new(&mut source).expect("healthy first block");
+            consume_checked_prefix_v1(&mut checked);
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    checked
+                        .derive_independent_seed_v1(b"panicking-independent-seed")
+                        .ok();
+                }))
+                .is_err()
+            );
+            assert!(checked.poisoned);
+            assert_eq!(*checked.reservoir, [0; HEALTH_PREFIX_BYTES_V1]);
+            assert_eq!(*checked.initial_block, [0; HEALTH_PREFIX_BYTES_V1]);
+            assert_eq!(checked.source.0.requests, [64, 64]);
+            let mut destination = [0xA5; 64];
+            assert_eq!(
+                checked.try_fill_bytes(&mut destination),
+                Err(TryCryptoProverRandomnessErrorV1::Unavailable)
+            );
+            assert_eq!(destination, [0; 64]);
+            assert_eq!(checked.source.0.requests, [64, 64]);
+        }
+
+        #[test]
+        fn partitioned_prover_replays_block_one_and_skips_reserved_block_two() {
+            let purpose = b"partitioned-prover-test-v1";
+            let mut source = TryRecordingRng(RecordingStream::new(None));
+            let checked =
+                HealthCheckedTryCryptoRngV1::new(&mut source).expect("healthy first block");
+            let (mut prover, seed) = checked
+                .partition_initial_block_with_independent_seed_v1(purpose)
+                .expect("healthy partition");
+
+            let first_block = (0..64).map(RecordingStream::byte).collect::<Vec<_>>();
+            let second_block: [u8; 64] = (64..128)
+                .map(RecordingStream::byte)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("second canonical block");
+            let expected_seed = derive_try_crypto_seed_from_block_v1(&second_block, purpose)
+                .expect("expected independent seed");
+            assert_eq!(*seed, *expected_seed);
+            assert_eq!(prover.0.source.0.requests, [64, 64]);
+
+            let mut actual = [0_u8; 128];
+            prover
+                .try_fill_bytes(&mut actual)
+                .expect("partitioned prover stream");
+            let mut expected = first_block;
+            expected.extend((128..192).map(RecordingStream::byte));
+            assert_eq!(actual.as_slice(), expected.as_slice());
+            assert_eq!(prover.0.source.0.requests, [64, 64, 64]);
+            assert!(prover.0.initial_block.iter().all(|byte| *byte == 0));
         }
 
         #[test]

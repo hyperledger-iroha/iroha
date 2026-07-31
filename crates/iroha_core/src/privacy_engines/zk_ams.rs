@@ -2384,6 +2384,37 @@ mod tests {
     }
 
     #[test]
+    fn maximum_lsag_requires_the_first_release_decode_allocation_budget() {
+        const RETIRED_UNDERSIZED_BUDGET_BYTES_V1: usize = 4 * 4_205;
+        let size = ZK_AMS_MAX_RING_SIZE_V1;
+        let (_ring, _key_image, proof) = sign_fixture(size, size / 2);
+        assert_eq!(RETIRED_UNDERSIZED_BUDGET_BYTES_V1, 16_820);
+        assert_eq!(ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1, 32 * 1024);
+        let decoded = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
+            &proof,
+            zk_ams_lsag_decode_limits(size, proof.len()),
+        )
+        .expect("maximum-ring LSAG must decode under the governed budget");
+        assert_eq!(decoded.responses.len(), size);
+
+        let retired_limits = norito::DecodeLimits::new(
+            size,
+            proof.len(),
+            size,
+            RETIRED_UNDERSIZED_BUDGET_BYTES_V1,
+            8,
+        );
+        assert!(
+            norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
+                &proof,
+                retired_limits,
+            )
+            .is_err(),
+            "the retired allocation budget unexpectedly admits the maximum canonical LSAG"
+        );
+    }
+
+    #[test]
     fn lsag_decoder_preflights_oversized_and_forged_response_counts() {
         let (ring, key_image, proof) = sign_fixture(16, 7);
         let public = ring.iter().map(|(public, _)| *public).collect::<Vec<_>>();

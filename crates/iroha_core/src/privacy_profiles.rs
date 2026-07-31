@@ -141,8 +141,9 @@ use crate::privacy_engines::{
             PQ_MASP_INPUT_BOUND_V1, PQ_MASP_OUTPUT_BOUND_V1, PQ_MASP_TREE_DEPTH_V1,
         },
         stark::{
-            PQ_MASP_STARK_KAT_PROOF_SHA256_V1, PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1,
-            PQ_MASP_STARK_PROFILE_DIGEST_V1, validate_pq_masp_stark_profile_v1,
+            PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1, PQ_MASP_STARK_KAT_PROOF_SHA256_V1,
+            PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1, PQ_MASP_STARK_PROFILE_DIGEST_V1,
+            validate_pq_masp_stark_profile_v1,
         },
         wire::{
             AUTHORIZATION_MAGIC_V1, ENCRYPTED_OUTPUT_MAGIC_V1, ML_DSA_65_PUBLIC_KEY_BYTES_V1,
@@ -817,6 +818,7 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             != PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1
         || profile_digest != PQ_MASP_STARK_PROFILE_DIGEST_V1
         || PQ_MASP_STARK_KAT_PROOF_SHA256_V1 == [0; 32]
+        || PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1 == [0; 32]
         || PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1 == [0; 32]
         || PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1 == [0; 32]
         || validate_pq_masp_stark_profile_v1().is_err()
@@ -880,6 +882,7 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1,
             &PQ_MASP_STARK_PROFILE_DIGEST_V1,
             &PQ_MASP_STARK_KAT_PROOF_SHA256_V1,
+            &PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1,
             &PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1,
             &PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1,
             AUTHORIZATION_MAGIC_V1,
@@ -920,6 +923,7 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1,
             &PQ_MASP_STARK_PROFILE_DIGEST_V1,
             &PQ_MASP_STARK_KAT_PROOF_SHA256_V1,
+            &PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1,
             &PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1,
             &PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1,
             &statement_schema_digest,
@@ -962,6 +966,7 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             &statement_schema_digest,
             &bootstrap_schema_digest,
             &PQ_MASP_STARK_KAT_PROOF_SHA256_V1,
+            &PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1,
             &PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1,
             &PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1,
             &input_limit,
@@ -1855,6 +1860,7 @@ fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
             VEGA_DEVICE_AUTHENTICATION_GOVERNANCE_FRAME_SCHEMA_V1,
             VEGA_MDL_DEVICE_AUTHENTICATION_DOMAIN_V1,
             &device_authentication_frame_version,
+            CURVE_PROVER_RANDOMNESS_POLICY_V1,
             &global_proof_cap,
         ],
     );
@@ -3557,7 +3563,7 @@ mod tests {
         let sampling_profile_digest = bootle_sampling_profile_digest_v1();
         assert_eq!(
             hex::encode(sampling_profile_digest),
-            "ca1b5f131bbd477faa1b5e75ea8c3ea28fe843c7985ee161efc63da28d6c7f00"
+            "6e037c7342b327b75df5621f999506799174254ca7a7846d7549a6526f6ef897"
         );
         let governed =
             bootle_lantern_parameter_digest_v1(&public_parameter_seed, &sampling_profile_digest);

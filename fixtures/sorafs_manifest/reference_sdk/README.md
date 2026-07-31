@@ -4,6 +4,13 @@ These files are byte-exact `ValidationOutcomeV1` goldens shared by every SDK.
 The two appeal-finance profiles use `generated_at=123`; heterogeneous
 fixture-bundle outcomes use `generated_at=1700001234`.
 
+The signed closed inventory covers 82 payload artifacts, 32 exact
+`ValidationOutcomeV1` files, and 38 negative payload vectors. All eight
+appeal-finance `CancelAssetLock` JSON/Norito files are mandatory; a missing file
+fails validation rather than skipping a capability. These checked-in fixtures
+do not qualify the current native packages: clean ABI-21 builds and unskipped
+replay remain required for all five release targets.
+
 - `appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json`
   accepts the canonical 85-byte `CancelAssetLock` V1 payload.
 - `appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json`

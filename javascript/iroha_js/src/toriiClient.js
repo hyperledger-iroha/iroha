@@ -15105,6 +15105,10 @@ const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
   "iroha_data_model::block::consensus::LaneBlockProposalPreimage";
 const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
   "iroha_data_model::block::consensus::LaneBlockCommitment";
+const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
+  "iroha.nexus.lane-relay.settlement.v1",
+  "utf8",
+);
 
 function parseSumeragiBlsNormalPeerId(value, context) {
   if (typeof value !== "string") {
@@ -15375,9 +15379,16 @@ function computeSumeragiNativeParticipantSettlementHash(settlement) {
     encodeNoritoVec([], (value) => value, true),
     encodeNoritoVec([], (value) => value, true),
   ]);
-  return formatSumeragiNativeHash(
-    frameNoritoPayload(SUMERAGI_NATIVE_SETTLEMENT_TYPE, payload, 2),
+  const framedSettlement = frameNoritoPayload(
+    SUMERAGI_NATIVE_SETTLEMENT_TYPE,
+    payload,
+    2,
   );
+  return formatSumeragiNativeHash(Buffer.concat([
+    u64ToLittleEndianBuffer(SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN.length),
+    SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN,
+    framedSettlement,
+  ]));
 }
 
 export const __sumeragiNativeAmxTestHelpers = Object.freeze({
