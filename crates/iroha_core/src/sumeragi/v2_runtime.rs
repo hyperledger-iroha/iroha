@@ -660,6 +660,38 @@ impl RuntimeIngressOwnershipEvidence {
             .map(|token| token.map(super::FairV2IngressLeaderWireToken::scheduler_ordinal))
     }
 
+    /// Exact physical occurrence and dequeue-time predecessor cut for a
+    /// productive leader-wire carrier.
+    fn leader_wire_physical_carrier(
+        &self,
+    ) -> Result<Option<(u64, u128)>, RuntimeIngressMergeError> {
+        let mut exact = None;
+        for carrier in self
+            .direct
+            .iter()
+            .chain(self.commit_certificate_response.iter())
+        {
+            if carrier.leader_wire_token().is_none() {
+                continue;
+            }
+            let physical_ordinal = carrier
+                .physical_admission_ordinal()
+                .ok_or(RuntimeIngressMergeError::Conflict)?;
+            let physical_cut = carrier
+                .runtime_physical_cut()
+                .ok_or(RuntimeIngressMergeError::Conflict)?;
+            let candidate = (physical_ordinal, physical_cut);
+            match exact {
+                Some(retained) if retained != candidate => {
+                    return Err(RuntimeIngressMergeError::Conflict);
+                }
+                Some(_) => {}
+                None => exact = Some(candidate),
+            }
+        }
+        Ok(exact)
+    }
+
     fn earliest_lifecycle_ordinal(&self) -> Result<Option<u128>, RuntimeIngressMergeError> {
         let mut earliest = None;
         let mut saw_untagged = false;
@@ -823,6 +855,10 @@ impl RuntimeIngressOwnershipEvidence {
                 })
             });
         let leader_wire_token_is_exact = self.leader_wire_token().is_ok();
+        let leader_wire_physical_carrier_is_exact = matches!(
+            (self.leader_wire_token(), self.leader_wire_physical_carrier()),
+            (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)))
+        );
         let lifecycle_ordinal_is_exact = self.earliest_lifecycle_ordinal().is_ok();
         let leader_wire_runtime_receipt_is_exact = matches!(
             (self.leader_wire_token(), self.leader_wire_runtime_receipt()),
@@ -832,6 +868,7 @@ impl RuntimeIngressOwnershipEvidence {
             && response_exact
             && carriers_are_pairwise_disjoint
             && leader_wire_token_is_exact
+            && leader_wire_physical_carrier_is_exact
             && lifecycle_ordinal_is_exact
             && leader_wire_runtime_receipt_is_exact
             && self.projection_hash == runtime_ingress_ownership_projection_hash(self)
@@ -2768,6 +2805,68 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
 
     fn oldest_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         let command_minimum = self.oldest_lifecycle_ordinal()?;
+        self.dormant_local_fifo_reservations.iter().try_fold(
+            command_minimum,
+            |minimum, reservation| {
+                if reservation.admission_ordinal == 0
+                    || !self
+                        .lifecycle_ordinals
+                        .recognizes_minted(reservation.admission_ordinal)
+                        .map_err(|_| EnqueueError::FailClosed)?
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
+                Ok(Some(
+                    minimum.map_or(reservation.admission_ordinal, |ordinal| {
+                        ordinal.min(reservation.admission_ordinal)
+                    }),
+                ))
+            },
+        )
+    }
+
+    /// Oldest owner which is allowed to precede an already-admitted producer
+    /// continuation at `physical_cut`.
+    ///
+    /// A leader-wire replay admitted at or after the cut retains its logical
+    /// scheduler ordinal for identity, but its fresh physical carrier is
+    /// behind the continuation and must not become its runner blocker.
+    fn oldest_active_lifecycle_ordinal_before_physical_cut(
+        &self,
+        physical_cut: u128,
+    ) -> Result<Option<u128>, EnqueueError> {
+        if physical_cut == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        let command_minimum = self.commands.iter().try_fold(
+            None,
+            |minimum, queued| -> Result<Option<u128>, EnqueueError> {
+                let ordinal = queued.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+                if !queued.identity_deep_validated
+                    || !queued.identity.validate_exact()
+                    || !queued.causal_origin.validate_exact()
+                    || queued.causal_origin.root_lifecycle_ordinal != Some(ordinal)
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
+                let post_cut_leader_wire = match queued.ingress_ownership.as_ref() {
+                    Some(ownership) => match ownership.leader_wire_physical_carrier() {
+                        Ok(Some((physical_ordinal, _))) => {
+                            u128::from(physical_ordinal) >= physical_cut
+                        }
+                        Ok(None) => false,
+                        Err(_) => return Err(EnqueueError::FailClosed),
+                    },
+                    None => false,
+                };
+                if post_cut_leader_wire {
+                    return Ok(minimum);
+                }
+                Ok(Some(
+                    minimum.map_or(ordinal, |current: u128| current.min(ordinal)),
+                ))
+            },
+        )?;
         self.dormant_local_fifo_reservations.iter().try_fold(
             command_minimum,
             |minimum, reservation| {
@@ -5271,12 +5370,75 @@ struct ActiveViewProducerReservation {
     ownership: RuntimeEffectOwnership,
 }
 
+/// One adapter-deferred producer together with its immutable receiver-local
+/// ingress cut.
+///
+/// The logical lifecycle may be rebased when an older exact aggregate carrier
+/// joins the same request. The physical cut never moves: a leader-wire replay
+/// admitted at or after it cannot regain a position ahead of this already
+/// admitted continuation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeDeferredLifecycleOwnership {
+    owner: RuntimeLifecycleOwner,
+    physical_cut: u128,
+}
+
+impl RuntimeDeferredLifecycleOwnership {
+    fn new(owner: RuntimeLifecycleOwner, physical_cut: u128) -> Result<Self, EnqueueError> {
+        let ownership = Self {
+            owner,
+            physical_cut,
+        };
+        ownership
+            .validate_exact()
+            .then_some(ownership)
+            .ok_or(EnqueueError::FailClosed)
+    }
+
+    fn validate_exact(&self) -> bool {
+        self.physical_cut != 0 && self.owner.validate_exact()
+    }
+
+    const fn owner(&self) -> &RuntimeLifecycleOwner {
+        &self.owner
+    }
+
+    fn rebase_deferred_ingress(
+        &self,
+        lifecycle_ordinal: u128,
+        ingress_identity: iroha_crypto::Hash,
+    ) -> Result<Self, RuntimeIngressMergeError> {
+        let owner = self
+            .owner
+            .rebase_deferred_ingress(lifecycle_ordinal, ingress_identity)?;
+        let rebased = Self {
+            owner,
+            physical_cut: self.physical_cut,
+        };
+        rebased
+            .validate_exact()
+            .then_some(rebased)
+            .ok_or(RuntimeIngressMergeError::Conflict)
+    }
+}
+
+impl std::ops::Deref for RuntimeDeferredLifecycleOwnership {
+    type Target = RuntimeLifecycleOwner;
+
+    fn deref(&self) -> &Self::Target {
+        self.owner()
+    }
+}
+
 /// One-owner, class-aware scheduling shell for Sumeragi v2.
 pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     driver: D,
     ingress: BoundedIngress<D::Command>,
     deferred_ingress_ownership: BTreeMap<u128, RuntimeIngressOwnershipEvidence>,
-    deferred_lifecycle_ownership: BTreeMap<u128, RuntimeLifecycleOwner>,
+    deferred_lifecycle_ownership: BTreeMap<u128, RuntimeDeferredLifecycleOwnership>,
+    /// Latest receiver-local physical high-watermark published by the outer
+    /// runner immediately before a serialized runtime turn.
+    ingress_physical_cut: u128,
     leader_wire_runtime_receipts: BTreeMap<u128, LeaderWireLifecycleRuntimeReceipt>,
     pending_leader_wire_terminals: VecDeque<LeaderWireRuntimeTerminal>,
     active_view_producer: Option<ActiveViewProducerReservation>,
@@ -5360,6 +5522,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             ingress,
             deferred_ingress_ownership: BTreeMap::new(),
             deferred_lifecycle_ownership: BTreeMap::new(),
+            ingress_physical_cut: 1,
             leader_wire_runtime_receipts: BTreeMap::new(),
             pending_leader_wire_terminals: VecDeque::new(),
             active_view_producer: None,
@@ -5568,6 +5731,19 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err("Sumeragi v2 effect lifecycle ownership was invalid".to_owned());
         }
         Ok(ownership)
+    }
+
+    /// Publish the receiver-local physical admission high-watermark before a
+    /// serialized runtime turn. The value may only advance; refreshing an
+    /// already-created continuation is forbidden because each continuation
+    /// copies the current value exactly once at reservation.
+    pub(crate) fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
+        if physical_cut == 0 || physical_cut < self.ingress_physical_cut {
+            self.latch_fail_closed("receiver physical admission cut regressed or was zero");
+            return Err("Sumeragi v2 receiver physical admission cut was invalid".to_owned());
+        }
+        self.ingress_physical_cut = physical_cut;
+        Ok(())
     }
 
     /// Replace the bounded set of owners currently held by retained executor
@@ -6169,13 +6345,23 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 return Err(RuntimeError::FailClosed);
             }
             match retained.get(&ordinal) {
-                Some(existing) if existing != parent => {
+                Some(existing) if existing.owner() != parent => {
                     self.latch_fail_closed("deferred ordinal changed its lifecycle owner");
                     return Err(RuntimeError::FailClosed);
                 }
                 Some(_) => {}
                 None => {
-                    retained.insert(ordinal, parent.clone());
+                    let ownership = RuntimeDeferredLifecycleOwnership::new(
+                        parent.clone(),
+                        self.ingress_physical_cut,
+                    )
+                    .map_err(|_| {
+                        self.latch_fail_closed(
+                            "deferred lifecycle did not retain a valid physical ingress cut",
+                        );
+                        RuntimeError::FailClosed
+                    })?;
+                    retained.insert(ordinal, ownership);
                 }
             }
         }
@@ -6282,7 +6468,72 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             observe(&queued.lifecycle_owner()?)?;
         }
         for owner in self.deferred_lifecycle_ownership.values() {
+            if !owner.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            observe(owner.owner())?;
+        }
+        if let Some(owner) = &self.timeout_owner {
             observe(owner)?;
+        }
+        if let Some(owner) = &self.retransmit_owner {
+            observe(owner)?;
+        }
+        if let Some(reservation) = &self.active_view_producer {
+            if reservation.tag != self.round_tag || !reservation.ownership.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            observe(reservation.ownership.owner())?;
+        }
+        for owner in &self.external_lifecycle_owners {
+            observe(owner)?;
+        }
+        if let Some(ownership) = &self.pending_effect_ownership {
+            for effect in ownership {
+                observe(effect.owner())?;
+            }
+        }
+        if let Some(reservation) = &self.ingress.reserved_body_available {
+            let owner = reservation
+                .lifecycle_owner()
+                .ok_or(EnqueueError::FailClosed)?;
+            observe(&owner)?;
+        }
+        Ok(minimum)
+    }
+
+    /// Global logical minimum as observed by one already-admitted deferred
+    /// continuation.
+    ///
+    /// All ordinary owners retain the established logical ordering. The sole
+    /// exception is a productive leader-wire occurrence whose fresh physical
+    /// carrier is at or after this continuation's frozen cut; letting that
+    /// replay's old logical ordinal block the target would resurrect its
+    /// obsolete pre-restart queue position.
+    fn minimum_active_lifecycle_ordinal_for_deferred(
+        &self,
+        target: &RuntimeDeferredLifecycleOwnership,
+    ) -> Result<Option<u128>, EnqueueError> {
+        if !target.validate_exact() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut minimum = self
+            .ingress
+            .oldest_active_lifecycle_ordinal_before_physical_cut(target.physical_cut)?;
+        let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
+            if !owner.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            minimum = Some(minimum.map_or(owner.lifecycle_ordinal(), |ordinal| {
+                ordinal.min(owner.lifecycle_ordinal())
+            }));
+            Ok(())
+        };
+        for owner in self.deferred_lifecycle_ownership.values() {
+            if !owner.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            observe(owner.owner())?;
         }
         if let Some(owner) = &self.timeout_owner {
             observe(owner)?;
@@ -6323,7 +6574,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self
             .deferred_lifecycle_ownership
             .values()
-            .any(|owner| owner_matches(owner))
+            .any(|owner| owner.validate_exact() && owner_matches(owner.owner()))
             || self
                 .timeout_owner
                 .as_ref()
@@ -7236,7 +7487,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .map(|owner| {
                 owner
                     .validate_exact()
-                    .then_some(owner.lifecycle_ordinal())
+                    .then_some(owner.owner().lifecycle_ordinal())
                     .ok_or(EnqueueError::FailClosed)
             })
             .try_fold(None, |minimum, ordinal| {
@@ -7267,19 +7518,33 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         let eligible = match deferred_minimum {
             Some(deferred_minimum) => {
-                let global_minimum = self.minimum_active_lifecycle_ordinal().map_err(|_| {
-                    self.latch_fail_closed("global lifecycle ownership was invalid");
-                    RuntimeError::FailClosed
-                })?;
-                if global_minimum != Some(deferred_minimum) {
+                let mut eligible = BTreeSet::new();
+                let mut invalid_cut = false;
+                for (ordinal, owner) in &self.deferred_lifecycle_ownership {
+                    if owner.owner().lifecycle_ordinal() != deferred_minimum {
+                        continue;
+                    }
+                    let minimum = match self.minimum_active_lifecycle_ordinal_for_deferred(owner) {
+                        Ok(minimum) => minimum,
+                        Err(_) => {
+                            invalid_cut = true;
+                            break;
+                        }
+                    };
+                    if minimum == Some(deferred_minimum) {
+                        eligible.insert(*ordinal);
+                    }
+                }
+                if invalid_cut {
+                    self.latch_fail_closed(
+                        "deferred physical-cut lifecycle ownership was invalid",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                }
+                if eligible.is_empty() {
                     return Ok(None);
                 }
-                self.deferred_lifecycle_ownership
-                    .iter()
-                    .filter_map(|(ordinal, owner)| {
-                        (owner.lifecycle_ordinal() == deferred_minimum).then_some(*ordinal)
-                    })
-                    .collect::<BTreeSet<_>>()
+                eligible
             }
             #[cfg(test)]
             None => BTreeSet::new(),
@@ -7313,7 +7578,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
         let deferred_ordinal = evidence.admission_ordinal;
-        let lifecycle_owner = self.deferred_lifecycle_ownership.remove(&deferred_ordinal);
+        let lifecycle_owner = self
+            .deferred_lifecycle_ownership
+            .remove(&deferred_ordinal)
+            .map(|ownership| ownership.owner);
         #[cfg(test)]
         let lifecycle_owner =
             lifecycle_owner.or_else(|| self.driver.synthetic_deferred_lifecycle_owner(&evidence));
@@ -16490,6 +16758,128 @@ mod tests {
             validation: 1,
             local_proposal: 0,
         };
+        let body_available_only = RetiredBodyPipelineCompletions {
+            body_available: 1,
+            body_stored: 0,
+            validation: 0,
+            local_proposal: 0,
+        };
+
+        let dormant_manifest = runtime_manifest(&context, 0xA0);
+        let dormant_lifecycle_key = Hash::new(b"bulk-retired dormant body lifecycle");
+        let dormant_lifecycle_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the restart-restored body lifecycle");
+        let dormant_command = AdapterCommand::BodyAvailable {
+            manifest: dormant_manifest.clone(),
+        };
+        let dormant_owner = RuntimeCandidateCausalOrigin::restore_producer_lifecycle(
+            owner_tag,
+            CommandClass::Completion,
+            &dormant_command,
+            None,
+            dormant_lifecycle_key,
+            dormant_lifecycle_ordinal,
+        )
+        .expect("restore the exact dormant body owner");
+        let dormant = RuntimeDormantLocalFifoReservation::completion(
+            dormant_lifecycle_key,
+            dormant_lifecycle_ordinal,
+            8,
+        );
+        let capacity_before_dormant = runtime.remaining_completion_capacity();
+        runtime
+            .ingress
+            .install_dormant_local_fifo_reservations(vec![dormant])
+            .expect("install one dormant body-pipeline slot");
+        let dormant_reservation = runtime
+            .ingress
+            .reserve_canonical_body_available_internal(
+                owner_tag,
+                dormant_manifest.clone(),
+                Some(&dormant_owner),
+                Some(8),
+            )
+            .expect("reserve an unpublished token backed by the dormant slot");
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant - 1,
+            "the token aliases rather than duplicates its dormant capacity charge",
+        );
+        assert_eq!(
+            runtime.ingress.body_pipeline_completion_counts(
+                owner_tag,
+                dormant_manifest.round,
+                dormant_manifest.subject,
+            ),
+            body_available_only,
+            "the unpublished reservation is exactly one BodyAvailable owner",
+        );
+        let dormant_mismatch = runtime_manifest(&context, 0xAF);
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    dormant_mismatch.round,
+                    dormant_mismatch.subject,
+                )
+                .expect("mismatched bulk retirement is an atomic no-op"),
+            RetiredBodyPipelineCompletions::default(),
+        );
+        assert_eq!(
+            runtime.ingress.reserved_body_available.as_ref(),
+            Some(&dormant_reservation),
+        );
+        assert!(
+            runtime
+                .ingress
+                .dormant_local_fifo_reservations
+                .contains(&dormant)
+        );
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant - 1,
+            "mismatched bulk retirement preserves the aliased capacity charge",
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    dormant_manifest.round,
+                    dormant_manifest.subject,
+                )
+                .expect("retire the unpublished dormant-backed body token"),
+            body_available_only,
+        );
+        assert!(runtime.ingress.reserved_body_available.is_none());
+        assert!(
+            !runtime
+                .ingress
+                .dormant_local_fifo_reservations
+                .contains(&dormant)
+        );
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant,
+            "bulk retirement releases the token and its one aliased capacity owner",
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    dormant_manifest.round,
+                    dormant_manifest.subject,
+                )
+                .expect("a repeated exact retirement cannot recreate the drained stage"),
+            RetiredBodyPipelineCompletions::default(),
+        );
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant,
+            "repeated retirement cannot reacquire or release capacity",
+        );
 
         let ingress_manifest = runtime_manifest(&context, 0xA1);
         let (durable, validated) = receipts(&ingress_manifest);
@@ -16682,6 +17072,103 @@ mod tests {
             runtime.step(Instant::now()),
             Err(RuntimeError::FailClosed)
         ));
+
+        let duplicate_directory =
+            TempDir::new().expect("temporary duplicate dormant-body retirement directory");
+        let (mut duplicate_runtime, duplicate_context, _keys) =
+            authenticated_network_runtime(&duplicate_directory, RuntimeQueueConfig::new(4, 1, 1));
+        let duplicate_tag = duplicate_runtime.round_tag();
+        let duplicate_manifest = runtime_manifest(&duplicate_context, 0xD1);
+        let duplicate_lifecycle_key = Hash::new(b"duplicate bulk-retired dormant body lifecycle");
+        let duplicate_lifecycle_ordinal = duplicate_runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the duplicate fixture's dormant lifecycle");
+        let duplicate_command = AdapterCommand::BodyAvailable {
+            manifest: duplicate_manifest.clone(),
+        };
+        let duplicate_owner = RuntimeCandidateCausalOrigin::restore_producer_lifecycle(
+            duplicate_tag,
+            CommandClass::Completion,
+            &duplicate_command,
+            None,
+            duplicate_lifecycle_key,
+            duplicate_lifecycle_ordinal,
+        )
+        .expect("restore the duplicate fixture's dormant body owner");
+        let duplicate_dormant = RuntimeDormantLocalFifoReservation::completion(
+            duplicate_lifecycle_key,
+            duplicate_lifecycle_ordinal,
+            8,
+        );
+        duplicate_runtime
+            .ingress
+            .install_dormant_local_fifo_reservations(vec![duplicate_dormant])
+            .expect("install duplicate fixture dormant ownership");
+        let duplicate_reservation = duplicate_runtime
+            .ingress
+            .reserve_canonical_body_available_internal(
+                duplicate_tag,
+                duplicate_manifest.clone(),
+                Some(&duplicate_owner),
+                Some(8),
+            )
+            .expect("reserve duplicate fixture unpublished ownership");
+        stage_completion_for_queue_test(&mut duplicate_runtime, duplicate_tag, duplicate_command);
+        let duplicate_capacity_before_rejection = duplicate_runtime.remaining_completion_capacity();
+        assert_eq!(
+            duplicate_runtime.ingress.body_pipeline_completion_counts(
+                duplicate_tag,
+                duplicate_manifest.round,
+                duplicate_manifest.subject,
+            ),
+            RetiredBodyPipelineCompletions {
+                body_available: 2,
+                body_stored: 0,
+                validation: 0,
+                local_proposal: 0,
+            },
+        );
+        let duplicate_mismatch = runtime_manifest(&duplicate_context, 0xDF);
+        assert_eq!(
+            duplicate_runtime
+                .retire_body_pipeline_completions(
+                    duplicate_tag,
+                    duplicate_mismatch.round,
+                    duplicate_mismatch.subject,
+                )
+                .expect("mismatched duplicate retirement is an atomic no-op"),
+            RetiredBodyPipelineCompletions::default(),
+        );
+        assert_eq!(
+            duplicate_runtime
+                .retire_body_pipeline_completions(
+                    duplicate_tag,
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                )
+                .expect_err("duplicate unpublished and queued owners must fail closed"),
+            "Sumeragi v2 body pipeline has duplicate exact serialized completion stages",
+        );
+        assert!(duplicate_runtime.fail_closed);
+        assert_eq!(
+            duplicate_runtime.ingress.reserved_body_available.as_ref(),
+            Some(&duplicate_reservation),
+            "duplicate preflight cannot consume the unpublished token",
+        );
+        assert!(
+            duplicate_runtime
+                .ingress
+                .dormant_local_fifo_reservations
+                .contains(&duplicate_dormant)
+        );
+        assert_eq!(duplicate_runtime.queued_commands(), 1);
+        assert_eq!(
+            duplicate_runtime.remaining_completion_capacity(),
+            duplicate_capacity_before_rejection,
+            "duplicate preflight must preserve the complete capacity charge",
+        );
     }
 
     #[test]

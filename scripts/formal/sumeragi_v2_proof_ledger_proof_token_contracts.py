@@ -95,6 +95,8 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry",
         "AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep",
         "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep",
+        "AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep",
+        "AdequateLeaderFiniteRetainedProducerBudgetClosesNonDescentEpisode",
         "AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders",
         "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep",
         "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineDecisionRetention",
@@ -328,13 +330,32 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
-        "AsyncSpecProvidesAdequateLeaderWirePhysicalConvergence",
+        "AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence",
     ): (
         "ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded",
         "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
         "ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor",
         "ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank",
-        "ExactDecisionTargetNeutralNonDescentConsumesOrdinal",
+        "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded",
+        "ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank",
+        "ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal",
+        "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
+        "LeaderWirePhysicalPacketDependencyRankIsSnapshotScoped",
+        "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
+        "AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced",
+        "AsyncHeldChunkReceiptTombstonesExactProducerEpisode",
+        "LeaderWirePacketAdmissionPreservesExactResolution",
+        "AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AsyncSpecProvidesAdequateLeaderWirePhysicalConvergence",
+    ): (
+        "LeaderWirePhysicalResidualCapturesFrozenCertificate",
+        "AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence",
         "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
         "ExactDecisionRequestIngressRankOrderingIsWellFounded",
         "LeaderWirePhysicalLifecycleOrdinalOrderingIsWellFounded",
@@ -561,6 +582,8 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "IndexedDecisionWitness!AsyncCommitImportExecutionProvenance",
         "IndexedDecisionWitness!FifoRuntimeStep",
         "IndexedDecisionWitness!DeferredDrainStep",
+        "IndexedDecisionWitness!AsyncProducerVars",
+        "IndexedProducer",
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
@@ -2794,6 +2817,14 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+    ): (
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+        "IndexedHistoricalDecisionTargetOwnerRankProgressObligation",
+        "IndexedHistoricalStrictHeightServiceCompositionClosesDecisionRank",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress",
     ): (
         "IndexedHistoricalCertificateRankProgressResidualProperty",
@@ -3144,9 +3175,44 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "IndexedDecisionWitness!AsyncAllVars",
         "IndexedDecisionWitness!AsyncSchedulerVars",
         "IndexedDecisionWitness!AsyncRecoveryVars",
+        "IndexedDecisionWitness!AsyncProducerVars",
         "IndexedCore",
         "IndexedScheduler",
         "IndexedRecovery",
+        "IndexedProducer",
+        "IndexedFixedCorridorDeadlines",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedDecisionServiceWitnessVariablesAreExact",
+    ): (
+        "IndexedAsyncStateShape",
+        "IndexedAsyncStateAt",
+        "IndexedDecisionServiceWitness!AsyncAllVars",
+        "IndexedDecisionServiceWitness!AsyncSchedulerVars",
+        "IndexedDecisionServiceWitness!AsyncRecoveryVars",
+        "IndexedDecisionServiceWitness!AsyncProducerVars",
+        "IndexedCore",
+        "IndexedScheduler",
+        "IndexedRecovery",
+        "IndexedProducer",
+        "IndexedFixedCorridorDeadlines",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedAdequateLeaderWitnessVariablesAreExact",
+    ): (
+        "IndexedAsyncStateShape",
+        "IndexedAsyncStateAt",
+        "IndexedAdequateLeaderWitness!AsyncAllVars",
+        "IndexedAdequateLeaderWitness!AsyncSchedulerVars",
+        "IndexedAdequateLeaderWitness!AsyncRecoveryVars",
+        "IndexedAdequateLeaderWitness!AsyncProducerVars",
+        "IndexedCore",
+        "IndexedScheduler",
+        "IndexedRecovery",
+        "IndexedProducer",
+        "IndexedFixedCorridorDeadlines",
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
@@ -3314,6 +3380,60 @@ FIXED_PROOF_FORBIDDEN_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
         "ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal",
     ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+    ): (
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+        "IndexedHistoricalReleaseResidualsDischargeExactProgress",
+        "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
+        "IndexedExactHistoricalRecoveryProgress",
+        "ApplicationLivenessProperty",
+        "OneHeightCompletionLiveness",
+        "IndexedHeightLivenessProperty",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ): (
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+        "IndexedHistoricalReleaseResidualsDischargeExactProgress",
+        "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
+        "IndexedExactHistoricalRecoveryProgress",
+        "ApplicationLivenessProperty",
+        "OneHeightCompletionLiveness",
+        "IndexedHeightLivenessProperty",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+    ): (
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+        "IndexedHistoricalReleaseResidualsDischargeExactProgress",
+        "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
+        "IndexedExactHistoricalRecoveryProgress",
+        "ApplicationLivenessProperty",
+        "OneHeightCompletionLiveness",
+        "IndexedHeightLivenessProperty",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+    ): (
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+        "IndexedHistoricalReleaseResidualsDischargeExactProgress",
+        "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
+        "IndexedExactHistoricalRecoveryProgress",
+        "ApplicationLivenessProperty",
+        "OneHeightCompletionLiveness",
+        "IndexedHeightLivenessProperty",
+    ),
 }
 
 FIXED_PROOF_FORBIDDEN_MODULE_TOKENS = {
@@ -3358,6 +3478,153 @@ EXACT_TARGET_NEUTRAL_FORBIDDEN_TOKENS = (
     "IndexedExactHistoricalRecoveryProgress",
     "IndexedHeightLivenessProperty",
 )
+
+# The target-neutral kernel has a deliberately large local helper inventory.
+# Seal the token-normalized operator bodies and theorem statements as two
+# canonical sorted aggregates: this keeps every helper fail-closed without
+# duplicating thousands of lines of normalized TLA+ text in this component.
+# Critical rank/fairness/dependency seams are additionally checked
+# structurally by ``check_exact_target_neutral_contract``.
+EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 106
+EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_SHA256 = (
+    "8efcab64f3ddde5e109d8bc0cc4f6ceb979ecd20b9721b51316e50c8c2871067"
+)
+EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 48
+EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_SHA256 = (
+    "72743c037968dee0cd1ab65bc94f3d3bb3540836f12001481bd1697c6e24f23f"
+)
+
+EXACT_TARGET_NEUTRAL_RETIRED_SYMBOLS = (
+    "ExactDecisionTargetNeutralPacketDependencyRank",
+    "ExactDecisionTargetNeutralCandidateOwners",
+    "ExactDecisionTargetNeutralServeOwners",
+    "ExactDecisionTargetNeutralCandidateRanks",
+    "ExactDecisionTargetNeutralServeRanks",
+    "ExactDecisionTargetNeutralCandidateDebtRank",
+    "ExactDecisionTargetNeutralServeDebtRank",
+    "ExactDecisionTargetNeutralCandidateOccurrenceRank",
+    "ExactDecisionTargetNeutralServeOccurrenceRank",
+    "ExactDecisionTargetNeutralSelectedPacketDependencyRank",
+    "ExactDecisionTargetNeutralConcreteDependencyRank",
+    "ExactDecisionTargetNeutralConcreteFixedClockRank",
+    "ExactDecisionTargetNeutralCandidateOrdinalTokens",
+    "ExactDecisionTargetNeutralServeOrdinalTokens",
+    "ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal",
+    "ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal",
+    "ExactDecisionTargetNeutralNonDescentConsumesOrdinal",
+    "ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal",
+    "ExactDecisionTargetNeutralLiveRetainedLeaderWireProducerIdentitySet",
+    (
+        "ExactDecisionTargetNeutralRetainedLeaderWireProducerIdentities"
+        "ForSnapshot"
+    ),
+    "ExactDecisionTargetNeutralRetainedLeaderWireProducerPrepaid",
+    "ExactDecisionTargetNeutralDormantLeaderWireChargeableForSnapshot",
+)
+
+EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
+    "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame": (
+        "ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish",
+        "ExactDecisionTargetNeutralFrozenPastCutServeCannotReplenish",
+        "ExactDecisionTargetNeutralFrozenPastCutCandidateServiceConsumesExactOccurrence",
+        "AsyncCausalEpisodeExactCandidateOccurrenceBudget",
+        "AsyncCausalEpisodeServeWorkBudget",
+        "AsyncCausalEpisodeStructuralRankOrdering",
+    ),
+    "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame": (
+        "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
+        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+        "ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish",
+        "ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge",
+        "ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix",
+        "ExactDecisionTargetNeutralDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
+        "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
+        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
+        "ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot",
+        "ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot",
+    ),
+    "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame": (
+        "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame",
+    ),
+    "ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor": (
+        "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
+        "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
+        "ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant",
+        "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+    ),
+    "ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank": (
+        "HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket",
+        "ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier",
+    ),
+    "ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame": (
+        "ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank",
+        "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralProducerEpisodeOrdering",
+        "ExactDecisionTargetNeutralProducerEpisodeCarrier",
+    ),
+    "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish": (
+        "ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame",
+        "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
+        "ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor",
+    ),
+    "ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank": (
+        "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish",
+        "ExactDecisionTargetNeutralProducerEpisodeOrdering",
+        "ExactDecisionTargetNeutralProducerEpisodeCarrier",
+    ),
+    "ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier": (
+        "ExactDecisionTargetNeutralEpisodeRankIsInCarrier",
+        "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish",
+    ),
+    "ExactDecisionTargetNeutralRankCellHasConcreteFairOwner": (
+        "ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank",
+        "ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier",
+    ),
+    "ExactDecisionTargetNeutralRankCellStepIsSafe": (
+        "ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank",
+        "ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank",
+    ),
+    "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell": (
+        "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish",
+        "ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier",
+    ),
+    "ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal": (
+        "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
+        "ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank",
+    ),
+    "ExactDecisionTargetNeutralFiniteEpisodeClosesRankCell": (
+        "ExactDecisionTargetNeutralFairEpisodeStep",
+        "ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal",
+        "ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded",
+        "WellFoundedLeadsTo",
+    ),
+    "ExactDecisionTargetNeutralFixedClockRankStep": (
+        "ExactDecisionTargetNeutralFiniteEpisodeClosesRankCell",
+        "ExactDecisionTargetNeutralEpisodeRankIsInCarrier",
+    ),
+    "ExactDecisionTargetNeutralFixedClockConverges": (
+        "ExactDecisionTargetNeutralFixedClockRankStep",
+        "ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded",
+        "ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier",
+    ),
+    "ExactDecisionTargetNeutralFairEpisodeStep": (
+        "ExactDecisionTargetNeutralRankCellStepIsSafe",
+        "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
+        "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
+    ),
+    "ExactDecisionTargetNeutralDueHeadDisablesTick": (
+        "AsyncPacketOwnsClockDeadline",
+    ),
+    "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness": (
+        "LocalCandidateProducerContinuationResolutionUsesReviewedFairAction",
+        "ConditionalTransportProducerContinuationServiceUsesReviewedFairAction",
+        "VolatileBodyProducerContinuationServiceUsesReviewedFairAction",
+        "ExactDecisionTargetNeutralFairOwnerSet",
+        "ExactDecisionTargetNeutralFairAction",
+        "AsyncFairnessAt",
+    ),
+}
 
 # Temporal composition may be promoted only after its proof dependencies.  The
 # ledger order is intentional as well: reviewers should encounter each

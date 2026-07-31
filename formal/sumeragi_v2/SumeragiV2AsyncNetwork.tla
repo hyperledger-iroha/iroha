@@ -1873,7 +1873,8 @@ AsyncCandidateProducerContinuationStatusRank(status) ==
     [] OTHER -> 0
 
 AsyncCandidateProducerContinuationRecord(
-    candidate, handoffCandidates, lifecycleSlot, ordinal, status) ==
+    candidate, handoffCandidates, lifecycleSlot, ordinal, physicalCut,
+    status) ==
   [identity |-> AsyncCandidateServiceIdentity(candidate),
    candidate |-> candidate,
    handoffCandidates |-> handoffCandidates,
@@ -1891,17 +1892,20 @@ AsyncCandidateProducerContinuationRecord(
      AsyncCandidateProducerContinuationSourceClass(candidate),
    causalOrigin |-> candidate.causalOrigin,
    ordinal |-> ordinal,
+   physicalCut |-> physicalCut,
    status |-> status]
 
 AsyncCandidateProducerContinuationRecordSet ==
   {AsyncCandidateProducerContinuationRecord(
-     candidate, handoffCandidates, lifecycleSlot, ordinal, status):
+     candidate, handoffCandidates, lifecycleSlot, ordinal, physicalCut,
+     status):
      candidate \in
        {owned \in AsyncCandidateSet:
           owned.kind \in AsyncCandidateServiceTrackedKinds},
      handoffCandidates \in SUBSET AsyncCandidateSet,
      lifecycleSlot \in Nat \ {0},
      ordinal \in Nat \ {0},
+     physicalCut \in Nat,
      status \in AsyncCandidateProducerContinuationStatuses}
 
 (***************************************************************************
@@ -2992,6 +2996,9 @@ AsyncControlServiceStateTypeInvariant ==
        /\ record.ordinal \in Nat \ {0}
        /\ record.ordinal
             < AsyncNextCandidateLifecycleOrdinal(record.node)
+       /\ record.physicalCut \in Nat
+       /\ record.physicalCut
+            <= AsyncNextIngressPhysicalOrdinal(record.node)
   /\ \A left, right \in AsyncCandidateLifecycleAdmissions:
        /\ ((left.node = right.node /\ left.origin = right.origin)
              => left = right)
@@ -5372,7 +5379,8 @@ AsyncCandidateProducerSemanticHandoffReservationToken(record) ==
    origin |-> record.causalOrigin,
    phase |-> record.phase,
    slot |-> record.address.slot,
-   ordinal |-> record.ordinal]
+   ordinal |-> record.ordinal,
+   physicalCut |-> record.physicalCut]
 
 THEOREM AsyncCandidateProducerSemanticHandoffUsesInheritedLifecycle ==
   \A record \in AsyncCandidateProducerContinuationRecordSet:
@@ -5386,6 +5394,8 @@ THEOREM AsyncCandidateProducerSemanticHandoffUsesInheritedLifecycle ==
            /\ lifecycle.ordinal =
                 (AsyncCandidateProducerSemanticHandoffReservationToken(
                    record)).ordinal
+           /\ (AsyncCandidateProducerSemanticHandoffReservationToken(
+                 record)).physicalCut = record.physicalCut
 BY Isa
    DEF AsyncCandidateProducerSemanticHandoffReservation,
        AsyncCandidateProducerSemanticHandoffReservationToken
@@ -6290,6 +6300,21 @@ AsyncProducerRemainingIngressEpisodes ==
 
 AsyncProducerRemainingIngressRank ==
   Cardinality(AsyncProducerRemainingIngressEpisodes)
+
+AsyncProducerIngressEpisodeUniverseFor(request) ==
+  {episode \in AsyncProducerIngressEpisodeSet:
+     episode.request = request}
+
+AsyncProducerConsumedIngressEpisodesFor(request) ==
+  asyncProducerConsumedEpisodes
+    \cap AsyncProducerIngressEpisodeUniverseFor(request)
+
+AsyncProducerRemainingIngressEpisodesFor(request) ==
+  AsyncProducerIngressEpisodeUniverseFor(request)
+    \ AsyncProducerConsumedIngressEpisodesFor(request)
+
+AsyncProducerRemainingIngressRankFor(request) ==
+  Cardinality(AsyncProducerRemainingIngressEpisodesFor(request))
 
 IngressLane(recipient, source) == asyncIngressLanes[recipient][source]
 
@@ -10164,6 +10189,10 @@ AsyncProducerAdmittedIngressObligations ==
   {AsyncProducerEpisodeObligation(episode):
      episode \in AsyncProducerAdmittedIngressEpisodes}
 
+AsyncProducerAdmittedIngressEpisodesFor(request) ==
+  AsyncProducerAdmittedIngressEpisodes
+    \cap AsyncProducerIngressEpisodeUniverseFor(request)
+
 AsyncProducerProjectionStep ==
   /\ asyncProducerKnownObligations' =
        asyncProducerKnownObligations
@@ -10187,10 +10216,19 @@ AsyncProducerFirstDistinctIngressEpisodeStep ==
   (AsyncProducerAdmittedIngressEpisodes
      \ asyncProducerConsumedEpisodes) # {}
 
+AsyncProducerFirstDistinctIngressEpisodeStepFor(request) ==
+  (AsyncProducerAdmittedIngressEpisodesFor(request)
+     \ AsyncProducerConsumedIngressEpisodesFor(request)) # {}
+
 AsyncProducerExactRetransmissionEpisodeStep ==
   /\ AsyncProducerAdmittedIngressEpisodes # {}
   /\ AsyncProducerAdmittedIngressEpisodes
        \subseteq asyncProducerConsumedEpisodes
+
+AsyncProducerExactRetransmissionEpisodeStepFor(request) ==
+  /\ AsyncProducerAdmittedIngressEpisodesFor(request) # {}
+  /\ AsyncProducerAdmittedIngressEpisodesFor(request)
+       \subseteq AsyncProducerConsumedIngressEpisodesFor(request)
 
 AsyncProducerJournalClosed ==
   /\ asyncProducerConsumedEpisodes
@@ -10214,6 +10252,23 @@ BY Isa
        AsyncProducerRemainingIngressRank,
        AsyncProducerRemainingIngressEpisodes
 
+THEOREM AsyncProducerFirstDistinctEpisodeForStrictlyConsumesFiniteRank ==
+  \A request \in AsyncProducerIngressRequests:
+    /\ AsyncConfiguration
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerFirstDistinctIngressEpisodeStepFor(request)
+    => AsyncProducerRemainingIngressRankFor(request)'
+         < AsyncProducerRemainingIngressRankFor(request)
+BY Isa
+   DEF AsyncProducerProjectionStep,
+       AsyncProducerFirstDistinctIngressEpisodeStepFor,
+       AsyncProducerAdmittedIngressEpisodesFor,
+       AsyncProducerRemainingIngressRankFor,
+       AsyncProducerRemainingIngressEpisodesFor,
+       AsyncProducerConsumedIngressEpisodesFor,
+       AsyncProducerIngressEpisodeUniverseFor
+
 THEOREM AsyncProducerExactRetransmissionIsJournalStutter ==
   /\ AsyncProducerJournalClosed
   /\ AsyncProducerProjectionStep
@@ -10225,6 +10280,22 @@ BY Isa
        AsyncProducerAdmittedIngressObligations,
        AsyncProducerAdmittedIngressOrigins,
        AsyncProducerCanonicalOrigin
+
+THEOREM AsyncProducerExactRetransmissionPreservesTargetIngressRank ==
+  \A request \in AsyncProducerIngressRequests:
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerExactRetransmissionEpisodeStepFor(request)
+    => AsyncProducerRemainingIngressRankFor(request)'
+         = AsyncProducerRemainingIngressRankFor(request)
+BY Isa
+   DEF AsyncProducerProjectionStep,
+       AsyncProducerExactRetransmissionEpisodeStepFor,
+       AsyncProducerAdmittedIngressEpisodesFor,
+       AsyncProducerRemainingIngressRankFor,
+       AsyncProducerRemainingIngressEpisodesFor,
+       AsyncProducerConsumedIngressEpisodesFor,
+       AsyncProducerIngressEpisodeUniverseFor
 
 CoalesceDueLeaderWireLifecycleRetry(recipient, source) ==
   LET item == OldestDueSourcePacket(recipient, source).item
@@ -10795,17 +10866,35 @@ AsyncEarliestIngressSchedulerOrdinal(node) ==
             ELSE AsyncLeaderWireEarliestPhysicalIngressRecord(
                    node).schedulerOrdinal
 
+AsyncEarliestIngressPhysicalOrdinal(node) ==
+  IF AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  THEN AsyncLeaderWireEarliestPhysicalIngressRecord(
+         node).physicalAdmissionOrdinal
+  ELSE IF AsyncLeaderWireIngressProtectedRecordsAt(node) = {}
+       THEN AsyncServeIngressAdmissionOrdinal(
+              node,
+              AsyncServeEarliestIngressLifecycleOwnerIdentity(node))
+       ELSE IF AsyncServeIngressOwnsSharedPhysicalTurn(node)
+            THEN AsyncServeIngressAdmissionOrdinal(
+                   node,
+                   AsyncServeEarliestIngressLifecycleOwnerIdentity(node))
+            ELSE AsyncLeaderWireEarliestPhysicalIngressRecord(
+                   node).physicalAdmissionOrdinal
+
 (***************************************************************************
-An admitted ingress lifecycle is an immutable scheduler cut.  A producer
-continuation whose inherited lifecycle ordinal is later than that cut remains
-owned in the durable continuation table, but it is not eligible to preempt
-the admitted ingress turn.  Earlier and equal ordinals retain their original
-stage ordering.  Once the ingress barrier drains, every deferred continuation
-becomes runner-eligible again without changing identity or ordinal.
+A continuation freezes the receiver's physical high-watermark at its
+reservation.  Only an ingress carrier admitted strictly before that cut can
+precede it, and only when the carrier's inherited scheduler ordinal is also
+earlier.  A restart-dormant lifecycle may retain an old logical ordinal, but
+its later physical admission is at or above the cut and cannot overtake the
+target.  Once the genuine pre-cut barrier drains, every deferred continuation
+becomes runner-eligible without changing identity, ordinal, or physical cut.
 ***************************************************************************)
 AsyncCandidateProducerContinuationRunnerMayPrecedeIngress(node, record) ==
   \/ ~AsyncIngressSchedulerBarrierActive(node)
-  \/ record.ordinal <= AsyncEarliestIngressSchedulerOrdinal(node)
+  \/ record.physicalCut <= AsyncEarliestIngressPhysicalOrdinal(node)
+  \/ /\ AsyncEarliestIngressPhysicalOrdinal(node) < record.physicalCut
+     /\ record.ordinal <= AsyncEarliestIngressSchedulerOrdinal(node)
 
 AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode(node) ==
   {record \in
@@ -10816,7 +10905,11 @@ AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(node) ==
   AsyncCandidateProducerContinuationSelectedResolutionRecord(node)
 
 AsyncCandidateProducerContinuationRunnerResolutionRequired(node) ==
-  AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode(node) # {}
+  /\ AsyncCandidateProducerContinuationResolutionRequired(node)
+  /\ AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(node)
+       \in
+         AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode(
+           node)
 
 AsyncCandidateProducerContinuationRunnerResolutionReady(node) ==
   LET record ==
@@ -10831,6 +10924,7 @@ THEOREM AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn ==
      record \in
        AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
     /\ AsyncIngressSchedulerBarrierActive(node)
+    /\ AsyncEarliestIngressPhysicalOrdinal(node) < record.physicalCut
     /\ AsyncEarliestIngressSchedulerOrdinal(node) < record.ordinal
       => record
            \notin
@@ -10840,18 +10934,52 @@ BY Isa
    DEF AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
        AsyncCandidateProducerContinuationRunnerMayPrecedeIngress
 
+THEOREM AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn ==
+  \A node \in ValidatorIds,
+     record \in
+       AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
+    /\ AsyncIngressSchedulerBarrierActive(node)
+    /\ record.physicalCut <= AsyncEarliestIngressPhysicalOrdinal(node)
+      => record
+           \in
+             AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode(
+               node)
+BY Isa
+   DEF AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerMayPrecedeIngress
+
+THEOREM AsyncCandidateProducerContinuationOnlyPreCutIngressCanBlockRunnerTurn ==
+  \A node \in ValidatorIds,
+     record \in
+       AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
+    /\ AsyncIngressSchedulerBarrierActive(node)
+    /\ record
+         \notin
+           AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode(
+             node)
+      => /\ AsyncEarliestIngressPhysicalOrdinal(node) < record.physicalCut
+         /\ AsyncEarliestIngressSchedulerOrdinal(node) < record.ordinal
+BY Isa
+   DEF AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerMayPrecedeIngress
+
 THEOREM AsyncCandidateProducerContinuationRunnerSelectionRespectsIngressCut ==
   \A node \in ValidatorIds:
     /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ AsyncIngressSchedulerBarrierActive(node)
-      => (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
-            node)).ordinal
-           <= AsyncEarliestIngressSchedulerOrdinal(node)
+      => LET selected ==
+               AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
+                 node)
+         IN \/ selected.physicalCut
+                  <= AsyncEarliestIngressPhysicalOrdinal(node)
+            \/ selected.ordinal
+                  <= AsyncEarliestIngressSchedulerOrdinal(node)
 BY FS_CardinalityType, IsaT(300)
    DEF AsyncCandidateProducerContinuationRunnerResolutionRequired,
        AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
        AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
        AsyncCandidateProducerContinuationRunnerMayPrecedeIngress,
+       AsyncEarliestIngressPhysicalOrdinal,
        AsyncCandidateProducerContinuationSelectedResolutionRecord,
        AsyncCandidateProducerContinuationResolutionPredecessorsFor
 
@@ -15386,6 +15514,7 @@ THEOREM AsyncCandidateProducerContinuationResetPreservesExactReservation ==
            /\ after.causalOrigin = record.causalOrigin
            /\ after.sourceClass = record.sourceClass
            /\ after.ordinal = record.ordinal
+           /\ after.physicalCut = record.physicalCut
            /\ IF /\ record.node \in resetNodes
                   /\ \/ record.status = "Materialized"
                      \/ /\ record.status = "Terminal"
@@ -16225,6 +16354,14 @@ AsyncCandidateProducerContinuationRecordAfterStep(state, record) ==
                     state, record)
             THEN [record EXCEPT !.status = "Materialized"]
             ELSE record
+
+THEOREM AsyncCandidateProducerContinuationStepPreservesPhysicalCut ==
+  \A state,
+     record \in AsyncCandidateProducerContinuationRecordSet:
+    (AsyncCandidateProducerContinuationRecordAfterStep(
+       state, record)).physicalCut = record.physicalCut
+BY SMT
+   DEF AsyncCandidateProducerContinuationRecordAfterStep
 
 THEOREM AsyncCandidateProducerContinuationRunnerResolutionRequiresReadyEvidence ==
   \A record \in AsyncCandidateProducerContinuationRecordSet:
@@ -17418,8 +17555,33 @@ AsyncCandidateProducerContinuationStateAfterDeparture(state, candidate) ==
                   AsyncCandidateProducerContinuationHandoffCandidatesThisStep(
                     candidate),
                   address.slot, ordinal,
+                  AsyncNextIngressPhysicalOrdinal(candidate.node),
                   AsyncCandidateProducerContinuationInitialStatusAfter(
                     candidate))}]
+
+THEOREM AsyncCandidateProducerContinuationReservationFreezesPhysicalCut ==
+  \A state, candidate:
+    /\ candidate \in AsyncCandidateSet
+    /\ AsyncCandidateProducerContinuationSourceAfter(candidate)
+    /\ AsyncCandidateLifecycleRecordedIn(
+         state, candidate.node, candidate.causalOrigin)
+    /\ AsyncCandidateProducerContinuationRecordsForIdentityIn(
+         state, AsyncCandidateServiceIdentity(candidate)) = {}
+    /\ AsyncCandidateProducerContinuationReservationAvailableIn(
+         state, candidate)
+      => \E record \in
+           (AsyncCandidateProducerContinuationStateAfterDeparture(
+              state, candidate)).producerContinuations:
+           /\ record.identity = AsyncCandidateServiceIdentity(candidate)
+           /\ record.ordinal =
+                AsyncCandidateProducerContinuationOrdinalForIn(
+                  state, candidate)
+           /\ record.physicalCut =
+                AsyncNextIngressPhysicalOrdinal(candidate.node)
+BY Isa
+   DEF AsyncCandidateProducerContinuationStateAfterDeparture,
+       AsyncCandidateProducerContinuationRecord,
+       AsyncCandidateProducerContinuationInitialStatusAfter
 
 AsyncCandidateProducerContinuationReservationAvailableAfterDepartureIn(
     state) ==
@@ -20841,6 +21003,14 @@ AsyncNext ==
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
 
+THEOREM AsyncNextProjectsMonotoneProducerJournal ==
+  AsyncNext
+    => /\ AsyncProducerProjectionStep
+       /\ AsyncProducerJournalMonotoneStep
+BY Isa
+   DEF AsyncNext, AsyncProducerProjectionStep,
+       AsyncProducerJournalMonotoneStep
+
 THEOREM AsyncIngressPhysicalHighWatermarkIsMonotone ==
   AsyncNext
     => \A node \in ValidatorIds:
@@ -20946,7 +21116,7 @@ BY IsaT(3600)
 \* through their outer frame, and the same complete-successor witness hides
 \* those redundant copies as well.
 AsyncOriginalAllVars ==
-  <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>
+  <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars>>
 
 AsyncNextBeforeFixedCorridorDeadlineReceipt ==
   \E nextOriginal:
@@ -22529,6 +22699,7 @@ AsyncServeSourceAttemptTyped(attempt) ==
   /\ attempt.stage \in AsyncServeAttemptStages
 
 AsyncServeSourceAttemptInvariant ==
+  /\ IsFiniteSet(asyncServeAttempts)
   /\ \A left, right \in asyncServeAttempts:
        left.key = right.key => left = right
   /\ \A node \in ValidatorIds,

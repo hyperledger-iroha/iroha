@@ -1891,6 +1891,12 @@ struct FairV2IngressReplyAttempt {
 #[derive(Clone, Debug)]
 struct FairV2IngressOwnershipOccurrence {
     action: FairV2IngressOwnershipAction,
+    /// Receiver-local physical FIFO position for this admitted occurrence.
+    ///
+    /// This is internal scheduling metadata, not part of the authenticated
+    /// wire identity. Exact retransmission coalesces with the existing
+    /// occurrence; restart re-admission receives a fresh value.
+    physical_admission_ordinal: u64,
     /// Actor-global lifecycle position retained across the runtime handoff.
     ///
     /// Test-only ungated ingress may omit this owner. Every production-bound
@@ -1929,6 +1935,13 @@ struct FairV2IngressOwnershipOccurrence {
 pub(crate) struct FairV2IngressOwnershipEvidence {
     first: FairV2IngressOwnershipOccurrence,
     latest: FairV2IngressOwnershipOccurrence,
+    /// First receiver-local physical ordinal which was not yet admitted when
+    /// this occurrence crossed from fair ingress into serialized runtime.
+    ///
+    /// The dequeue transaction freezes this once. A producer continuation
+    /// derived from the occurrence can therefore distinguish real pre-cut
+    /// ingress from a later replay retaining an older logical lifecycle.
+    runtime_physical_cut: Option<u128>,
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
     leader_wire_runtime_receipt:
         Option<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt>,
@@ -1984,6 +1997,7 @@ impl FairV2IngressOwnershipEvidence {
         Self {
             leader_wire_token,
             leader_wire_runtime_receipt: None,
+            runtime_physical_cut: None,
             current_routes: occurrence.routes_after.clone(),
             attempts: occurrence.attempts_after.clone(),
             attempts_hash: occurrence.attempts_after_hash,
@@ -2004,6 +2018,7 @@ impl FairV2IngressOwnershipEvidence {
             first: self.first.clone(),
             leader_wire_token: self.leader_wire_token.clone(),
             leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+            runtime_physical_cut: self.runtime_physical_cut,
             admission_count: self.admission_count,
             current_routes: occurrence.routes_after.clone(),
             attempts: occurrence.attempts_after.clone(),
@@ -2124,6 +2139,15 @@ impl FairV2IngressOwnershipEvidence {
                 return false;
             }
         }
+        // Downstream coalescence retains the first physical occurrence and
+        // its immutable predecessor cut. A later route/source observation is
+        // history for that logical request, not a replacement FIFO owner.
+        candidate.first.physical_admission_ordinal = self.first.physical_admission_ordinal;
+        candidate.latest.physical_admission_ordinal = self.first.physical_admission_ordinal;
+        candidate.runtime_physical_cut = self.runtime_physical_cut;
+        if !candidate.validate_exact() {
+            return false;
+        }
         let admission_count = match self.admission_count.checked_add(candidate.admission_count) {
             Some(count) => count,
             None => return false,
@@ -2155,6 +2179,7 @@ impl FairV2IngressOwnershipEvidence {
             latest: candidate.latest,
             leader_wire_token: self.leader_wire_token.clone(),
             leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+            runtime_physical_cut: self.runtime_physical_cut,
             admission_count,
             occurrence_count,
             action_counts,
@@ -2203,6 +2228,37 @@ impl FairV2IngressOwnershipEvidence {
         self.validate_exact()
             .then_some(self.first.lifecycle_ordinal)
             .flatten()
+    }
+
+    /// Physical FIFO position of the one coalesced ingress occurrence.
+    pub(crate) fn physical_admission_ordinal(&self) -> Option<u64> {
+        self.validate_exact()
+            .then_some(self.first.physical_admission_ordinal)
+    }
+
+    /// Immutable receiver-local cut frozen by checked dequeue.
+    pub(crate) fn runtime_physical_cut(&self) -> Option<u128> {
+        self.validate_exact()
+            .then_some(self.runtime_physical_cut)
+            .flatten()
+    }
+
+    /// Freeze the physical predecessor cut exactly once while the selected
+    /// fair-ingress carrier is still owned by the dequeue transaction.
+    fn freeze_runtime_physical_cut(&mut self, physical_cut: u128) -> bool {
+        if !self.validate_exact()
+            || self.runtime_physical_cut.is_some()
+            || physical_cut <= u128::from(self.first.physical_admission_ordinal)
+        {
+            return false;
+        }
+        let mut frozen = self.clone();
+        frozen.runtime_physical_cut = Some(physical_cut);
+        if !frozen.validate_exact() {
+            return false;
+        }
+        *self = frozen;
+        true
     }
 
     fn install_leader_wire_runtime_receipt(
@@ -2260,8 +2316,9 @@ impl FairV2IngressOwnershipEvidence {
     /// because their wire bytes and counters match.
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
         let mut projection = Vec::new();
-        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v7");
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v8");
         for occurrence in [&self.first, &self.latest] {
+            projection.extend_from_slice(&occurrence.physical_admission_ordinal.to_le_bytes());
             match occurrence.lifecycle_ordinal {
                 None => projection.push(0),
                 Some(ordinal) => {
@@ -2286,6 +2343,13 @@ impl FairV2IngressOwnershipEvidence {
                 &mut projection,
                 &occurrence.semantic_owner_source,
             );
+        }
+        match self.runtime_physical_cut {
+            None => projection.push(0),
+            Some(cut) => {
+                projection.push(1);
+                projection.extend_from_slice(&cut.to_le_bytes());
+            }
         }
         projection.extend_from_slice(&self.admission_count.to_le_bytes());
         projection.extend_from_slice(&self.occurrence_count.to_le_bytes());
@@ -2424,6 +2488,12 @@ impl FairV2IngressOwnershipEvidence {
                 .try_fold(0u128, |total, count| total.checked_add(count))
                 == Some(self.occurrence_count)
             && self.action_counts[self.latest.action.index()] != 0
+            && self.first.physical_admission_ordinal != 0
+            && self.first.physical_admission_ordinal
+                == self.latest.physical_admission_ordinal
+            && self.runtime_physical_cut.is_none_or(|cut| {
+                u128::from(self.first.physical_admission_ordinal) < cut
+            })
             && self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
             && self
                 .first
@@ -5103,6 +5173,7 @@ impl FairV2Ingress {
             let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
             let occurrence = FairV2IngressOwnershipOccurrence {
                 action,
+                physical_admission_ordinal: queued.admission_ordinal,
                 lifecycle_ordinal: prior_evidence.first.lifecycle_ordinal,
                 wire_key: key.clone(),
                 semantic_origin: inbound.sender.clone(),
@@ -5491,6 +5562,7 @@ impl FairV2Ingress {
         }
         let mut occurrence = FairV2IngressOwnershipOccurrence {
             action: FairV2IngressOwnershipAction::New,
+            physical_admission_ordinal: carrier_admission_ordinal,
             lifecycle_ordinal: leader_wire_token
                 .as_ref()
                 .map(FairV2IngressLeaderWireToken::scheduler_ordinal),
@@ -6145,6 +6217,7 @@ impl FairV2Ingress {
             state.nonempty_since = None;
             state.last_service_attempt_at = None;
         }
+        let runtime_physical_cut = u128::from(state.last_admission_ordinal) + 1;
 
         // Apply the same source rotation as the original lock-held scan. Any
         // producer that materialized a new source while the predicate ran is
@@ -6170,9 +6243,31 @@ impl FairV2Ingress {
         }
         state.ready.append(&mut newly_ready);
         self.debug_assert_consistent(&state);
-        Ok(Some(Arc::try_unwrap(entry.inbound).expect(
-            "serialized fair-ingress service must own the selected envelope",
-        )))
+        let physical_admission_ordinal = entry.admission_ordinal;
+        let mut inbound = Arc::try_unwrap(entry.inbound)
+            .expect("serialized fair-ingress service must own the selected envelope");
+        let Some(ownership) = inbound.ingress_ownership.as_mut() else {
+            state.open = false;
+            return Err(
+                "selected fair-ingress envelope lost its physical ownership evidence".to_owned(),
+            );
+        };
+        if ownership.physical_admission_ordinal() != Some(physical_admission_ordinal)
+            || !ownership.freeze_runtime_physical_cut(runtime_physical_cut)
+        {
+            state.open = false;
+            return Err(
+                "selected fair-ingress envelope changed its immutable physical cut".to_owned(),
+            );
+        }
+        Ok(Some(inbound))
+    }
+
+    /// First receiver-local physical ordinal not yet allocated at this
+    /// instant. The value is monotone and remains internal to local scheduling.
+    pub(crate) fn next_physical_admission_ordinal(&self) -> u128 {
+        let state = self.state.lock();
+        u128::from(state.last_admission_ordinal) + 1
     }
 
     /// Snapshot live bounded ingress ownership at one local monotonic instant.
