@@ -627,8 +627,9 @@ AdequateLeaderFixedSelectedServiceOwnerAction(owner) ==
     [] owner.ownerKind = "ServiceConditionalProducer" ->
          PostGstServiceConditionalTransportProducerContinuation(
            owner.node)
-    [] OTHER ->
+    [] owner.ownerKind = "ServiceVolatileProducer" ->
          PostGstServiceVolatileBodyProducerContinuation(owner.node)
+    [] OTHER -> FALSE
 
 THEOREM AdequateLeaderFixedReadyLeaderWireRetirementDisablesTick ==
   \A slot \in AsyncLeaderWireLifecycleSlotSet:
@@ -4305,137 +4306,61 @@ BY AdequateLeaderFixedStrictGoalsProjectToServiceRankDescent, PTL
 (***************************************************************************
 Frozen global fixed-clock blocker prefix.
 
-A due action for another responsive node can disable Tick even while the
-pipeline candidate's own service slack is positive.  Such an action is not
-pipeline progress.  The target-neutral fixed-clock rank and the finite
-admission-ordinal episode below are therefore deliberately separate.  An
-equal-count or count-increasing producer replacement may preserve the frozen
-producer prefix while consuming the ordinal budget; only after that finite
-episode closes may the fixed-clock occurrence rank itself be required to
-descend.  In particular, replenishment is never hidden in the second
-coordinate of a lexicographic pair whose first coordinate can increase.
+A due action for another responsive node can disable Tick while the selected
+pipeline cell is otherwise ready.  The immutable exact-Decision lifecycle
+snapshot therefore freezes the due packet set, source-qualified ingress
+journal, causal roots, materialized Candidate/Serve identities, and the past
+logical scheduler and physical admission cuts.  It grants no future ordinal
+interval.  A Dormant lifecycle without an already admitted physical carrier
+is outside this prefix.  Its producer rank is
+the actual remaining ingress journal followed by the proofless retained
+handoff rank and the exact Candidate-occurrence/Serve-work/Serve-reach tail.
+An unrelated later admission cannot enter the frozen predecessor set, and a
+same-source retry is a journal stutter rather than progress.
 ***************************************************************************)
 
-AdequateLeaderFixedGlobalBlockerSnapshotCarrier ==
+AdequateLeaderFixedGlobalLifecycleSnapshotCarrier ==
   [clock: Nat,
-   serviceCellIdentity:
-     AdequateLeaderFixedPipelineServiceCellIdentityCarrier,
    packets: SUBSET AsyncPacketSet,
+   producerRequests: SUBSET AsyncProducerIngressRequests,
+   ingressEpisodes: SUBSET AsyncProducerIngressEpisodeSet,
+   candidateRoots: SUBSET ExactDecisionTargetNeutralCausalRootSet,
+   schedulerCuts: [Responsive -> Nat],
+   physicalCuts: [Responsive -> Nat],
    predecessors:
      SUBSET
        (({"Packet"} \X AsyncPacketSet)
           \cup
         ({"Candidate"}
-           \X ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet)
+           \X ExactDecisionTargetNeutralCandidateOwnerIdentitySet)
           \cup
-        ({"Serve"} \X ExactDecisionTargetNeutralServeOwnerIdentitySet)),
+        ({"Serve"} \X ExactDecisionTargetNeutralServeOwnerIdentitySet)
+          \cup
+        ({"SchedulerCut"}
+           \X [node: ValidatorIds, cutoffOrdinal: Nat])),
    candidateIdentities:
-     SUBSET ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet,
+     SUBSET ExactDecisionTargetNeutralCandidateOwnerIdentitySet,
    serveIdentities:
-     SUBSET ExactDecisionTargetNeutralServeOwnerIdentitySet,
-   candidateStart: [Responsive -> Nat],
-   serveStart: [Responsive -> Nat],
-   candidateCeiling: [Responsive -> Nat],
-   serveCeiling: [Responsive -> Nat]]
+     SUBSET ExactDecisionTargetNeutralServeOwnerIdentitySet]
 
-\* This snapshot is source-frozen from configured cumulative work budgets.
-\* The candidate high-watermark charges the exact nineteen-occurrence causal
-\* subtree for every currently possible lifecycle carrier, rather than only
-\* the simultaneous carrier count.  The Serve high-watermark is cumulative
-\* too, but every fresh/advance allocation happens during physical ingress
-\* admission and therefore strictly lowers the frozen due-packet coordinate;
-\* `AsyncServeLifecycleFamilyBudget` supplies only finite positive slack and
-\* is not used as a cumulative-view bound.  Unlike the former exact-Decision
-\* compatibility snapshot, no `roots * 3^depth` estimate can be refreshed.
-\* Ceilings are exclusive: when a next ordinal reaches its ceiling, no token
-\* remains and the separate last-token provider below must establish the
-\* pipeline selection goal.
+AdequateLeaderFixedGlobalBlockerSnapshotCarrier ==
+  [serviceCellIdentity:
+     AdequateLeaderFixedPipelineServiceCellIdentityCarrier,
+   fixedClock: AdequateLeaderFixedGlobalLifecycleSnapshotCarrier]
+
 AdequateLeaderFixedConfiguredGlobalBlockerSnapshot(
     clockValue, serviceCellIdentity) ==
-  [clock |-> clockValue,
-   serviceCellIdentity |-> serviceCellIdentity,
-   packets |-> HistoricalDiscoveryDuePacketsAt(clockValue),
-   predecessors |->
-     ExactDecisionTargetNeutralFixedPredecessorSet(clockValue),
-   candidateIdentities |->
-     ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
-   serveIdentities |->
-     ExactDecisionTargetNeutralLiveServeIdentitySet,
-   candidateStart |->
-     [node \in Responsive |->
-        AsyncNextCandidateServiceOrdinal(node)],
-   serveStart |->
-     [node \in Responsive |->
-        asyncNextServeAdmissionOrdinal[node]],
-   candidateCeiling |->
-     [node \in Responsive |->
-        AsyncNextCandidateServiceOrdinal(node)
-          + AsyncCandidateProducerEpisodeBudget],
-   serveCeiling |->
-     [node \in Responsive |->
-        asyncNextServeAdmissionOrdinal[node]
-          + AsyncServeLifecycleFamilyBudget]]
-
-AdequateLeaderFixedGlobalBlockerCandidateOrdinalTokens(snapshot) ==
-  {[ownerKind |-> "Candidate", node |-> node, ordinal |-> ordinal]:
-     node \in Responsive,
-     ordinal \in
-       AsyncNextCandidateServiceOrdinal(node)
-         ..(snapshot.candidateCeiling[node] - 1)}
-
-AdequateLeaderFixedGlobalBlockerServeOrdinalTokens(snapshot) ==
-  {[ownerKind |-> "Serve", node |-> node, ordinal |-> ordinal]:
-     node \in Responsive,
-     ordinal \in
-       asyncNextServeAdmissionOrdinal[node]
-         ..(snapshot.serveCeiling[node] - 1)}
-
-AdequateLeaderFixedGlobalBlockerProducerEpisodeTokens(snapshot) ==
-  AdequateLeaderFixedGlobalBlockerCandidateOrdinalTokens(snapshot)
-    \cup AdequateLeaderFixedGlobalBlockerServeOrdinalTokens(snapshot)
-
-AdequateLeaderFixedGlobalBlockerProducerEpisodeBudget(snapshot) ==
-  Cardinality(
-    AdequateLeaderFixedGlobalBlockerProducerEpisodeTokens(snapshot))
+  [serviceCellIdentity |-> serviceCellIdentity,
+   fixedClock |->
+     ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)]
 
 AdequateLeaderFixedGlobalBlockerSnapshotActive(snapshot, clockValue) ==
   /\ snapshot \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier
-  /\ snapshot.clock = clockValue
   /\ snapshot.serviceCellIdentity
        \in AdequateLeaderFixedPipelineServiceCellIdentityCarrier
-  /\ IsFiniteSet(snapshot.packets)
-  /\ IsFiniteSet(snapshot.predecessors)
-  /\ IsFiniteSet(snapshot.candidateIdentities)
-  /\ IsFiniteSet(snapshot.serveIdentities)
-  /\ snapshot.candidateIdentities
-       \subseteq ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet
-  /\ snapshot.serveIdentities
-       \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
-  /\ snapshot.predecessors =
-       ({"Packet"} \X snapshot.packets)
-         \cup
-       ({"Candidate"} \X snapshot.candidateIdentities)
-         \cup
-       ({"Serve"} \X snapshot.serveIdentities)
-  /\ ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(snapshot)
-  /\ ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot)
-  /\ HistoricalDiscoveryDuePacketsAt(clockValue)
-       \subseteq snapshot.packets
-  /\ \A node \in Responsive:
-       /\ snapshot.candidateCeiling[node] =
-            snapshot.candidateStart[node]
-              + AsyncCandidateProducerEpisodeBudget
-       /\ snapshot.serveCeiling[node] =
-            snapshot.serveStart[node]
-              + AsyncServeLifecycleFamilyBudget
-       /\ snapshot.candidateStart[node]
-            <= AsyncNextCandidateServiceOrdinal(node)
-       /\ AsyncNextCandidateServiceOrdinal(node)
-            <= snapshot.candidateCeiling[node]
-       /\ snapshot.serveStart[node]
-            <= asyncNextServeAdmissionOrdinal[node]
-       /\ asyncNextServeAdmissionOrdinal[node]
-            <= snapshot.serveCeiling[node]
+  /\ snapshot.fixedClock.clock = clockValue
+  /\ ExactDecisionTargetNeutralSnapshotActive(
+       snapshot.fixedClock, clockValue)
 
 AdequateLeaderFixedGlobalBlockerRankCarrier ==
   ExactDecisionTargetNeutralFixedClockCarrier
@@ -4443,11 +4368,24 @@ AdequateLeaderFixedGlobalBlockerRankCarrier ==
 AdequateLeaderFixedGlobalBlockerRankOrdering ==
   ExactDecisionTargetNeutralFixedClockOrdering
 
-AdequateLeaderFixedConcreteGlobalBlockerRank(clockValue) ==
-  ExactDecisionTargetNeutralConcreteFixedClockRank(clockValue)
+AdequateLeaderFixedConcreteGlobalBlockerRank(snapshot, clockValue) ==
+  ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot(
+    snapshot.fixedClock, clockValue)
 
 AdequateLeaderFixedGlobalBlockerProducerPrefix(blockerRank) ==
   ExactDecisionTargetNeutralProducerPrefix(blockerRank)
+
+AdequateLeaderFixedGlobalProducerEpisodeRank(snapshot) ==
+  ExactDecisionTargetNeutralProducerEpisodeRank(snapshot.fixedClock)
+
+AdequateLeaderFixedGlobalProducerEpisodeRankCarrier ==
+  ExactDecisionTargetNeutralProducerEpisodeCarrier
+
+AdequateLeaderFixedGlobalProducerEpisodeRankOrdering ==
+  ExactDecisionTargetNeutralProducerEpisodeOrdering
+
+AdequateLeaderFixedGlobalProducerEpisodeBottom ==
+  ExactDecisionTargetNeutralProducerEpisodeBottom
 
 AdequateLeaderFixedGlobalBlockerSelectionGoal(
     initialContext, target, leaderContext, leader, leaderView, receipt,
@@ -4484,7 +4422,7 @@ AdequateLeaderFixedGlobalBlockerAtRank(
        initialContext, target, leaderContext,
        leader, leaderView, receipt, sourceRank, snapshot, clockValue)
   /\ blockerRank \in AdequateLeaderFixedGlobalBlockerRankCarrier
-  /\ AdequateLeaderFixedConcreteGlobalBlockerRank(clockValue)
+  /\ AdequateLeaderFixedConcreteGlobalBlockerRank(snapshot, clockValue)
        = blockerRank
 
 AdequateLeaderFixedGlobalBlockerStrictRankGoal(
@@ -4504,11 +4442,11 @@ AdequateLeaderFixedGlobalBlockerStrictRankGoal(
          leader, leaderView, receipt, sourceRank,
          snapshot, clockValue, lowerRank)
 
-AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+AdequateLeaderFixedGlobalProducerEpisodeAtRank(
     initialContext, target, leaderContext, leader, leaderView, receipt,
-    sourceRank, snapshot, clockValue, blockerRank, budget) ==
+    sourceRank, snapshot, clockValue, blockerRank, episodeRank) ==
   LET currentRank ==
-        AdequateLeaderFixedConcreteGlobalBlockerRank(clockValue)
+        AdequateLeaderFixedConcreteGlobalBlockerRank(snapshot, clockValue)
   IN /\ AdequateLeaderFixedGlobalBlockerPending(
            initialContext, target, leaderContext,
            leader, leaderView, receipt, sourceRank,
@@ -4521,43 +4459,48 @@ AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
           snapshot, clockValue, blockerRank)
      /\ AdequateLeaderFixedGlobalBlockerProducerPrefix(currentRank)
           = AdequateLeaderFixedGlobalBlockerProducerPrefix(blockerRank)
-     /\ budget =
-          AdequateLeaderFixedGlobalBlockerProducerEpisodeBudget(snapshot)
+     /\ episodeRank \in
+          AdequateLeaderFixedGlobalProducerEpisodeRankCarrier
+     /\ episodeRank =
+          AdequateLeaderFixedGlobalProducerEpisodeRank(snapshot)
 
 AdequateLeaderFixedGlobalProducerEpisodeOutcome(
     initialContext, target, leaderContext, leader, leaderView, receipt,
-    sourceRank, snapshot, clockValue, blockerRank, budget) ==
+    sourceRank, snapshot, clockValue, blockerRank, episodeRank) ==
   \/ AdequateLeaderFixedGlobalBlockerStrictRankGoal(
        initialContext, target, leaderContext,
        leader, leaderView, receipt, sourceRank,
        snapshot, clockValue, blockerRank)
-  \/ \E lowerBudget
-       \in SetLessThan(budget, OpToRel(<, Nat), Nat):
-       AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+  \/ \E lowerEpisodeRank
+       \in SetLessThan(
+            episodeRank,
+            AdequateLeaderFixedGlobalProducerEpisodeRankOrdering,
+            AdequateLeaderFixedGlobalProducerEpisodeRankCarrier):
+       AdequateLeaderFixedGlobalProducerEpisodeAtRank(
          initialContext, target, leaderContext,
          leader, leaderView, receipt, sourceRank,
-         snapshot, clockValue, blockerRank, lowerBudget)
+         snapshot, clockValue, blockerRank, lowerEpisodeRank)
 
 AdequateLeaderFixedGlobalBlockerOwnerReady(
     initialContext, target, leaderContext, leader, leaderView, receipt,
-    sourceRank, snapshot, clockValue, blockerRank, budget, owner) ==
+    sourceRank, snapshot, clockValue, blockerRank, episodeRank, owner) ==
   /\ owner \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext)
   /\ ENABLED
        (AdequateLeaderFixedSelectedServiceOwnerAction(owner)
           /\ AdequateLeaderFixedGlobalProducerEpisodeOutcome(
                initialContext, target, leaderContext,
                leader, leaderView, receipt, sourceRank,
-               snapshot, clockValue, blockerRank, budget)')
+               snapshot, clockValue, blockerRank, episodeRank)')
 
 AdequateLeaderFixedSelectedGlobalBlockerOwner(
     initialContext, target, leaderContext, leader, leaderView, receipt,
-    sourceRank, snapshot, clockValue, blockerRank, budget) ==
+    sourceRank, snapshot, clockValue, blockerRank, episodeRank) ==
   CHOOSE owner
     \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
       AdequateLeaderFixedGlobalBlockerOwnerReady(
         initialContext, target, leaderContext,
         leader, leaderView, receipt, sourceRank,
-        snapshot, clockValue, blockerRank, budget, owner)
+        snapshot, clockValue, blockerRank, episodeRank, owner)
 
 AdequateLeaderFixedGlobalBlockerEntryProvider ==
   \A initialContext \in ContextRecords,
@@ -4580,7 +4523,8 @@ AdequateLeaderFixedGlobalBlockerEntryProvider ==
              AdequateLeaderFixedConfiguredGlobalBlockerSnapshot(
                clockValue, serviceCellIdentity)
            blockerRank ==
-             AdequateLeaderFixedConcreteGlobalBlockerRank(clockValue)
+             AdequateLeaderFixedConcreteGlobalBlockerRank(
+               snapshot, clockValue)
        IN AdequateLeaderFixedGlobalBlockerAtRank(
             initialContext, target, leaderContext,
             leader, leaderView, receipt, sourceRank,
@@ -4605,11 +4549,12 @@ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider ==
                initialContext, target, leaderContext,
                leader, leaderView, receipt, sourceRank,
                snapshot, clockValue, blockerRank)
-         \/ \E budget \in Nat:
-              AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+         \/ \E episodeRank
+              \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier:
+              AdequateLeaderFixedGlobalProducerEpisodeAtRank(
                 initialContext, target, leaderContext,
                 leader, leaderView, receipt, sourceRank,
-                snapshot, clockValue, blockerRank, budget)
+                snapshot, clockValue, blockerRank, episodeRank)
 
 AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider ==
   \A initialContext \in ContextRecords,
@@ -4622,19 +4567,20 @@ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider ==
      snapshot \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
      clockValue \in Nat,
      blockerRank \in AdequateLeaderFixedGlobalBlockerRankCarrier,
-     budget \in Nat:
-    AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+     episodeRank
+       \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier:
+    AdequateLeaderFixedGlobalProducerEpisodeAtRank(
       initialContext, target, leaderContext,
       leader, leaderView, receipt, sourceRank,
-      snapshot, clockValue, blockerRank, budget)
+      snapshot, clockValue, blockerRank, episodeRank)
       => AdequateLeaderFixedGlobalBlockerOwnerReady(
            initialContext, target, leaderContext,
            leader, leaderView, receipt, sourceRank,
-           snapshot, clockValue, blockerRank, budget,
+           snapshot, clockValue, blockerRank, episodeRank,
            AdequateLeaderFixedSelectedGlobalBlockerOwner(
              initialContext, target, leaderContext,
              leader, leaderView, receipt, sourceRank,
-             snapshot, clockValue, blockerRank, budget))
+             snapshot, clockValue, blockerRank, episodeRank))
 
 AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider ==
   \A initialContext \in ContextRecords,
@@ -4647,38 +4593,39 @@ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider ==
      snapshot \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
      clockValue \in Nat,
      blockerRank \in AdequateLeaderFixedGlobalBlockerRankCarrier,
-     budget \in Nat:
+     episodeRank
+       \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier:
     LET owner ==
           AdequateLeaderFixedSelectedGlobalBlockerOwner(
             initialContext, target, leaderContext,
             leader, leaderView, receipt, sourceRank,
-            snapshot, clockValue, blockerRank, budget)
-    IN /\ AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+            snapshot, clockValue, blockerRank, episodeRank)
+    IN /\ AdequateLeaderFixedGlobalProducerEpisodeAtRank(
              initialContext, target, leaderContext,
              leader, leaderView, receipt, sourceRank,
-             snapshot, clockValue, blockerRank, budget)
+             snapshot, clockValue, blockerRank, episodeRank)
        /\ [AsyncNext]_AsyncAllVars
        => \/ AdequateLeaderFixedGlobalProducerEpisodeOutcome(
                initialContext, target, leaderContext,
                leader, leaderView, receipt, sourceRank,
-               snapshot, clockValue, blockerRank, budget)'
-          \/ /\ (AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+               snapshot, clockValue, blockerRank, episodeRank)'
+          \/ /\ (AdequateLeaderFixedGlobalProducerEpisodeAtRank(
                    initialContext, target, leaderContext,
                    leader, leaderView, receipt, sourceRank,
-                   snapshot, clockValue, blockerRank, budget))'
+                   snapshot, clockValue, blockerRank, episodeRank))'
              /\ (AdequateLeaderFixedSelectedGlobalBlockerOwner(
                    initialContext, target, leaderContext,
                    leader, leaderView, receipt, sourceRank,
-                   snapshot, clockValue, blockerRank, budget))'
+                   snapshot, clockValue, blockerRank, episodeRank))'
                   = owner
              /\ ~<<AdequateLeaderFixedSelectedServiceOwnerAction(
                        owner)>>_AsyncAllVars
 
-\* Exclusive ordinal ceilings must be carried by every non-goal step.  A
-\* candidate, Serve reservation, replay, or retry whose next ordinal would
-\* cross the frozen ceiling is therefore a selection/rank goal, never a state
-\* in which a fresh snapshot can be chosen.
-AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider ==
+\* A non-goal step may retain the exact producer rank or strictly lower it.
+\* The frozen past scheduler cut, causal roots, and source journal cannot be
+\* refreshed, so this is a true non-replenishment statement rather than a
+\* bounded allowance for future Candidate or Serve ordinals.
+AdequateLeaderFixedGlobalBlockerRetainedEpisodeCarryProvider ==
   \A initialContext \in ContextRecords,
      target \in ValidatorIds,
      leaderContext \in ContextRecords,
@@ -4689,11 +4636,12 @@ AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider ==
      snapshot \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
      clockValue \in Nat,
      blockerRank \in AdequateLeaderFixedGlobalBlockerRankCarrier,
-     budget \in Nat:
-    /\ AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+     episodeRank
+       \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier:
+    /\ AdequateLeaderFixedGlobalProducerEpisodeAtRank(
          initialContext, target, leaderContext,
          leader, leaderView, receipt, sourceRank,
-         snapshot, clockValue, blockerRank, budget)
+         snapshot, clockValue, blockerRank, episodeRank)
     /\ [AsyncNext]_AsyncAllVars
     /\ ~(AdequateLeaderFixedGlobalBlockerStrictRankGoal(
            initialContext, target, leaderContext,
@@ -4701,16 +4649,19 @@ AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider ==
            snapshot, clockValue, blockerRank))'
     => /\ (AdequateLeaderFixedGlobalBlockerSnapshotActive(
               snapshot, clockValue))'
-       /\ \A node \in Responsive:
-            /\ AsyncNextCandidateServiceOrdinal(node)'
-                 <= snapshot.candidateCeiling[node]
-            /\ asyncNextServeAdmissionOrdinal[node]'
-                 <= snapshot.serveCeiling[node]
+       /\ AdequateLeaderFixedGlobalProducerEpisodeRank(snapshot)'
+            \in
+              {episodeRank}
+                \cup
+              SetLessThan(
+                episodeRank,
+                AdequateLeaderFixedGlobalProducerEpisodeRankOrdering,
+                AdequateLeaderFixedGlobalProducerEpisodeRankCarrier)
 
-\* With half-open ordinal ranges, budget one is the final allocation token.
-\* Its selected action must reach selection/strict blocker descent.  It may
-\* not leave a zero-budget non-goal frontier which would have no fair owner.
-AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider ==
+\* The nested product bottom has no lower element.  Its selected exact fair
+\* action must therefore reach selection or strict fixed-clock descent in the
+\* same transition; there is no fabricated "last ordinal" token.
+AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider ==
   \A initialContext \in ContextRecords,
      target \in ValidatorIds,
      leaderContext \in ContextRecords,
@@ -4721,18 +4672,17 @@ AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider ==
      snapshot \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
      clockValue \in Nat,
      blockerRank \in AdequateLeaderFixedGlobalBlockerRankCarrier:
-    LET budget ==
-          AdequateLeaderFixedGlobalBlockerProducerEpisodeBudget(snapshot)
-        owner ==
+    LET owner ==
           AdequateLeaderFixedSelectedGlobalBlockerOwner(
             initialContext, target, leaderContext,
             leader, leaderView, receipt, sourceRank,
-            snapshot, clockValue, blockerRank, budget)
-    IN /\ budget = 1
-       /\ AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+            snapshot, clockValue, blockerRank,
+            AdequateLeaderFixedGlobalProducerEpisodeBottom)
+    IN /\ AdequateLeaderFixedGlobalProducerEpisodeAtRank(
             initialContext, target, leaderContext,
             leader, leaderView, receipt, sourceRank,
-            snapshot, clockValue, blockerRank, budget)
+            snapshot, clockValue, blockerRank,
+            AdequateLeaderFixedGlobalProducerEpisodeBottom)
        /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
               owner)>>_AsyncAllVars
        => (AdequateLeaderFixedGlobalBlockerStrictRankGoal(
@@ -4741,13 +4691,15 @@ AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider ==
              snapshot, clockValue, blockerRank))'
 
 AdequateLeaderFixedGlobalBlockerProviderProperty(specification) ==
-  specification
-    => [](/\ AdequateLeaderFixedGlobalBlockerEntryProvider
-          /\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider
-          /\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider
-          /\ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider
-          /\ AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider
-          /\ AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider)
+  /\ (specification
+        => [](/\ AdequateLeaderFixedGlobalBlockerEntryProvider
+              /\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider
+              /\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider
+              /\ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider
+              /\ AdequateLeaderFixedGlobalBlockerRetainedEpisodeCarryProvider
+              /\ AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider))
+  /\ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty(
+       specification)
 
 AdequateLeaderFixedGlobalProducerEpisodeStepProperty(specification) ==
   specification
@@ -4761,15 +4713,16 @@ AdequateLeaderFixedGlobalProducerEpisodeStepProperty(specification) ==
           snapshot \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
           clockValue \in Nat,
           blockerRank \in AdequateLeaderFixedGlobalBlockerRankCarrier,
-          budget \in Nat:
-         AdequateLeaderFixedGlobalProducerEpisodeAtBudget(
+          episodeRank
+            \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier:
+         AdequateLeaderFixedGlobalProducerEpisodeAtRank(
            initialContext, target, leaderContext,
            leader, leaderView, receipt, sourceRank,
-           snapshot, clockValue, blockerRank, budget)
+           snapshot, clockValue, blockerRank, episodeRank)
            ~> AdequateLeaderFixedGlobalProducerEpisodeOutcome(
                 initialContext, target, leaderContext,
                 leader, leaderView, receipt, sourceRank,
-                snapshot, clockValue, blockerRank, budget)
+                snapshot, clockValue, blockerRank, episodeRank)
 
 THEOREM AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep ==
   \A specification:
@@ -4809,7 +4762,9 @@ THEOREM AdequateLeaderFixedGlobalFiniteProducerEpisodeSuppliesRankStep ==
     /\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification)
     /\ AdequateLeaderFixedGlobalProducerEpisodeStepProperty(specification)
       => AdequateLeaderFixedGlobalBlockerRankStepProperty(specification)
-BY NatLessThanWellFounded, WellFoundedLeadsTo, PTL
+BY ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded,
+   ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
+   WellFoundedLeadsTo, PTL
    DEF AdequateLeaderFixedGlobalBlockerProviderProperty,
        AdequateLeaderFixedGlobalProducerEpisodeEntryProvider,
        AdequateLeaderFixedGlobalProducerEpisodeStepProperty,
@@ -5108,7 +5063,7 @@ listed at the proof boundary:
   * producer/parent-child handoff:
       `AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut`,
       `AdequateLeaderFixedOwnedFinalRouteParentConsumesCumulativeDebt`,
-      `ExactDecisionTargetNeutralNonDescentConsumesOrdinal`, and
+      `ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank`, and
       `AsyncCandidateProducerContinuationHandoffCandidatesThisStep`;
   * selected-action temporal occurrence:
       `ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness`,
@@ -5308,7 +5263,7 @@ BY AsyncLiveSpecProjectsAsyncSpec,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
    ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
    ExactDecisionRequestIngressRankOrderingIsWellFounded,
    AsyncLiveProvidesAdequateLeaderWirePhysicalConvergence,
@@ -6310,7 +6265,7 @@ BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
    ExactDecisionTargetNeutralRankCellStepIsSafe,
    ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
    ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock,
@@ -6409,10 +6364,686 @@ BY AsyncLiveSpecProjectsAsyncSpec,
      AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty,
      AdequateLeaderFixedSelectedActionClockCarryProviderProperty
 
+(***************************************************************************
+Concrete source-qualified retained ingress service.
+
+The source below already contains a real transport packet whose exact
+request/source episode is absent from the consumed journal.  Tick fairness
+makes it due after GST.  Per-recipient/source Admit fairness consumes the
+finite immutable prefix ahead of it; later traffic cannot move ahead of that
+packet.  When the selected packet is finally admitted (including a policy
+drop or an exact coalescing admission), the episode is first-distinct for its
+request.  The leading journal coordinate therefore decreases enough to
+dominate any change in the bounded exact Candidate-occurrence tail.  No
+retransmission and no aggregate Decision theorem is used as progress.
+***************************************************************************)
+
+AdequateLeaderRetainedProducerPacketWitnessSet(
+    request, target, leaderContext, leader, leaderView, subject) ==
+  {packet \in asyncTransport:
+     /\ AsyncProducerIngressRequest(packet.item) = request
+     /\ packet.authenticatedSource \in AsyncIngressSources
+     /\ AsyncProducerIngressEpisode(
+          packet.item, packet.authenticatedSource)
+          \notin asyncProducerConsumedEpisodes
+     /\ AsyncProducerIngressRequest(packet.item)
+          \in AdequateLeaderFrozenTargetProducerRequests(
+               target, leaderContext, leader, leaderView, subject)}
+
+AdequateLeaderRetainedProducerSelectedPacket(
+    request, target, leaderContext, leader, leaderView, subject) ==
+  CHOOSE packet \in
+    AdequateLeaderRetainedProducerPacketWitnessSet(
+      request, target, leaderContext, leader, leaderView, subject): TRUE
+
+THEOREM AdequateLeaderRetainedProducerSourceHasActualPacketWitness ==
+  \A request, node, cutoffOrdinal, sourceRank,
+     target, leaderContext, leader, leaderView,
+     subject, known, budget:
+    AdequateLeaderRetainedProducerEpisodeAtRank(
+      request, node, cutoffOrdinal, sourceRank,
+      target, leaderContext, leader, leaderView,
+      subject, known, budget)
+      => LET packet ==
+               AdequateLeaderRetainedProducerSelectedPacket(
+                 request, target, leaderContext,
+                 leader, leaderView, subject)
+         IN /\ packet
+                  \in AdequateLeaderRetainedProducerPacketWitnessSet(
+                       request, target, leaderContext,
+                       leader, leaderView, subject)
+            /\ packet.item.envelope.recipient = node
+BY Isa
+   DEF AdequateLeaderRetainedProducerEpisodeAtRank,
+       AdequateLeaderTargetProducerPacketEpisodesFor,
+       AdequateLeaderTargetProducerPacketEpisodes,
+       AdequateLeaderRetainedProducerPacketWitnessSet,
+       AdequateLeaderRetainedProducerSelectedPacket,
+       AdequateLeaderRetainedProducerRequestOwner,
+       AsyncProducerIngressEpisode,
+       AsyncProducerEpisode
+
+THEOREM AdequateLeaderRetainedProducerExactAdmissionLowersCompositeRank ==
+  \A request, node, cutoffOrdinal, sourceRank,
+     target, leaderContext, leader, leaderView,
+     subject, known, budget, packet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncStrongTypeInvariant'
+    /\ AsyncProducerJournalClosed
+    /\ AsyncNext
+    /\ AdequateLeaderRetainedProducerEpisodeAtRank(
+         request, node, cutoffOrdinal, sourceRank,
+         target, leaderContext, leader, leaderView,
+         subject, known, budget)
+    /\ packet
+         \in AdequateLeaderRetainedProducerPacketWitnessSet(
+              request, target, leaderContext,
+              leader, leaderView, subject)
+    /\ packet =
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ PostGstAdmitHiddenPacket(node, packet.authenticatedSource)
+      => (AdequateLeaderRetainedProducerExactRankGoal(
+            request, node, cutoffOrdinal, sourceRank, target))'
+BY AsyncNextProjectsMonotoneProducerJournal,
+   AsyncFiniteStrongTypeBoundsCandidateEpisodeTail,
+   AsyncFiniteFirstDistinctTargetIngressDominatesCandidateEpisodeTail,
+   IsaT(900)
+   DEF AdequateLeaderRetainedProducerExactRankGoal,
+       AdequateLeaderRetainedProducerEpisodeAtRank,
+       AdequateLeaderRetainedProducerCompositeRank,
+       AdequateLeaderRetainedProducerPacketWitnessSet,
+       AsyncProducerFirstDistinctIngressEpisodeStepFor,
+       AsyncProducerAdmittedIngressEpisodesFor,
+       AsyncProducerAdmittedIngressEpisodes,
+       AsyncProducerAdmittedIngressCoordinates,
+       AsyncProducerIngressEpisode,
+       PostGstAdmitHiddenPacket, AdmitIngressPacket,
+       AsyncFiniteCandidateEpisodeTailTypeInvariant
+
+AdequateLeaderRetainedProducerPacketClockDebt(packet) ==
+  IF asyncNow < packet.deadline
+  THEN packet.deadline - asyncNow
+  ELSE 0
+
+AdequateLeaderRetainedProducerPacketPrefixRank(
+    snapshot, clockValue, packet) ==
+  <<AdequateLeaderRetainedProducerPacketClockDebt(packet),
+    ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot(
+      snapshot, clockValue)>>
+
+AdequateLeaderRetainedProducerPacketPrefixRankCarrier ==
+  Nat \X ExactDecisionTargetNeutralFixedClockCarrier
+
+AdequateLeaderRetainedProducerPacketPrefixRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionTargetNeutralFixedClockOrdering,
+    Nat,
+    ExactDecisionTargetNeutralFixedClockCarrier)
+
+THEOREM AdequateLeaderRetainedProducerPacketPrefixRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    AdequateLeaderRetainedProducerPacketPrefixRankOrdering,
+    AdequateLeaderRetainedProducerPacketPrefixRankCarrier)
+BY NatLessThanWellFounded,
+   ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded,
+   WFLexPairOrdering
+   DEF AdequateLeaderRetainedProducerPacketPrefixRankOrdering,
+       AdequateLeaderRetainedProducerPacketPrefixRankCarrier
+
+THEOREM AdequateLeaderRetainedProducerPacketPrefixRankIsInCarrier ==
+  \A packet \in AsyncPacketSet,
+     snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+     clockValue \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue)
+    /\ asyncNow = clockValue
+    => AdequateLeaderRetainedProducerPacketPrefixRank(
+         snapshot, clockValue, packet)
+         \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier
+BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
+   ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
+   HistoricalDiscoveryIngressCounterRankInCarrier,
+   HistoricalDiscoveryFixedClockRankShapeInCarrier,
+   FS_CardinalityType, IsaT(300)
+   DEF AdequateLeaderRetainedProducerPacketPrefixRank,
+       AdequateLeaderRetainedProducerPacketClockDebt,
+       AdequateLeaderRetainedProducerPacketPrefixRankCarrier,
+       AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
+       ExactDecisionTargetNeutralConcreteBlockerStage,
+       ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot,
+       ExactDecisionTargetNeutralSelectedOverduePacket,
+       ExactDecisionTargetNeutralSelectedPacketDependencyRankForSnapshot,
+       ExactDecisionTargetNeutralFixedClockCarrier,
+       HistoricalDiscoveryLatentOwnerDebt,
+       HistoricalDiscoveryDuePacketDebt,
+       HistoricalDiscoveryDormantIoDebt,
+       HistoricalDiscoveryNodeBlockerDebt,
+       HistoricalDiscoveryActiveIoBlockerDebt,
+       HistoricalDiscoveryBlockerStageCarrier
+
+AdequateLeaderRetainedProducerPacketPrefixAtRank(
+    initialContext,
+    request, node, cutoffOrdinal, sourceRank,
+    target, leaderContext, leader, leaderView,
+    subject, known, budget,
+    packet, snapshot, clockValue, prefixRank) ==
+  /\ AdequateLeaderRetainedProducerEpisodeAtRank(
+       request, node, cutoffOrdinal, sourceRank,
+       target, leaderContext, leader, leaderView,
+       subject, known, budget)
+  /\ ~AdequateLeaderRetainedProducerExactRankGoal(
+       request, node, cutoffOrdinal, sourceRank, target)
+  /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+  /\ packet
+       \in AdequateLeaderRetainedProducerPacketWitnessSet(
+            request, target, leaderContext,
+            leader, leaderView, subject)
+  /\ packet.item.envelope.recipient = node
+  /\ clockValue = asyncNow
+  /\ snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier
+  /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue)
+  /\ prefixRank
+       \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier
+  /\ prefixRank =
+       AdequateLeaderRetainedProducerPacketPrefixRank(
+         snapshot, clockValue, packet)
+
+\* An inner fixed-clock descent retains the exact source-sealed snapshot,
+\* including its physical admission cut.  Only strict outer clock-debt
+\* descent may construct a new snapshot; a retry or owner replacement at the
+\* same clock can never refresh the cut.
+AdequateLeaderRetainedProducerPacketPrefixSnapshotCarry(
+    snapshot, clockValue, prefixRank,
+    snapshot2, clockValue2, lowerPrefixRank) ==
+  \/ lowerPrefixRank[1] < prefixRank[1]
+  \/ /\ lowerPrefixRank[1] = prefixRank[1]
+     /\ snapshot2 = snapshot
+     /\ clockValue2 = clockValue
+
+THEOREM AdequateLeaderRetainedProducerSameClockCannotRefreshPhysicalCut ==
+  \A snapshot, clockValue, prefixRank,
+     snapshot2, clockValue2, lowerPrefixRank:
+    /\ AdequateLeaderRetainedProducerPacketPrefixSnapshotCarry(
+         snapshot, clockValue, prefixRank,
+         snapshot2, clockValue2, lowerPrefixRank)
+    /\ lowerPrefixRank[1] = prefixRank[1]
+    => /\ snapshot2 = snapshot
+       /\ clockValue2 = clockValue
+       /\ snapshot2.physicalCuts = snapshot.physicalCuts
+BY Isa
+   DEF AdequateLeaderRetainedProducerPacketPrefixSnapshotCarry
+
+THEOREM AdequateLeaderRetainedProducerConfiguredSnapshotCapturesPhysicalCut ==
+  \A clockValue:
+    (ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)).physicalCuts
+      = ExactDecisionTargetNeutralCurrentPhysicalCuts
+BY Isa DEF ExactDecisionTargetNeutralFixedClockSnapshot
+
+THEOREM AdequateLeaderRetainedProducerAdmissionUsesCapturedPhysicalCut ==
+  \A packet \in AsyncPacketSet, clockValue \in Nat:
+    LET item == packet.item
+        node == item.envelope.recipient
+        source == packet.authenticatedSource
+        snapshot ==
+          ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
+    IN /\ asyncNow = clockValue
+       /\ node \in Responsive
+       /\ packet = OldestDueSourcePacket(node, source)
+       /\ AdmitHiddenPacket(node, source)
+       /\ item.kind \in AsyncLeaderWireKinds
+       /\ AsyncLeaderWireLifecycleIdentityDerivable(item)
+       => \E record \in asyncLeaderWireLifecycles':
+            /\ record.identity =
+                 AsyncLeaderWireLifecycleIdentityAt(item, context)
+            /\ record.physicalAdmissionOrdinal
+                 = snapshot.physicalCuts[node]
+            /\ AsyncNextIngressPhysicalOrdinal(node)'
+                 = snapshot.physicalCuts[node] + 1
+BY AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut,
+   AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal,
+   AdequateLeaderRetainedProducerConfiguredSnapshotCapturesPhysicalCut,
+   Isa
+   DEF ExactDecisionTargetNeutralCurrentPhysicalCuts
+
+AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+    initialContext,
+    request, node, cutoffOrdinal, sourceRank,
+    target, leaderContext, leader, leaderView,
+    subject, known, budget,
+    packet, snapshot, clockValue, prefixRank) ==
+  \/ AdequateLeaderRetainedProducerRankOrKnownAdvanceGoal(
+       request, node, cutoffOrdinal, sourceRank,
+       target, leaderContext, leader, leaderView,
+       subject, known, budget)
+  \/ \E snapshot2 \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+       clockValue2 \in Nat,
+       lowerPrefixRank
+         \in SetLessThan(
+              prefixRank,
+              AdequateLeaderRetainedProducerPacketPrefixRankOrdering,
+              AdequateLeaderRetainedProducerPacketPrefixRankCarrier):
+       /\ AdequateLeaderRetainedProducerPacketPrefixSnapshotCarry(
+            snapshot, clockValue, prefixRank,
+            snapshot2, clockValue2, lowerPrefixRank)
+       /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
+            initialContext,
+            request, node, cutoffOrdinal, sourceRank,
+            target, leaderContext, leader, leaderView,
+            subject, known, budget,
+            packet, snapshot2, clockValue2, lowerPrefixRank)
+
+AdequateLeaderRetainedProducerPacketOwnerReady(
+    initialContext,
+    request, node, cutoffOrdinal, sourceRank,
+    target, leaderContext, leader, leaderView,
+    subject, known, budget,
+    packet, snapshot, clockValue, prefixRank, owner) ==
+  /\ owner \in ExactDecisionTargetNeutralFairOwnerSet(initialContext)
+  /\ ENABLED
+       (ExactDecisionTargetNeutralFairAction(owner)
+          /\ AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+               initialContext,
+               request, node, cutoffOrdinal, sourceRank,
+               target, leaderContext, leader, leaderView,
+               subject, known, budget,
+               packet, snapshot, clockValue, prefixRank)')
+
+AdequateLeaderRetainedProducerSelectedPacketOwner(
+    initialContext,
+    request, node, cutoffOrdinal, sourceRank,
+    target, leaderContext, leader, leaderView,
+    subject, known, budget,
+    packet, snapshot, clockValue, prefixRank) ==
+  CHOOSE owner \in
+    ExactDecisionTargetNeutralFairOwnerSet(initialContext):
+      AdequateLeaderRetainedProducerPacketOwnerReady(
+        initialContext,
+        request, node, cutoffOrdinal, sourceRank,
+        target, leaderContext, leader, leaderView,
+        subject, known, budget,
+        packet, snapshot, clockValue, prefixRank, owner)
+
+AdequateLeaderRetainedProducerPacketPrefixEntryProvider(initialContext) ==
+  \A request \in AsyncProducerIngressRequests,
+     node \in ValidatorIds,
+     cutoffOrdinal \in Nat,
+     sourceRank \in Nat,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     subject \in Subjects,
+     known \in
+       SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+         target, leaderContext, leader, leaderView, subject),
+     budget \in Nat:
+    /\ AdequateLeaderRetainedProducerEpisodeAtRank(
+         request, node, cutoffOrdinal, sourceRank,
+         target, leaderContext, leader, leaderView,
+         subject, known, budget)
+    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+      => \/ AdequateLeaderRetainedProducerExactRankGoal(
+               request, node, cutoffOrdinal, sourceRank, target)
+         \/ \E packet \in AsyncPacketSet,
+              snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+              clockValue \in Nat,
+              prefixRank
+                \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+              /\ snapshot =
+                   ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
+              /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                   initialContext,
+                   request, node, cutoffOrdinal, sourceRank,
+                   target, leaderContext, leader, leaderView,
+                   subject, known, budget,
+                   packet, snapshot, clockValue, prefixRank)
+
+AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(initialContext) ==
+  \A request \in AsyncProducerIngressRequests,
+     node \in ValidatorIds,
+     cutoffOrdinal \in Nat,
+     sourceRank \in Nat,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     subject \in Subjects,
+     known \in
+       SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+         target, leaderContext, leader, leaderView, subject),
+     budget \in Nat,
+     packet \in AsyncPacketSet,
+     snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+     clockValue \in Nat,
+     prefixRank \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+    AdequateLeaderRetainedProducerPacketPrefixAtRank(
+      initialContext,
+      request, node, cutoffOrdinal, sourceRank,
+      target, leaderContext, leader, leaderView,
+      subject, known, budget,
+      packet, snapshot, clockValue, prefixRank)
+      => AdequateLeaderRetainedProducerPacketOwnerReady(
+           initialContext,
+           request, node, cutoffOrdinal, sourceRank,
+           target, leaderContext, leader, leaderView,
+           subject, known, budget,
+           packet, snapshot, clockValue, prefixRank,
+           AdequateLeaderRetainedProducerSelectedPacketOwner(
+             initialContext,
+             request, node, cutoffOrdinal, sourceRank,
+             target, leaderContext, leader, leaderView,
+             subject, known, budget,
+             packet, snapshot, clockValue, prefixRank))
+
+AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
+    initialContext) ==
+  \A request \in AsyncProducerIngressRequests,
+     node \in ValidatorIds,
+     cutoffOrdinal \in Nat,
+     sourceRank \in Nat,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     subject \in Subjects,
+     known \in
+       SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+         target, leaderContext, leader, leaderView, subject),
+     budget \in Nat,
+     packet \in AsyncPacketSet,
+     snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+     clockValue \in Nat,
+     prefixRank \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+    LET owner ==
+          AdequateLeaderRetainedProducerSelectedPacketOwner(
+            initialContext,
+            request, node, cutoffOrdinal, sourceRank,
+            target, leaderContext, leader, leaderView,
+            subject, known, budget,
+            packet, snapshot, clockValue, prefixRank)
+    IN /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
+             initialContext,
+             request, node, cutoffOrdinal, sourceRank,
+             target, leaderContext, leader, leaderView,
+             subject, known, budget,
+             packet, snapshot, clockValue, prefixRank)
+       /\ [AsyncNext]_AsyncAllVars
+       => \/ (AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                initialContext,
+                request, node, cutoffOrdinal, sourceRank,
+                target, leaderContext, leader, leaderView,
+                subject, known, budget,
+                packet, snapshot, clockValue, prefixRank))'
+          \/ /\ (AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                   initialContext,
+                   request, node, cutoffOrdinal, sourceRank,
+                   target, leaderContext, leader, leaderView,
+                   subject, known, budget,
+                   packet, snapshot, clockValue, prefixRank))'
+             /\ (AdequateLeaderRetainedProducerSelectedPacketOwner(
+                   initialContext,
+                   request, node, cutoffOrdinal, sourceRank,
+                   target, leaderContext, leader, leaderView,
+                   subject, known, budget,
+                   packet, snapshot, clockValue, prefixRank))'
+                  = owner
+             /\ ~<<ExactDecisionTargetNeutralFairAction(owner)>>_AsyncAllVars
+
+AdequateLeaderRetainedProducerPacketActionProviderProperty(
+    specification, initialContext) ==
+  /\ initialContext \in ContextRecords
+  /\ (specification
+        => [](/\ AdequateLeaderRetainedProducerPacketPrefixEntryProvider(
+                     initialContext)
+              /\ AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(
+                   initialContext)
+              /\ AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
+                   initialContext)))
+
+THEOREM AdequateLeaderRetainedProducerPacketFactsSupplyActionProviders ==
+  \A initialContext \in ContextRecords:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ PostGstReplayQuarantineExcluded
+      => /\ AdequateLeaderRetainedProducerPacketPrefixEntryProvider(
+               initialContext)
+         /\ AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(
+               initialContext)
+         /\ AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
+               initialContext)
+BY AdequateLeaderRetainedProducerSourceHasActualPacketWitness,
+   AdequateLeaderRetainedProducerExactAdmissionLowersCompositeRank,
+   AdequateLeaderRetainedProducerPacketPrefixRankIsInCarrier,
+   AdequateLeaderRetainedProducerAdmissionUsesCapturedPhysicalCut,
+   AdequateLeaderRetainedProducerSameClockCannotRefreshPhysicalCut,
+   ExactDecisionTargetNeutralSnapshotIsFinite,
+   ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
+   ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
+   ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish,
+   ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
+   HistoricalDiscoveryFixedClockBlockerCharacterization,
+   HistoricalDiscoveryFixedClockLexStepStrictlyDescends,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
+   HistoricalDiscoverySelectedNonOverdueShadowStrictlyDescends,
+   HistoricalDiscoveryLowerCandidateInsertionReselectsLower,
+   HistoricalDiscoveryLowerServeInsertionReselectsLower,
+   HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
+   HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
+   HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   AsyncTickEnabledHasConcreteSuccessor,
+   OverdueResponsivePacketEnablesConcreteProgress,
+   DueNodeServiceEnablesConcreteGateProgress,
+   DueIoServiceEnablesConcreteLocalProgress,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   IsaT(18000)
+   DEF AdequateLeaderRetainedProducerPacketPrefixEntryProvider,
+       AdequateLeaderRetainedProducerPacketConcreteOwnerProvider,
+       AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider,
+       AdequateLeaderRetainedProducerPacketOwnerReady,
+       AdequateLeaderRetainedProducerSelectedPacketOwner,
+       AdequateLeaderRetainedProducerPacketPrefixAtRank,
+       AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal,
+       AdequateLeaderRetainedProducerPacketPrefixSnapshotCarry,
+       AdequateLeaderRetainedProducerPacketPrefixRank,
+       AdequateLeaderRetainedProducerPacketClockDebt,
+       AdequateLeaderRetainedProducerPacketWitnessSet,
+       AdequateLeaderRetainedProducerSelectedPacket,
+       AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+       ExactDecisionTargetNeutralFairOwnerSet,
+       ExactDecisionTargetNeutralFairAction,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
+       AsyncNext, AsyncAllVars
+
+THEOREM AdequateLeaderRetainedProducerPacketFactsSupplyPrefixEntry ==
+  \A initialContext \in ContextRecords:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ PostGstReplayQuarantineExcluded
+      => AdequateLeaderRetainedProducerPacketPrefixEntryProvider(
+           initialContext)
+BY AdequateLeaderRetainedProducerPacketFactsSupplyActionProviders
+
+THEOREM AdequateLeaderRetainedProducerPacketFactsSupplyConcreteOwner ==
+  \A initialContext \in ContextRecords:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ PostGstReplayQuarantineExcluded
+      => AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(
+           initialContext)
+BY AdequateLeaderRetainedProducerPacketFactsSupplyActionProviders
+
+THEOREM AdequateLeaderRetainedProducerPacketFactsSupplySelectedOwnerStep ==
+  \A initialContext \in ContextRecords:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ PostGstReplayQuarantineExcluded
+      => AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
+           initialContext)
+BY AdequateLeaderRetainedProducerPacketFactsSupplyActionProviders
+
+THEOREM AsyncLiveProvidesAdequateLeaderRetainedProducerPacketActionProviders ==
+  \A initialContext:
+    AdequateLeaderRetainedProducerPacketActionProviderProperty(
+      AsyncLiveSpecAt(initialContext), initialContext)
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+   AsyncSpecAlwaysExcludesPostGstReplayQuarantine,
+   AdequateLeaderRetainedProducerPacketFactsSupplyActionProviders,
+   PTL
+   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty
+
+AdequateLeaderRetainedProducerExactOwnerFairnessProperty(
+    specification, initialContext) ==
+  /\ initialContext \in ContextRecords
+  /\ (specification
+        => \A owner \in
+              ExactDecisionTargetNeutralFairOwnerSet(initialContext):
+             WF_AsyncAllVars(ExactDecisionTargetNeutralFairAction(owner)))
+
+THEOREM AsyncLiveProvidesAdequateLeaderRetainedProducerExactOwnerFairness ==
+  \A initialContext:
+    AdequateLeaderRetainedProducerExactOwnerFairnessProperty(
+      AsyncLiveSpecAt(initialContext), initialContext)
+BY AsyncLiveSpecProjectsAsyncSpec,
+   ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness, PTL
+   DEF AdequateLeaderRetainedProducerExactOwnerFairnessProperty
+
+AdequateLeaderRetainedProducerPacketPrefixRankStepProperty(
+    specification, initialContext) ==
+  /\ initialContext \in ContextRecords
+  /\ (specification
+    => \A request \in AsyncProducerIngressRequests,
+          node \in ValidatorIds,
+          cutoffOrdinal \in Nat,
+          sourceRank \in Nat,
+          target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          known \in
+            SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject),
+          budget \in Nat,
+          packet \in AsyncPacketSet,
+          snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+          clockValue \in Nat,
+          prefixRank
+            \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+         AdequateLeaderRetainedProducerPacketPrefixAtRank(
+           initialContext,
+           request, node, cutoffOrdinal, sourceRank,
+           target, leaderContext, leader, leaderView,
+           subject, known, budget,
+           packet, snapshot, clockValue, prefixRank)
+           ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                initialContext,
+                request, node, cutoffOrdinal, sourceRank,
+                target, leaderContext, leader, leaderView,
+                subject, known, budget,
+                packet, snapshot, clockValue, prefixRank))
+
+THEOREM AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep ==
+  \A specification, initialContext:
+    /\ AdequateLeaderRetainedProducerPacketActionProviderProperty(
+         specification, initialContext)
+    /\ AdequateLeaderRetainedProducerExactOwnerFairnessProperty(
+         specification, initialContext)
+      => AdequateLeaderRetainedProducerPacketPrefixRankStepProperty(
+           specification, initialContext)
+BY WF1, PTL
+   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
+       AdequateLeaderRetainedProducerExactOwnerFairnessProperty,
+       AdequateLeaderRetainedProducerPacketConcreteOwnerProvider,
+       AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider,
+       AdequateLeaderRetainedProducerPacketPrefixRankStepProperty
+
+AdequateLeaderRetainedProducerActualPacketStepProperty(specification) ==
+  specification
+    => \A request \in AsyncProducerIngressRequests,
+          node \in ValidatorIds,
+          cutoffOrdinal \in Nat,
+          sourceRank \in Nat,
+          target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          known \in
+            SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject),
+          budget \in Nat:
+         AdequateLeaderRetainedProducerEpisodeAtRank(
+           request, node, cutoffOrdinal, sourceRank,
+           target, leaderContext, leader, leaderView,
+           subject, known, budget)
+           ~> AdequateLeaderRetainedProducerRankOrKnownAdvanceGoal(
+                request, node, cutoffOrdinal, sourceRank,
+                target, leaderContext, leader, leaderView,
+                subject, known, budget)
+
+THEOREM AdequateLeaderRetainedProducerPacketRankClosesNonDescentStep ==
+  \A specification, initialContext:
+    /\ (specification
+          => [](AsyncCurrentResponsiveVoters
+                  = AsyncVotersAt(initialContext)))
+    /\ AdequateLeaderRetainedProducerPacketActionProviderProperty(
+         specification, initialContext)
+    /\ AdequateLeaderRetainedProducerPacketPrefixRankStepProperty(
+         specification, initialContext)
+      => AdequateLeaderRetainedProducerActualPacketStepProperty(
+           specification)
+BY AdequateLeaderRetainedProducerPacketPrefixRankOrderingIsWellFounded,
+   WellFoundedLeadsTo, PTL
+   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
+       AdequateLeaderRetainedProducerPacketPrefixEntryProvider,
+       AdequateLeaderRetainedProducerPacketPrefixRankStepProperty,
+       AdequateLeaderRetainedProducerActualPacketStepProperty,
+       AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal,
+       AdequateLeaderRetainedProducerPacketPrefixSnapshotCarry
+
+THEOREM AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep ==
+  \A initialContext:
+    AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesAdequateLeaderRetainedProducerPacketActionProviders,
+   AsyncLiveProvidesAdequateLeaderRetainedProducerExactOwnerFairness,
+   AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep,
+   AdequateLeaderRetainedProducerPacketRankClosesNonDescentStep,
+   PTL
+   DEF AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty,
+       AdequateLeaderRetainedProducerRankOrKnownAdvanceGoal,
+       AdequateLeaderRetainedProducerActualPacketStepProperty,
+       AsyncLiveSpecAt
+
 \* Concrete global fixed-clock ownership.  This projection deliberately ends
 \* at this pipeline's selected rank cell, not at an Exact-Decision residual.
 \* The target-neutral lemmas below are used only for their concrete blocker
-\* partition, immutable predecessor snapshot, ordinal consumption, and exact
+\* partition, immutable predecessor snapshot, retained-rank descent, and exact
 \* fair-action classifications.  Candidate/pre-candidate target state is
 \* carried by the local route/cut lemmas, so an unrelated exact-Decision exit
 \* is never accepted as this provider's goal.
@@ -6427,23 +7058,25 @@ THEOREM AdequateLeaderFixedGlobalBlockerFactsSupplyProviders ==
        /\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider
        /\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider
        /\ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider
-       /\ AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider
-       /\ AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider
+       /\ AdequateLeaderFixedGlobalBlockerRetainedEpisodeCarryProvider
+       /\ AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider
 BY HistoricalDiscoveryFixedClockBlockerCharacterization,
    ExactDecisionTargetNeutralSnapshotIsFinite,
-   ExactDecisionTargetNeutralEpisodeBudgetIsNatural,
-   ExactDecisionTargetNeutralConcreteRankInCarrier,
+   ExactDecisionTargetNeutralEpisodeRankIsInCarrier,
+   ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
    ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
-   ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal,
-   ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish,
+   ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier,
+   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
    ExactDecisionTargetNeutralRankCellHasConcreteFairOwner,
    ExactDecisionTargetNeutralRankCellStepIsSafe,
    ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
-   ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal,
+   ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
+   ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal,
    OverdueResponsivePacketEnablesConcreteProgress,
    DueNodeServiceEnablesConcreteGateProgress,
    ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock,
@@ -6471,22 +7104,23 @@ BY HistoricalDiscoveryFixedClockBlockerCharacterization,
        AdequateLeaderFixedGlobalProducerEpisodeEntryProvider,
        AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider,
        AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider,
-       AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider,
-       AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider,
+       AdequateLeaderFixedGlobalBlockerRetainedEpisodeCarryProvider,
+       AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider,
        AdequateLeaderFixedConfiguredGlobalBlockerSnapshot,
+       AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
        AdequateLeaderFixedGlobalBlockerSnapshotActive,
        AdequateLeaderFixedGlobalBlockerAtRank,
        AdequateLeaderFixedGlobalBlockerPending,
        AdequateLeaderFixedGlobalBlockerStrictRankGoal,
        AdequateLeaderFixedGlobalBlockerSelectionGoal,
-       AdequateLeaderFixedGlobalProducerEpisodeAtBudget,
+       AdequateLeaderFixedGlobalProducerEpisodeAtRank,
        AdequateLeaderFixedGlobalProducerEpisodeOutcome,
        AdequateLeaderFixedGlobalBlockerOwnerReady,
        AdequateLeaderFixedSelectedGlobalBlockerOwner,
-       AdequateLeaderFixedGlobalBlockerProducerEpisodeBudget,
-       AdequateLeaderFixedGlobalBlockerProducerEpisodeTokens,
-       AdequateLeaderFixedGlobalBlockerCandidateOrdinalTokens,
-       AdequateLeaderFixedGlobalBlockerServeOrdinalTokens,
+       AdequateLeaderFixedGlobalProducerEpisodeRank,
+       AdequateLeaderFixedGlobalProducerEpisodeRankCarrier,
+       AdequateLeaderFixedGlobalProducerEpisodeRankOrdering,
+       AdequateLeaderFixedGlobalProducerEpisodeBottom,
        AdequateLeaderFixedConcreteGlobalBlockerRank,
        AdequateLeaderFixedGlobalBlockerProducerPrefix,
        AdequateLeaderFixedGlobalBlockerRankCarrier,
@@ -6524,6 +7158,8 @@ BY AsyncLiveSpecProjectsAsyncSpec,
    AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
    AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    AsyncSpecAlwaysExcludesPostGstReplayQuarantine,
+   AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep,
+   AdequateLeaderFiniteRetainedProducerBudgetClosesNonDescentEpisode,
    AdequateLeaderFixedGlobalBlockerFactsSupplyProviders,
    PTL
    DEF AdequateLeaderFixedGlobalBlockerProviderProperty
@@ -6655,6 +7291,10 @@ AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle(
        specification)
   /\ AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
        specification)
+  /\ AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty(
+       specification)
+  /\ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty(
+       specification)
   /\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification)
   /\ AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty(
        specification)
@@ -6705,6 +7345,8 @@ BY AsyncLiveSpecSuppliesAdequateLeaderConfiguredBudget,
    AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry,
    AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep,
    AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep,
+   AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep,
+   AdequateLeaderFiniteRetainedProducerBudgetClosesNonDescentEpisode,
    AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders,
    AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep,
    AsyncLiveProvidesAdequateLeaderAuthorityDeadlineDecisionRetention,
@@ -6716,6 +7358,8 @@ THEOREM AdequateLeaderAuthorityDeadlineFreshSelfBundleClosesPrimitiveRanks ==
     AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle(
       specification)
       => /\ AdequateLeaderFixedSelectedOwnerServiceProperty(specification)
+         /\ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty(
+              specification)
          /\ AdequateLeaderFixedPreCandidateEntryServiceProperty(specification)
          /\ AdequateLeaderFixedPreAdmissionSubjectReplacementClosureProperty(
               specification)
@@ -6733,6 +7377,7 @@ THEOREM AdequateLeaderAuthorityDeadlineFreshSelfBundleClosesPrimitiveRanks ==
          /\ AdequateLeaderAuthorityDeadlineNoPrematureExitSafetyProperty(
               specification)
 BY AdequateLeaderFixedPipelineOriginEpisodeStepClosesNonDescentEpisode,
+   AdequateLeaderFiniteRetainedProducerBudgetClosesNonDescentEpisode,
    AdequateLeaderFixedPreAdmissionBudgetClosesWithoutOrdinalRecreation,
    AdequateLeaderFixedSubjectReplacementServicesSupplyBudgetDescent,
    AdequateLeaderFixedSubjectReplacementBudgetDescentClosesEpisode,

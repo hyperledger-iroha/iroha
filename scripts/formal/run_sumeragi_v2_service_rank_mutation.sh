@@ -71,6 +71,43 @@ assert_explored_counterexample() {
   sumeragi_v2_tlc_assert_terminal "$label" "$log"
 }
 
+run_registered_case() {
+  local label="$1"
+  local model="$2"
+  local config="$3"
+  local expected_status="$4"
+  local expected_diagnostic="${5:-}"
+  local log="$run_dir/${label}.log"
+  local actual_status
+  set +e
+  (
+    cd "$FORMAL_DIR"
+    "${common[@]}" -metadir "$run_dir/$label" \
+      -config "$config" "$model"
+  ) >"$log" 2>&1
+  actual_status=$?
+  set -e
+  [[ "$actual_status" -eq "$expected_status" ]] || {
+    echo "${label} returned TLC status ${actual_status}, expected ${expected_status}" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    [[ -z "$expected_diagnostic" ]] || {
+      echo "${label} repaired case declared a failure diagnostic" >&2
+      exit 1
+    }
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    [[ -n "$expected_diagnostic" ]] || {
+      echo "${label} failing case omitted its exact primary diagnostic" >&2
+      exit 1
+    }
+    assert_explored_counterexample "$label" "$log" "$expected_diagnostic"
+  fi
+  echo "[tlc] ${label}: expected status ${expected_status}"
+}
+
 set +e
 (
   cd "$FORMAL_DIR"
@@ -942,3 +979,33 @@ done
 
 echo "[tlc] field-only locked Commit selection reproduces the two-owner height alias"
 echo "[tlc] canonical full-Vote selection exhaustively preserves empty/singleton readiness"
+
+run_registered_case busy-consumer-fixed \
+  SumeragiV2BusyConsumerMutation.tla \
+  busy_consumer_fixed.cfg 0
+run_registered_case busy-consumer-stale-mutation \
+  SumeragiV2BusyConsumerMutation.tla \
+  busy_consumer_stale.cfg 12 \
+  "Error: Invariant CountedBusyWitnessIsExecutable is violated."
+
+run_registered_case deferred-busy-cursor-cyclic \
+  SumeragiV2DeferredBusyCursorMutation.tla \
+  deferred_busy_cursor_cyclic.cfg 0
+run_registered_case deferred-busy-cursor-strict-mutation \
+  SumeragiV2DeferredBusyCursorMutation.tla \
+  deferred_busy_cursor_strict_bug.cfg 13 \
+  "Error: Temporal properties were violated."
+
+run_registered_case deferred-cursor-effect-fixed \
+  SumeragiV2DeferredCursorEffectMutation.tla \
+  deferred_cursor_completion_progress_fixed.cfg 0
+run_registered_case deferred-cursor-effect-generation-mutation \
+  SumeragiV2DeferredCursorEffectMutation.tla \
+  deferred_cursor_completion_progress_bug.cfg 12 \
+  "Error: Invariant GenerationEraProgressQueueEffect is violated."
+run_registered_case deferred-cursor-effect-rank-mutation \
+  SumeragiV2DeferredCursorEffectMutation.tla \
+  deferred_busy_rank_nonregression_bug.cfg 12 \
+  "Error: Invariant RetiredDeferredRankNonregression is violated."
+
+echo "[tlc] registered Busy-consumer and deferred-cursor mutation pairs passed"

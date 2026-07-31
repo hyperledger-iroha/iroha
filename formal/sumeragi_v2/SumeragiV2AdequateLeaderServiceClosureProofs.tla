@@ -4454,10 +4454,12 @@ unbound reordered Chunk has no derivable lifecycle record and therefore uses
 the zero lifecycle prefix; its finite, coalesced physical episode is bounded
 by `AsyncProoflessChunkEpisodeDebtSet`.
 
-The packet component reuses the target-neutral fixed-clock rank.  Atomic Admit
-removes the exact due packet in the same transition that installs the Ingress
-owner, so the ordinary transport component strictly descends.  Every fair
-owner remains individually quantified.
+The packet component reuses the snapshot-scoped target-neutral fixed-clock
+rank.  The same certificate records the frozen past scheduler cut and the
+proofless/exact-occurrence causal producer rank for the packet recipient.
+Atomic Admit removes the exact due packet in the same transition that installs
+the Ingress owner, so the ordinary transport component strictly descends.
+Every fair owner remains individually quantified.
 ***************************************************************************)
 LeaderWirePhysicalLifecycleOrdinalRank(item) ==
   IF /\ AsyncLeaderWireLifecycleExactActive(item)
@@ -4493,8 +4495,13 @@ LeaderWirePhysicalIngressDependencyOrdering ==
     LeaderWirePhysicalLifecycleOrdinalCarrier,
     ExactDecisionRequestIngressRankCarrier)
 
-LeaderWirePhysicalPacketDependencyRank(packet) ==
-  ExactDecisionTargetNeutralPacketDependencyRank(packet)
+LeaderWirePhysicalPacketDependencyRank(snapshot, packet) ==
+  ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+    snapshot, packet)
+
+LeaderWirePhysicalCausalProducerRank(snapshot, item) ==
+  ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+    snapshot, item.envelope.recipient)
 
 LeaderWirePhysicalLifecycleStageRank(packet, item) ==
   IF LeaderWireRunnerAdmissionHandoff(item)
@@ -4509,17 +4516,63 @@ LeaderWirePhysicalLifecycleStageCarrier == 0..2
 LeaderWirePhysicalLifecycleStageOrdering ==
   OpToRel(<, LeaderWirePhysicalLifecycleStageCarrier)
 
-LeaderWirePhysicalDependencyCertificate(packet) ==
+LeaderWirePhysicalDependencyCertificate(snapshot, packet) ==
   LET item == packet.item
-      snapshot ==
-        ExactDecisionTargetNeutralFixedClockSnapshot(asyncNow)
   IN [stage |->
         LeaderWirePhysicalLifecycleStageRank(packet, item),
-      packetRank |-> LeaderWirePhysicalPacketDependencyRank(packet),
+      packetRank |->
+        LeaderWirePhysicalPacketDependencyRank(snapshot, packet),
       ingressRank |-> LeaderWirePhysicalIngressDependencyRank(item),
       predecessors |-> snapshot.predecessors,
+      schedulerCuts |-> snapshot.schedulerCuts,
+      causalProducerRank |->
+        LeaderWirePhysicalCausalProducerRank(snapshot, item),
+      causalProducerCarrier |->
+        ExactDecisionTargetNeutralComposedCausalEpisodeCarrier,
       producerBudget |->
         ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)]
+
+\* The snapshot argument is a rigid temporal parameter.  This frontier never
+\* rebuilds the cut from a later asyncNow: entry chooses the current snapshot
+\* once, and every later rank/certificate projection reuses that same record.
+LeaderWirePhysicalFrozenCertificateFrontier(snapshot, packet) ==
+  LET certificate ==
+        LeaderWirePhysicalDependencyCertificate(snapshot, packet)
+  IN /\ snapshot.clock \in Nat
+     /\ asyncNow = snapshot.clock
+     /\ gst
+     /\ ExactDecisionTargetNeutralSnapshotActive(
+          snapshot, snapshot.clock)
+     /\ packet \in snapshot.packets
+     /\ packet \in OverdueResponsivePackets
+     /\ \/ LeaderWireCurrentContextWitnessIdentity(packet.item)
+        \/ LeaderWireProductiveTransportIdentity(packet.item)
+     /\ certificate.predecessors = snapshot.predecessors
+     /\ certificate.schedulerCuts = snapshot.schedulerCuts
+     /\ certificate.packetRank =
+          LeaderWirePhysicalPacketDependencyRank(snapshot, packet)
+     /\ certificate.causalProducerRank =
+          LeaderWirePhysicalCausalProducerRank(snapshot, packet.item)
+     /\ certificate.producerBudget =
+          ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)
+
+AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty(
+    specification) ==
+  specification
+    => /\ \A snapshot:
+             \A packet \in AsyncPacketSet:
+               (/\ LeaderWirePhysicalFrozenCertificateFrontier(
+                      snapshot, packet)
+                /\ LeaderWireCurrentContextWitnessIdentity(packet.item))
+                 ~> (ResponsiveNodesDecide
+                      \/ LeaderWireTransportResolution(packet))
+       /\ \A snapshot:
+             \A packet \in AsyncPacketSet:
+               (/\ LeaderWirePhysicalFrozenCertificateFrontier(
+                      snapshot, packet)
+                /\ LeaderWireProductiveTransportIdentity(packet.item))
+                 ~> (ResponsiveNodesDecide
+                      \/ LeaderWireTransportHandoff(packet))
 
 AdequateLeaderWirePhysicalConvergenceProperty(specification) ==
   specification
@@ -4613,6 +4666,73 @@ BY LeaderWirePhysicalLifecycleOrdinalRankIsInCarrier,
        IngressSourceServiceRank, IngressResourceSource,
        IngressLane, SequenceSet
 
+THEOREM LeaderWirePhysicalPacketDependencyRankIsSnapshotScoped ==
+  \A snapshot:
+    \A packet \in OverdueResponsivePackets:
+      /\ AsyncStrongTypeInvariant
+      /\ snapshot.candidateIdentities
+           \subseteq ExactDecisionTargetNeutralCandidateOwnerIdentitySet
+      /\ snapshot.candidateRoots
+           \subseteq ExactDecisionTargetNeutralCausalRootSet
+      /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+      /\ snapshot.serveIdentities
+           \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
+      => LeaderWirePhysicalPacketDependencyRank(snapshot, packet)
+           \in HistoricalDiscoveryPacketDependencyCarrier
+BY ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier
+   DEF LeaderWirePhysicalPacketDependencyRank
+
+THEOREM LeaderWirePhysicalResidualCapturesFrozenCertificate ==
+  \A packet \in AsyncPacketSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ gst
+    /\ packet \in OverdueResponsivePackets
+    /\ \/ LeaderWireCurrentContextWitnessIdentity(packet.item)
+       \/ LeaderWireProductiveTransportIdentity(packet.item)
+      => \E snapshot:
+           /\ snapshot =
+                ExactDecisionTargetNeutralFixedClockSnapshot(asyncNow)
+           /\ LeaderWirePhysicalFrozenCertificateFrontier(
+                snapshot, packet)
+BY ExactDecisionTargetNeutralSnapshotIsFinite,
+   StrongTypeHasFiniteHistoricalDiscoveryCohorts,
+   StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
+   IsaT(2400)
+   DEF LeaderWirePhysicalFrozenCertificateFrontier,
+       LeaderWirePhysicalDependencyCertificate,
+       LeaderWirePhysicalPacketDependencyRank,
+       LeaderWirePhysicalCausalProducerRank,
+       ExactDecisionTargetNeutralFixedClockSnapshot,
+       ExactDecisionTargetNeutralSnapshotActive,
+       ExactDecisionTargetNeutralCurrentPastSchedulerCut,
+       ExactDecisionTargetNeutralCurrentPastSchedulerCuts,
+       ExactDecisionTargetNeutralSchedulerCutToken,
+       ExactDecisionTargetNeutralSchedulerCutTokens,
+       ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot,
+       ExactDecisionTargetNeutralRetainedCausalRootsForSnapshot,
+       ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered,
+       ExactDecisionTargetNeutralFrozenServeLifecycleCovered,
+       ExactDecisionTargetNeutralProducerEpisodeBudget,
+       OverdueResponsivePackets
+
+THEOREM LeaderWirePhysicalFrozenCertificateRetainsPastCut ==
+  \A snapshot, packet:
+    /\ LeaderWirePhysicalFrozenCertificateFrontier(snapshot, packet)
+    /\ [AsyncNext]_AsyncAllVars
+      => /\ ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot)'
+                = ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot)
+         /\ \A node \in Responsive:
+              snapshot.schedulerCuts[node]
+                < AsyncNextCandidateLifecycleOrdinal(node)'
+BY ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant,
+   ExactDecisionTargetNeutralFrozenPastCutsRemainPast,
+   Isa
+   DEF LeaderWirePhysicalFrozenCertificateFrontier,
+       ExactDecisionTargetNeutralSnapshotActive,
+       AsyncAllVars
+
 THEOREM LeaderWirePacketAdmissionPreservesExactResolution ==
   \A packet \in AsyncPacketSet:
     LET item == packet.item
@@ -4677,13 +4797,14 @@ Concrete physical closure.  The fixed-clock packet rank consumes the finite
 due prefix and the individually fair atomic admission owners.  The exact
 ingress product then consumes the immutable leader-wire predecessor snapshot
 before its ordinary mode/capacity/selector/lane/source/runner tail.  Candidate
-and Serve replacement use the separate finite producer-ordinal episode.
-Proofless Chunk occurrences use their finite/coalesced episode bound and
-terminate in the route-neutral receipt tombstone.
+and Serve replacement use the snapshot-scoped composed causal episode rank;
+its proofless outer coordinate is a finite/coalesced non-descent episode, not
+progress by itself.  Proofless Chunk occurrences terminate in the
+route-neutral receipt tombstone.
 ***************************************************************************)
-THEOREM AsyncSpecProvidesAdequateLeaderWirePhysicalConvergence ==
+THEOREM AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence ==
   \A initialContext:
-    AdequateLeaderWirePhysicalConvergenceProperty(
+    AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty(
       AsyncSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
@@ -4692,7 +4813,42 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded,
+   ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
+   ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal,
+   ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
+   LeaderWirePhysicalPacketDependencyRankIsSnapshotScoped,
+   LeaderWirePhysicalFrozenCertificateRetainsPastCut,
+   AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced,
+   AsyncHeldChunkReceiptTombstonesExactProducerEpisode,
+   LeaderWirePacketAdmissionPreservesExactResolution,
+   PTL, IsaT(9000)
+   DEF AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty,
+       LeaderWirePhysicalFrozenCertificateFrontier,
+       LeaderWirePhysicalDependencyCertificate,
+       LeaderWirePhysicalLifecycleStageRank,
+       LeaderWirePhysicalPacketDependencyRank,
+       LeaderWirePhysicalCausalProducerRank,
+       LeaderWireTransportResolution,
+       LeaderWireTransportOccurrenceAbsent,
+       LeaderWireTransportHandoff,
+       LeaderWireIngressOwned, LeaderWireCandidateOwned,
+       LeaderWireConsumerMilestone,
+       AsyncProoflessChunkEpisodeDebtSet,
+       AsyncSpecAt, AsyncFairnessAt, AsyncAllVars
+
+THEOREM AsyncSpecProvidesAdequateLeaderWirePhysicalConvergence ==
+  \A initialContext:
+    AdequateLeaderWirePhysicalConvergenceProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   ExactDecisionAsyncSpecAlwaysCandidateTombstones,
+   LeaderWirePhysicalResidualCapturesFrozenCertificate,
+   AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence,
    ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
    ExactDecisionRequestIngressRankOrderingIsWellFounded,
    LeaderWirePhysicalLifecycleOrdinalOrderingIsWellFounded,
@@ -4707,9 +4863,12 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    LeaderWireIngressDrainPreservesExactHandoff,
    PTL, IsaT(9000)
    DEF AdequateLeaderWirePhysicalConvergenceProperty,
+       AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty,
+       LeaderWirePhysicalFrozenCertificateFrontier,
        LeaderWirePhysicalDependencyCertificate,
        LeaderWirePhysicalLifecycleStageRank,
        LeaderWirePhysicalPacketDependencyRank,
+       LeaderWirePhysicalCausalProducerRank,
        LeaderWirePhysicalIngressDependencyRank,
        LeaderWirePhysicalLifecycleOrdinalRank,
        LeaderWireTransportResolution,
@@ -4720,6 +4879,13 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        LeaderWireConsumerMilestone,
        AsyncProoflessChunkEpisodeDebtSet,
        AsyncSpecAt, AsyncFairnessAt, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence ==
+  \A initialContext:
+    AdequateLeaderWirePhysicalFrozenCertificateConvergenceProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence
+   DEF AsyncLiveSpecAt
 
 THEOREM AsyncLiveProvidesAdequateLeaderWirePhysicalConvergence ==
   \A initialContext:

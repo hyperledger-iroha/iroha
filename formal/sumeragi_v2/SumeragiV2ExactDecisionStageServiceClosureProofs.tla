@@ -1136,7 +1136,8 @@ THEOREM AsyncBracketStepRetainsExactDecisionRecord ==
     => ExactDecisionRecord(node, qc)'
 BY AsyncStepRefinementObligation,
    CoreBracketStepRetainsExactDecisionRecord, Isa
-   DEF AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars, vars
+   DEF AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncProducerVars, vars
 
 ExactDecisionRouteNeutralResponseClaimOwned(
     node, qc, archive, request, response) ==
@@ -1615,6 +1616,7 @@ BY AsyncStrongTypeProjectsAsyncType,
        DueSourcePackets, AsyncNonRunnerOuterFrame,
        AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
        AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncProducerVars,
        AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
        LeaveCausalQueues, vars
 
@@ -1673,6 +1675,7 @@ BY ExpandENABLED, Isa
        DueSourcePackets, AsyncNonRunnerOuterFrame,
        AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
        AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncProducerVars,
        AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
        LeaveCausalQueues, vars
 
@@ -2429,7 +2432,8 @@ BY ExactDecisionResponseNonPhysicalNonClaimDueHeadCanLeaveTransport,
        DueSourcePackets,
        AsyncNonRunnerOuterFrame, AsyncNonCrashOuterFrame,
        AsyncCoreOuterFrame, AsyncAllVars, AsyncSchedulerVars,
-       AsyncRecoveryVars, AsyncIoVars, AsyncDeferredVars,
+       AsyncRecoveryVars, AsyncProducerVars,
+       AsyncIoVars, AsyncDeferredVars,
        AsyncLocalAdmissionVars, LeaveCausalQueues, vars
 
 THEOREM ExactDecisionResponseRemainingHeadGateIsDeadlineOrShadow ==
@@ -2976,7 +2980,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(300)
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn,
        RunHistoricalServer, RunHistoricalRecoveryNode,
-       AsyncAllVars, AsyncSchedulerVars
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars
 
 THEOREM ExactDecisionPhysicalCompletionClockPreservesRank ==
   \A node, qc, archive, request, response, packet:
@@ -2997,7 +3001,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        TransportCompletionOwnerDebt,
        TransportCompletionOwnerIndices,
        IngressLane, AsyncTick, AsyncNonClockVars,
-       AsyncAllVars, AsyncSchedulerVars
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars
 
 THEOREM ExactDecisionPhysicalCompletionIoPreservesRank ==
   \A node, qc, archive, request, response, packet:
@@ -3029,7 +3033,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(300)
        ServiceIoWorkerWork, EnqueueIoLocalControl,
        EnqueueHistoricalRecoveryIoLocalControl,
        EnqueueIoLocalControlWork,
-       AsyncAllVars, AsyncSchedulerVars
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars
 
 THEOREM ExactDecisionPhysicalCompletionOuterPrefixPreservesRank ==
   \A node, qc, archive, request, response, packet:
@@ -3058,7 +3062,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(300)
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        CommitCertificateDiscoveryStepWork,
-       AsyncAllVars, AsyncSchedulerVars
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars
 
 THEOREM ExactDecisionPhysicalCompletionNetworkOrFaultPreservesRank ==
   \A node, qc, archive, request, response, packet:
@@ -3091,7 +3095,7 @@ BY PositivePhysicalCompletionDebtAdmissionPreservesDebt,
        AsyncNetworkStep, AdmitIngressPacket,
        AsyncFaultStep, PreGstCrash,
        InjectUntrustedTransportCompletion,
-       AsyncAllVars, AsyncSchedulerVars
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars
 
 THEOREM ExactDecisionPhysicalCompletionRunnerStep ==
   \A node, qc, archive, request, response, packet:
@@ -3119,7 +3123,8 @@ PROOF
              DrainableIngressTurnReachRank,
              TransportCompletionOwnerDebt,
              TransportCompletionOwnerIndices,
-             IngressLane, AsyncAllVars, AsyncSchedulerVars
+             IngressLane, AsyncAllVars, AsyncSchedulerVars,
+             AsyncProducerVars
     <2>2. CASE AsyncNext
       <3>1. CASE \E other \in AsyncCurrentResponsiveVoters:
                     RunNode(other)
@@ -3728,7 +3733,8 @@ THEOREM AsyncBracketStepRetainsDurableBodies ==
     => durableBodies \subseteq durableBodies'
 BY AsyncStepRefinementObligation,
    CoreBracketStepRetainsDurableBodies, Isa
-   DEF AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars, vars
+   DEF AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncProducerVars, vars
 
 (***************************************************************************
 Split (a): preservation of the semantic alias.
@@ -5044,7 +5050,8 @@ BY GstHistoricalServerIsEnabled,
        AsyncArchiveServerIds,
        PostGstRunHistoricalServer, RunHistoricalServer,
        DrainHistoricalIngressSelected, PopSelectedIngress,
-       AsyncAllVars, AsyncSchedulerVars, SequenceSet
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars,
+       SequenceSet
 
 (***************************************************************************
 Small exact per-item ingress rank interface.
@@ -5980,7 +5987,7 @@ BY Isa
        ExactDecisionRequestIngressSourcePosition,
        IngressSourceServiceRank,
        ExactDecisionRequestIngressReachRank,
-       AsyncAllVars, AsyncSchedulerVars, vars
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars, vars
 
 THEOREM ExactDecisionRequestIngressLaneOwnsPriorityTicket ==
   \A node, qc, archive, request:
@@ -6446,7 +6453,7 @@ BY IsaT(300)
        ResetNodeSchedulerForRestart,
        DriveResponsiveReplayHead, FinishResponsiveReplay,
        RearmResponsiveRecovery,
-       AsyncAllVars, AsyncSchedulerVars,
+       AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars,
        AsyncLocalAdmissionVars, AsyncIoVars
 
 THEOREM AsyncSpecAlwaysExactDecisionRequestIngressCausalOwedQueue ==
@@ -9488,51 +9495,197 @@ BY AsyncBracketStepRetainsExactDecisionRecord,
        IngressLane, IngressLaneDepth,
        SequenceSet
 
-ExactDecisionTargetNeutralCandidateOwners(packet) ==
+ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate) ==
+  [ownerKind |-> "Candidate",
+   identity |-> AsyncCandidateAdmissionIdentity(candidate)]
+
+ExactDecisionTargetNeutralServeOwnerIdentity(node, job) ==
+  [ownerKind |-> "Serve",
+   identity |-> AsyncIoServeJobIdentity(node, job)]
+
+ExactDecisionTargetNeutralServeRequestOwnerIdentity(node, request) ==
+  [ownerKind |-> "Serve",
+   identity |-> AsyncServeLogicalRequestIdentity(node, request)]
+
+ExactDecisionTargetNeutralCandidateOwnerIdentitySet ==
+  {[ownerKind |-> "Candidate", identity |-> identity]:
+     identity \in AsyncCandidateAdmissionIdentitySet}
+
+ExactDecisionTargetNeutralServeOwnerIdentitySet ==
+  {[ownerKind |-> "Serve", identity |-> identity]:
+     identity \in AsyncServeLogicalRequestIdentities}
+
+ExactDecisionTargetNeutralCausalRoot(node, origin) ==
+  [node |-> node, origin |-> origin]
+
+ExactDecisionTargetNeutralCausalRootSet ==
+  [node: ValidatorIds, origin: AsyncCandidateCausalOriginSet]
+
+ExactDecisionTargetNeutralLiveCandidateCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(
+     candidate.node, candidate.causalOrigin):
+     candidate \in ActiveScheduledCandidates,
+     candidate.node \in Responsive}
+
+ExactDecisionTargetNeutralLifecycleRecordCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(record.node, record.origin):
+     record \in AsyncCandidateLifecycleAdmissions,
+     record.node \in Responsive,
+     ~record.retired}
+
+ExactDecisionTargetNeutralProducerContinuationCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(
+     continuation.node, continuation.causalOrigin):
+     continuation \in AsyncCandidateProducerContinuations,
+     continuation.node \in Responsive,
+     continuation.status \in {"Reserved", "Materialized"}}
+
+ExactDecisionTargetNeutralOrdinaryIngressCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(
+     carrier.node, carrier.origin):
+     carrier
+       \in asyncControlServiceState.ordinaryIngressCarrierEvidence,
+     carrier.node \in Responsive}
+
+ExactDecisionTargetNeutralLeaderWireCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(
+     owner.recipient, owner.causalOrigin):
+     owner \in asyncLeaderWireLifecycles,
+     owner.recipient \in Responsive,
+     AsyncLeaderWireLifecycleActive(owner)}
+
+ExactDecisionTargetNeutralDurableReplayCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(node, origin):
+     node \in Responsive,
+     origin \in AsyncCandidateLifecycleDurableReplayOriginsForNode(node)}
+
+ExactDecisionTargetNeutralTimeoutReservationCausalRoots ==
+  {ExactDecisionTargetNeutralCausalRoot(
+     node, asyncControlServiceState.timeoutLifecycleOrigin[node]):
+     node \in Responsive,
+     AsyncUnmaterializedTimeoutLifecycleReservationIn(
+       asyncControlServiceState, node)}
+
+ExactDecisionTargetNeutralRetainedCandidateCausalRoots ==
+  ExactDecisionTargetNeutralLiveCandidateCausalRoots
+    \cup ExactDecisionTargetNeutralLifecycleRecordCausalRoots
+    \cup ExactDecisionTargetNeutralProducerContinuationCausalRoots
+    \cup ExactDecisionTargetNeutralOrdinaryIngressCausalRoots
+    \cup ExactDecisionTargetNeutralLeaderWireCausalRoots
+    \cup ExactDecisionTargetNeutralDurableReplayCausalRoots
+    \cup ExactDecisionTargetNeutralTimeoutReservationCausalRoots
+
+ExactDecisionTargetNeutralDuePacketCausalRoots(clockValue) ==
+  {ExactDecisionTargetNeutralCausalRoot(
+     packet.item.envelope.recipient,
+     (DeliveryCandidate(packet.item)).causalOrigin):
+     packet \in HistoricalDiscoveryDuePacketsAt(clockValue),
+     packet.item.envelope.recipient \in Responsive}
+
+ExactDecisionTargetNeutralFrozenCausalRoots(clockValue) ==
+  ExactDecisionTargetNeutralRetainedCandidateCausalRoots
+    \cup ExactDecisionTargetNeutralDuePacketCausalRoots(clockValue)
+
+ExactDecisionTargetNeutralCandidateEpisodeUniverse(clockValue) ==
+  {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
+     candidate \in ActiveScheduledCandidates,
+     ExactDecisionTargetNeutralCausalRoot(
+       candidate.node, candidate.causalOrigin)
+       \in ExactDecisionTargetNeutralFrozenCausalRoots(clockValue)}
+
+\* A fixed-clock episode freezes the predecessor of the shared scheduler
+\* high-watermark at every responsive process.  This is a past cut, not a
+\* future allowance: every fresh Candidate root and every fresh Serve ticket
+\* receives the current high-watermark and is therefore strictly above it.
+\* A child of an already admitted Candidate retains its parent's immutable
+\* lifecycle ordinal and remains below the cut, so its complete successor
+\* subtree must be prepaid by the causal occurrence budget rather than by
+\* enumerating the child's not-yet-materialized identity.
+ExactDecisionTargetNeutralCurrentPastSchedulerCut(node) ==
+  AsyncNextCandidateLifecycleOrdinal(node) - 1
+
+ExactDecisionTargetNeutralCurrentPastSchedulerCuts ==
+  [node \in Responsive |->
+     ExactDecisionTargetNeutralCurrentPastSchedulerCut(node)]
+
+\* The physical cut is the current receiver-local admission high-watermark.
+\* Every carrier already active at construction has a strictly smaller
+\* ordinal.  A Dormant replay admitted afterwards receives the cut itself,
+\* so logical age cannot place it back into this frozen physical prefix.
+ExactDecisionTargetNeutralCurrentPhysicalCuts ==
+  [node \in Responsive |-> AsyncNextIngressPhysicalOrdinal(node)]
+
+ExactDecisionTargetNeutralSchedulerCutToken(node, cutoffOrdinal) ==
+  [node |-> node, cutoffOrdinal |-> cutoffOrdinal]
+
+ExactDecisionTargetNeutralSchedulerCutTokens(snapshot) ==
+  {ExactDecisionTargetNeutralSchedulerCutToken(
+     node, snapshot.schedulerCuts[node]):
+     node \in Responsive}
+
+ExactDecisionTargetNeutralCandidateOwnersForSnapshot(snapshot, packet) ==
   LET recipient == packet.item.envelope.recipient
   IN {candidate \in ActiveScheduledCandidates:
         /\ candidate.node = recipient
         /\ candidate.node \in AsyncTimedServiceNodes
+        /\ AsyncCandidateLifecycleOrdinal(candidate)
+             <= snapshot.schedulerCuts[recipient]
+        /\ ExactDecisionTargetNeutralCausalRoot(
+             candidate.node, candidate.causalOrigin)
+             \in snapshot.candidateRoots
         /\ ProtectedCandidateOwned(candidate)}
 
-ExactDecisionTargetNeutralServeOwners(packet) ==
+ExactDecisionTargetNeutralServeOwnersForSnapshot(snapshot, packet) ==
   LET recipient == packet.item.envelope.recipient
   IN {job \in ActiveIoJobs:
         /\ job \in SequenceSet(asyncIoQueues[recipient])
-        /\ job.class = "Serve"}
+        /\ job.class = "Serve"
+        /\ ExactDecisionTargetNeutralServeOwnerIdentity(recipient, job)
+             \in snapshot.serveIdentities}
 
-ExactDecisionTargetNeutralCandidateRanks(packet) ==
+ExactDecisionTargetNeutralCandidateRanksForSnapshot(snapshot, packet) ==
   {CandidateServiceRank(candidate):
-     candidate \in ExactDecisionTargetNeutralCandidateOwners(packet)}
+     candidate
+       \in ExactDecisionTargetNeutralCandidateOwnersForSnapshot(
+             snapshot, packet)}
 
-ExactDecisionTargetNeutralServeRanks(packet) ==
+ExactDecisionTargetNeutralServeRanksForSnapshot(snapshot, packet) ==
   LET recipient == packet.item.envelope.recipient
   IN {ServeJobRank(recipient, job):
-        job \in ExactDecisionTargetNeutralServeOwners(packet)}
+        job \in ExactDecisionTargetNeutralServeOwnersForSnapshot(
+                   snapshot, packet)}
 
-ExactDecisionTargetNeutralCandidateDebtRank(packet) ==
-  LET ranks == ExactDecisionTargetNeutralCandidateRanks(packet)
+ExactDecisionTargetNeutralCandidateDebtRankForSnapshot(snapshot, packet) ==
+  LET ranks ==
+        ExactDecisionTargetNeutralCandidateRanksForSnapshot(
+          snapshot, packet)
   IN IF ranks = {}
      THEN HistoricalDiscoveryCandidateDebtBottom
      ELSE HistoricalDiscoveryOwnedRankMinimum(ranks)
 
-ExactDecisionTargetNeutralServeDebtRank(packet) ==
-  LET ranks == ExactDecisionTargetNeutralServeRanks(packet)
+ExactDecisionTargetNeutralServeDebtRankForSnapshot(snapshot, packet) ==
+  LET ranks ==
+        ExactDecisionTargetNeutralServeRanksForSnapshot(snapshot, packet)
   IN IF ranks = {}
      THEN HistoricalDiscoveryServeDebtBottom
      ELSE HistoricalDiscoveryOwnedRankMinimum(ranks)
 
-ExactDecisionTargetNeutralCandidateOccurrenceRank(packet) ==
+ExactDecisionTargetNeutralCandidateOccurrenceRankForSnapshot(
+    snapshot, packet) ==
   <<Cardinality(
-       ExactDecisionTargetNeutralCandidateOwners(packet)),
-    ExactDecisionTargetNeutralCandidateDebtRank(packet)>>
+       ExactDecisionTargetNeutralCandidateOwnersForSnapshot(
+         snapshot, packet)),
+    ExactDecisionTargetNeutralCandidateDebtRankForSnapshot(
+      snapshot, packet)>>
 
-ExactDecisionTargetNeutralServeOccurrenceRank(packet) ==
+ExactDecisionTargetNeutralServeOccurrenceRankForSnapshot(
+    snapshot, packet) ==
   <<Cardinality(
-       ExactDecisionTargetNeutralServeOwners(packet)),
-    ExactDecisionTargetNeutralServeDebtRank(packet)>>
+       ExactDecisionTargetNeutralServeOwnersForSnapshot(snapshot, packet)),
+    ExactDecisionTargetNeutralServeDebtRankForSnapshot(snapshot, packet)>>
 
-ExactDecisionTargetNeutralPacketDependencyRank(packet) ==
+ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+    snapshot, packet) ==
   LET recipient == packet.item.envelope.recipient
   IN <<OlderDueNonOverdueShadowDebt(packet),
        <<FreshIngressCapacityOwnerDebt(packet.item),
@@ -9543,17 +9696,17 @@ ExactDecisionTargetNeutralPacketDependencyRank(packet) ==
                <<ResetAwareIngressReachRank(recipient),
                  <<ReadyRunAuxRank(recipient),
                    <<Stage4CapacityRank(recipient),
-                     <<ExactDecisionTargetNeutralCandidateOccurrenceRank(
-                          packet),
-                       ExactDecisionTargetNeutralServeOccurrenceRank(
-                         packet)>>>>>>>>>>>>>>>>>>
+                     <<ExactDecisionTargetNeutralCandidateOccurrenceRankForSnapshot(
+                          snapshot, packet),
+                       ExactDecisionTargetNeutralServeOccurrenceRankForSnapshot(
+                         snapshot, packet)>>>>>>>>>>>>>>>>>>
 
 ExactDecisionTargetNeutralSelectedOverduePacket ==
   CHOOSE packet \in OverdueResponsivePackets: TRUE
 
-ExactDecisionTargetNeutralSelectedPacketDependencyRank ==
-  ExactDecisionTargetNeutralPacketDependencyRank(
-    ExactDecisionTargetNeutralSelectedOverduePacket)
+ExactDecisionTargetNeutralSelectedPacketDependencyRankForSnapshot(snapshot) ==
+  ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+    snapshot, ExactDecisionTargetNeutralSelectedOverduePacket)
 
 ExactDecisionTargetNeutralConcreteBlockerStage(clockValue) ==
   IF OverdueResponsivePackets # {}
@@ -9564,9 +9717,11 @@ ExactDecisionTargetNeutralConcreteBlockerStage(clockValue) ==
             THEN 2
             ELSE 0
 
-ExactDecisionTargetNeutralConcreteDependencyRank(clockValue) ==
+ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot(
+    snapshot, clockValue) ==
   IF OverdueResponsivePackets # {}
-  THEN ExactDecisionTargetNeutralSelectedPacketDependencyRank
+  THEN ExactDecisionTargetNeutralSelectedPacketDependencyRankForSnapshot(
+         snapshot)
   ELSE IF HistoricalDiscoveryNodeBlockersAt(clockValue) # {}
        THEN HistoricalDiscoveryIngressCounterRank(
               HistoricalDiscoveryNodeBlockerDebt(clockValue))
@@ -9575,11 +9730,446 @@ ExactDecisionTargetNeutralConcreteDependencyRank(clockValue) ==
                    HistoricalDiscoveryActiveIoBlockerDebt(clockValue))
             ELSE HistoricalDiscoveryIngressCounterRank(0)
 
-ExactDecisionTargetNeutralConcreteFixedClockRank(clockValue) ==
+ExactDecisionTargetNeutralLiveCandidateIdentitySet ==
+  {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
+     candidate \in ActiveScheduledCandidates,
+     candidate.node \in Responsive}
+
+ExactDecisionTargetNeutralLiveServeIdentitySet ==
+  {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
+     node \in Responsive,
+     job \in SequenceSet(asyncIoQueues[node]),
+     job.class = "Serve"}
+
+ExactDecisionTargetNeutralRetainedServeLifecycleRecords ==
+  {record \in asyncServeAdmissions \cup asyncServeTombstones:
+     record.node \in Responsive}
+
+ExactDecisionTargetNeutralRetainedServeIdentitySet ==
+  {[ownerKind |-> "Serve", identity |-> record.identity]:
+     record \in ExactDecisionTargetNeutralRetainedServeLifecycleRecords}
+
+ExactDecisionTargetNeutralLiveProducerIdentitySet ==
+  ExactDecisionTargetNeutralLiveCandidateIdentitySet
+    \cup ExactDecisionTargetNeutralLiveServeIdentitySet
+
+ExactDecisionTargetNeutralFrozenProducerRequests(clockValue) ==
+  {AsyncProducerIngressRequest(packet.item):
+     packet \in HistoricalDiscoveryDuePacketsAt(clockValue)}
+
+ExactDecisionTargetNeutralIngressEpisodeUniverse(clockValue) ==
+  {AsyncProducerEpisode(
+     request, authenticatedSource, AsyncProducerIngressStage):
+     request
+       \in ExactDecisionTargetNeutralFrozenProducerRequests(clockValue),
+     authenticatedSource \in AsyncIngressSources}
+
+ExactDecisionTargetNeutralServeEpisodeUniverse(clockValue) ==
+  ExactDecisionTargetNeutralRetainedServeIdentitySet
+    \cup
+  {ExactDecisionTargetNeutralServeRequestOwnerIdentity(
+     packet.item.envelope.recipient, packet.item):
+     packet \in HistoricalDiscoveryDuePacketsAt(clockValue),
+     packet.item.kind \in AsyncReplyRequestKinds}
+
+ExactDecisionTargetNeutralCandidateIdentityCoalesced(owner) ==
+  /\ owner.ownerKind = "Candidate"
+  /\ \/ AsyncCandidateTransientServiceIdentityMarked(
+          owner.identity.service)
+     \/ AsyncCandidateTerminalIdentityTombstoned(
+          owner.identity.service)
+
+ExactDecisionTargetNeutralCandidateIdentityObsolete(owner) ==
+  /\ owner.ownerKind = "Candidate"
+  /\ AsyncCandidateAdmissionIdentityObsolete(owner.identity)
+
+ExactDecisionTargetNeutralServeIdentityRetired(owner) ==
+  /\ owner.ownerKind = "Serve"
+  /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
+       owner.identity.owner, owner.identity)
+
+\* Compatibility names now range over the immutable semantic owner universe,
+\* rather than over only the DeliverChunk owners live at the snapshot edge.
+ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet ==
+  ExactDecisionTargetNeutralCandidateOwnerIdentitySet
+
+ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet ==
+  ExactDecisionTargetNeutralLiveCandidateIdentitySet
+
+ExactDecisionTargetNeutralCandidateEpisodeRemaining(snapshot) ==
+  {owner \in snapshot.candidateIdentities:
+     /\ ~ExactDecisionTargetNeutralCandidateIdentityCoalesced(owner)
+     /\ ~ExactDecisionTargetNeutralCandidateIdentityObsolete(owner)}
+
+ExactDecisionTargetNeutralServeEpisodeRemaining(snapshot) ==
+  {owner \in snapshot.serveIdentities:
+     ~ExactDecisionTargetNeutralServeIdentityRetired(owner)}
+
+ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(snapshot) ==
+  \A owner \in snapshot.candidateIdentities:
+    \/ owner \in ExactDecisionTargetNeutralLiveCandidateIdentitySet
+    \/ owner \in ExactDecisionTargetNeutralCandidateEpisodeRemaining(
+                  snapshot)
+    \/ ExactDecisionTargetNeutralCandidateIdentityCoalesced(owner)
+    \/ ExactDecisionTargetNeutralCandidateIdentityObsolete(owner)
+
+ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot) ==
+  \A owner \in snapshot.serveIdentities:
+    \/ owner \in ExactDecisionTargetNeutralLiveServeIdentitySet
+    \/ owner \in ExactDecisionTargetNeutralServeEpisodeRemaining(snapshot)
+    \/ ExactDecisionTargetNeutralServeIdentityRetired(owner)
+
+ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot) ==
+  snapshot.ingressEpisodes \ asyncProducerConsumedEpisodes
+
+\* These identity sets are retained only for carrier-coverage diagnostics.
+\* They are not the producer rank: a not-yet-materialized same-origin child
+\* has no identity in either set.  The causal occurrence rank below instead
+\* prepays the complete closed successor subtree below the frozen scheduler
+\* cut.
+ExactDecisionTargetNeutralProducerEpisodeSet(snapshot) ==
+  ({"Ingress"} \X
+     ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot))
+    \cup
+  ({"Candidate"} \X
+     ExactDecisionTargetNeutralCandidateEpisodeRemaining(snapshot))
+    \cup
+  ({"Serve"} \X
+     ExactDecisionTargetNeutralServeEpisodeRemaining(snapshot))
+
+\* Materialized-identity diagnostics.  In particular, these are not ordinal
+\* intervals and are never used to justify finite episode closure.
+ExactDecisionTargetNeutralMaterializedCandidateIdentityTokens(snapshot) ==
+  {"Candidate"} \X
+    ExactDecisionTargetNeutralCandidateEpisodeRemaining(snapshot)
+
+ExactDecisionTargetNeutralMaterializedServeIdentityTokens(snapshot) ==
+  {"Serve"} \X
+    ExactDecisionTargetNeutralServeEpisodeRemaining(snapshot)
+
+ExactDecisionTargetNeutralIngressEpisodeTokens(snapshot) ==
+  {"Ingress"} \X
+    ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot)
+
+ExactDecisionTargetNeutralProducerEpisodeTokens(snapshot) ==
+  ExactDecisionTargetNeutralIngressEpisodeTokens(snapshot)
+    \cup
+      ExactDecisionTargetNeutralMaterializedCandidateIdentityTokens(snapshot)
+    \cup
+      ExactDecisionTargetNeutralMaterializedServeIdentityTokens(snapshot)
+
+\* The producer episode is an ingress-leading lexicographic rank.  Its causal
+\* tail is selected only while a concrete overdue packet owns the fixed-clock
+\* dependency rank.  Replacing that packet is already strict dependency-rank
+\* progress, so a non-descent cell retains the same recipient and frozen cut.
+ExactDecisionTargetNeutralIngressEpisodeRank(snapshot) ==
+  Cardinality(
+    ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot))
+
+ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(snapshot, node) ==
+  LET cutoffOrdinal == snapshot.schedulerCuts[node]
+  IN <<AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+          node, cutoffOrdinal),
+       <<AsyncCausalEpisodeServeWorkBudget(node, cutoffOrdinal),
+         AsyncCausalEpisodeServeReachDebt(node, cutoffOrdinal)>>>
+
+ExactDecisionTargetNeutralCausalEpisodeBottom ==
+  <<0, <<0, 0>>>
+
+\* Proofless carrier replacement is charged outside the physical occurrence
+\* rank.  The rigid physical cut contains exactly the leader-wire carriers
+\* already admitted when the snapshot was built.  Dormant records contribute
+\* zero: their exact due packet is paid by the outer fixed-clock packet rank,
+\* and any later admission receives a physical ordinal at or above this cut.
+\* The continuation coordinate covers Reserved and Materialized local/external
+\* handoffs plus their latent Candidate.  Ingress-to-Runtime replacement
+\* consumes the stage coordinate before the inner occurrence rank can change.
+ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+    snapshot, node) ==
+  {record \in asyncLeaderWireLifecycles:
+  /\ record.recipient = node
+  /\ record.schedulerOrdinal <= snapshot.schedulerCuts[node]
+  /\ AsyncLeaderWireLifecycleActive(record)
+  /\ record.physicalAdmissionOrdinal < snapshot.physicalCuts[node]}
+
+ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot(
+    snapshot, node, record) ==
+  CASE /\ record
+              \in ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+                   snapshot, node)
+       /\ AsyncLeaderWireLifecycleIngressProtected(record) -> 1
+    [] OTHER -> 0
+
+ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot(snapshot, node) ==
+  {<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
+     token>>:
+     record
+       \in ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+            snapshot, node),
+     token
+       \in
+         1..ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot(
+              snapshot, node, record)}
+
+ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot(snapshot, node) ==
+  Cardinality(
+    ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot(
+      snapshot, node))
+
+ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+    snapshot, node) ==
+  {AsyncLeaderWireRuntimeCandidate(record.item):
+     record
+       \in ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+            snapshot, node)}
+
+ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot(
+    snapshot, node) ==
+  AsyncCausalEpisodeCandidates(node, snapshot.schedulerCuts[node])
+    \cup
+      AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates(
+        node, snapshot.schedulerCuts[node])
+    \cup
+      ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+        snapshot, node)
+
+ExactDecisionTargetNeutralProoflessCandidateTokensForSnapshot(
+    snapshot, node) ==
+  {<<"Candidate", candidate, token>>:
+     candidate
+       \in ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot(
+            snapshot, node),
+     token
+       \in
+         1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}
+
+ExactDecisionTargetNeutralProoflessContinuationTokensForSnapshot(
+    snapshot, node) ==
+  ExactDecisionTargetNeutralProoflessCandidateTokensForSnapshot(
+    snapshot, node)
+    \cup AsyncCandidateProducerContinuationFrozenStatusTokens(
+           node, snapshot.schedulerCuts[node])
+
+ExactDecisionTargetNeutralProoflessContinuationBudgetForSnapshot(
+    snapshot, node) ==
+  Cardinality(
+    ExactDecisionTargetNeutralProoflessContinuationTokensForSnapshot(
+      snapshot, node))
+
+ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+    snapshot, node) ==
+  <<ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot(
+      snapshot, node),
+    ExactDecisionTargetNeutralProoflessContinuationBudgetForSnapshot(
+      snapshot, node)>>
+
+ExactDecisionTargetNeutralProoflessProducerCarrier ==
+  Nat \X Nat
+
+ExactDecisionTargetNeutralProoflessProducerOrdering ==
+  LexPairOrdering(OpToRel(<, Nat), OpToRel(<, Nat), Nat, Nat)
+
+ExactDecisionTargetNeutralProoflessProducerBottom ==
+  <<0, 0>>
+
+ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+    snapshot, node) ==
+  <<ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+       snapshot, node),
+    ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(snapshot, node)>>
+
+ExactDecisionTargetNeutralComposedCausalEpisodeCarrier ==
+  ExactDecisionTargetNeutralProoflessProducerCarrier
+    \X AsyncCausalEpisodeStructuralRankCarrier
+
+ExactDecisionTargetNeutralComposedCausalEpisodeOrdering ==
+  LexPairOrdering(
+    ExactDecisionTargetNeutralProoflessProducerOrdering,
+    AsyncCausalEpisodeStructuralRankOrdering,
+    ExactDecisionTargetNeutralProoflessProducerCarrier,
+    AsyncCausalEpisodeStructuralRankCarrier)
+
+ExactDecisionTargetNeutralComposedCausalEpisodeBottom ==
+  <<ExactDecisionTargetNeutralProoflessProducerBottom,
+    ExactDecisionTargetNeutralCausalEpisodeBottom>>
+
+ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot(snapshot) ==
+  IF OverdueResponsivePackets = {}
+  THEN ExactDecisionTargetNeutralComposedCausalEpisodeBottom
+  ELSE LET packet == ExactDecisionTargetNeutralSelectedOverduePacket
+           node == packet.item.envelope.recipient
+       IN ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+            snapshot, node)
+
+ExactDecisionTargetNeutralProducerEpisodeRank(snapshot) ==
+  <<ExactDecisionTargetNeutralIngressEpisodeRank(snapshot),
+    ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot(
+      snapshot)>>
+
+ExactDecisionTargetNeutralProducerEpisodeCarrier ==
+  Nat \X ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
+
+ExactDecisionTargetNeutralProducerEpisodeOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionTargetNeutralComposedCausalEpisodeOrdering,
+    Nat,
+    ExactDecisionTargetNeutralComposedCausalEpisodeCarrier)
+
+ExactDecisionTargetNeutralProducerEpisodeBottom ==
+  <<0, ExactDecisionTargetNeutralComposedCausalEpisodeBottom>>
+
+ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot(
+    snapshot, clockValue) ==
+  ({"Packet"} \X
+     (HistoricalDiscoveryDuePacketsAt(clockValue)
+        \cap snapshot.packets))
+    \cup
+  ({"Candidate"} \X
+     (ExactDecisionTargetNeutralLiveCandidateIdentitySet
+        \cap snapshot.candidateIdentities))
+    \cup
+  ({"Serve"} \X
+     (ExactDecisionTargetNeutralLiveServeIdentitySet
+        \cap snapshot.serveIdentities))
+    \cup
+  ({"SchedulerCut"} \X
+     ExactDecisionTargetNeutralSchedulerCutTokens(snapshot))
+
+ExactDecisionTargetNeutralRetainedCausalRootsForSnapshot(snapshot) ==
+  ExactDecisionTargetNeutralRetainedCandidateCausalRoots
+    \cap snapshot.candidateRoots
+
+ExactDecisionTargetNeutralFixedPredecessorSet(clockValue) ==
+  ({"Packet"} \X HistoricalDiscoveryDuePacketsAt(clockValue))
+    \cup
+  ({"Candidate"} \X
+     ExactDecisionTargetNeutralCandidateEpisodeUniverse(clockValue))
+    \cup
+  ({"Serve"} \X
+     ExactDecisionTargetNeutralServeEpisodeUniverse(clockValue))
+    \cup
+  ({"SchedulerCut"} \X
+     ExactDecisionTargetNeutralSchedulerCutTokens(
+       [schedulerCuts |->
+          ExactDecisionTargetNeutralCurrentPastSchedulerCuts]))
+
+\* The predecessor fields freeze every currently materialized identity and,
+\* separately, the complete causal-root universe which may still materialize
+\* a descendant ahead of the target.  These fields never grant a future ordinal
+\* interval: an identity rooted after the scheduler cut is excluded by
+\* `candidateRoots`, while an admission at or after the physical cut is behind
+\* the target and every due request/source coordinate is precharged by the
+\* journal.
+ExactDecisionTargetNeutralFixedClockSnapshot(clockValue) ==
+  LET schedulerCuts ==
+        ExactDecisionTargetNeutralCurrentPastSchedulerCuts
+      physicalCuts == ExactDecisionTargetNeutralCurrentPhysicalCuts
+  IN [clock |-> clockValue,
+   packets |-> HistoricalDiscoveryDuePacketsAt(clockValue),
+   producerRequests |->
+     ExactDecisionTargetNeutralFrozenProducerRequests(clockValue),
+   ingressEpisodes |->
+     ExactDecisionTargetNeutralIngressEpisodeUniverse(clockValue),
+   candidateRoots |->
+     ExactDecisionTargetNeutralFrozenCausalRoots(clockValue),
+   schedulerCuts |-> schedulerCuts,
+   physicalCuts |-> physicalCuts,
+   predecessors |->
+     ({"Packet"} \X HistoricalDiscoveryDuePacketsAt(clockValue))
+       \cup
+     ({"Candidate"} \X
+        ExactDecisionTargetNeutralCandidateEpisodeUniverse(clockValue))
+       \cup
+     ({"Serve"} \X
+        ExactDecisionTargetNeutralServeEpisodeUniverse(clockValue))
+       \cup
+     ({"SchedulerCut"} \X
+        ExactDecisionTargetNeutralSchedulerCutTokens(
+          [schedulerCuts |-> schedulerCuts])),
+   candidateIdentities |->
+     ExactDecisionTargetNeutralCandidateEpisodeUniverse(clockValue),
+   serveIdentities |->
+     ExactDecisionTargetNeutralServeEpisodeUniverse(clockValue)]
+
+\* The constructor above reads the source state exactly once.  Temporal
+\* arguments carry the resulting record as a rigid quantified value; these
+\* projections make that state-freezing boundary explicit.
+ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot) ==
+  [clock |-> snapshot.clock,
+   packets |-> snapshot.packets,
+   producerRequests |-> snapshot.producerRequests,
+   ingressEpisodes |-> snapshot.ingressEpisodes,
+   candidateRoots |-> snapshot.candidateRoots,
+   schedulerCuts |-> snapshot.schedulerCuts,
+   physicalCuts |-> snapshot.physicalCuts,
+   predecessors |-> snapshot.predecessors,
+   candidateIdentities |-> snapshot.candidateIdentities,
+   serveIdentities |-> snapshot.serveIdentities]
+
+THEOREM ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant ==
+  \A snapshot:
+    ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot)'
+      = ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot)
+BY Isa
+   DEF ExactDecisionTargetNeutralFrozenSnapshotCarriers
+
+ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue) ==
+  /\ snapshot.clock = clockValue
+  /\ AsyncCandidateServiceLifecycleInvariant
+  /\ IsFiniteSet(snapshot.packets)
+  /\ IsFiniteSet(snapshot.predecessors)
+  /\ IsFiniteSet(snapshot.producerRequests)
+  /\ IsFiniteSet(snapshot.ingressEpisodes)
+  /\ IsFiniteSet(snapshot.candidateRoots)
+  /\ IsFiniteSet(snapshot.candidateIdentities)
+  /\ IsFiniteSet(snapshot.serveIdentities)
+  /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+  /\ snapshot.physicalCuts \in [Responsive -> Nat]
+  /\ \A node \in Responsive:
+       snapshot.schedulerCuts[node]
+         < AsyncNextCandidateLifecycleOrdinal(node)
+  /\ \A node \in Responsive:
+       snapshot.physicalCuts[node]
+         <= AsyncNextIngressPhysicalOrdinal(node)
+  /\ snapshot.candidateIdentities
+       \subseteq ExactDecisionTargetNeutralCandidateOwnerIdentitySet
+  /\ snapshot.candidateRoots
+       \subseteq ExactDecisionTargetNeutralCausalRootSet
+  /\ snapshot.serveIdentities
+       \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
+  /\ snapshot.producerRequests \subseteq AsyncProducerIngressRequests
+  /\ snapshot.ingressEpisodes =
+       {AsyncProducerEpisode(
+          request, authenticatedSource, AsyncProducerIngressStage):
+          request \in snapshot.producerRequests,
+          authenticatedSource \in AsyncIngressSources}
+  /\ snapshot.predecessors =
+       ({"Packet"} \X snapshot.packets)
+         \cup
+       ({"Candidate"} \X snapshot.candidateIdentities)
+         \cup
+       ({"Serve"} \X snapshot.serveIdentities)
+         \cup
+       ({"SchedulerCut"} \X
+          ExactDecisionTargetNeutralSchedulerCutTokens(snapshot))
+  /\ ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot(
+       snapshot, clockValue)
+       \subseteq snapshot.predecessors
+  /\ ExactDecisionTargetNeutralRetainedCausalRootsForSnapshot(snapshot)
+       \subseteq snapshot.candidateRoots
+  /\ ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(snapshot)
+  /\ ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot)
+  /\ HistoricalDiscoveryDuePacketsAt(clockValue)
+       \subseteq snapshot.packets
+
+ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot(
+    snapshot, clockValue) ==
   HistoricalDiscoveryFixedClockRank(
     clockValue,
     ExactDecisionTargetNeutralConcreteBlockerStage(clockValue),
-    ExactDecisionTargetNeutralConcreteDependencyRank(clockValue))
+    ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot(
+      snapshot, clockValue))
 
 ExactDecisionTargetNeutralFixedClockCarrier ==
   HistoricalDiscoveryFixedClockBlockerCarrier
@@ -9604,181 +10194,6 @@ ExactDecisionTargetNeutralProducerPrefix(rank) ==
     rank[2][2][2][1],
     ExactDecisionTargetNeutralDependencyProducerPrefix(
       rank[2][2][2][2])>>
-
-ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate) ==
-  [ownerKind |-> "Candidate",
-   identity |-> AsyncCandidateAdmissionIdentity(candidate)]
-
-ExactDecisionTargetNeutralServeOwnerIdentity(node, job) ==
-  [ownerKind |-> "Serve",
-   identity |-> AsyncIoServeJobIdentity(node, job)]
-
-ExactDecisionTargetNeutralCandidateOwnerIdentitySet ==
-  {[ownerKind |-> "Candidate", identity |-> identity]:
-     identity \in AsyncCandidateAdmissionIdentitySet}
-
-\* Only DeliverChunk is a frozen Candidate predecessor.  Production rejects
-\* that stage after an identical chunk is held, its consumer epoch advances,
-\* or Decision is durable.  Other causal, Control, and Completion candidates
-\* remain legitimate after Decision and are charged to the finite producer
-\* occurrence/ordinal episode rather than being declared obsolete.
-ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet ==
-  {owner \in ExactDecisionTargetNeutralCandidateOwnerIdentitySet:
-     owner.identity.service.phase = "DeliverChunk"}
-
-ExactDecisionTargetNeutralServeOwnerIdentitySet ==
-  {[ownerKind |-> "Serve", identity |-> identity]:
-     identity \in AsyncServeLogicalRequestIdentities}
-
-ExactDecisionTargetNeutralLiveCandidateIdentitySet ==
-  {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
-     candidate \in ActiveScheduledCandidates,
-     candidate.node \in Responsive}
-
-ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet ==
-  {owner \in ExactDecisionTargetNeutralLiveCandidateIdentitySet:
-     owner \in ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet}
-
-ExactDecisionTargetNeutralLiveServeIdentitySet ==
-  {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
-     node \in Responsive,
-     job \in SequenceSet(asyncIoQueues[node]),
-     job.class = "Serve"}
-
-ExactDecisionTargetNeutralLiveProducerIdentitySet ==
-  ExactDecisionTargetNeutralLiveCandidateIdentitySet
-    \cup ExactDecisionTargetNeutralLiveServeIdentitySet
-
-ExactDecisionTargetNeutralCandidateIdentityCoalesced(owner) ==
-  /\ owner.ownerKind = "Candidate"
-  /\ \/ AsyncCandidateTransientServiceIdentityMarked(
-          owner.identity.service)
-     \/ AsyncCandidateTerminalIdentityTombstoned(
-          owner.identity.service)
-
-ExactDecisionTargetNeutralCandidateIdentityObsolete(owner) ==
-  /\ owner.ownerKind = "Candidate"
-  /\ AsyncCandidateAdmissionIdentityObsolete(owner.identity)
-
-ExactDecisionTargetNeutralServeIdentityRetired(owner) ==
-  /\ owner.ownerKind = "Serve"
-  /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
-       owner.identity.owner, owner.identity)
-
-ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(snapshot) ==
-  \A owner \in snapshot.candidateIdentities:
-    \/ owner \in ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet
-    \/ ExactDecisionTargetNeutralCandidateIdentityCoalesced(owner)
-    \/ ExactDecisionTargetNeutralCandidateIdentityObsolete(owner)
-
-ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot) ==
-  \A owner \in snapshot.serveIdentities:
-    \/ owner \in ExactDecisionTargetNeutralLiveServeIdentitySet
-    \/ ExactDecisionTargetNeutralServeIdentityRetired(owner)
-
-ExactDecisionTargetNeutralFixedPredecessorSet(clockValue) ==
-  ({"Packet"} \X HistoricalDiscoveryDuePacketsAt(clockValue))
-    \cup
-  ({"Candidate"}
-     \X ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet)
-    \cup
-  ({"Serve"} \X ExactDecisionTargetNeutralLiveServeIdentitySet)
-
-\* The producer ceilings use source-configured cumulative work accounting,
-\* not an estimate derived from the current number of roots.  Candidate
-\* allocation charges the exact nineteen-occurrence causal subtree for every
-\* possible live carrier.  A Serve high-watermark may advance across views,
-\* so its family count is not itself a cumulative bound; the source theorem
-\* below instead proves that every fresh/advance Serve allocation is a
-\* physical ingress step which strictly lowers the frozen due-packet rank.
-\* The family budget is finite positive slack only.  Both ranges are
-\* exclusive: the ordinal at a ceiling is outside the frozen episode.  A
-\* target-neutral step therefore cannot refresh `roots * 3^depth` allowance.
-ExactDecisionTargetNeutralFixedClockSnapshot(clockValue) ==
-  [clock |-> clockValue,
-   packets |-> HistoricalDiscoveryDuePacketsAt(clockValue),
-   predecessors |->
-     ExactDecisionTargetNeutralFixedPredecessorSet(clockValue),
-   candidateIdentities |->
-     ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
-   serveIdentities |->
-     ExactDecisionTargetNeutralLiveServeIdentitySet,
-   candidateStart |->
-     [node \in Responsive |->
-        AsyncNextCandidateServiceOrdinal(node)],
-   serveStart |->
-     [node \in Responsive |->
-        asyncNextServeAdmissionOrdinal[node]],
-   candidateCeiling |->
-     [node \in Responsive |->
-        AsyncNextCandidateServiceOrdinal(node)
-          + AsyncCandidateProducerEpisodeBudget],
-   serveCeiling |->
-     [node \in Responsive |->
-        asyncNextServeAdmissionOrdinal[node]
-          + AsyncServeLifecycleFamilyBudget]]
-
-ExactDecisionTargetNeutralCandidateOrdinalTokens(snapshot) ==
-  {[ownerKind |-> "Candidate", node |-> node, ordinal |-> ordinal]:
-     node \in Responsive,
-     ordinal
-       \in AsyncNextCandidateServiceOrdinal(node)
-             ..(snapshot.candidateCeiling[node] - 1)}
-
-ExactDecisionTargetNeutralServeOrdinalTokens(snapshot) ==
-  {[ownerKind |-> "Serve", node |-> node, ordinal |-> ordinal]:
-     node \in Responsive,
-     ordinal
-       \in asyncNextServeAdmissionOrdinal[node]
-             ..(snapshot.serveCeiling[node] - 1)}
-
-ExactDecisionTargetNeutralProducerEpisodeTokens(snapshot) ==
-  ExactDecisionTargetNeutralCandidateOrdinalTokens(snapshot)
-    \cup ExactDecisionTargetNeutralServeOrdinalTokens(snapshot)
-
-ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot) ==
-  Cardinality(
-    ExactDecisionTargetNeutralProducerEpisodeTokens(snapshot))
-
-ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue) ==
-  /\ snapshot.clock = clockValue
-  /\ IsFiniteSet(snapshot.packets)
-  /\ IsFiniteSet(snapshot.predecessors)
-  /\ IsFiniteSet(snapshot.candidateIdentities)
-  /\ IsFiniteSet(snapshot.serveIdentities)
-  /\ snapshot.candidateIdentities
-       \subseteq ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet
-  /\ snapshot.serveIdentities
-       \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
-  /\ snapshot.predecessors =
-       ({"Packet"} \X snapshot.packets)
-         \cup
-       ({"Candidate"} \X snapshot.candidateIdentities)
-         \cup
-       ({"Serve"} \X snapshot.serveIdentities)
-  /\ ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(snapshot)
-  /\ ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot)
-  /\ snapshot.candidateCeiling \in [Responsive -> Nat]
-  /\ snapshot.serveCeiling \in [Responsive -> Nat]
-  /\ snapshot.candidateStart \in [Responsive -> Nat]
-  /\ snapshot.serveStart \in [Responsive -> Nat]
-  /\ HistoricalDiscoveryDuePacketsAt(clockValue)
-       \subseteq snapshot.packets
-  /\ \A node \in Responsive:
-       /\ snapshot.candidateCeiling[node] =
-            snapshot.candidateStart[node]
-              + AsyncCandidateProducerEpisodeBudget
-       /\ snapshot.serveCeiling[node] =
-            snapshot.serveStart[node]
-              + AsyncServeLifecycleFamilyBudget
-       /\ snapshot.candidateStart[node]
-            <= AsyncNextCandidateServiceOrdinal(node)
-       /\ AsyncNextCandidateServiceOrdinal(node)
-            <= snapshot.candidateCeiling[node]
-       /\ snapshot.serveStart[node]
-            <= asyncNextServeAdmissionOrdinal[node]
-       /\ asyncNextServeAdmissionOrdinal[node]
-            <= snapshot.serveCeiling[node]
 
 ExactDecisionTargetNeutralModeSet ==
   {"RequestClock", "RequestHead", "ResponseHead"}
@@ -9844,7 +10259,8 @@ ExactDecisionTargetNeutralFixedClockBlockedAtRank(
        snapshot, mode, node, qc, archive,
        request, response, packet, clockValue)
   /\ rank \in ExactDecisionTargetNeutralFixedClockCarrier
-  /\ ExactDecisionTargetNeutralConcreteFixedClockRank(clockValue)
+  /\ ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot(
+       snapshot, clockValue)
        = rank
 
 ExactDecisionTargetNeutralFixedClockStrictRankGoal(
@@ -9861,23 +10277,31 @@ ExactDecisionTargetNeutralFixedClockStrictRankGoal(
          snapshot, mode, node, qc, archive, request, response,
          packet, clockValue, lowerRank)
 
+\* The episode budget is a genuine well-founded rank, not an ordinal
+\* allowance.  Its ingress head coalesces exact retransmissions through the
+\* producer journal; its causal tail prepays all remaining same-origin
+\* occurrences and every Serve predecessor below the frozen scheduler cut.
+ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot) ==
+  ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)
+
 ExactDecisionTargetNeutralProducerEpisodeAtBudget(
     snapshot, mode, node, qc, archive, request, response,
     packet, clockValue, sourceRank, budget) ==
   LET currentRank ==
-        ExactDecisionTargetNeutralConcreteFixedClockRank(clockValue)
+        ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot(
+          snapshot, clockValue)
   IN /\ ExactDecisionTargetNeutralFixedClockPending(
            snapshot, mode, node, qc, archive,
            request, response, packet, clockValue)
      /\ sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier
      /\ currentRank \in ExactDecisionTargetNeutralFixedClockCarrier
+     /\ budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier
      /\ ~ExactDecisionTargetNeutralFixedClockStrictRankGoal(
           snapshot, mode, node, qc, archive, request, response,
           packet, clockValue, sourceRank)
      /\ ExactDecisionTargetNeutralProducerPrefix(currentRank)
           = ExactDecisionTargetNeutralProducerPrefix(sourceRank)
-     /\ budget
-          = ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)
+     /\ budget = ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)
 
 ExactDecisionTargetNeutralRankCellOutcome(
     snapshot, mode, node, qc, archive, request, response,
@@ -9886,8 +10310,10 @@ ExactDecisionTargetNeutralRankCellOutcome(
        snapshot, mode, node, qc, archive, request, response,
        packet, clockValue, sourceRank)
   \/ \E lowerBudget \in
-       SetLessThan(budget, OpToRel(<, Nat), Nat)
-         \cap (Nat \ {0}):
+       SetLessThan(
+         budget,
+         ExactDecisionTargetNeutralProducerEpisodeOrdering,
+         ExactDecisionTargetNeutralProducerEpisodeCarrier):
        ExactDecisionTargetNeutralProducerEpisodeAtBudget(
          snapshot, mode, node, qc, archive, request, response,
          packet, clockValue, sourceRank, lowerBudget)
@@ -9896,14 +10322,31 @@ ExactDecisionTargetNeutralFairOwner(
     ownerKind, node, source) ==
   [ownerKind |-> ownerKind, node |-> node, source |-> source]
 
-\* Every owner is individually weakly fair.  `Admit` is the single atomic
-\* physical packet/lifecycle handoff.
+\* Every owner is individually weakly fair.  The three producer-continuation
+\* owners are distinct non-runner source-class actions in AsyncFairnessAt;
+\* RunNode does not subsume them.  `Admit` is the single atomic physical
+\* packet/lifecycle handoff.
 ExactDecisionTargetNeutralFairOwnerSet(initialContext) ==
   {ExactDecisionTargetNeutralFairOwner(
      "Tick", 0, AsyncUntrustedSource)}
   \cup
   {ExactDecisionTargetNeutralFairOwner(
      "RunNode", node, AsyncUntrustedSource):
+     node \in AsyncVotersAt(initialContext)}
+  \cup
+  {ExactDecisionTargetNeutralFairOwner(
+     "ResolveLocalCandidateProducerContinuation",
+     node, AsyncUntrustedSource):
+     node \in AsyncVotersAt(initialContext)}
+  \cup
+  {ExactDecisionTargetNeutralFairOwner(
+     "ServiceConditionalTransportProducerContinuation",
+     node, AsyncUntrustedSource):
+     node \in AsyncVotersAt(initialContext)}
+  \cup
+  {ExactDecisionTargetNeutralFairOwner(
+     "ServiceVolatileBodyProducerContinuation",
+     node, AsyncUntrustedSource):
      node \in AsyncVotersAt(initialContext)}
   \cup
   {ExactDecisionTargetNeutralFairOwner(
@@ -9927,6 +10370,15 @@ ExactDecisionTargetNeutralFairAction(owner) ==
   CASE owner.ownerKind = "Tick" -> AsyncTick
     [] owner.ownerKind = "RunNode" ->
          PostGstRunNode(owner.node)
+    [] owner.ownerKind =
+         "ResolveLocalCandidateProducerContinuation" ->
+         PostGstResolveLocalCandidateProducerContinuation(owner.node)
+    [] owner.ownerKind =
+         "ServiceConditionalTransportProducerContinuation" ->
+         PostGstServiceConditionalTransportProducerContinuation(owner.node)
+    [] owner.ownerKind =
+         "ServiceVolatileBodyProducerContinuation" ->
+         PostGstServiceVolatileBodyProducerContinuation(owner.node)
     [] owner.ownerKind = "RunHistoricalRecovery" ->
          PostGstRunHistoricalRecoveryNode(owner.node)
     [] owner.ownerKind = "RunHistoricalServer" ->
@@ -9937,9 +10389,10 @@ ExactDecisionTargetNeutralFairAction(owner) ==
          PostGstServiceHistoricalRecoveryIoWorker(owner.node)
     [] owner.ownerKind = "Admit" ->
          PostGstAdmitHiddenPacket(owner.node, owner.source)
-    [] OTHER ->
+    [] owner.ownerKind = "AdmitHistorical" ->
          PostGstAdmitHistoricalRecoveryPacket(
            owner.node, owner.source)
+    [] OTHER -> FALSE
 
 ExactDecisionTargetNeutralOwnerReadyForRankCell(
     initialContext, snapshot, mode, node, qc, archive,
@@ -9978,7 +10431,7 @@ ExactDecisionTargetNeutralProducerEpisodeOwnedBy(
 The source transition installs a same-generation transient service marker or
 a restart-durable terminal-discard tombstone independently of adequate-leader
 convergence.  These local theorems repeat only the
-initialization/preservation bridge needed by the fixed-GST ordinal episode;
+initialization/preservation bridge needed by the fixed-GST rank episode;
 they do not import the adequate-leader module.  The restart bridge is stated
 separately so pre-GST reconstruction cannot be mistaken for rank progress.
 ***************************************************************************)
@@ -10081,7 +10534,7 @@ PROOF
            /\ [AsyncNext]_AsyncAllVars
           => AsyncCandidateServiceLifecycleInvariant'
       BY ExactDecisionAsyncNextPreservesCandidateTombstones, Isa
-         DEF AsyncAllVars
+         DEF AsyncAllVars, AsyncProducerVars
     <2> QED BY <1>1, <2>1, <2>2, <2>3, PTL
          DEF AsyncSpecAt
   <1> QED BY <1>1
@@ -10094,7 +10547,7 @@ THEOREM ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst ==
     /\ gst
     /\ [AsyncNext]_AsyncAllVars
     /\ ~AsyncCandidateTransientMarkerExitThisStep(candidate)
-    => /\ ~AsyncCandidateTransientServiceMarked(candidate)'
+    => /\ AsyncCandidateTransientServiceActive(candidate)'
        /\ ~CandidateScheduled(candidate)'
 BY AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst
 
@@ -10123,76 +10576,182 @@ BY AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction
 
 THEOREM ExactDecisionTargetNeutralSnapshotIsFinite ==
   \A clockValue \in Nat:
-    AsyncStrongTypeInvariant
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
       => LET snapshot ==
                ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
          IN /\ IsFiniteSet(snapshot.packets)
             /\ IsFiniteSet(snapshot.predecessors)
+            /\ IsFiniteSet(snapshot.producerRequests)
+            /\ IsFiniteSet(snapshot.ingressEpisodes)
+            /\ IsFiniteSet(snapshot.candidateRoots)
             /\ IsFiniteSet(snapshot.candidateIdentities)
             /\ IsFiniteSet(snapshot.serveIdentities)
-            /\ AsyncCandidateProducerEpisodeBudget
-                 \in Nat \ {0}
-            /\ AsyncServeLifecycleFamilyBudget
-                 \in Nat \ {0}
-            /\ \A node \in Responsive:
-                 /\ snapshot.candidateCeiling[node] =
-                      snapshot.candidateStart[node]
-                        + AsyncCandidateProducerEpisodeBudget
-                 /\ snapshot.serveCeiling[node] =
-                      snapshot.serveStart[node]
-                        + AsyncServeLifecycleFamilyBudget
-                 /\ snapshot.candidateStart[node] =
-                      AsyncNextCandidateServiceOrdinal(node)
-                 /\ snapshot.serveStart[node] =
-                      asyncNextServeAdmissionOrdinal[node]
+            /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+            /\ snapshot.physicalCuts \in [Responsive -> Nat]
+            /\ ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)
+                 \in ExactDecisionTargetNeutralProducerEpisodeCarrier
 BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
    StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
+   AsyncCausalEpisodeStructuralRankAtFiniteCutIsFinite,
+   CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound,
    RuntimeValidatorIdsAreFinite,
-   FS_Image, FS_Union, FS_Product, FS_CardinalityType,
-   CommandSuccessorsHaveBoundedLength, Isa, SMT
+   FS_Image, FS_Union, FS_Product, FS_Subset, FS_Intersection,
+   FS_CardinalityType, Isa
    DEF ExactDecisionTargetNeutralFixedClockSnapshot,
-       ExactDecisionTargetNeutralFixedPredecessorSet,
-       ExactDecisionTargetNeutralLiveProducerIdentitySet,
+       ExactDecisionTargetNeutralFrozenProducerRequests,
+       ExactDecisionTargetNeutralIngressEpisodeUniverse,
+       AsyncProducerEpisode, AsyncProducerIngressStage,
+       ExactDecisionTargetNeutralCandidateEpisodeUniverse,
+       ExactDecisionTargetNeutralFrozenCausalRoots,
+       ExactDecisionTargetNeutralRetainedCandidateCausalRoots,
+       ExactDecisionTargetNeutralLiveCandidateCausalRoots,
+       ExactDecisionTargetNeutralLifecycleRecordCausalRoots,
+       ExactDecisionTargetNeutralProducerContinuationCausalRoots,
+       ExactDecisionTargetNeutralOrdinaryIngressCausalRoots,
+       ExactDecisionTargetNeutralLeaderWireCausalRoots,
+       ExactDecisionTargetNeutralDurableReplayCausalRoots,
+       ExactDecisionTargetNeutralTimeoutReservationCausalRoots,
+       ExactDecisionTargetNeutralDuePacketCausalRoots,
+       ExactDecisionTargetNeutralCurrentPastSchedulerCut,
+       ExactDecisionTargetNeutralCurrentPastSchedulerCuts,
+       ExactDecisionTargetNeutralCurrentPhysicalCuts,
+       ExactDecisionTargetNeutralSchedulerCutToken,
+       ExactDecisionTargetNeutralSchedulerCutTokens,
+       ExactDecisionTargetNeutralServeEpisodeUniverse,
+       ExactDecisionTargetNeutralRetainedServeLifecycleRecords,
+       ExactDecisionTargetNeutralRetainedServeIdentitySet,
        ExactDecisionTargetNeutralLiveCandidateIdentitySet,
-       ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
        ExactDecisionTargetNeutralLiveServeIdentitySet,
-       ExactDecisionTargetNeutralCandidateOwnerIdentitySet,
-       ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet,
        ExactDecisionTargetNeutralCandidateOwnerIdentity,
+       ExactDecisionTargetNeutralCausalRoot,
        ExactDecisionTargetNeutralServeOwnerIdentity,
-       AsyncCandidateAdmissionIdentitySet,
+       ExactDecisionTargetNeutralServeRequestOwnerIdentity,
+       ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeSet,
+       ExactDecisionTargetNeutralIngressEpisodeRemaining,
+       ExactDecisionTargetNeutralCandidateEpisodeRemaining,
+       ExactDecisionTargetNeutralServeEpisodeRemaining,
+       ExactDecisionTargetNeutralIngressEpisodeRank,
+       ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralCausalEpisodeBottom,
+       ExactDecisionTargetNeutralProoflessProducerRankForSnapshot,
+       ExactDecisionTargetNeutralProoflessProducerCarrier,
+       ExactDecisionTargetNeutralProoflessProducerBottom,
+       ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot,
+       ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot,
+       ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot,
+       ExactDecisionTargetNeutralProoflessCandidateTokensForSnapshot,
+       ExactDecisionTargetNeutralProoflessContinuationTokensForSnapshot,
+       ExactDecisionTargetNeutralProoflessContinuationBudgetForSnapshot,
+       ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralComposedCausalEpisodeCarrier,
+       ExactDecisionTargetNeutralComposedCausalEpisodeBottom,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier,
+       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
+       AsyncCandidateProducerContinuationFrozenStatusTokens,
+       AsyncCandidateProducerContinuationFrozenRecords,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCausalEpisodeStructuralRankCarrier,
+       AsyncCausalEpisodeServeRankCarrier,
+       AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeServeWorkBudget,
+       AsyncCausalEpisodeServeReachDebt,
        AsyncCandidateAdmissionIdentity,
-       AsyncCandidateProducerEpisodeBudget,
-       AsyncCandidateProducerEpisodeCapacity,
-       AsyncCausalCandidateLifecycleCapacity,
-       AsyncServeLifecycleFamilyBudget,
-       AsyncActiveRequestBudget,
-       AsyncActiveCertifiedRequestBudget,
-       AsyncActiveCommitRequestBudget,
        AsyncStrongTypeInvariant, AsyncConfiguration,
        StrongInductiveInvariant, Safety, TypeInvariant,
        ModelConfiguration, QuorumConfiguration
 
-THEOREM ExactDecisionTargetNeutralEpisodeBudgetIsNatural ==
+THEOREM ExactDecisionTargetNeutralEpisodeRankIsInCarrier ==
   \A snapshot:
     \A clockValue \in Nat:
       /\ AsyncStrongTypeInvariant
       /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue)
       => ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)
-           \in Nat
-BY RuntimeValidatorIdsAreFinite,
+           \in ExactDecisionTargetNeutralProducerEpisodeCarrier
+BY AsyncCausalEpisodeStructuralRankAtFiniteCutIsFinite,
+   CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound,
+   RuntimeValidatorIdsAreFinite,
    FS_Interval, FS_Image, FS_Union, FS_Product,
    FS_CardinalityType, Isa
    DEF ExactDecisionTargetNeutralProducerEpisodeBudget,
-       ExactDecisionTargetNeutralProducerEpisodeTokens,
-       ExactDecisionTargetNeutralCandidateOrdinalTokens,
-       ExactDecisionTargetNeutralServeOrdinalTokens,
+       ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier,
+       ExactDecisionTargetNeutralIngressEpisodeRank,
+       ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralCausalEpisodeBottom,
+       ExactDecisionTargetNeutralProoflessProducerRankForSnapshot,
+       ExactDecisionTargetNeutralProoflessProducerCarrier,
+       ExactDecisionTargetNeutralProoflessProducerBottom,
+       ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot,
+       ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot,
+       ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot,
+       ExactDecisionTargetNeutralProoflessCandidateTokensForSnapshot,
+       ExactDecisionTargetNeutralProoflessContinuationTokensForSnapshot,
+       ExactDecisionTargetNeutralProoflessContinuationBudgetForSnapshot,
+       ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralComposedCausalEpisodeCarrier,
+       ExactDecisionTargetNeutralComposedCausalEpisodeBottom,
+       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
+       AsyncCandidateProducerContinuationFrozenStatusTokens,
+       AsyncCandidateProducerContinuationFrozenRecords,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCausalEpisodeStructuralRankCarrier,
+       AsyncCausalEpisodeServeRankCarrier,
+       AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeServeWorkBudget,
+       AsyncCausalEpisodeServeReachDebt,
        ExactDecisionTargetNeutralSnapshotActive
 
-THEOREM ExactDecisionTargetNeutralPacketDependencyRankInCarrier ==
-  \A packet \in OverdueResponsivePackets:
-    AsyncStrongTypeInvariant
-      => ExactDecisionTargetNeutralPacketDependencyRank(packet)
+THEOREM ExactDecisionTargetNeutralProoflessProducerOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    ExactDecisionTargetNeutralProoflessProducerOrdering,
+    ExactDecisionTargetNeutralProoflessProducerCarrier)
+BY NatLessThanWellFounded, WFLexPairOrdering
+   DEF ExactDecisionTargetNeutralProoflessProducerOrdering,
+       ExactDecisionTargetNeutralProoflessProducerCarrier
+
+THEOREM ExactDecisionTargetNeutralComposedCausalEpisodeOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    ExactDecisionTargetNeutralComposedCausalEpisodeOrdering,
+    ExactDecisionTargetNeutralComposedCausalEpisodeCarrier)
+BY ExactDecisionTargetNeutralProoflessProducerOrderingIsWellFounded,
+   AsyncCausalEpisodeStructuralRankOrderingIsWellFounded,
+   WFLexPairOrdering
+   DEF ExactDecisionTargetNeutralComposedCausalEpisodeOrdering,
+       ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
+
+THEOREM ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    ExactDecisionTargetNeutralProducerEpisodeOrdering,
+    ExactDecisionTargetNeutralProducerEpisodeCarrier)
+BY NatLessThanWellFounded,
+   ExactDecisionTargetNeutralComposedCausalEpisodeOrderingIsWellFounded,
+   WFLexPairOrdering
+   DEF ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier
+
+THEOREM ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier ==
+  \A snapshot:
+    \A packet \in OverdueResponsivePackets:
+      /\ AsyncStrongTypeInvariant
+      /\ snapshot.candidateIdentities
+           \subseteq ExactDecisionTargetNeutralCandidateOwnerIdentitySet
+      /\ snapshot.candidateRoots
+           \subseteq ExactDecisionTargetNeutralCausalRootSet
+      /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+      /\ snapshot.serveIdentities
+           \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
+      => ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+           snapshot, packet)
            \in HistoricalDiscoveryPacketDependencyCarrier
 BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
    ScheduledCandidateServiceRankInCarrier,
@@ -10205,15 +10764,15 @@ BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
    ReadyRunAuxRankInCarrier,
    Stage4CapacityRankInCarrier,
    FS_Subset, FS_CardinalityType, Isa
-   DEF ExactDecisionTargetNeutralPacketDependencyRank,
-       ExactDecisionTargetNeutralCandidateOccurrenceRank,
-       ExactDecisionTargetNeutralServeOccurrenceRank,
-       ExactDecisionTargetNeutralCandidateDebtRank,
-       ExactDecisionTargetNeutralServeDebtRank,
-       ExactDecisionTargetNeutralCandidateRanks,
-       ExactDecisionTargetNeutralServeRanks,
-       ExactDecisionTargetNeutralCandidateOwners,
-       ExactDecisionTargetNeutralServeOwners,
+   DEF ExactDecisionTargetNeutralPacketDependencyRankForSnapshot,
+       ExactDecisionTargetNeutralCandidateOccurrenceRankForSnapshot,
+       ExactDecisionTargetNeutralServeOccurrenceRankForSnapshot,
+       ExactDecisionTargetNeutralCandidateDebtRankForSnapshot,
+       ExactDecisionTargetNeutralServeDebtRankForSnapshot,
+       ExactDecisionTargetNeutralCandidateRanksForSnapshot,
+       ExactDecisionTargetNeutralServeRanksForSnapshot,
+       ExactDecisionTargetNeutralCandidateOwnersForSnapshot,
+       ExactDecisionTargetNeutralServeOwnersForSnapshot,
        HistoricalDiscoveryPacketDependencyCarrier,
        HistoricalDiscoveryCapacityTailCarrier,
        HistoricalDiscoveryTimeoutTailCarrier,
@@ -10226,25 +10785,26 @@ BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
        HistoricalDiscoveryOccurrenceDebtCarrier,
        OwnedServiceRankCarrier
 
-THEOREM ExactDecisionTargetNeutralConcreteRankInCarrier ==
+THEOREM ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat:
       ExactDecisionTargetNeutralFixedClockPending(
         snapshot, mode, node, qc, archive,
         request, response, packet, clockValue)
-        => ExactDecisionTargetNeutralConcreteFixedClockRank(clockValue)
+        => ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot(
+             snapshot, clockValue)
              \in ExactDecisionTargetNeutralFixedClockCarrier
-BY ExactDecisionTargetNeutralPacketDependencyRankInCarrier,
+BY ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
    StrongTypeHasFiniteHistoricalDiscoveryCohorts,
    HistoricalDiscoveryFixedClockRankShapeInCarrier,
    HistoricalDiscoveryIngressCounterRankInCarrier,
    FS_CardinalityType, Isa
    DEF ExactDecisionTargetNeutralFixedClockPending,
-       ExactDecisionTargetNeutralConcreteFixedClockRank,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
        ExactDecisionTargetNeutralConcreteBlockerStage,
-       ExactDecisionTargetNeutralConcreteDependencyRank,
+       ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot,
        ExactDecisionTargetNeutralSelectedOverduePacket,
-       ExactDecisionTargetNeutralSelectedPacketDependencyRank,
+       ExactDecisionTargetNeutralSelectedPacketDependencyRankForSnapshot,
        ExactDecisionTargetNeutralFixedClockCarrier,
        HistoricalDiscoveryLatentOwnerDebt,
        HistoricalDiscoveryDuePacketDebt,
@@ -10262,16 +10822,14 @@ BY HistoricalDiscoveryFixedClockBlockerOrderingIsWellFounded
        ExactDecisionTargetNeutralFixedClockCarrier
 
 (***************************************************************************
-Action-local producer accounting.
+Action-local retained producer accounting.
 
-The ceiling theorem is the exact no-lasso bridge.  At a fixed clock, packet
-publication has a future deadline, so the frozen due set cannot grow.  Every
-causal replacement has at most three children and a kind in the finite
-`AsyncWorkKinds` inventory.  Every terminal candidate disposition--successful
-service or terminal stale discard--consumes one candidate ordinal before any
-children become live; an exact Serve admission consumes one Serve ordinal.
-Retries coalesce, and the durable tombstone or monotone obsolete-stage guard
-prevents resurrection at the retired stage.
+At a fixed clock the due set cannot grow.  A first authenticated-source
+observation consumes one precharged ingress episode; an exact retransmission
+is a journal stutter and coalesces into the same lifecycle.  Candidate
+children were already included through their frozen causal root, while
+candidate markers and Serve tombstones monotonically retire exact identities.
+No action receives credit merely for allocating or replacing an owner.
 ***************************************************************************)
 
 THEOREM ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets ==
@@ -10311,6 +10869,80 @@ BY HistoricalDiscoveryPublicationHelpersHaveFixedClockFrame,
        AsyncNetworkStep, AdmitIngressPacket,
        AsyncFaultStep, AsyncAllVars
 
+ExactDecisionTargetNeutralExactIngressRequest(packet) ==
+  AsyncProducerIngressRequest(packet.item)
+
+ExactDecisionTargetNeutralExactIngressRank(packet) ==
+  AsyncProducerRemainingIngressRankFor(
+    ExactDecisionTargetNeutralExactIngressRequest(packet))
+
+THEOREM ExactDecisionTargetNeutralFrozenRequestUsesExactIngressRank ==
+  \A snapshot, packet:
+    /\ packet \in snapshot.packets
+    /\ ExactDecisionTargetNeutralExactIngressRequest(packet)
+         \in snapshot.producerRequests
+    /\ snapshot.ingressEpisodes =
+         {AsyncProducerEpisode(
+            request, authenticatedSource, AsyncProducerIngressStage):
+            request \in snapshot.producerRequests,
+            authenticatedSource \in AsyncIngressSources}
+    => AsyncProducerRemainingIngressEpisodesFor(
+         ExactDecisionTargetNeutralExactIngressRequest(packet))
+         =
+       {episode
+          \in ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot):
+          episode.request =
+            ExactDecisionTargetNeutralExactIngressRequest(packet)}
+BY Isa
+   DEF ExactDecisionTargetNeutralExactIngressRequest,
+       ExactDecisionTargetNeutralIngressEpisodeRemaining,
+       AsyncProducerRemainingIngressEpisodesFor,
+       AsyncProducerConsumedIngressEpisodesFor,
+       AsyncProducerIngressEpisodeUniverseFor,
+       AsyncProducerIngressEpisodeSet,
+       AsyncProducerEpisode, AsyncProducerIngressStage
+
+THEOREM ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank ==
+  \A snapshot:
+    /\ AsyncConfiguration
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ (AsyncProducerAdmittedIngressEpisodes
+          \ asyncProducerConsumedEpisodes)
+         \cap snapshot.ingressEpisodes # {}
+    /\ IsFiniteSet(snapshot.ingressEpisodes)
+    /\ ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot(
+         snapshot)
+         \in ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
+    /\ ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot(
+         snapshot)'
+         \in ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
+    => <<ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)',
+          ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)>>
+         \in ExactDecisionTargetNeutralProducerEpisodeOrdering
+BY AsyncProducerFirstDistinctEpisodeStrictlyConsumesFiniteRank,
+   FS_CardinalityType, Isa
+   DEF ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier,
+       ExactDecisionTargetNeutralIngressEpisodeRank,
+       ExactDecisionTargetNeutralIngressEpisodeRemaining,
+       AsyncProducerProjectionStep,
+       AsyncProducerFirstDistinctIngressEpisodeStep,
+       LexPairOrdering, SetLessThan, OpToRel
+
+THEOREM ExactDecisionTargetNeutralExactRetransmissionIsProducerStutter ==
+  \A snapshot:
+    /\ AsyncProducerJournalClosed
+    /\ AsyncProducerProjectionStep
+    /\ AsyncProducerAdmittedIngressEpisodes # {}
+    /\ AsyncProducerAdmittedIngressEpisodes
+         \subseteq asyncProducerConsumedEpisodes
+    => ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot)'
+         = ExactDecisionTargetNeutralIngressEpisodeRemaining(snapshot)
+BY AsyncProducerExactRetransmissionIsJournalStutter, Isa
+   DEF ExactDecisionTargetNeutralIngressEpisodeRemaining
+
 (***************************************************************************
 Atomic ingress is strict physical progress.
 
@@ -10320,30 +10952,40 @@ leader-wire Ingress lifecycle.  Thus the existing bounded transport
 coordinate strictly descends; no proof-only reservation bit is needed.
 ***************************************************************************)
 THEOREM ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank ==
-  \A packet \in OverdueResponsivePackets,
+  \A snapshot,
+     packet \in OverdueResponsivePackets,
      recipient \in Responsive,
      source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
+    /\ snapshot.candidateIdentities
+         \subseteq ExactDecisionTargetNeutralCandidateOwnerIdentitySet
+    /\ snapshot.candidateRoots
+         \subseteq ExactDecisionTargetNeutralCausalRootSet
+    /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+    /\ snapshot.serveIdentities
+         \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
     /\ packet.item.envelope.recipient = recipient
-    /\ packet.item.source = source
+    /\ packet.authenticatedSource = source
     /\ PostGstAdmitHiddenPacket(recipient, source)
-    => ExactDecisionTargetNeutralPacketDependencyRank(packet)'
+    => ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+         snapshot, packet)'
          \in SetLessThan(
-              ExactDecisionTargetNeutralPacketDependencyRank(packet),
+              ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+                snapshot, packet),
               HistoricalDiscoveryPacketDependencyOrdering,
               HistoricalDiscoveryPacketDependencyCarrier)
 BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
-   ExactDecisionTargetNeutralPacketDependencyRankInCarrier,
+   ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
    IsaT(600)
-   DEF ExactDecisionTargetNeutralPacketDependencyRank,
-       ExactDecisionTargetNeutralCandidateOccurrenceRank,
-       ExactDecisionTargetNeutralServeOccurrenceRank,
-       ExactDecisionTargetNeutralCandidateOwners,
-       ExactDecisionTargetNeutralServeOwners,
-       ExactDecisionTargetNeutralCandidateRanks,
-       ExactDecisionTargetNeutralServeRanks,
-       ExactDecisionTargetNeutralCandidateDebtRank,
-       ExactDecisionTargetNeutralServeDebtRank,
+   DEF ExactDecisionTargetNeutralPacketDependencyRankForSnapshot,
+       ExactDecisionTargetNeutralCandidateOccurrenceRankForSnapshot,
+       ExactDecisionTargetNeutralServeOccurrenceRankForSnapshot,
+       ExactDecisionTargetNeutralCandidateOwnersForSnapshot,
+       ExactDecisionTargetNeutralServeOwnersForSnapshot,
+       ExactDecisionTargetNeutralCandidateRanksForSnapshot,
+       ExactDecisionTargetNeutralServeRanksForSnapshot,
+       ExactDecisionTargetNeutralCandidateDebtRankForSnapshot,
+       ExactDecisionTargetNeutralServeDebtRankForSnapshot,
        HistoricalDiscoveryPacketDependencyOrdering,
        HistoricalDiscoveryPacketDependencyCarrier,
        HistoricalDiscoveryCapacityTailOrdering,
@@ -10361,42 +11003,42 @@ BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
        BoundedTransportServiceRank, IngressSourceServiceRank,
        LexPairOrdering, SetLessThan, OpToRel
 
-THEOREM ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists ==
+THEOREM ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect ==
   \A snapshot:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
+    /\ AsyncProducerJournalClosed
     /\ gst
     /\ snapshot.candidateIdentities
-         \subseteq
-           ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet
+         \subseteq ExactDecisionTargetNeutralCandidateOwnerIdentitySet
     /\ snapshot.serveIdentities
          \subseteq ExactDecisionTargetNeutralServeOwnerIdentitySet
-    /\ ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(snapshot)
-    /\ ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot)
     /\ [AsyncNext]_AsyncAllVars
-    => /\ ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered(
-            snapshot)'
-       /\ ExactDecisionTargetNeutralFrozenServeLifecycleCovered(snapshot)'
+    => ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)'
+         \subseteq ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)
 BY AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
    ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst,
    ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst,
+   AsyncNextProjectsMonotoneProducerJournal,
    AsyncServeQueuedIdentityDepartureInstallsTombstone,
    AsyncServeRetiredIdentityCannotRequeueAtGst,
+   FS_Product, FS_Union, FS_Subset,
    IsaT(900)
-   DEF ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered,
-       ExactDecisionTargetNeutralFrozenServeLifecycleCovered,
+   DEF ExactDecisionTargetNeutralProducerEpisodeSet,
+       ExactDecisionTargetNeutralIngressEpisodeRemaining,
+       ExactDecisionTargetNeutralCandidateEpisodeRemaining,
+       ExactDecisionTargetNeutralServeEpisodeRemaining,
        ExactDecisionTargetNeutralCandidateIdentityCoalesced,
        ExactDecisionTargetNeutralCandidateIdentityObsolete,
        ExactDecisionTargetNeutralServeIdentityRetired,
        ExactDecisionTargetNeutralCandidateOwnerIdentitySet,
-       ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet,
        ExactDecisionTargetNeutralServeOwnerIdentitySet,
        ExactDecisionTargetNeutralLiveCandidateIdentitySet,
-       ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
        ExactDecisionTargetNeutralLiveServeIdentitySet,
        ExactDecisionTargetNeutralCandidateOwnerIdentity,
        ExactDecisionTargetNeutralServeOwnerIdentity,
+       AsyncProducerJournalMonotoneStep,
        AsyncCandidateAdmissionIdentity,
        AsyncCandidateAdmissionIdentityObsolete,
        AsyncCandidateAdmissionIdentityLifecycleCovered,
@@ -10415,6 +11057,378 @@ BY AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
        AsyncLogicalCandidateOwnershipInvariant,
        AsyncAllVars
 
+(***************************************************************************
+Frozen past-cut producer accounting.
+
+The next four theorems are the action-specialized bridge which the old
+materialized-identity complement could not supply.  A fixed snapshot stores a
+strict past cut.  Fresh roots and Serve tickets are allocated at the shared
+high-watermark and cannot enter below that cut.  Servicing a Candidate below
+the cut removes its exact remaining occurrence weight and replaces it only
+with the strictly smaller closed successor batch.  The proofless
+continuation/leader-wire handoff is ranked separately and may expose a
+physical Candidate only while consuming that outer rank.
+***************************************************************************)
+
+THEOREM ExactDecisionTargetNeutralFrozenPastCutsRemainPast ==
+  \A snapshot:
+    /\ AsyncStrongTypeInvariant
+    /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+    /\ \A node \in Responsive:
+         snapshot.schedulerCuts[node]
+           < AsyncNextCandidateLifecycleOrdinal(node)
+    /\ [AsyncNext]_AsyncAllVars
+    => \A node \in Responsive:
+         snapshot.schedulerCuts[node]
+           < AsyncNextCandidateLifecycleOrdinal(node)'
+BY AsyncSharedSchedulerHighWatermarkIsMonotone, IsaT(600)
+   DEF AsyncAllVars
+
+THEOREM ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent ==
+  \A snapshot:
+    /\ AsyncStrongTypeInvariant
+    /\ snapshot.physicalCuts \in [Responsive -> Nat]
+    /\ \A node \in Responsive:
+         snapshot.physicalCuts[node]
+           <= AsyncNextIngressPhysicalOrdinal(node)
+    /\ [AsyncNext]_AsyncAllVars
+    => \A node \in Responsive:
+         snapshot.physicalCuts[node]
+           <= AsyncNextIngressPhysicalOrdinal(node)'
+BY AsyncIngressPhysicalHighWatermarkIsMonotone, IsaT(600)
+   DEF AsyncAllVars
+
+THEOREM ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesMatchPhysicalCut ==
+  \A snapshot, node \in Responsive:
+    ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+      snapshot, node)
+      =
+    AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+      node, snapshot.schedulerCuts[node] + 1,
+      snapshot.physicalCuts[node])
+BY Isa
+   DEF ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot,
+       ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates
+
+THEOREM ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge ==
+  \A snapshot, node \in Responsive,
+     record \in asyncLeaderWireLifecycles:
+    AsyncLeaderWireActionInertDormant(record)
+      => /\ record
+              \notin
+                ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+                  snapshot, node)
+         /\ ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot(
+              snapshot, node, record) = 0
+BY CandidateProducerContinuationActionInertDormantHasZeroFrozenStage, Isa
+   DEF ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot,
+       AsyncLeaderWireActionInertDormant,
+       AsyncLeaderWireLifecycleActive,
+       AsyncLeaderWireLifecycleDormant
+
+THEOREM ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix ==
+  \A snapshot, node \in Responsive,
+     recipient \in ValidatorIds,
+     source \in AsyncIngressSources:
+    /\ snapshot.physicalCuts \in [Responsive -> Nat]
+    /\ snapshot.physicalCuts[node]
+         <= AsyncNextIngressPhysicalOrdinal(node)
+    /\ recipient = node
+    /\ AdmitHiddenPacket(recipient, source)
+      => \A record \in asyncLeaderWireLifecycles':
+           record.physicalAdmissionOrdinal >= snapshot.physicalCuts[node]
+             => record
+                  \notin
+                    ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+                      snapshot, node)'
+BY CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   Isa
+   DEF ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot
+
+THEOREM ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish ==
+  \A snapshot, node \in Responsive:
+    /\ gst
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+    /\ snapshot.physicalCuts \in [Responsive -> Nat]
+    /\ snapshot.schedulerCuts[node]
+         < AsyncNextCandidateLifecycleOrdinal(node)
+    /\ snapshot.physicalCuts[node]
+         <= AsyncNextIngressPhysicalOrdinal(node)
+    /\ [AsyncNext]_AsyncAllVars
+      => (ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+             snapshot, node))'
+           \subseteq
+             ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+               snapshot, node)
+BY ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesMatchPhysicalCut,
+   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   IsaT(900)
+   DEF AsyncAllVars
+
+THEOREM ExactDecisionTargetNeutralDropPolicyRejectedIsFrozenPhysicalPrefixFrame ==
+  \A snapshot, node \in Responsive,
+     recipient \in ValidatorIds,
+     source \in AsyncIngressSources:
+    DropPolicyRejectedHiddenPacket(recipient, source)
+      => /\ (ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+                snapshot, node))'
+              = ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+                  snapshot, node)
+         /\ (ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot(
+                snapshot, node))'
+              = ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot(
+                  snapshot, node)
+BY CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
+   Isa
+   DEF ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot,
+       ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot,
+       DropPolicyRejectedHiddenPacket
+
+THEOREM ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish ==
+  \A snapshot, node \in Responsive:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+    /\ snapshot.schedulerCuts[node]
+         < AsyncNextCandidateLifecycleOrdinal(node)
+    /\ [AsyncNext]_AsyncAllVars
+    => (AsyncCausalEpisodeFrozenPredecessorOrigins(
+           node, snapshot.schedulerCuts[node]))'
+         \subseteq
+           AsyncCausalEpisodeFrozenPredecessorOrigins(
+             node, snapshot.schedulerCuts[node])
+BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(1200)
+   DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncAllVars
+
+THEOREM ExactDecisionTargetNeutralFrozenPastCutServeCannotReplenish ==
+  \A snapshot, node \in Responsive:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+    /\ snapshot.schedulerCuts[node]
+         < AsyncNextCandidateLifecycleOrdinal(node)
+    /\ [AsyncNext]_AsyncAllVars
+    => (AsyncCausalEpisodeServeIngressIdentities(
+           node, snapshot.schedulerCuts[node]))'
+         \subseteq
+           AsyncCausalEpisodeServeIngressIdentities(
+             node, snapshot.schedulerCuts[node])
+BY AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal,
+   AsyncServeIngressAdmissionConsumesSharedSchedulerOrdinal,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(1200)
+   DEF AsyncCausalEpisodeServeIngressIdentities,
+       AsyncFreshServeIngressAdmissionsForNodeThisStep,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionOwned,
+       AsyncServeIngressAdmissionSchedulerOrdinal,
+       AsyncServeIngressAdmissionRecord,
+       AsyncServeIngressAdmissionRecords,
+       AsyncServeIngressAdmissionsAfterIngressDrain,
+       AsyncServeIngressAdmissionsWithout,
+       AsyncAllVars
+
+THEOREM ExactDecisionTargetNeutralFrozenPastCutCandidateServiceConsumesExactOccurrence ==
+  \A snapshot, node \in Responsive, serviced \in AsyncCandidateSet:
+    LET cutoffOrdinal == snapshot.schedulerCuts[node]
+    IN /\ gst
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+       /\ cutoffOrdinal < AsyncNextCandidateLifecycleOrdinal(node)
+       /\ serviced \in
+            AsyncCausalEpisodeCandidates(node, cutoffOrdinal)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ ~CandidateScheduled(serviced)'
+       => AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+            node, cutoffOrdinal)'
+            < AsyncCausalEpisodeExactCandidateOccurrenceBudget(
+                node, cutoffOrdinal)
+BY ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish,
+   AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   FS_CardinalityType, FS_Subset, IsaT(1800)
+   DEF AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
+       AsyncCausalEpisodeCandidates,
+       CandidateScheduled, AsyncAllVars
+
+THEOREM ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame ==
+  \A snapshot, node \in Responsive:
+    LET rank ==
+          ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(
+            snapshot, node)
+        prooflessRank ==
+          ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+            snapshot, node)
+    IN /\ gst
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+       /\ snapshot.physicalCuts \in [Responsive -> Nat]
+       /\ snapshot.schedulerCuts[node]
+            < AsyncNextCandidateLifecycleOrdinal(node)
+       /\ snapshot.physicalCuts[node]
+            <= AsyncNextIngressPhysicalOrdinal(node)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+            snapshot, node)' = prooflessRank
+       => \/ <<ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(
+                   snapshot, node)', rank>>
+                  \in AsyncCausalEpisodeStructuralRankOrdering
+          \/ ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(
+               snapshot, node)' = rank
+BY ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish,
+   ExactDecisionTargetNeutralFrozenPastCutServeCannotReplenish,
+   ExactDecisionTargetNeutralFrozenPastCutCandidateServiceConsumesExactOccurrence,
+   AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain,
+   AsyncServeQueuedIdentityDepartureInstallsTombstone,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   AsyncServeIngressTargetOnlyCannotOvertakeOlderRuntimeLifecycle,
+   AsyncServeIngressTargetOnlyCannotOvertakeOlderLocalLifecycle,
+   ExactTicketTurnDecreasesDrainableIngressTurnReach,
+   ExhaustedIngressStepDecreasesDrainableIngressTurnReach,
+   LocalStepDecreasesDrainableIngressTurnReach,
+   SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
+   RuntimeStepDecreasesDrainableIngressTurnReach,
+   OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach,
+   FS_CardinalityType, FS_Subset, IsaT(3000)
+   DEF ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot,
+       AsyncCausalEpisodeExactCandidateOccurrenceBudget,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
+       AsyncCausalEpisodeCandidates,
+       AsyncCausalEpisodeServeWorkBudget,
+       AsyncCausalEpisodeServeWorkTokens,
+       AsyncCausalEpisodeServeOccurrenceTokens,
+       AsyncCausalEpisodeServeIngressPrefixTokens,
+       AsyncCausalEpisodeServeIoPredecessorTokens,
+       AsyncCausalEpisodeServeReachDebt,
+       AsyncCausalEpisodeStructuralRankOrdering,
+       AsyncCausalEpisodeServeRankOrdering,
+       AsyncServeIngressTargetOnlyTurn,
+       AsyncServeIngressAdmissionsAfterIngressDrain,
+       AsyncServeIngressAdmissionsWithout,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeReservationsAfterIngressDrain,
+       ServiceIoWorkerWork, PopSelectedIngress,
+       DrainFairIngressSelected,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncNext, AsyncAllVars,
+       LexPairOrdering, OpToRel
+
+THEOREM ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame ==
+  \A snapshot, node \in Responsive:
+    LET rank ==
+          ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+            snapshot, node)
+    IN /\ gst
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+       /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+       /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+       /\ snapshot.physicalCuts \in [Responsive -> Nat]
+       /\ snapshot.schedulerCuts[node]
+            < AsyncNextCandidateLifecycleOrdinal(node)
+       /\ snapshot.physicalCuts[node]
+            <= AsyncNextIngressPhysicalOrdinal(node)
+       /\ [AsyncNext]_AsyncAllVars
+       => \/ <<ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+                   snapshot, node)', rank>>
+                  \in ExactDecisionTargetNeutralProoflessProducerOrdering
+          \/ ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+               snapshot, node)' = rank
+BY CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
+   CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst,
+   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
+   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
+   ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish,
+   ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge,
+   ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix,
+   ExactDecisionTargetNeutralDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
+   CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage,
+   CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge,
+   ExternalContinuationPersistsOrDescendsOrReplayExits,
+   LocalContinuationPersistsOrDescendsOrReplayExits,
+   AsyncCandidateProducerContinuationGstExcludesResetReplay,
+   AsyncCandidateProducerContinuationStatusIsMonotone,
+   AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
+   AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
+   AsyncCandidateProducerSemanticHandoffRetirementRequiresAck,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   FS_CardinalityType, FS_Subset, IsaT(3000)
+   DEF ExactDecisionTargetNeutralProoflessProducerRankForSnapshot,
+       ExactDecisionTargetNeutralProoflessProducerOrdering,
+       ExactDecisionTargetNeutralProoflessProducerCarrier,
+       ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot,
+       ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot,
+       ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot,
+       ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot,
+       ExactDecisionTargetNeutralProoflessCandidateTokensForSnapshot,
+       ExactDecisionTargetNeutralProoflessContinuationTokensForSnapshot,
+       ExactDecisionTargetNeutralProoflessContinuationBudgetForSnapshot,
+       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
+       AsyncCandidateProducerContinuationFrozenStatusTokens,
+       AsyncCandidateProducerContinuationFrozenRecords,
+       AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncNext, AsyncAllVars,
+       LexPairOrdering, SetLessThan, OpToRel
+
+THEOREM ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame ==
+  \A snapshot, node \in Responsive:
+    LET rank ==
+          ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+            snapshot, node)
+    IN /\ gst
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+       /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+       /\ snapshot.schedulerCuts \in [Responsive -> Nat]
+       /\ snapshot.physicalCuts \in [Responsive -> Nat]
+       /\ snapshot.schedulerCuts[node]
+            < AsyncNextCandidateLifecycleOrdinal(node)
+       /\ snapshot.physicalCuts[node]
+            <= AsyncNextIngressPhysicalOrdinal(node)
+       /\ [AsyncNext]_AsyncAllVars
+       => \/ <<ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+                   snapshot, node)', rank>>
+                  \in
+                    ExactDecisionTargetNeutralComposedCausalEpisodeOrdering
+          \/ ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+               snapshot, node)' = rank
+BY ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame,
+   IsaT(900)
+   DEF ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralComposedCausalEpisodeOrdering,
+       ExactDecisionTargetNeutralComposedCausalEpisodeCarrier,
+       LexPairOrdering
+
 THEOREM ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat:
@@ -10428,19 +11442,21 @@ THEOREM ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor ==
            request, response, packet, clockValue)'
       => /\ HistoricalDiscoveryDuePacketsAt(clockValue)'
               \subseteq snapshot.packets
-         /\ (ExactDecisionTargetNeutralFixedPredecessorSet(clockValue)'
-                \cap snapshot.predecessors)
+         /\ ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot(
+              snapshot, clockValue)'
+              \subseteq snapshot.predecessors
+         /\ ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)'
               \subseteq
-            (ExactDecisionTargetNeutralFixedPredecessorSet(clockValue)
-                \cap snapshot.predecessors)
-         /\ ((ExactDecisionTargetNeutralLiveProducerIdentitySet'
-                \ ExactDecisionTargetNeutralLiveProducerIdentitySet)
-                \cap
-              (snapshot.candidateIdentities
-                 \cup snapshot.serveIdentities))
-              = {}
+                ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)
 BY ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists,
+   ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect,
+   ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant,
+   AsyncServeIngressTicketExcludesLaterLocalWork,
+   AsyncServeIngressReservationPrecedesSameStepCandidateAllocation,
+   AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal,
+   AsyncFreshServeIngressSchedulerOrdinalInjectsAgainstPriorOwners,
+   AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn,
+   AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain,
    AsyncCandidateDiscardRetiresLogicalLifecycle,
    AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
    ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst,
@@ -10458,19 +11474,17 @@ BY ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
    IsaT(600)
    DEF ExactDecisionTargetNeutralFixedClockPending,
        ExactDecisionTargetNeutralSnapshotActive,
-       ExactDecisionTargetNeutralFixedPredecessorSet,
-       ExactDecisionTargetNeutralConcreteFixedClockRank,
-       ExactDecisionTargetNeutralLiveProducerIdentitySet,
+       ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot,
+       ExactDecisionTargetNeutralSchedulerCutTokens,
+       ExactDecisionTargetNeutralSchedulerCutToken,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
+       ExactDecisionTargetNeutralProducerEpisodeSet,
        ExactDecisionTargetNeutralLiveCandidateIdentitySet,
-       ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
        ExactDecisionTargetNeutralLiveServeIdentitySet,
        ExactDecisionTargetNeutralCandidateOwnerIdentitySet,
-       ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet,
        ExactDecisionTargetNeutralServeOwnerIdentitySet,
        ExactDecisionTargetNeutralCandidateOwnerIdentity,
        ExactDecisionTargetNeutralServeOwnerIdentity,
-       ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered,
-       ExactDecisionTargetNeutralFrozenServeLifecycleCovered,
        ExactDecisionTargetNeutralCandidateIdentityCoalesced,
        ExactDecisionTargetNeutralCandidateIdentityObsolete,
        ExactDecisionTargetNeutralServeIdentityRetired,
@@ -10488,7 +11502,7 @@ THEOREM ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ DecisionFrontierUniquenessInvariant
@@ -10521,7 +11535,7 @@ BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
    AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    AsyncBracketNextPreservesFinalProgressWitnessClosure,
-   ExactDecisionTargetNeutralConcreteRankInCarrier,
+   ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier,
    IsaT(1200)
    DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
        ExactDecisionTargetNeutralFixedClockStrictRankGoal,
@@ -10530,9 +11544,9 @@ BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
        ExactDecisionTargetNeutralFixedClockExit,
        ExactDecisionTargetNeutralResidual,
        ExactDecisionTargetNeutralGoal,
-       ExactDecisionTargetNeutralConcreteFixedClockRank,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
        ExactDecisionTargetNeutralConcreteBlockerStage,
-       ExactDecisionTargetNeutralConcreteDependencyRank,
+       ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot,
        HistoricalDiscoveryFixedClockLexStep,
        HistoricalDiscoveryFixedClockRank,
        HistoricalDiscoveryDuePacketDebt,
@@ -10542,18 +11556,65 @@ BY HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
        AdmitIngressPacket, AdmitHiddenPacket,
        AsyncAllVars
 
-\* Every non-goal step carries the source-frozen exclusive ceilings.  The
-\* candidate allowance is the configured exact-occurrence budget, not the
-\* simultaneous carrier capacity.  Same-origin causal children consume their
-\* parent's remaining occurrence credit; a later lifecycle cannot overtake
-\* the frozen predecessor cut.  Serve allocation needs no cumulative-view
-\* estimate because the theorem immediately above makes every such increment
-\* a strict packet-rank goal.
-THEOREM ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal ==
+\* At a non-strict fixed-clock step, the due-packet prefix either descends or
+\* keeps the same selected recipient.  In the latter case a first distinct
+\* ingress episode lowers the outer journal coordinate; otherwise the
+\* proofless handoff and exact occurrence/Serve ranks are descent-or-frame.
+THEOREM ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      /\ AsyncProducerJournalClosed
+      /\ ExactDecisionTargetNeutralProducerEpisodeAtBudget(
+           snapshot, mode, node, qc, archive, request, response,
+           packet, clockValue, sourceRank, budget)
+      /\ [AsyncNext]_AsyncAllVars
+      /\ ~(ExactDecisionTargetNeutralFixedClockStrictRankGoal(
+             snapshot, mode, node, qc, archive, request, response,
+             packet, clockValue, sourceRank))'
+      => \/ <<ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)',
+                budget>>
+               \in ExactDecisionTargetNeutralProducerEpisodeOrdering
+         \/ ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)'
+              = budget
+BY HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryFixedClockLexStepStrictlyDescends,
+   ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank,
+   ExactDecisionTargetNeutralExactRetransmissionIsProducerStutter,
+   ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralFrozenPastCutsRemainPast,
+   ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent,
+   AsyncNextProjectsMonotoneProducerJournal,
+   FS_CardinalityType, FS_Subset, IsaT(2400)
+   DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
+       ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier,
+       ExactDecisionTargetNeutralIngressEpisodeRank,
+       ExactDecisionTargetNeutralIngressEpisodeRemaining,
+       ExactDecisionTargetNeutralSelectedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot,
+       ExactDecisionTargetNeutralFixedClockStrictRankGoal,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
+       AsyncProducerJournalMonotoneStep,
+       HistoricalDiscoveryFixedClockLexStep,
+       LexPairOrdering, SetLessThan, OpToRel, AsyncAllVars
+
+\* Every non-goal step retains the immutable snapshot and stays in the same
+\* producer cell or a strictly smaller one.  This is the non-replenishment
+\* statement consumed by temporal induction; materialized-identity subset is
+\* retained only as an independent non-resurrection diagnostic.
+THEOREM ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish ==
+  \A snapshot, mode, node, qc, archive, request, response, packet:
+    \A clockValue \in Nat,
+       sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -10566,52 +11627,53 @@ THEOREM ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal ==
              packet, clockValue, sourceRank))'
       => /\ (ExactDecisionTargetNeutralSnapshotActive(
                  snapshot, clockValue))'
-         /\ \A responsiveNode \in Responsive:
-              /\ snapshot.candidateStart[responsiveNode]
-                   <= AsyncNextCandidateServiceOrdinal(responsiveNode)'
-              /\ AsyncNextCandidateServiceOrdinal(responsiveNode)'
-                   <= snapshot.candidateCeiling[responsiveNode]
-              /\ snapshot.serveStart[responsiveNode]
-                   <= asyncNextServeAdmissionOrdinal[responsiveNode]'
-              /\ asyncNextServeAdmissionOrdinal[responsiveNode]'
-                   <= snapshot.serveCeiling[responsiveNode]
-BY AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode,
-   AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget,
-   AsyncCausalEpisodeServicedCandidateConsumesExactOccurrenceBudget,
-   AsyncCausalEpisodeSameOriginHandoffRetainsLifecycleCut,
-   ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
+         /\ ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)'
+              \subseteq
+                ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)
+         /\ ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)'
+              \in
+                {budget}
+                  \cup
+                SetLessThan(
+                  budget,
+                  ExactDecisionTargetNeutralProducerEpisodeOrdering,
+                  ExactDecisionTargetNeutralProducerEpisodeCarrier)
+BY ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionAsyncNextPreservesCandidateTombstones,
+   ExactDecisionTargetNeutralFrozenPastCutsRemainPast,
+   ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists,
-   AsyncCandidateSuccessfulServiceAllocatesExactOrdinal,
-   AsyncCandidateTerminalDiscardAllocatesExactOrdinal,
-   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
-   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
-   AsyncServeIngressDuplicateDoesNotAllocateOrdinal,
-   ExactDecisionRequestLifecycleOrdinalCannotResurrect,
-   ExactDecisionServeTombstoneSurvivesSameHeightReplay,
-   SameHeightRestartPreservesServeHighWatermarks,
-   IsaT(1800)
+   FS_CardinalityType, FS_Subset, IsaT(1200)
    DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
        ExactDecisionTargetNeutralSnapshotActive,
+       ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot,
+       ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered,
+       ExactDecisionTargetNeutralFrozenServeLifecycleCovered,
+       ExactDecisionTargetNeutralCandidateEpisodeRemaining,
+       ExactDecisionTargetNeutralServeEpisodeRemaining,
+       ExactDecisionTargetNeutralCandidateIdentityCoalesced,
+       ExactDecisionTargetNeutralCandidateIdentityObsolete,
+       ExactDecisionTargetNeutralServeIdentityRetired,
+       ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeSet,
        ExactDecisionTargetNeutralProducerEpisodeBudget,
        ExactDecisionTargetNeutralProducerEpisodeTokens,
-       ExactDecisionTargetNeutralCandidateOrdinalTokens,
-       ExactDecisionTargetNeutralServeOrdinalTokens,
-       AsyncCandidateProducerEpisodeBudget,
+       ExactDecisionTargetNeutralMaterializedCandidateIdentityTokens,
+       ExactDecisionTargetNeutralIngressEpisodeTokens,
+       ExactDecisionTargetNeutralMaterializedServeIdentityTokens,
+       ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier,
        AsyncAllVars
 
-\* A non-goal step always retains at least one exclusive ordinal token.
-\* At the source this follows from the configured positive ceilings.  Later,
-\* exhaustion would contradict either the exact causal occurrence budget or
-\* the Serve-admission packet descent above.  The action premise is essential:
-\* source activity alone does not make an already-exhausted arbitrary snapshot
-\* impossible.
-THEOREM ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal ==
+\* The rank remains in its exact product carrier, including its explicit
+\* nested bottom.  No positive-slack or numeric-ordinal conclusion is exposed.
+THEOREM ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -10623,31 +11685,20 @@ THEOREM ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal ==
              snapshot, mode, node, qc, archive, request, response,
              packet, clockValue, sourceRank))'
       => ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)'
-           \in Nat \ {0}
-BY AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode,
-   AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget,
-   AsyncCausalEpisodeServicedCandidateConsumesExactOccurrenceBudget,
-   AsyncCausalEpisodeSameOriginHandoffRetainsLifecycleCut,
-   ExactDecisionTargetNeutralEpisodeBudgetIsNatural,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
-   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
-   ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal,
-   IsaT(1200)
+           \in ExactDecisionTargetNeutralProducerEpisodeCarrier
+BY ExactDecisionTargetNeutralEpisodeRankIsInCarrier,
+   ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish, IsaT(600)
    DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
        ExactDecisionTargetNeutralSnapshotActive,
        ExactDecisionTargetNeutralProducerEpisodeBudget,
-       ExactDecisionTargetNeutralProducerEpisodeTokens,
-       ExactDecisionTargetNeutralCandidateOrdinalTokens,
-       ExactDecisionTargetNeutralServeOrdinalTokens,
-       AsyncCandidateProducerEpisodeBudget,
-       AsyncServeLifecycleFamilyBudget
+       ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier
 
-THEOREM ExactDecisionTargetNeutralNonDescentConsumesOrdinal ==
+THEOREM ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank ==
   \A snapshot, mode, node, qc, archive, request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -10658,43 +11709,28 @@ THEOREM ExactDecisionTargetNeutralNonDescentConsumesOrdinal ==
       /\ ~ExactDecisionTargetNeutralFixedClockStrictRankGoal(
            snapshot, mode, node, qc, archive, request, response,
            packet, clockValue, sourceRank)'
-      /\ ExactDecisionTargetNeutralProducerPrefix(
-           ExactDecisionTargetNeutralConcreteFixedClockRank(clockValue)')
-           =
-         ExactDecisionTargetNeutralProducerPrefix(sourceRank)
-      /\ ExactDecisionTargetNeutralLiveProducerIdentitySet'
-           # ExactDecisionTargetNeutralLiveProducerIdentitySet
+      /\ ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)'
+           # budget
       => ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)'
-           < budget
-BY AsyncCandidateSuccessfulServiceAllocatesExactOrdinal,
-   AsyncCandidateTerminalDiscardAllocatesExactOrdinal,
-   ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst,
-   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
-   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
-   AsyncServeIngressDuplicateDoesNotAllocateOrdinal,
-   ExactDecisionRequestLifecycleOrdinalCannotResurrect,
-   ExactDecisionServeTombstoneSurvivesSameHeightReplay,
-   CommandSuccessorsHaveBoundedLength,
-   CommandSuccessorInventoryIsClosed,
-   FS_Interval, FS_CardinalityType, IsaT(600)
+           \in
+             SetLessThan(
+               budget,
+               ExactDecisionTargetNeutralProducerEpisodeOrdering,
+               ExactDecisionTargetNeutralProducerEpisodeCarrier)
+BY ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish,
+   IsaT(600)
    DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
        ExactDecisionTargetNeutralProducerEpisodeBudget,
-       ExactDecisionTargetNeutralProducerEpisodeTokens,
-       ExactDecisionTargetNeutralCandidateOrdinalTokens,
-       ExactDecisionTargetNeutralServeOrdinalTokens,
-       ExactDecisionTargetNeutralLiveProducerIdentitySet,
-       ExactDecisionTargetNeutralLiveCandidateIdentitySet,
-       ExactDecisionTargetNeutralLiveServeIdentitySet,
-       ExactDecisionTargetNeutralCandidateOwnerIdentity,
-       ExactDecisionTargetNeutralServeOwnerIdentity,
-       AsyncNextCandidateServiceOrdinal
+       ExactDecisionTargetNeutralProducerEpisodeRank,
+       ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier
 
 THEOREM ExactDecisionTargetNeutralRankCellHasConcreteFairOwner ==
   \A initialContext, snapshot, mode, node, qc, archive,
      request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -10715,6 +11751,12 @@ THEOREM ExactDecisionTargetNeutralRankCellHasConcreteFairOwner ==
              sourceRank, budget, owner)
 BY HistoricalDiscoveryFixedClockBlockerCharacterization,
    AsyncTickEnabledHasConcreteSuccessor,
+   CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
+   ExternalCandidateProducerContinuationSelectionIsReady,
+   LocalContinuationReadyEnablesFairResolution,
+   ConditionalTransportContinuationReadyEnablesFairService,
+   VolatileBodyContinuationReadyEnablesFairService,
+   CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends,
    OverdueResponsivePacketEnablesConcreteProgress,
    DueNodeServiceEnablesConcreteGateProgress,
    DueIoServiceEnablesConcreteLocalProgress,
@@ -10726,10 +11768,12 @@ BY HistoricalDiscoveryFixedClockBlockerCharacterization,
    HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
    HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
    HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank,
+   ExactDecisionTargetNeutralExactRetransmissionIsProducerStutter,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
    ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
-   ExactDecisionTargetNeutralConcreteRankInCarrier,
+   ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier,
    IsaT(1200)
    DEF ExactDecisionTargetNeutralProducerEpisodeAtBudget,
        ExactDecisionTargetNeutralRankCellOutcome,
@@ -10739,16 +11783,16 @@ BY HistoricalDiscoveryFixedClockBlockerCharacterization,
        ExactDecisionTargetNeutralFairOwnerSet,
        ExactDecisionTargetNeutralFairOwner,
        ExactDecisionTargetNeutralFairAction,
-       ExactDecisionTargetNeutralConcreteFixedClockRank,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
        ExactDecisionTargetNeutralConcreteBlockerStage,
-       ExactDecisionTargetNeutralConcreteDependencyRank,
-       ExactDecisionTargetNeutralPacketDependencyRank,
+       ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot,
+       ExactDecisionTargetNeutralPacketDependencyRankForSnapshot,
        ExactDecisionTargetNeutralSelectedOverduePacket,
-       ExactDecisionTargetNeutralSelectedPacketDependencyRank,
-       ExactDecisionTargetNeutralCandidateOwners,
-       ExactDecisionTargetNeutralServeOwners,
-       ExactDecisionTargetNeutralCandidateOccurrenceRank,
-       ExactDecisionTargetNeutralServeOccurrenceRank,
+       ExactDecisionTargetNeutralSelectedPacketDependencyRankForSnapshot,
+       ExactDecisionTargetNeutralCandidateOwnersForSnapshot,
+       ExactDecisionTargetNeutralServeOwnersForSnapshot,
+       ExactDecisionTargetNeutralCandidateOccurrenceRankForSnapshot,
+       ExactDecisionTargetNeutralServeOccurrenceRankForSnapshot,
        ExactDecisionTargetNeutralProducerPrefix,
        ExactDecisionTargetNeutralProducerEpisodeBudget,
        HistoricalDiscoveryFixedClockLexStep,
@@ -10759,7 +11803,7 @@ THEOREM ExactDecisionTargetNeutralSelectedOwnerIsReady ==
      request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -10788,7 +11832,10 @@ THEOREM ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness ==
       => AsyncSpecAt(initialContext)
            => WF_AsyncAllVars(
                 ExactDecisionTargetNeutralFairAction(owner))
-BY Isa, PTL
+BY LocalCandidateProducerContinuationResolutionUsesReviewedFairAction,
+   ConditionalTransportProducerContinuationServiceUsesReviewedFairAction,
+   VolatileBodyProducerContinuationServiceUsesReviewedFairAction,
+   Isa, PTL
    DEF ExactDecisionTargetNeutralFairOwnerSet,
        ExactDecisionTargetNeutralFairOwner,
        ExactDecisionTargetNeutralFairAction,
@@ -10799,7 +11846,7 @@ THEOREM ExactDecisionTargetNeutralRankCellStepIsSafe ==
      request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ DecisionFrontierUniquenessInvariant
@@ -10832,7 +11879,7 @@ THEOREM ExactDecisionTargetNeutralRankCellStepIsSafe ==
                  sourceRank, budget)
 BY ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
    ExactDecisionRequestHeadGateResidualStepIsSafe,
    ExactDecisionResponseHeadGateResidualStepIsSafe,
    ExactDecisionBodyHoldingAliasPersistsOrFrontier,
@@ -10843,6 +11890,8 @@ BY ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    AsyncBracketNextPreservesProgressOwnership,
    AsyncBracketNextPreservesFinalProgressWitnessClosure,
    ExactDecisionAsyncNextPreservesCandidateTombstones,
+   ExactDecisionTargetNeutralFirstDistinctIngressConsumesFrozenRank,
+   ExactDecisionTargetNeutralExactRetransmissionIsProducerStutter,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
    HistoricalLatentOwnerDebtCannotIncreaseAtFixedClock,
    IsaT(1200)
@@ -10855,7 +11904,7 @@ BY ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
        ExactDecisionTargetNeutralGoal,
        ExactDecisionTargetNeutralSelectedFairOwner,
        ExactDecisionTargetNeutralOwnerReadyForRankCell,
-       ExactDecisionTargetNeutralConcreteFixedClockRank,
+       ExactDecisionTargetNeutralConcreteFixedClockRankForSnapshot,
        ExactDecisionTargetNeutralProducerPrefix,
        ExactDecisionTargetNeutralProducerEpisodeBudget,
        AsyncAllVars
@@ -10865,7 +11914,7 @@ THEOREM ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell ==
      request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -10888,8 +11937,8 @@ THEOREM ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell ==
            packet, clockValue, sourceRank, budget)'
 BY ExactDecisionTargetNeutralSelectedOwnerIsReady,
    ExactDecisionTargetNeutralRankCellHasConcreteFairOwner,
-   ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal,
-   ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal,
+   ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish,
+   ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier,
    ENABLEDaxioms, IsaT(600)
    DEF ExactDecisionTargetNeutralOwnerReadyForRankCell,
        ExactDecisionTargetNeutralRankCellOutcome,
@@ -10897,11 +11946,35 @@ BY ExactDecisionTargetNeutralSelectedOwnerIsReady,
        ExactDecisionTargetNeutralProducerEpisodeBudget,
        AsyncAllVars
 
-\* Consuming the final positive ordinal cannot create a proofless zero-budget
-\* episode.  The repaired outcome admits only a strictly smaller positive
-\* episode, so a selected fair action at budget one must reach the exact goal
-\* (or a strict outer-rank goal) in the same transition.
-THEOREM ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal ==
+THEOREM ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank ==
+  /\ ExactDecisionTargetNeutralProducerEpisodeBottom
+       \in ExactDecisionTargetNeutralProducerEpisodeCarrier
+  /\ SetLessThan(
+       ExactDecisionTargetNeutralProducerEpisodeBottom,
+       ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier)
+       = {}
+BY IsaT(600)
+   DEF ExactDecisionTargetNeutralProducerEpisodeBottom,
+       ExactDecisionTargetNeutralComposedCausalEpisodeBottom,
+       ExactDecisionTargetNeutralProoflessProducerBottom,
+       ExactDecisionTargetNeutralCausalEpisodeBottom,
+       ExactDecisionTargetNeutralProducerEpisodeOrdering,
+       ExactDecisionTargetNeutralProducerEpisodeCarrier,
+       ExactDecisionTargetNeutralComposedCausalEpisodeOrdering,
+       ExactDecisionTargetNeutralComposedCausalEpisodeCarrier,
+       ExactDecisionTargetNeutralProoflessProducerOrdering,
+       ExactDecisionTargetNeutralProoflessProducerCarrier,
+       AsyncCausalEpisodeStructuralRankOrdering,
+       AsyncCausalEpisodeStructuralRankCarrier,
+       AsyncCausalEpisodeServeRankOrdering,
+       AsyncCausalEpisodeServeRankCarrier,
+       LexPairOrdering, SetLessThan, OpToRel
+
+\* The nested product bottom has no predecessor.  Therefore the selected fair
+\* owner must reach the exact goal or strict composite-rank descent in the
+\* same transition; no fabricated last positive ordinal is involved.
+THEOREM ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal ==
   \A initialContext, snapshot, mode, node, qc, archive,
      request, response, packet:
     \A clockValue \in Nat,
@@ -10917,16 +11990,19 @@ THEOREM ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal ==
            = AsyncVotersAt(initialContext)
       /\ ExactDecisionTargetNeutralProducerEpisodeAtBudget(
            snapshot, mode, node, qc, archive, request, response,
-           packet, clockValue, sourceRank, 1)
+           packet, clockValue, sourceRank,
+           ExactDecisionTargetNeutralProducerEpisodeBottom)
       /\ <<ExactDecisionTargetNeutralFairAction(
              ExactDecisionTargetNeutralSelectedFairOwner(
                initialContext, snapshot, mode, node, qc, archive,
                request, response, packet, clockValue,
-               sourceRank, 1))>>_AsyncAllVars
+               sourceRank,
+               ExactDecisionTargetNeutralProducerEpisodeBottom))>>_AsyncAllVars
       => ExactDecisionTargetNeutralFixedClockStrictRankGoal(
            snapshot, mode, node, qc, archive, request, response,
            packet, clockValue, sourceRank)'
 BY ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
+   ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
    IsaT(600)
    DEF ExactDecisionTargetNeutralRankCellOutcome,
        SetLessThan, OpToRel
@@ -10936,7 +12012,7 @@ THEOREM ExactDecisionTargetNeutralFairEpisodeStep ==
      request, response, packet:
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier,
-       budget \in Nat:
+       budget \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
       AsyncSpecAt(initialContext)
         => (ExactDecisionTargetNeutralProducerEpisodeAtBudget(
               snapshot, mode, node, qc, archive, request, response,
@@ -10950,7 +12026,8 @@ PROOF
                 NEW response, NEW packet, NEW clockValue \in Nat,
                 NEW sourceRank
                   \in ExactDecisionTargetNeutralFixedClockCarrier,
-                NEW budget \in Nat,
+                NEW budget
+                  \in ExactDecisionTargetNeutralProducerEpisodeCarrier,
                 AsyncSpecAt(initialContext)
          PROVE ExactDecisionTargetNeutralProducerEpisodeAtBudget(
                  snapshot, mode, node, qc, archive, request, response,
@@ -11073,7 +12150,8 @@ THEOREM ExactDecisionTargetNeutralFiniteEpisodeClosesRankCell ==
     \A clockValue \in Nat,
        sourceRank \in ExactDecisionTargetNeutralFixedClockCarrier:
       AsyncSpecAt(initialContext)
-        => \A budget \in Nat:
+        => \A budget
+             \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
              ExactDecisionTargetNeutralProducerEpisodeAtBudget(
                snapshot, mode, node, qc, archive, request, response,
                packet, clockValue, sourceRank, budget)
@@ -11081,8 +12159,9 @@ THEOREM ExactDecisionTargetNeutralFiniteEpisodeClosesRankCell ==
                     snapshot, mode, node, qc, archive, request, response,
                     packet, clockValue, sourceRank)
 BY ExactDecisionTargetNeutralFairEpisodeStep,
-   ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal,
-   NatLessThanWellFounded, WellFoundedLeadsTo
+   ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal,
+   ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded,
+   WellFoundedLeadsTo
    DEF ExactDecisionTargetNeutralRankCellOutcome
 
 THEOREM ExactDecisionTargetNeutralFixedClockRankStep ==
@@ -11134,15 +12213,17 @@ PROOF
               \/ ExactDecisionTargetNeutralFixedClockStrictRankGoal(
                    snapshot, mode, node, qc, archive, request, response,
                    packet, clockValue, sourceRank)
-              \/ \E budget \in Nat:
+              \/ \E budget
+                   \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
                    ExactDecisionTargetNeutralProducerEpisodeAtBudget(
                      snapshot, mode, node, qc, archive, request, response,
                      packet, clockValue, sourceRank, budget))
-      BY <2>1, ExactDecisionTargetNeutralEpisodeBudgetIsNatural, PTL
+      BY <2>1, ExactDecisionTargetNeutralEpisodeRankIsInCarrier, PTL
          DEF ExactDecisionTargetNeutralFixedClockBlockedAtRank,
              ExactDecisionTargetNeutralProducerEpisodeAtBudget,
              ExactDecisionTargetNeutralFixedClockStrictRankGoal
-    <2>3. \A budget \in Nat:
+    <2>3. \A budget
+               \in ExactDecisionTargetNeutralProducerEpisodeCarrier:
              ExactDecisionTargetNeutralProducerEpisodeAtBudget(
                snapshot, mode, node, qc, archive, request, response,
                packet, clockValue, sourceRank, budget)
@@ -11225,8 +12306,9 @@ PROOF
                   mode, node, qc, archive, request, response,
                   packet, clockValue, rank))
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         ExactDecisionAsyncSpecAlwaysCandidateTombstones,
          ExactDecisionTargetNeutralSnapshotIsFinite,
-         ExactDecisionTargetNeutralConcreteRankInCarrier, PTL
+         ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier, PTL
          DEF ExactDecisionTargetNeutralFixedClockBlockedAtRank
     <2> QED BY <2>2, <2>3, PTL
   <1> QED BY <1>1
@@ -11332,7 +12414,8 @@ PROOF
   <1>1. ASSUME [AsyncNext]_AsyncAllVars, ~AsyncTick
          PROVE asyncNow' = asyncNow
     <2>1. CASE UNCHANGED AsyncAllVars
-      BY <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars
+      BY <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars, AsyncProducerVars
     <2>2. CASE AsyncNext
       BY <1>1, <2>2,
          ExactDecisionTargetNeutralNonTickAsyncNextLeavesClock
@@ -11465,6 +12548,7 @@ PROOF
                  packet, budget)
     <2>1. [](/\ AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateServiceLifecycleInvariant
               /\ DecisionFrontierUniquenessInvariant
               /\ DecisionTimeoutFrontierInvariant
               /\ ResponsiveRecoveryValidationClearedInvariant
@@ -11473,6 +12557,7 @@ PROOF
               /\ ExactDecisionRequestAuthorityIsolationInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
+         ExactDecisionAsyncSpecAlwaysCandidateTombstones,
          DecisionFrontierUniquenessInvariantFromAsyncSpec,
          DecisionTimeoutFrontierInvariantFromAsyncSpec,
          ResponsiveRecoveryValidationClearedInvariantObligation,
@@ -11505,15 +12590,40 @@ PROOF
          DEF ExactDecisionTargetNeutralClockBudgetFrontier,
              ExactDecisionTargetNeutralFixedClockPending,
              ExactDecisionTargetNeutralFixedClockSnapshot,
+             ExactDecisionTargetNeutralCurrentPhysicalCuts,
              ExactDecisionTargetNeutralSnapshotActive,
-             ExactDecisionTargetNeutralFixedPredecessorSet,
+             ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot,
+             ExactDecisionTargetNeutralCurrentPastSchedulerCut,
+             ExactDecisionTargetNeutralCurrentPastSchedulerCuts,
+             ExactDecisionTargetNeutralSchedulerCutToken,
+             ExactDecisionTargetNeutralSchedulerCutTokens,
+             ExactDecisionTargetNeutralRetainedCausalRootsForSnapshot,
              ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered,
              ExactDecisionTargetNeutralFrozenServeLifecycleCovered,
+             ExactDecisionTargetNeutralCandidateEpisodeRemaining,
+             ExactDecisionTargetNeutralServeEpisodeRemaining,
+             ExactDecisionTargetNeutralFrozenProducerRequests,
+             ExactDecisionTargetNeutralIngressEpisodeUniverse,
+             AsyncProducerEpisode, AsyncProducerIngressStage,
+             ExactDecisionTargetNeutralCandidateEpisodeUniverse,
+             ExactDecisionTargetNeutralFrozenCausalRoots,
+             ExactDecisionTargetNeutralRetainedCandidateCausalRoots,
+             ExactDecisionTargetNeutralLiveCandidateCausalRoots,
+             ExactDecisionTargetNeutralLifecycleRecordCausalRoots,
+             ExactDecisionTargetNeutralProducerContinuationCausalRoots,
+             ExactDecisionTargetNeutralOrdinaryIngressCausalRoots,
+             ExactDecisionTargetNeutralLeaderWireCausalRoots,
+             ExactDecisionTargetNeutralDurableReplayCausalRoots,
+             ExactDecisionTargetNeutralTimeoutReservationCausalRoots,
+             ExactDecisionTargetNeutralDuePacketCausalRoots,
+             ExactDecisionTargetNeutralServeEpisodeUniverse,
+             ExactDecisionTargetNeutralRetainedServeLifecycleRecords,
+             ExactDecisionTargetNeutralRetainedServeIdentitySet,
              ExactDecisionTargetNeutralLiveCandidateIdentitySet,
-             ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
              ExactDecisionTargetNeutralLiveServeIdentitySet,
-             ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet,
              ExactDecisionTargetNeutralCandidateOwnerIdentitySet,
+             ExactDecisionTargetNeutralCausalRootSet,
+             ExactDecisionTargetNeutralCausalRoot,
              ExactDecisionTargetNeutralServeOwnerIdentitySet,
              ExactDecisionTargetNeutralCandidateOwnerIdentity,
              ExactDecisionTargetNeutralServeOwnerIdentity,
@@ -11643,6 +12753,7 @@ PROOF
                  mode, node, qc, archive, request, response, packet)
     <2>1. [](/\ AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateServiceLifecycleInvariant
               /\ DecisionFrontierUniquenessInvariant
               /\ DecisionTimeoutFrontierInvariant
               /\ ResponsiveRecoveryValidationClearedInvariant
@@ -11651,6 +12762,7 @@ PROOF
               /\ ExactDecisionRequestAuthorityIsolationInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
+         ExactDecisionAsyncSpecAlwaysCandidateTombstones,
          DecisionFrontierUniquenessInvariantFromAsyncSpec,
          DecisionTimeoutFrontierInvariantFromAsyncSpec,
          ResponsiveRecoveryValidationClearedInvariantObligation,
@@ -11692,15 +12804,40 @@ PROOF
       BY <2>1, ExactDecisionTargetNeutralSnapshotIsFinite, Isa, PTL
          DEF ExactDecisionTargetNeutralFixedClockPending,
              ExactDecisionTargetNeutralFixedClockSnapshot,
+             ExactDecisionTargetNeutralCurrentPhysicalCuts,
              ExactDecisionTargetNeutralSnapshotActive,
-             ExactDecisionTargetNeutralFixedPredecessorSet,
+             ExactDecisionTargetNeutralFixedPredecessorSetForSnapshot,
+             ExactDecisionTargetNeutralCurrentPastSchedulerCut,
+             ExactDecisionTargetNeutralCurrentPastSchedulerCuts,
+             ExactDecisionTargetNeutralSchedulerCutToken,
+             ExactDecisionTargetNeutralSchedulerCutTokens,
+             ExactDecisionTargetNeutralRetainedCausalRootsForSnapshot,
              ExactDecisionTargetNeutralFrozenCandidateLifecycleCovered,
              ExactDecisionTargetNeutralFrozenServeLifecycleCovered,
+             ExactDecisionTargetNeutralCandidateEpisodeRemaining,
+             ExactDecisionTargetNeutralServeEpisodeRemaining,
+             ExactDecisionTargetNeutralFrozenProducerRequests,
+             ExactDecisionTargetNeutralIngressEpisodeUniverse,
+             AsyncProducerEpisode, AsyncProducerIngressStage,
+             ExactDecisionTargetNeutralCandidateEpisodeUniverse,
+             ExactDecisionTargetNeutralFrozenCausalRoots,
+             ExactDecisionTargetNeutralRetainedCandidateCausalRoots,
+             ExactDecisionTargetNeutralLiveCandidateCausalRoots,
+             ExactDecisionTargetNeutralLifecycleRecordCausalRoots,
+             ExactDecisionTargetNeutralProducerContinuationCausalRoots,
+             ExactDecisionTargetNeutralOrdinaryIngressCausalRoots,
+             ExactDecisionTargetNeutralLeaderWireCausalRoots,
+             ExactDecisionTargetNeutralDurableReplayCausalRoots,
+             ExactDecisionTargetNeutralTimeoutReservationCausalRoots,
+             ExactDecisionTargetNeutralDuePacketCausalRoots,
+             ExactDecisionTargetNeutralServeEpisodeUniverse,
+             ExactDecisionTargetNeutralRetainedServeLifecycleRecords,
+             ExactDecisionTargetNeutralRetainedServeIdentitySet,
              ExactDecisionTargetNeutralLiveCandidateIdentitySet,
-             ExactDecisionTargetNeutralFrozenLiveCandidateIdentitySet,
              ExactDecisionTargetNeutralLiveServeIdentitySet,
-             ExactDecisionTargetNeutralFrozenCandidateOwnerIdentitySet,
              ExactDecisionTargetNeutralCandidateOwnerIdentitySet,
+             ExactDecisionTargetNeutralCausalRootSet,
+             ExactDecisionTargetNeutralCausalRoot,
              ExactDecisionTargetNeutralServeOwnerIdentitySet,
              ExactDecisionTargetNeutralCandidateOwnerIdentity,
              ExactDecisionTargetNeutralServeOwnerIdentity,

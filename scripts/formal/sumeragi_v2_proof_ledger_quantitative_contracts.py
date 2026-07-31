@@ -1339,6 +1339,12 @@ HISTORICAL_LOCAL_AUTHORITY_REQUIRED_OPERATORS = (
     "IndexedLocalAdequateLeaderTargetProofInvariantsProperty",
     "IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty",
     "IndexedLocalAdequateLeaderProducerTransportClosureProperty",
+    "IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty",
+    (
+        "IndexedLocalAdequateLeaderRetainedProducer"
+        "NonDescentEpisodeStepProperty"
+    ),
+    "IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty",
     "IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty",
     "IndexedAdequateLeaderLocalFairBehaviorAt",
     "IndexedLocalAdequateLeaderDecisionConvergenceProperty",
@@ -1401,6 +1407,27 @@ HISTORICAL_LOCAL_AUTHORITY_EXACT_OPERATOR_BODIES = {
         "\\A initialContext \\in AdmissibleContextRecords: "
         "IndexedAdequateLeaderWitness(initialContext)! "
         "AdequateLeaderTargetProducerTransportClosureProperty( "
+        "IndexedChainSpec)"
+    ),
+    "IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty": (
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedAdequateLeaderWitness(initialContext)! "
+        "AdequateLeaderTargetProducerTransportOccurrenceClosureProperty( "
+        "IndexedChainSpec)"
+    ),
+    (
+        "IndexedLocalAdequateLeaderRetainedProducer"
+        "NonDescentEpisodeStepProperty"
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedAdequateLeaderWitness(initialContext)! "
+        "AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty( "
+        "IndexedChainSpec)"
+    ),
+    "IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty": (
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedAdequateLeaderWitness(initialContext)! "
+        "AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty( "
         "IndexedChainSpec)"
     ),
     "IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty": (
@@ -1507,7 +1534,18 @@ HISTORICAL_LOCAL_AUTHORITY_REQUIRED_PROOF_TOKENS = {
     ),
     "IndexedAdequateLeaderCompletedProvidersSupplyLocalSemanticKernel": (
         "IndexedLiveChainSpecProvidesLocalAdequateLeaderProofInvariants",
+        "IndexedAdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose",
+        "IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty",
         "AdequateLeaderCompletedLocalProviderKernelSuppliesSemanticKernel",
+    ),
+    "IndexedAdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose": (
+        "AdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose",
+        "IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty",
+        (
+            "IndexedLocalAdequateLeaderRetainedProducer"
+            "NonDescentEpisodeStepProperty"
+        ),
+        "IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty",
     ),
     "IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster": (
         "IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster",

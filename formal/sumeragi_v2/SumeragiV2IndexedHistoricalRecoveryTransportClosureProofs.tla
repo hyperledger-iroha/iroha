@@ -89,51 +89,55 @@ IndexedHistoricalTransport(initialContext) ==
        asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
        asyncServeReservations <- IndexedScheduler(initialContext, 15),
        asyncServeTombstones <- IndexedScheduler(initialContext, 16),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
-       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
-       asyncSentItems <- IndexedScheduler(initialContext, 34),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
-       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
-       asyncTransport <- IndexedScheduler(initialContext, 38),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
-       asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncServeAttempts <- IndexedScheduler(initialContext, 17),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 18),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 20),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 21),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 22),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 25),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 26),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 27),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 28),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 29),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 30),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 34),
+       asyncSentItems <- IndexedScheduler(initialContext, 35),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 36),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 37),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 38),
+       asyncTransport <- IndexedScheduler(initialContext, 39),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 40),
+       asyncIngressReady <- IndexedScheduler(initialContext, 41),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 42),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 43),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 44),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 45),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 46),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
          IndexedRecovery(initialContext, 5),
+       asyncProducerKnownObligations <- IndexedProducer(initialContext, 1),
+       asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
+       asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext)
 
 (***************************************************************************
 Exact projection.
 
-These are the same duplicated GST, 49 Core, 45 scheduler, five recovery, and
-fixed-corridor receipt substitutions as `IndexedAsync` and
-`IndexedDecisionWitness`.  The extensional equality is what permits the
-product bracket to feed the transport instance without defining a second
+These are the same duplicated GST, 49 Core, 46 scheduler, five recovery,
+three producer-journal, and fixed-corridor receipt substitutions as
+`IndexedAsync` and `IndexedDecisionWitness`.  The extensional equality permits
+the product bracket to feed the transport instance without defining a second
 state machine.
 ***************************************************************************)
 
@@ -147,9 +151,11 @@ BY Isa
        IndexedHistoricalTransport!AsyncAllVars,
        IndexedHistoricalTransport!AsyncSchedulerVars,
        IndexedHistoricalTransport!AsyncRecoveryVars,
+       IndexedHistoricalTransport!AsyncProducerVars,
        IndexedHistoricalTransport!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedInitProjectsEveryHistoricalTransportInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -205,8 +211,10 @@ PROOF
            DEF IndexedHistoricalTransport!AsyncAllVars,
                IndexedHistoricalTransport!AsyncSchedulerVars,
                IndexedHistoricalTransport!AsyncRecoveryVars,
+               IndexedHistoricalTransport!AsyncProducerVars,
                IndexedHistoricalTransport!vars,
-               IndexedCore, IndexedScheduler, IndexedRecovery
+               IndexedCore, IndexedScheduler, IndexedRecovery,
+               IndexedProducer, IndexedFixedCorridorDeadlines
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1

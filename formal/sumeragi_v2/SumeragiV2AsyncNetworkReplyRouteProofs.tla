@@ -59,8 +59,10 @@ THEOREM AsyncProductionStepIsDisjointProduct ==
   AsyncProductionNext <=>
     \/ /\ AsyncNext
        /\ UNCHANGED AsyncReplyRouteVars
+       /\ AsyncReplyRouteBaseAttemptCoupling'
     \/ /\ AsyncReplyRouteNext
        /\ UNCHANGED AsyncAllVars
+       /\ AsyncReplyRouteBaseAttemptCoupling'
 BY DEF AsyncProductionNext
 
 THEOREM AsyncConsensusProductBranchStuttersReplyLifecycle ==
@@ -79,6 +81,45 @@ THEOREM AsyncReplyRouteFairnessIsExactV2Fairness ==
   AsyncReplyRouteFairness <=>
     AsyncReplyRoute!ReplyRouteV2Fairness
 BY DEF AsyncReplyRouteFairness
+
+(***************************************************************************
+The inherited route fairness names bare ticket/service actions.  These
+current-state guards prove that their kernel prerequisites already retain the
+exact positive, nonempty base output required by the production wrappers.
+The primed product coupling then prevents base-only revocation while either
+route occurrence remains live; no additional fairness premise is introduced.
+***************************************************************************)
+THEOREM AsyncReplyServiceReadyPositiveOutputGuardObligation ==
+  AsyncReplyServiceReadyPositiveOutputGuard
+BY DEF AsyncReplyServiceReadyPositiveOutputGuard,
+       AsyncReplySemanticServiceReady
+
+THEOREM AsyncReplyBareAcquirePositiveBaseGuardObligation ==
+  AsyncReplyBareAcquirePositiveBaseGuard
+BY Isa
+   DEF AsyncReplyBareAcquirePositiveBaseGuard,
+       AsyncReplyRouteBaseAttemptCoupling,
+       AsyncReplyRouteToBaseAttemptCoupling,
+       AsyncReplyRoute!ReplyAttemptLifecycleIdentityOwned,
+       AsyncReplyRoute!ReplyAttemptLifecycleIdentitiesFor
+
+THEOREM AsyncReplyBareServicePositiveBaseGuardObligation ==
+  AsyncReplyBareServicePositiveBaseGuard
+BY Isa
+   DEF AsyncReplyBareServicePositiveBaseGuard,
+       AsyncReplyRouteBaseAttemptCoupling,
+       AsyncReplyRouteToBaseAttemptCoupling,
+       AsyncReplyRoute!ReplyAttemptOwned,
+       AsyncReplyRoute!ReplyAttemptsForSource,
+       AsyncReplyRoute!ReplyAttemptsFor
+
+THEOREM AsyncReplyBareFairnessGuardsRequirePositiveBase ==
+  /\ AsyncReplyServiceReadyPositiveOutputGuard
+  /\ AsyncReplyBareAcquirePositiveBaseGuard
+  /\ AsyncReplyBareServicePositiveBaseGuard
+BY AsyncReplyServiceReadyPositiveOutputGuardObligation,
+   AsyncReplyBareAcquirePositiveBaseGuardObligation,
+   AsyncReplyBareServicePositiveBaseGuardObligation
 
 (***************************************************************************
 Checked product boundaries.  These theorems prove exact V2 action projection,

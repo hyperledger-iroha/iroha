@@ -9,6 +9,8 @@ readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly RETAINED_PRODUCER_PROOF_MODULE="SumeragiV2AdequateLeaderRetainedProducerClosureProofs"
+readonly RETAINED_PRODUCER_PROOF_SHA256="74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
@@ -48,16 +50,32 @@ grep -Fq "$EXPECTED_JAVA_VERSION" <<<"$java_version" || {
   printf '%s\n' "$java_version" >&2
   exit 1
 }
+retained_producer_proof="${FORMAL_DIR}/${RETAINED_PRODUCER_PROOF_MODULE}.tla"
+[[ -f "$retained_producer_proof" ]] || {
+  echo "missing retained-producer proof source: ${retained_producer_proof}" >&2
+  exit 1
+}
+actual_retained_producer_proof_sha256="$(hash_file "$retained_producer_proof")"
+[[ "$actual_retained_producer_proof_sha256" == "$RETAINED_PRODUCER_PROOF_SHA256" ]] || {
+  echo "retained-producer proof source checksum mismatch" >&2
+  echo "expected: ${RETAINED_PRODUCER_PROOF_SHA256}" >&2
+  echo "actual:   ${actual_retained_producer_proof_sha256}" >&2
+  exit 1
+}
 
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-adequate-readiness.XXXXXX")"
 trap 'rm -rf -- "$run_dir"' EXIT
 
 models=(
+  "$RETAINED_PRODUCER_PROOF_MODULE"
   SumeragiV2AdequateLeaderCrashParkingMutation
   SumeragiV2AdequateLeaderMutualOwnerAnchorMutation
   SumeragiV2AdequateLeaderBusyIdleProvenanceMutation
   SumeragiV2AdequateLeaderDormantNonDescentMutation
   SumeragiV2AdequateLeaderSubjectReplacementDormantMutation
+  SumeragiV2AdequateLeaderPreAdmissionRouteMutation
+  SumeragiV2CorridorExitAuthorityReceiptMutation
+  SumeragiV2FixedCorridorDeadlineMutation
 )
 
 for module in "${models[@]}"; do
@@ -235,5 +253,36 @@ run_case subject-replacement-dormant-omitted-potential-mutation \
   SumeragiV2AdequateLeaderSubjectReplacementDormantMutation.tla \
   adequate_leader_subject_replacement_dormant_omitted_potential_bug.cfg 12 \
   "Invariant ActivationConsumesPotentialBeforeAddingPredecessor is violated."
+
+run_case pre-admission-route-fixed \
+  SumeragiV2AdequateLeaderPreAdmissionRouteMutation.tla \
+  adequate_leader_pre_admission_route_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case pre-admission-route-identity-mutation \
+  SumeragiV2AdequateLeaderPreAdmissionRouteMutation.tla \
+  adequate_leader_pre_admission_route_identity_bug.cfg 12 \
+  "Invariant RetriedTransportRetainsFrozenIdentity is violated."
+
+run_case corridor-exit-authority-receipt-fixed \
+  SumeragiV2CorridorExitAuthorityReceiptMutation.tla \
+  corridor_exit_authority_receipt_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case corridor-exit-authority-receipt-mutation \
+  SumeragiV2CorridorExitAuthorityReceiptMutation.tla \
+  corridor_exit_authority_receipt_bug.cfg 12 \
+  "Invariant CorridorExitAuthorityReceiptImmutable is violated."
+
+run_case fixed-corridor-deadline-reservation \
+  SumeragiV2FixedCorridorDeadlineMutation.tla \
+  fixed_corridor_deadline_reservation_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case fixed-corridor-deadline-owner-refresh-mutation \
+  SumeragiV2FixedCorridorDeadlineMutation.tla \
+  fixed_corridor_deadline_owner_refresh_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "Stuttering"
 
 echo "[tlc] adequate-leader readiness mutation matrix passed"

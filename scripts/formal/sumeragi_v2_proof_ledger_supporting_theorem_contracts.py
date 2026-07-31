@@ -2633,7 +2633,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ gst "
         "/\\ [AsyncNext]_AsyncAllVars "
         "/\\ ~AsyncCandidateTransientMarkerExitThisStep(candidate) "
-        "=> /\\ ~AsyncCandidateTransientServiceMarked(candidate)' "
+        "=> /\\ AsyncCandidateTransientServiceActive(candidate)' "
         "/\\ ~CandidateScheduled(candidate)'"
     ),
     (
@@ -3225,7 +3225,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "packet.item.envelope.recipient, packet.item) "
         "/\\ packet.item.envelope.recipient "
         "\\in AsyncTimedServiceNodes "
-        "/\\ \\/ packet.item.source \\in AsyncTimedServiceNodes "
+        "/\\ \\/ packet.authenticatedSource \\in AsyncTimedServiceNodes "
         "\\/ /\\ packet.item.kind "
         '\\in {"CertifiedResponse", "CommitCertificateResponse"} '
         "/\\ IngressItemHasAuthenticatedHistory(packet.item) "

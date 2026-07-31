@@ -572,12 +572,18 @@ ASYNC_CAUSAL_EPISODE_PROOF_MODULES = (
     "SumeragiV2AsyncHistoricalCandidateProducerContinuationProofs",
 )
 ADEQUATE_LEADER_CONTINUATION_PROOF_MODULES = (
+    "SumeragiV2AdequateLeaderRetainedProducerClosureProofs",
     "SumeragiV2AdequateLeaderProducerTransportClosureProofs",
     "SumeragiV2AdequateLeaderSelectedOwnerContinuationProofs",
     "SumeragiV2AdequateLeaderCorridorEntryContinuationProofs",
     "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
     "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
 )
+ADEQUATE_LEADER_RETAINED_PRODUCER_RELEASE_SOURCE_SHA256 = {
+    "SumeragiV2AdequateLeaderRetainedProducerClosureProofs.tla": (
+        "74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
+    ),
+}
 
 # Exact source seal for the finite exact-ingress and adequate-leader ownership
 # mutation corpus.  These TLC pairs are regression evidence only: they may
@@ -1091,7 +1097,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "808cfababed87e4bc7d245986ab09de3549d7eb0569d11a06e7f51e47edb190b"
+        "b81171eb4105b8aa8a66c840b3123b8a0cddc8c7515fec23c1a5c0c6ff7541d4"
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
         "77368edad02e9ff8a03d1da3c6bb019f0a5d466db6801b30d106fc1b89c5c953"
@@ -1124,7 +1130,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "c12af944bccd6587374576ecc0abf6779a468ac0162d59b3c6762ab09aab9017"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "fe03d8b9a0234421cf9d394599adc4c8efe3e1e66ed2beea2260e744e86e225d"
+        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
         "2ab6aa430893197888a69b4ec56a120556e44e7465893dc5155a3941d236519e"
@@ -1175,7 +1181,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "26dde32bedb3b54cdfa7ead672fa1498b853a936b6620a7715f9ba9ea77ea8e2"
     ),
     "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
-        "01f822f4da7f7b91d5f4935dda9992a8de5a4d25e5c6e661ec2784cfbe88b944"
+        "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
         "bceb90990f6ca635bf9d48ad23d140f1a9088954f5bf81952646ec756d517424"
@@ -1187,10 +1193,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
 SHARED_TLC_RESULT_BRANCH_PROFILES = {
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 1),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        6,
-        5,
+        9,
+        7,
         0,
-        1,
+        2,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
@@ -1264,10 +1270,10 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         0,
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        1,
+        2,
         1,
         0,
-        0,
+        1,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
@@ -1383,10 +1389,10 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         0,
     ),
     "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
-        17,
-        6,
+        20,
+        9,
         0,
-        11,
+        12,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (7, 1, 0, 0, 4),
@@ -1408,7 +1414,7 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
         "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
             1,
             1,
-            0,
+            1,
             1,
             1,
         ),
@@ -1455,7 +1461,7 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
             1,
         ),
         "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
-            17,
+            18,
             1,
             2,
             1,
@@ -1472,10 +1478,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "5fadddda7f21c5396893a17271e5bedf9ab9f43e2c6848a06abc8ffb60bd881d"
+    "2c055aedf7762816eb44b420d972e0f40d18e9e53f27f2a2d592f1fea183f007"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "159dbee09baabfd3fdaa370f3cee9a560638cb9ecd7a37df80f2f8e2862e8273"
+    "812920890b22735c973ab3affa189e98e9e46c8d0af15f14b25586332981901a"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
@@ -2060,13 +2066,140 @@ HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_SHA256 = {
         "bdd9613583893b49e8f5762ea3342a50f5cc289689b225ef8b55c2aac0e8c49d"
     ),
     HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_RUNNER: (
-        "fe03d8b9a0234421cf9d394599adc4c8efe3e1e66ed2beea2260e744e86e225d"
+        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
     ),
 }
 HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2HistoricalDiscoveryOccurrenceRankMutation*.tla",
     "historical_discovery_occurrence_rank_*.cfg",
     "historical_discovery_plain_minimum_*.cfg",
+)
+
+# Exact source seal for the seven replenishment/retirement regressions which
+# predate their release-runner registration. These finite TLC models preserve
+# their repaired and failing outcomes as regression evidence only.
+REPLENISHMENT_REGRESSION_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2AdequateLeaderPreAdmissionRouteMutation.tla",
+    "adequate_leader_pre_admission_route_fixed.cfg",
+    "adequate_leader_pre_admission_route_identity_bug.cfg",
+    "SumeragiV2BusyConsumerMutation.tla",
+    "busy_consumer_fixed.cfg",
+    "busy_consumer_stale.cfg",
+    "SumeragiV2CorridorExitAuthorityReceiptMutation.tla",
+    "corridor_exit_authority_receipt_fixed.cfg",
+    "corridor_exit_authority_receipt_bug.cfg",
+    "SumeragiV2DeferredBusyCursorMutation.tla",
+    "deferred_busy_cursor_cyclic.cfg",
+    "deferred_busy_cursor_strict_bug.cfg",
+    "SumeragiV2DeferredCursorEffectMutation.tla",
+    "deferred_cursor_completion_progress_fixed.cfg",
+    "deferred_cursor_completion_progress_bug.cfg",
+    "deferred_busy_rank_nonregression_bug.cfg",
+    "SumeragiV2FixedCorridorDeadlineMutation.tla",
+    "fixed_corridor_deadline_reservation_fixed.cfg",
+    "fixed_corridor_deadline_owner_refresh_bug.cfg",
+    "SumeragiV2HistoricalProducerContinuationMutation.tla",
+    "historical_producer_continuation_fixed.cfg",
+    "historical_producer_continuation_voter_only_bug.cfg",
+)
+REPLENISHMENT_REGRESSION_MUTATION_RUNNERS = (
+    "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh",
+)
+REPLENISHMENT_REGRESSION_MUTATION_SHA256 = {
+    "SumeragiV2AdequateLeaderPreAdmissionRouteMutation.tla": (
+        "99616466a79971977c84bcd026b78361f007f4ceee4b6d33b6959908dec3d8a6"
+    ),
+    "adequate_leader_pre_admission_route_fixed.cfg": (
+        "b1bc2b6cf01ea358b0402cd5e7778cfdc5d36628c8a0ad195a2ea342da3b0abc"
+    ),
+    "adequate_leader_pre_admission_route_identity_bug.cfg": (
+        "ffe0b1f63fa7071f727307e6e0d8c591a58a12ad974c2d419666ce7e0ebacce3"
+    ),
+    "SumeragiV2BusyConsumerMutation.tla": (
+        "5ba544a00cf6bc893b67385ae68beaa8be13e874129d11d57feb01ef36a538b0"
+    ),
+    "busy_consumer_fixed.cfg": (
+        "e4c1e37d02f469a7c9f61c231f246eb682c057d8d29d206c295303d5d80c2a6c"
+    ),
+    "busy_consumer_stale.cfg": (
+        "11fd50ca8c142db82f3081fffe965f182af17c42c8a7a65a5726853801002abd"
+    ),
+    "SumeragiV2CorridorExitAuthorityReceiptMutation.tla": (
+        "2e5399e931679f7ea00690f0a5da480963b3c0586d8412c439a7bce4167fa7dc"
+    ),
+    "corridor_exit_authority_receipt_fixed.cfg": (
+        "d298c71cfecbc7f21d1168487b7d154f1293921beed3739d5f118f010cfaa007"
+    ),
+    "corridor_exit_authority_receipt_bug.cfg": (
+        "168e957dca0314ac5158e58e2372856243bb2c8918ee9a0cc4a95f11f7b6e18c"
+    ),
+    "SumeragiV2DeferredBusyCursorMutation.tla": (
+        "46dacb621bea28b388d7ffaad160824858557bd01864653051053c64f2882d68"
+    ),
+    "deferred_busy_cursor_cyclic.cfg": (
+        "25385a8c57ed4e91e9bb9db6cf413638a10a00ec502bb0f07cad32c136dd7260"
+    ),
+    "deferred_busy_cursor_strict_bug.cfg": (
+        "9adaa3e8877312e36132823f8e228699db8c068391abf1a1b916155aad6e6628"
+    ),
+    "SumeragiV2DeferredCursorEffectMutation.tla": (
+        "3139bdebfa3bcdce3b6b13daa38f174aa83144aca7a664e609d376580775d338"
+    ),
+    "deferred_cursor_completion_progress_fixed.cfg": (
+        "b579031595e3e9c1230704357071392a7b9e5729a36d0e1f9d35db6a69151ce4"
+    ),
+    "deferred_cursor_completion_progress_bug.cfg": (
+        "11b8809b9818738661cc2a32a451355091c5f4e7ac7ea933beb1ce77ecf63d21"
+    ),
+    "deferred_busy_rank_nonregression_bug.cfg": (
+        "6b7e55b90794a875aa41a8d41ee342f7eddc139711dc3d0c70426a4d262b6580"
+    ),
+    "SumeragiV2FixedCorridorDeadlineMutation.tla": (
+        "1cdaf4f32d4353d884d3e4cf9a01b86a37bf4b4e6c4c2c2431cffee76f7e87d7"
+    ),
+    "fixed_corridor_deadline_reservation_fixed.cfg": (
+        "058f759d88ce9d74d729eb2747b20207cdcbd9a5a28d91bfcf3fa1d01d0a96cc"
+    ),
+    "fixed_corridor_deadline_owner_refresh_bug.cfg": (
+        "8a91acb46c18a1d842577b1a6154b090cf2c18f74d22b561816f6506f18a801a"
+    ),
+    "SumeragiV2HistoricalProducerContinuationMutation.tla": (
+        "6c7e30317f4eda1ba837ce60e035f0713f0312d62301ae25d3ba08d9194f225e"
+    ),
+    "historical_producer_continuation_fixed.cfg": (
+        "3a9a90d05f9c1ee246bf9379d7e7f4132a18fdcc424419c432c2a41cdefb2d42"
+    ),
+    "historical_producer_continuation_voter_only_bug.cfg": (
+        "7e8fb414bea25a44bb89319b4609b62746f315240293d7ba47c90d338c93f837"
+    ),
+    "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
+        "b81171eb4105b8aa8a66c840b3123b8a0cddc8c7515fec23c1a5c0c6ff7541d4"
+    ),
+    "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
+        "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
+    ),
+    "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
+        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+    ),
+}
+REPLENISHMENT_REGRESSION_MUTATION_FORMAL_GLOBS = (
+    "SumeragiV2AdequateLeaderPreAdmissionRouteMutation*.tla",
+    "adequate_leader_pre_admission_route_*.cfg",
+    "SumeragiV2BusyConsumerMutation*.tla",
+    "busy_consumer_*.cfg",
+    "SumeragiV2CorridorExitAuthorityReceiptMutation*.tla",
+    "corridor_exit_authority_receipt_*.cfg",
+    "SumeragiV2DeferredBusyCursorMutation*.tla",
+    "deferred_busy_cursor_*.cfg",
+    "SumeragiV2DeferredCursorEffectMutation*.tla",
+    "deferred_cursor_completion_progress_*.cfg",
+    "deferred_busy_rank_nonregression_*.cfg",
+    "SumeragiV2FixedCorridorDeadlineMutation*.tla",
+    "fixed_corridor_deadline_*.cfg",
+    "SumeragiV2HistoricalProducerContinuationMutation*.tla",
+    "historical_producer_continuation_*.cfg",
 )
 
 # Exact source seal for the bounded effect-capacity ownership mutation matrix.
