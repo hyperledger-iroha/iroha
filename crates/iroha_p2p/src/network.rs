@@ -19616,6 +19616,7 @@ mod tests {
     use norito::codec::DecodeAll;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
+    use tempfile::tempdir;
     use tokio::sync::mpsc::error::TryRecvError;
 
     use super::handle_update_tests::handle_with_network_receivers;
@@ -21783,11 +21784,18 @@ mod tests {
     #[test]
     fn runtime_from_handshake_accepts_signed_ticket_with_configured_key() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
+        let revocation_dir = tempdir().expect("revocation tempdir");
         let mut handshake = ActualSoranetHandshake::default();
         handshake.pow.required = true;
         handshake.pow.difficulty = 1;
         handshake.pow.puzzle = None;
         handshake.pow.signed_ticket_public_key = Some(keypair.public_key().to_vec());
+        handshake.pow.revocation_store_path = revocation_dir
+            .path()
+            .join("ticket_revocations.norito")
+            .to_string_lossy()
+            .into_owned()
+            .into();
 
         let config = runtime_from_handshake(handshake).expect("runtime");
 
