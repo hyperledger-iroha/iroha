@@ -171,8 +171,9 @@ use crate::privacy_engines::{
         MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1, MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
         MAX_ZK_AMS_LSAG_PROOF_BYTES_V1, ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
         ZK_AMS_ADMISSION_POSSESSION_SUITE_V1, ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
-        ZK_AMS_LSAG_PROOF_VERSION_V1, ZK_AMS_LSAG_SUITE_V1, ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1,
-        ZK_AMS_RING_SIZES_V1, ZK_AMS_SOURCE_PROFILE_V1, zk_ams_generator_digest_v1,
+        ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1, ZK_AMS_LSAG_PROOF_VERSION_V1, ZK_AMS_LSAG_SUITE_V1,
+        ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_RING_SIZES_V1, ZK_AMS_SOURCE_PROFILE_V1,
+        zk_ams_generator_digest_v1,
     },
     zk_x509::{
         engine::construct_zk_x509_compiled_profile_v1,
@@ -1544,6 +1545,8 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
     let provision_proof_cap_value = u64::try_from(MAX_ZK_AMS_LSAG_PROOF_BYTES_V1)
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let lsag_decode_allocation_value = u64::try_from(ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
     let global_proof_cap_value = u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1);
     if batch_proof_cap_value > global_proof_cap_value
         || provision_proof_cap_value > global_proof_cap_value
@@ -1554,6 +1557,7 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     let batch_proof_cap = batch_proof_cap_value.to_be_bytes();
     let possession_proof_cap = possession_proof_cap_value.to_be_bytes();
     let provision_proof_cap = provision_proof_cap_value.to_be_bytes();
+    let lsag_decode_allocation = lsag_decode_allocation_value.to_be_bytes();
     let global_proof_cap = global_proof_cap_value.to_be_bytes();
 
     let max_batch_size = ZK_AMS_MAX_BATCH_SIZE_V1.to_be_bytes();
@@ -1645,6 +1649,7 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             &possession_proof_cap,
             &batch_proof_cap,
             &provision_proof_cap,
+            &lsag_decode_allocation,
             &max_batch_size,
             &ring_size_16,
             &ring_size_32,
@@ -1678,6 +1683,7 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             &possession_proof_cap,
             &batch_proof_cap,
             &provision_proof_cap,
+            &lsag_decode_allocation,
             CURVE_PROVER_RANDOMNESS_POLICY_V1,
             &global_proof_cap,
         ],

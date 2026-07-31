@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 __all__ = ["ToriiMockServer", "main"]
 
+_CURRENT_DATA_MODEL_VERSION = 4
+
 
 @dataclass
 class _Response:
@@ -380,7 +382,7 @@ class _MockState:
             }
             self.node_capabilities = {
                 "abi_version": 1,
-                "data_model_version": 1,
+                "data_model_version": _CURRENT_DATA_MODEL_VERSION,
                 "signed_transaction_schema_hash_hex": "7ab5ff9c572efb316deac478f19209c5",
             }
             self.sccp_capabilities = {

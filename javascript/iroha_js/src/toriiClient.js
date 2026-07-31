@@ -54,6 +54,12 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import {
+  NODE_CAPABILITIES_JSON_MAX_BYTES,
+  ToriiDataModelMismatchError,
+  ensureNodeDataModelCompatibility,
+  normalizeNodeCapabilitiesResponse,
+} from "./toriiCompatibility.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   buildCanonicalRequestHeaders,
@@ -143,7 +149,6 @@ const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
 const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
 const VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
-const NODE_CAPABILITIES_JSON_MAX_BYTES = 1024 * 1024;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
@@ -284,7 +289,6 @@ const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
 const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
   "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
-const EXPECTED_DATA_MODEL_VERSION = 4;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -1448,18 +1452,7 @@ export class IsoMessageTimeoutError extends Error {
   }
 }
 
-export class ToriiDataModelMismatchError extends Error {
-  constructor(expected, actual, cause) {
-    const actualLabel = actual == null ? "missing" : String(actual);
-    super(`Torii data model version mismatch (expected ${expected}, got ${actualLabel}).`);
-    this.name = "ToriiDataModelMismatchError";
-    this.expected = expected;
-    this.actual = actual ?? null;
-    if (cause !== undefined) {
-      this.cause = cause;
-    }
-  }
-}
+export { ToriiDataModelMismatchError };
 
 export class ToriiHttpError extends Error {
   constructor({
@@ -1753,10 +1746,11 @@ function sortJsonForErrorMessage(value) {
 }
 
 /**
- * Minimal Torii HTTP client mirroring the Python helper.
+ * Torii HTTP client for typed queries, transaction submission, status
+ * inspection, event streams, attachments, and prover reports.
  *
- * Provides attachment and prover-report utilities needed by Python
- * developers; more endpoints will be added as the broader JS SDK grows.
+ * Request and response validation follows the canonical Norito-backed data
+ * model exposed by this package.
  */
 
 /**
@@ -6074,45 +6068,7 @@ export class ToriiClient {
   }
 
   async _ensureDataModelValidation() {
-    const expected = EXPECTED_DATA_MODEL_VERSION;
-    if (this._dataModelValidation.status === "matched") {
-      return;
-    }
-    if (this._dataModelValidation.status === "mismatched") {
-      throw new ToriiDataModelMismatchError(expected, this._dataModelValidation.actual);
-    }
-    if (this._dataModelValidationPromise) {
-      return this._dataModelValidationPromise;
-    }
-    const promise = (async () => {
-      let capabilities;
-      try {
-        capabilities = await this.getNodeCapabilities();
-      } catch (error) {
-        if (error instanceof ValidationError) {
-          this._dataModelValidation = { status: "mismatched", actual: null };
-          throw new ToriiDataModelMismatchError(expected, null, error);
-        }
-        throw error;
-      }
-      const actual = capabilities.dataModelVersion;
-      if (actual !== expected) {
-        this._dataModelValidation = { status: "mismatched", actual };
-        throw new ToriiDataModelMismatchError(expected, actual);
-      }
-      this._dataModelValidation = { status: "matched", actual };
-    })();
-    this._dataModelValidationPromise = promise;
-    promise
-      .finally(() => {
-        if (this._dataModelValidationPromise === promise) {
-          this._dataModelValidationPromise = null;
-        }
-      })
-      .catch(() => {
-        // Avoid unhandled rejections from the cleanup chain.
-      });
-    return promise;
+    return ensureNodeDataModelCompatibility(this, () => this.getNodeCapabilities());
   }
 
   /**
@@ -19493,77 +19449,6 @@ function normalizeProtectedNamespacesGetResponse(payload) {
     ).map((value, index) =>
       requireNonEmptyString(value, `protected namespaces response.namespaces[${index}]`),
     ),
-  };
-}
-
-function normalizeNodeCapabilitiesResponse(payload) {
-  const record = ensureRecord(payload, "node capabilities response");
-  const cryptoRecord = ensureRecord(record.crypto ?? {}, "node capabilities response.crypto");
-  const curvesRecord = cryptoRecord.curves ?? {};
-  return {
-    abiVersion: ToriiClient._normalizeUnsignedInteger(
-      record.abi_version,
-      "node capabilities response.abi_version",
-      { allowZero: false },
-    ),
-    dataModelVersion: ToriiClient._normalizeUnsignedInteger(
-      record.data_model_version,
-      "node capabilities response.data_model_version",
-      { allowZero: false },
-    ),
-    crypto: {
-      sm: normalizeNodeSmCapabilities(cryptoRecord.sm, "node capabilities response.crypto.sm"),
-      curves: normalizeNodeCurveCapabilities(
-        curvesRecord,
-        "node capabilities response.crypto.curves",
-      ),
-    },
-  };
-}
-
-function normalizeNodeSmCapabilities(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  return {
-    enabled: coerceBoolean(record.enabled, `${context}.enabled`),
-    defaultHash: optionalString(record.default_hash, `${context}.default_hash`),
-    allowedSigning: parseStringArray(
-      record.allowed_signing,
-      `${context}.allowed_signing`,
-    ),
-    sm2DistIdDefault: optionalString(
-      record.sm2_distid_default,
-      `${context}.sm2_distid_default`,
-    ),
-    opensslPreview: coerceBoolean(record.openssl_preview ?? false, `${context}.openssl_preview`),
-    acceleration: normalizeNodeSmAcceleration(record.acceleration, `${context}.acceleration`),
-  };
-}
-
-function normalizeNodeSmAcceleration(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  return {
-    scalar: coerceBoolean(record.scalar ?? true, `${context}.scalar`),
-    neonSm3: coerceBoolean(record.neon_sm3 ?? false, `${context}.neon_sm3`),
-    neonSm4: coerceBoolean(record.neon_sm4 ?? false, `${context}.neon_sm4`),
-    policy: requireNonEmptyString(record.policy ?? "", `${context}.policy`),
-  };
-}
-
-function normalizeNodeCurveCapabilities(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const rawVersion = record.registry_version;
-  const registryVersion =
-    rawVersion === undefined || rawVersion === null
-      ? 1
-      : ToriiClient._normalizeUnsignedInteger(rawVersion, `${context}.registry_version`, {
-          allowZero: false,
-        });
-  const allowedRaw = record.allowed_curve_ids ?? [];
-  const bitmapRaw = record.allowed_curve_bitmap ?? [];
-  return {
-    registryVersion,
-    allowedCurveIds: parseIntegerArray(allowedRaw, `${context}.allowed_curve_ids`),
-    allowedCurveBitmap: parseIntegerArray(bitmapRaw, `${context}.allowed_curve_bitmap`),
   };
 }
 

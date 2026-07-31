@@ -49,8 +49,19 @@ list/prove/verify routes. DA digests use `DaModels.Digest32`; proof counters use
 
 ```kotlin
 val da = transport.newDaToriiClient()
+var page = da.listPinIntents(
+    DaModels.PinIntentListRequest(limit = BigInteger.valueOf(100)),
+).join()
+while (page.nextCursor != null) {
+    page = da.listPinIntents(
+        DaModels.PinIntentListRequest(
+            limit = BigInteger.valueOf(100),
+            cursor = page.nextCursor,
+        ),
+    ).join()
+}
 val proof = da.provePinIntent(
-    DaModels.PinIntentQuery(
+    DaModels.PinIntentQueryRequest(
         storageTicket = DaModels.Digest32.fromHex(ticketHex),
     ),
 ).join()
@@ -58,6 +69,10 @@ if (proof != null) {
     check(da.verifyPinIntent(proof).join().valid)
 }
 ```
+
+List routes use immutable, server-issued snapshot cursors and return an explicit
+nullable `nextCursor`. Proof routes use separate selector-only request types;
+pagination fields are not accepted by proof requests.
 
 Responses are decoded into closed typed models. The client rejects unknown
 fields, malformed transparent byte wrappers, invalid checksummed hashes,

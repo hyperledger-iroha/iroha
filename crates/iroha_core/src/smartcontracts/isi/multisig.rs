@@ -3181,11 +3181,17 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        num::{NonZeroU16, NonZeroU64},
+    use super::*;
+    use crate::{
+        executor::Executor,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        sns::{
+            SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
+            seed_default_namespace_policies, sync_default_namespace_policy_payment_asset,
+        },
+        state::{State, World},
     };
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         ChainId, IntoKeyValue, Registrable,
@@ -3223,23 +3229,13 @@ mod tests {
     };
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::{
-        executor::Executor,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        sns::{
-            SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
-            seed_default_namespace_policies, sync_default_namespace_policy_payment_asset,
-        },
-        state::{State, World},
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU16, NonZeroU64},
     };
-
     fn new_account_id(key_pair: &KeyPair) -> AccountId {
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("multisig ISI fixture key generation should succeed")
     }

@@ -1,0 +1,27 @@
+{
+  "name": "launch-editor",
+  "version": "2.14.1",
+  "description": "launch editor from node.js",
+  "keywords": [
+    "editor",
+    "launch"
+  ],
+  "homepage": "https://github.com/vitejs/launch-editor#readme",
+  "bugs": {
+    "url": "https://github.com/vitejs/launch-editor/issues"
+  },
+  "license": "MIT",
+  "author": "Evan You",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vitejs/launch-editor.git"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "picocolors": "^1.1.1",
+    "shell-quote": "^1.8.4"
+  },
+  "scripts": {
+    "test": "node --test --experimental-test-module-mocks"
+  }
+}

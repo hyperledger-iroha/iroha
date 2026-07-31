@@ -666,7 +666,6 @@ fn load_pdp_commitment_from_spool_rejects_commitment_shaped_directory() {
 #[test]
 fn load_pdp_commitment_from_spool_rejects_spool_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("dir");
     let target = dir.path().join("pdp-spool-target");
     fs::create_dir(&target).expect("create target directory");
@@ -2011,7 +2010,6 @@ fn taikai_artifacts_persist_idempotent() {
 #[test]
 fn taikai_artifact_persistence_rejects_spool_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("tempdir");
     let target = dir.path().join("taikai-write-target");
     fs::create_dir(&target).expect("create Taikai target directory");
@@ -2255,7 +2253,6 @@ async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) 
 #[cfg(unix)]
 async fn replace_path_with_symlink(path: &Path, target_contents: &[u8]) -> PathBuf {
     use std::os::unix::fs::symlink;
-
     if let Err(err) = async_fs::remove_file(path).await {
         assert_eq!(
             err.kind(),
@@ -2917,7 +2914,6 @@ async fn taikai_anchor_collection_rejects_symlinked_sentinel() {
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_symlinked_spool_root() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("tempdir");
     let target = dir.path().join("taikai-spool-target");
     async_fs::create_dir(&target)
@@ -3345,7 +3341,6 @@ fn taikai_trm_lineage_guard_rejects_inverted_window() {
 #[test]
 fn taikai_trm_lineage_guard_rejects_state_symlink() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
     let mut manifest = sample_trm_manifest();
@@ -3402,7 +3397,6 @@ fn taikai_trm_lineage_guard_rejects_state_symlink() {
 #[test]
 fn taikai_trm_lineage_guard_rejects_spool_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
     let target = spool_dir.join("taikai-lineage-target");
@@ -3465,7 +3459,6 @@ fn taikai_trm_lineage_guard_rejects_busy_live_lock() {
 #[test]
 fn taikai_trm_lineage_guard_rejects_lock_symlink() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
     let alias = sample_trm_manifest().alias_binding;
@@ -3509,7 +3502,6 @@ fn taikai_trm_lineage_guard_rejects_lock_symlink() {
 #[test]
 fn taikai_trm_lineage_guard_rejects_unremovable_stale_lock() {
     use std::{os::unix::fs::PermissionsExt as _, time::SystemTime};
-
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
     let alias = sample_trm_manifest().alias_binding;
@@ -5376,7 +5368,6 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
 #[test]
 fn persist_spool_artifacts_reject_existing_target_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
@@ -5555,7 +5546,6 @@ fn persist_da_receipt_rejects_fingerprint_storage_ticket_mismatch() {
 #[test]
 fn persist_da_receipt_rejects_spool_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = tempdir().expect("temp dir");
     let target = temp_dir.path().join("receipt-write-target");
     fs::create_dir(&target).expect("create target directory");
@@ -5754,7 +5744,6 @@ fn load_da_receipts_rejects_receipt_shaped_directory() {
 #[test]
 fn load_da_receipts_rejects_spool_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = tempdir().expect("temp dir");
     let target = temp_dir.path().join("receipt-spool-target");
     fs::create_dir(&target).expect("create target directory");

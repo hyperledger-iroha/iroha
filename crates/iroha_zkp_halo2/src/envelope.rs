@@ -2,7 +2,7 @@
 //!
 //! The envelope format is a thin binary header followed by flattened public
 //! inputs and the raw Halo2 transcript bytes. It mirrors the specification in
-//! `docs/source/confidential_assets.md`. The redundant public-input count and
+//! `specs/confidential_assets.md`. The redundant public-input count and
 //! byte-length fields are canonical only when `pi_len == n_pi * 32`; decoding
 //! rejects any other relationship before reading or allocating public inputs.
 

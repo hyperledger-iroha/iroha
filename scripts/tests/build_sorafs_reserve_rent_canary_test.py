@@ -32,6 +32,8 @@ assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
+from sorafs_rollout_runner_test_support import write_topology_qualification  # noqa: E402
+
 
 POLICY_DIGEST = "a" * 64
 MATRIX_DIGEST = "b" * 64
@@ -340,6 +342,17 @@ def test_generated_canaries_pass_full_reserve_rent_gate(tmp_path: Path) -> None:
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary), "--now-unix", str(GENERATED_AT)])
+    command.extend(
+        [
+            "--topology-qualification-summary",
+            str(
+                write_topology_qualification(
+                    tmp_path / "topology-qualification.json",
+                    deployment_id="sorafs-reserve-prod-20260701",
+                )
+            ),
+        ]
+    )
 
     assert CHECKER.main(command) == 0
 

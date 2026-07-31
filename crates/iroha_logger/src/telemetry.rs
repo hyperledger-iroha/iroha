@@ -63,7 +63,7 @@ const EXPLICIT_REDACTION_PREFIXES: &[&str] = &["redact", "sensitive", "secret", 
 
 /// Normalized field names explicitly allowed to bypass keyword redaction.
 ///
-/// This list must remain short and documented in `docs/source/telemetry.md`.
+/// This list must remain short and documented in `specs/telemetry.md`.
 pub const REDACTION_ALLOWLIST_POLICY: &[&str] = &[];
 
 /// Compile-time support flag for telemetry redaction.

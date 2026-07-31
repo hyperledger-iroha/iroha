@@ -5919,10 +5919,14 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
 
 #[cfg(test)]
 mod sorafs_tests {
-    use core::str::FromStr;
-    use std::{collections::BTreeSet, convert::TryInto};
-
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use blake3::hash as blake3_hash;
+    use core::str::FromStr;
     use hex;
     use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
@@ -5989,18 +5993,10 @@ mod sorafs_tests {
             RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1,
         },
     };
-
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-
+    use std::{collections::BTreeSet, convert::TryInto};
     fn canonical_profile(handle: &ChunkerProfileHandle) -> String {
         format!("{}.{}@{}", handle.namespace, handle.name, handle.semver)
     }
-
     fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> (Vec<u8>, String) {
         let manifest_hex = hex::encode(record.digest.as_bytes());
         let chunk_hex = hex::encode(record.chunk_digest_sha3_256);
@@ -15012,7 +15008,6 @@ mod sorafs_tests {
     #[test]
     fn sorafs_provider_owner_query_resolves_binding() {
         use crate::smartcontracts::ValidSingularQuery;
-
         let mut state = make_state();
         let provider = ProviderId::new([0xA4; 32]);
         state.world.provider_owners.insert(provider, alice());
@@ -15028,7 +15023,6 @@ mod sorafs_tests {
     #[test]
     fn pin_manifest_query_is_finalized_cursor_bound_and_authoritative() {
         use crate::smartcontracts::ValidSingularQuery;
-
         let mut state = make_state();
         let digest = default_digest();
         let record = PinManifestRecord::new(

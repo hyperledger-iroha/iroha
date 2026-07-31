@@ -1,6 +1,6 @@
 # Ministry Automation Helpers
 
-This directory hosts helper scripts referenced by `docs/source/ministry/transparency_plan.md`.
+This directory hosts helper scripts referenced by `specs/ministry/transparency_plan.md`.
 
 - `dp_sanitizer.py` — convenience wrapper that calls
   `cargo xtask ministry-transparency sanitize` with the arguments required to
@@ -44,7 +44,7 @@ This directory hosts helper scripts referenced by `docs/source/ministry/transpar
   quarter/CID. CI runs it via `ci/check_ministry_transparency.sh` so drift is
   caught before artefacts are published.
 - `scaffold_red_team_drill.py` — scaffolds red-team drill artefacts referenced by
-  `docs/source/ministry/moderation_red_team_plan.md`, creating the report stub
+  `specs/ministry/moderation_red_team_plan.md`, creating the report stub
   from the template plus the evidence directory layout under
   `artifacts/ministry/red-team/<YYYY-MM>/<slug>/`.
 - `check_red_team_reports.py` — scans every committed red-team report and fails
@@ -53,7 +53,7 @@ This directory hosts helper scripts referenced by `docs/source/ministry/transpar
   incomplete metadata.
 - `export_red_team_evidence.py` — copies dashboards/logs/manifests/evidence for
   a given scenario id into the canonical directory layout (see
-  `docs/source/ministry/moderation_red_team_plan.md`) and writes an
+  `specs/ministry/moderation_red_team_plan.md`) and writes an
   `evidence_manifest.json` describing every file (category, source, SHA-256).
   Supports Grafana API exports via `grafana:<uid>` specs when `--grafana-url`
   (and optionally `--grafana-token` or `GRAFANA_API_URL`/`GRAFANA_API_TOKEN`)

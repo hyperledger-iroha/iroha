@@ -3,7 +3,7 @@
 
 The script scans a telemetry JSON log (as produced by `iroha_logger` in JSON
 mode), extracts the most recent `nexus.audit.outcome` event for the requested
-trace, and writes the payload to `docs/examples/nexus_audit_outcomes/` for
+trace, and writes the payload to `fixtures/documentation/nexus_audit_outcomes/` for
 record keeping.  It fails with a non-zero exit code when:
 
 * no matching event is found;
@@ -37,7 +37,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 DEFAULT_OK_STATUSES = {"pass", "mitigated"}
 DEFAULT_FAIL_STATUSES = {"fail"}
-DEFAULT_OUTPUT_DIR = Path("docs/examples/nexus_audit_outcomes")
+DEFAULT_OUTPUT_DIR = Path("fixtures/documentation/nexus_audit_outcomes")
 
 
 class AuditError(RuntimeError):

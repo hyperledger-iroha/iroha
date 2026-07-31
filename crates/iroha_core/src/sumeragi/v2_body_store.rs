@@ -309,6 +309,14 @@ pub(crate) struct V2BodyStore {
 }
 
 impl V2BodyStore {
+    /// Return whether this already-open store belongs to the exact context.
+    ///
+    /// Production startup uses this when a durable recovery catalog must be
+    /// inspected before the serialized runtime is constructed.
+    pub(crate) fn matches_context(&self, context: &wire::HeightContext) -> bool {
+        &self.context == context
+    }
+
     /// Open the active context directory and fail closed on every malformed
     /// final body file. Incomplete `.tmp` files are unacknowledged writes and
     /// are deliberately ignored.
@@ -1395,6 +1403,10 @@ mod tests {
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        assert!(store.matches_context(&context));
+        let mut foreign_context = context.clone();
+        foreign_context.height = foreign_context.height.saturating_add(1);
+        assert!(!store.matches_context(&foreign_context));
         let receipt = store
             .store(manifest.clone(), body.clone())
             .expect("store exact body");

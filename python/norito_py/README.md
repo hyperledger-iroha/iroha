@@ -14,7 +14,8 @@ Python tooling and tests can produce deterministic, interoperable payloads.
 - Optional Zstandard compression (enable the `compression` extra, requires the `zstandard` package)
 - Maps and tuples built from composable adapters
 - Schema hash helpers (type-name and structural) matching Rust's canonical JSON hashing
-- Columnar (NCB) helpers and adaptive AoS/NCB selection for `(u64, str, bool)` rows
+- Columnar (NCB) helpers and adaptive AoS/NCB selection for string, optional
+  string/u32, raw byte, and enum row layouts
 
 ## Rust trait parity
 The Python adapters track the Rust core traits `NoritoSerialize` and
@@ -23,15 +24,14 @@ ergonomic helpers via `norito::codec::{Encode, Decode}`, the Python façade
 mirrors the behaviour through `encode(...)`/`decode(...)` so application code
 sees the same semantics that the refreshed `norito.md` documents.
 
-### Limitations (v0.1.0)
-- Columnar helpers currently target the `(u64, str, bool)` layout used by Norito
-  telemetry. Additional shapes (e.g., enums, optional columns) are tracked in
-  the roadmap and will be added incrementally.
-- Zstandard compression is optional and will raise a clear error if the backend is missing.
+### Current scope
+- Columnar helpers cover `(u64, value, bool)` rows whose value is a string,
+  optional string, optional u32, raw bytes, or an enum name/code.
+- Zstandard compression is optional and raises a clear error when the backend
+  is missing.
 
 ## Installation
-Until the package is published on PyPI, install directly from the workspace
-root using:
+Install directly from the workspace root:
 
 ```bash
 python3 -m pip install ./python/norito_py
@@ -102,27 +102,6 @@ VCS metadata to skip the check; manual overrides are no longer supported.
 > Streaming manifests, control frames, and telemetry helpers are all available
 > under `norito.streaming`, providing parity with the Rust Norito structures for
 > manifest distribution, capability negotiation, and runtime counters.
-
-#### October 2025
-
-- Verified parity after the Rust codec consolidated ChaCha20/XChaCha20 key and
-  nonce helpers. No Python API surface changes were required; this note keeps
-  the binding sync check satisfied for the corresponding Rust update.
-
-#### December 2026
-
-- Rust Norito now confines debug-only environment toggles (`NORITO_TRACE`,
-  `NORITO_DISABLE_PACKED_STRUCT`, stage1 GPU/parallel cutover knobs) to
-  debug/test builds and defaults to deterministic constants in release builds.
-  The Python binding already relied on explicit adapter configuration and has
-  no environment shims, so no code changes were required; this entry records
-  the parity check for the release-mode behaviour tweak.
-
-#### December 2027
-
-- Revalidated parity after the Rust Norito bare decode fallback for exact-length
-  drift; Python bindings required no code changes beyond rerunning the parity
-  suite.
 
 ## License
 

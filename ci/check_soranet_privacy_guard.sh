@@ -7,9 +7,9 @@ cd -- "${ROOT}"
 
 TARGET="crates/iroha_torii/src/lib.rs"
 PIN_TARGET="crates/iroha_torii/src/sorafs/api.rs"
-DOC_PATH="docs/source/references/configuration.md"
-RUNBOOK_PATH="docs/source/sorafs_authz_runbook.md"
-OPS_PLAYBOOK_PATH="docs/source/sorafs_ops_playbook.md"
+DOC_PATH="specs/references/configuration.md"
+RUNBOOK_PATH="specs/sorafs_authz_runbook.md"
+OPS_PLAYBOOK_PATH="specs/sorafs_ops_playbook.md"
 
 endpoints=(
 	"handler_post_soranet_privacy_event"

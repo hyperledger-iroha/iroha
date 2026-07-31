@@ -111,7 +111,10 @@ public final class HttpClientTransport implements IrohaClient {
     final String hashHex = SignedTransactionHasher.hashHex(transaction);
     return flushPendingQueue()
         .exceptionally(ex -> null)
-        .thenCompose(ignored -> submitWithRetryInternal(transaction, hashHex, 1, true));
+        .thenCompose(
+            ignored ->
+                submitWithRetryInternal(
+                    transaction, hashHex, 1, false));
   }
 
   @Override
@@ -124,7 +127,9 @@ public final class HttpClientTransport implements IrohaClient {
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
-    return executeAccepted(request, "transaction JSON submit", 202);
+    return ensureTransactionSubmissionCompatibility()
+        .thenCompose(
+            ignored -> executeAccepted(request, "transaction JSON submit", 202));
   }
 
   @Override
@@ -155,37 +160,43 @@ public final class HttpClientTransport implements IrohaClient {
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
-    notifyRequest(request);
-    return executor
-        .execute(request)
-        .handle(
-            (response, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause =
-                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                notifyFailure(request, cause);
-                final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
-                failed.completeExceptionally(cause);
-                return failed;
-              }
-              final ClientResponse clientResponse =
-                  new ClientResponse(
-                      response.statusCode(),
-                      response.body(),
-                      response.message(),
-                      extractTransactionHash(response).orElse(null),
-                      extractRejectCode(response));
-              if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
-                notifyFailure(
-                    request,
-                    new RuntimeException(
-                        "Torii request failed with status " + clientResponse.statusCode()));
-              } else {
-                notifyResponse(request, clientResponse);
-              }
-              return CompletableFuture.completedFuture(clientResponse);
-            })
-        .thenCompose(future -> future);
+    return ensureTransactionSubmissionCompatibility()
+        .thenCompose(
+            ignored -> {
+              notifyRequest(request);
+              return executor
+                  .execute(request)
+                  .handle(
+                      (response, throwable) -> {
+                        if (throwable != null) {
+                          final Throwable cause = unwrapCompletion(throwable);
+                          notifyFailure(request, cause);
+                          final CompletableFuture<ClientResponse> failed =
+                              new CompletableFuture<>();
+                          failed.completeExceptionally(cause);
+                          return failed;
+                        }
+                        final ClientResponse clientResponse =
+                            new ClientResponse(
+                                response.statusCode(),
+                                response.body(),
+                                response.message(),
+                                extractTransactionHash(response).orElse(null),
+                                extractRejectCode(response));
+                        if (clientResponse.statusCode() < 200
+                            || clientResponse.statusCode() >= 300) {
+                          notifyFailure(
+                              request,
+                              new RuntimeException(
+                                  "Torii request failed with status "
+                                      + clientResponse.statusCode()));
+                        } else {
+                          notifyResponse(request, clientResponse);
+                        }
+                        return CompletableFuture.completedFuture(clientResponse);
+                      })
+                  .thenCompose(future -> future);
+            });
   }
 
   @Override
@@ -198,7 +209,11 @@ public final class HttpClientTransport implements IrohaClient {
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
-    return executeAccepted(request, "transaction entrypoint JSON submit", 202);
+    return ensureTransactionSubmissionCompatibility()
+        .thenCompose(
+            ignored ->
+                executeAccepted(
+                    request, "transaction entrypoint JSON submit", 202));
   }
 
   private CompletableFuture<ClientResponse> executeAccepted(
@@ -1219,10 +1234,14 @@ public final class HttpClientTransport implements IrohaClient {
       chain = chain.thenCompose(
           ignored -> {
             final CompletableFuture<ClientResponse> submission =
-                submitWithRetryInternal(queuedTx, SignedTransactionHasher.hashHex(queuedTx), 1, true);
+                submitWithRetryInternal(
+                    queuedTx, SignedTransactionHasher.hashHex(queuedTx), 1, true);
             CompletableFuture<Void> stage = submission.thenApply(response -> null);
             stage = stage.exceptionally(ex -> {
-              requeueRemaining(pending, index + 1);
+              final Throwable cause = unwrapCompletion(ex);
+              final int requeueFrom =
+                  cause instanceof ToriiTransactionCompatibilityException ? index : index + 1;
+              requeueRemaining(pending, requeueFrom);
               throw ex instanceof CompletionException
                   ? (CompletionException) ex
                   : new CompletionException(ex);
@@ -1237,13 +1256,7 @@ public final class HttpClientTransport implements IrohaClient {
       final SignedTransaction transaction,
       final String hashHex,
       final int attempt,
-      final boolean skipFlush) {
-    if (!skipFlush) {
-      return flushPendingQueue()
-          .exceptionally(ex -> null)
-          .thenCompose(ignored -> submitWithRetryInternal(transaction, hashHex, attempt, true));
-    }
-
+      final boolean queuedReplay) {
     final TransportRequest request =
         ToriiRequestBuilder.buildSubmitRequest(
             config.baseUri(),
@@ -1252,50 +1265,88 @@ public final class HttpClientTransport implements IrohaClient {
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
 
-    notifyRequest(request);
-    return executor
-        .execute(request)
-        .handle((response, throwable) -> {
-          if (throwable != null) {
-            final Throwable cause =
-                throwable instanceof CompletionException ? throwable.getCause() : throwable;
-            notifyFailure(request, cause);
-            return scheduleRetry(transaction, hashHex, attempt, request, null, cause);
-          }
-          final ClientResponse clientResponse =
-              new ClientResponse(
-                  response.statusCode(),
-                  response.body(),
-                  response.message(),
-                  extractTransactionHash(response).orElse(hashHex),
-                  extractRejectCode(response));
-          if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
-            if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
-              return scheduleRetry(transaction, hashHex, attempt, request, clientResponse, null);
-            }
-            if (config.retryPolicy().isRetryableStatus(clientResponse.statusCode())) {
-              final RuntimeException error =
-                  new RuntimeException(
-                      "Torii request failed with status " + clientResponse.statusCode());
-              notifyFailure(request, error);
-              enqueuePending(transaction);
-              final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
-              failed.completeExceptionally(error);
-              return failed;
-            }
-            notifyResponse(request, clientResponse);
-            return CompletableFuture.completedFuture(clientResponse);
-          }
-          notifyResponse(request, clientResponse);
-          return CompletableFuture.completedFuture(clientResponse);
-        })
-        .thenCompose(future -> future);
+    return ensureTransactionSubmissionCompatibility()
+        .handle(
+            (ignored, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                if (!queuedReplay
+                    && cause instanceof ToriiTransactionCompatibilityProbeException) {
+                  enqueuePending(transaction);
+                }
+                throw new CompletionException(cause);
+              }
+              return null;
+            })
+        .thenCompose(
+            ignored -> {
+              notifyRequest(request);
+              return executor
+                  .execute(request)
+                  .handle(
+                      (response, throwable) -> {
+                        if (throwable != null) {
+                          final Throwable cause = unwrapCompletion(throwable);
+                          notifyFailure(request, cause);
+                          return scheduleRetry(
+                              transaction,
+                              hashHex,
+                              attempt,
+                              queuedReplay,
+                              request,
+                              null,
+                              cause);
+                        }
+                        final ClientResponse clientResponse =
+                            new ClientResponse(
+                                response.statusCode(),
+                                response.body(),
+                                response.message(),
+                                extractTransactionHash(response).orElse(hashHex),
+                                extractRejectCode(response));
+                        if (clientResponse.statusCode() < 200
+                            || clientResponse.statusCode() >= 300) {
+                          if (config
+                              .retryPolicy()
+                              .shouldRetryResponse(attempt, clientResponse)) {
+                            return scheduleRetry(
+                                transaction,
+                                hashHex,
+                                attempt,
+                                queuedReplay,
+                                request,
+                                clientResponse,
+                                null);
+                          }
+                          if (config
+                              .retryPolicy()
+                              .isRetryableStatus(clientResponse.statusCode())) {
+                            final RuntimeException error =
+                                new RuntimeException(
+                                    "Torii request failed with status "
+                                        + clientResponse.statusCode());
+                            notifyFailure(request, error);
+                            enqueuePending(transaction);
+                            final CompletableFuture<ClientResponse> failed =
+                                new CompletableFuture<>();
+                            failed.completeExceptionally(error);
+                            return failed;
+                          }
+                          notifyResponse(request, clientResponse);
+                          return CompletableFuture.completedFuture(clientResponse);
+                        }
+                        notifyResponse(request, clientResponse);
+                        return CompletableFuture.completedFuture(clientResponse);
+                      })
+                  .thenCompose(future -> future);
+            });
   }
 
   private CompletableFuture<ClientResponse> scheduleRetry(
       final SignedTransaction transaction,
       final String hashHex,
       final int attempt,
+      final boolean queuedReplay,
       final TransportRequest request,
       final ClientResponse lastResponse,
       final Throwable lastError) {
@@ -1328,7 +1379,10 @@ public final class HttpClientTransport implements IrohaClient {
     return CompletableFuture
         .supplyAsync(
             () -> null, CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS))
-        .thenCompose(ignored -> submitWithRetryInternal(transaction, hashHex, attempt + 1, true));
+        .thenCompose(
+            ignored ->
+                submitWithRetryInternal(
+                    transaction, hashHex, attempt + 1, queuedReplay));
   }
 
   private void enqueuePending(final SignedTransaction transaction) {
@@ -2045,6 +2099,34 @@ public final class HttpClientTransport implements IrohaClient {
       current = current.getCause();
     }
     return current;
+  }
+
+  private CompletableFuture<Void> ensureTransactionSubmissionCompatibility() {
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/node/capabilities",
+            Collections.emptyMap(),
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES);
+    return fetchJson(
+            request,
+            payload -> {
+              ToriiTransactionCompatibility.requireCompatible(payload);
+              return Boolean.TRUE;
+            },
+            "transaction submission compatibility",
+            200)
+        .handle(
+            (ignored, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                if (cause instanceof ToriiTransactionCompatibilityException) {
+                  throw new CompletionException(cause);
+                }
+                throw new CompletionException(
+                    new ToriiTransactionCompatibilityProbeException(cause));
+              }
+              return null;
+            });
   }
 
   private <T> CompletableFuture<T> fetchJson(
@@ -3252,6 +3334,7 @@ public final class HttpClientTransport implements IrohaClient {
           "native_proof_b64",
           "creation_time_ms");
   private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
+  private static final long NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
   private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
 

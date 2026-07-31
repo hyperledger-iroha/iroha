@@ -7,8 +7,9 @@ readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -55,6 +56,8 @@ models=(
   SumeragiV2AdequateLeaderCrashParkingMutation
   SumeragiV2AdequateLeaderMutualOwnerAnchorMutation
   SumeragiV2AdequateLeaderBusyIdleProvenanceMutation
+  SumeragiV2AdequateLeaderDormantNonDescentMutation
+  SumeragiV2AdequateLeaderSubjectReplacementDormantMutation
 )
 
 for module in "${models[@]}"; do
@@ -88,6 +91,9 @@ run_case() {
   shift 4
   local log="${run_dir}/${label}.log"
   local actual_status
+  local expected_diagnostic
+  local expected_diagnostic_count=0
+  local primary_diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -101,13 +107,56 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   for marker in "$@"; do
-    if ! grep -Fq "$marker" "$log"; then
-      echo "${label} missed expected marker: ${marker}" >&2
+    case "$marker" in
+      "Invariant "*)
+        expected_diagnostic="Error: ${marker}"
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      "Error: Invariant "*|"Error: Action property "*|\
+        "Temporal properties were violated.")
+        expected_diagnostic="$marker"
+        if [[ "$marker" == "Temporal properties were violated." ]]; then
+          expected_diagnostic="Error: ${marker}"
+        fi
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      *)
+        if ! grep -Fq "$marker" "$log"; then
+          echo "${label} missed expected marker: ${marker}" >&2
+          cat "$log" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done
+  if [[ "$expected_status" -ne 0 ]]; then
+    [[ "$expected_diagnostic_count" -eq 1 ]] || {
+      echo "${label} did not declare exactly one failure diagnostic" >&2
       cat "$log" >&2
       exit 1
-    fi
-  done
+    }
+    primary_diagnostic_count="$(
+      grep -Ec \
+        "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+        "$log" || true
+    )"
+    [[ "$primary_diagnostic_count" -eq 1 ]] || {
+      echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+  fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }
 
@@ -155,5 +204,36 @@ run_case busy-idle-provenance-mutation \
   'phase = "Idle"' \
   "2 states generated, 2 distinct states found, 0 states left on queue." \
   "depth of the complete state graph search is 2"
+
+run_case dormant-non-descent-inert-fixed \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_inert_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case dormant-non-descent-inert-owner-mutation \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_inert_owner_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "Stuttering"
+
+run_case dormant-non-descent-retry-fixed \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_retry_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case dormant-non-descent-omitted-potential-mutation \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_omitted_potential_bug.cfg 12 \
+  "Invariant ReactivationConsumesFrozenPotentialBudget is violated."
+
+run_case subject-replacement-dormant-fixed \
+  SumeragiV2AdequateLeaderSubjectReplacementDormantMutation.tla \
+  adequate_leader_subject_replacement_dormant_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case subject-replacement-dormant-omitted-potential-mutation \
+  SumeragiV2AdequateLeaderSubjectReplacementDormantMutation.tla \
+  adequate_leader_subject_replacement_dormant_omitted_potential_bug.cfg 12 \
+  "Invariant ActivationConsumesPotentialBeforeAddingPredecessor is violated."
 
 echo "[tlc] adequate-leader readiness mutation matrix passed"

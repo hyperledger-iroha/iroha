@@ -9,7 +9,7 @@ fn runtime_upgrade_types_section_matches_documentation() {
         .parent()
         .and_then(|p| p.parent())
         .expect("workspace root");
-    let path = repo_root.join("docs/source/runtime_upgrades.md");
+    let path = repo_root.join("specs/runtime_upgrades.md");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 

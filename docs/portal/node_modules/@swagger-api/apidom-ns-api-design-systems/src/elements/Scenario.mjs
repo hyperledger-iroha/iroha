@@ -1,0 +1,29 @@
+import { ObjectElement } from '@swagger-api/apidom-core';
+/**
+ * @public
+ */
+class Scenario extends ObjectElement {
+  constructor(content, meta, attributes) {
+    super(content, meta, attributes);
+    this.element = 'scenario';
+  }
+  get description() {
+    return this.get('description');
+  }
+  set description(description) {
+    this.set('description', description);
+  }
+  get when() {
+    return this.get('when');
+  }
+  set when(when) {
+    this.set('when', when);
+  }
+  get then() {
+    return this.get('then');
+  }
+  set then(then) {
+    this.set('then', then);
+  }
+}
+export default Scenario;

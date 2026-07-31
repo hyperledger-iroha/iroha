@@ -1,0 +1,61 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const assert = require('assert');
+const ShortUniqueId = require('../dist/short-unique-id');
+
+const [,, ...args] = process.argv;
+
+const {options} = require('./getopts').create([
+  ['l' , 'length=ARG', 'character length of the uid to generate.'],
+  ['s' , 'stamp', 'include timestamp in uid (must be used with --length (-l) of 10 or more).'],
+  ['t' , 'timestamp=ARG', 'custom timestamp to parse (must be used along with -s, --stamp, -f, or --format).'],
+  ['f' , 'format=ARG', 'string representing custom format to generate id with.'],
+  ['p' , 'parse=ARG', 'extract timestamp from stamped uid (ARG).'],
+  ['d' , 'dictionaryJson=ARG', 'json file with dictionary array.'],
+])
+.bindHelp()
+.parseSystem();
+
+const uidOps = {};
+
+if ('length' in options) {
+  const oLength = options.length;
+
+  if (!((/^\d+$/).test(oLength) && parseInt(oLength, 10) > 0)) {
+    throw new Error('Only positive integers allowed for --length (-l) property');
+  }
+
+  uidOps.length = parseInt(oLength, 10);
+}
+
+if ('dictionaryJson' in options) {
+  const oDictJson = options.dictionaryJson;
+
+  fs.statSync(oDictJson);
+
+  const dictJson = JSON.parse(fs.readFileSync(oDictJson));
+
+  try {
+    assert(
+      Array.isArray(dictJson)
+      && dictJson.length > 1
+      && dictJson.reduce((a, b) => a && (typeof b === 'string') && (b.length === 1), true)
+    );
+  } catch(e) {
+    throw new Error('JSON file can only contain an array of two or more single character strings');
+  }
+
+  uidOps.dictionary = dictJson;
+}
+
+const uid = new ShortUniqueId(uidOps);
+
+if ('format' in options) {
+  console.log(uid.formattedUUID(options.format, new Date(options.timestamp || Date.now())));
+} else if ('stamp' in options) {
+  console.log(uid.stamp(uidOps.length || 10, new Date(options.timestamp || Date.now())));
+} else if ('parse' in options) {
+  console.log(uid.parseStamp(options.parse));
+} else {
+  console.log(uid.rnd());
+}

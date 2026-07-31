@@ -10237,7 +10237,7 @@ mod view_lock_contention_log_tests {
 
 /// Current state of the blockchain.
 ///
-/// Merge-ledger finality plumbing is specified in `docs/source/merge_ledger.md`.
+/// Merge-ledger finality plumbing is specified in `specs/merge_ledger.md`.
 /// The lane/global reduction metadata exposed by the merge ledger is stored in
 /// [`World::merge_hint_roots`] and [`World::merge_global_state_root`] so queries can
 /// surface the latest committee commitments.
@@ -30971,7 +30971,9 @@ impl State {
             let mut buffer = Vec::with_capacity(LANE_RELAY_MEMBER_DOMAIN.len() + seed.len());
             buffer.extend_from_slice(LANE_RELAY_MEMBER_DOMAIN);
             buffer.extend_from_slice(&seed);
-            let encoded = norito::to_bytes(peer)?;
+            // Committee order is consensus-significant, so ambient Norito
+            // layout guards must never alter this ranking preimage.
+            let encoded = norito::encode_canonical(peer)?;
             buffer.extend_from_slice(&encoded);
             scored.push((Hash::new(buffer), peer.clone()));
         }
@@ -33775,8 +33777,9 @@ impl State {
                     ));
                 }
                 if validate_live_authority
-                    && self.authoritative_lane_peer_ids_at_height(
-                        route.leg.route.lane_id,
+                    && crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                        &self.view(),
+                        route.leg.route,
                         context.proposal_height,
                     ) != route.validator_set
                 {
@@ -104311,28 +104314,34 @@ seiyaku SequentialNfts {
 
     #[test]
     fn lane_relay_committee_from_pool_is_deterministic() {
-        let alice = PeerId::new(
-            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let bob = PeerId::new(
-            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let carol = PeerId::new(
-            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let pool = vec![bob.clone(), alice.clone(), carol.clone(), alice.clone()];
+        let members = (1_u8..=8)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic relay committee member")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut pool = members.iter().rev().cloned().collect::<Vec<_>>();
+        pool.push(members[0].clone());
         let seed = [0x11; 32];
 
-        let committee = State::lane_relay_committee_from_pool(&pool, 2, seed).expect("committee");
-        let again = State::lane_relay_committee_from_pool(&pool, 2, seed).expect("committee");
+        let committee =
+            State::lane_relay_committee_from_pool(&pool, members.len(), seed).expect("committee");
+        let again =
+            State::lane_relay_committee_from_pool(&pool, members.len(), seed).expect("committee");
         assert_eq!(committee, again);
-        assert_eq!(committee.len(), 2);
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let under_alternate_layout = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            State::lane_relay_committee_from_pool(&pool, members.len(), seed)
+                .expect("ambient layout cannot change a consensus committee")
+        };
+        assert_eq!(committee, under_alternate_layout);
+        assert_eq!(committee.len(), members.len());
         let mut unique = committee.clone();
         unique.sort();
         unique.dedup();
@@ -121051,8 +121060,11 @@ seiyaku IdentitylessRawCallback {
             .legs()
             .into_iter()
             .map(|leg| {
-                let validator_set =
-                    state.authoritative_lane_peer_ids_at_height(leg.route.lane_id, proposal_height);
+                let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                    &state.view(),
+                    leg.route,
+                    proposal_height,
+                );
                 assert!(
                     !validator_set.is_empty(),
                     "fixture route must have authoritative validators"
@@ -121755,6 +121767,51 @@ seiyaku IdentitylessRawCallback {
                 .queue_plan_admission_registry_entrypoint_present(binding.entrypoint_hash)
                 .is_err(),
             "a malformed marker must not be treated as an absent or canonical admission"
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy QueuePlan route");
+        let validator_keypairs = configure_commit_topology(&state, 1);
+
+        let parent = empty_global_block_after(None);
+        kura.store_block(Arc::new(parent.clone()))
+            .expect("store legacy QueuePlan carrier parent");
+        commit_block_metadata_to_state(&state, &parent);
+
+        let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        assert!(
+            state
+                .authoritative_lane_peer_ids_at_height(route.lane_id, 2)
+                .is_empty(),
+            "disabled Nexus has no lane-registry authority; QueuePlan must use commit topology"
+        );
+        let routing_plan = crate::queue::RoutingPlan::single(route);
+        let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x62,
+        );
+
+        assert_eq!(
+            state
+                .classify_pending_queue_plan_admission(&certificate, 2)
+                .expect("legacy QueuePlan certificate is classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::EligibleAbsent
         );
     }
 

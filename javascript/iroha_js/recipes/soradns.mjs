@@ -5,7 +5,7 @@
  * Derives the canonical + pretty hosts for a supplied FQDN using the SDK’s
  * Blake3-backed helper and optionally validates a comma-separated list of
  * GAR host patterns. This mirrors the resolver logic described in
- * docs/source/soradns/deterministic_hosts.md.
+ * specs/soradns/deterministic_hosts.md.
  *
  * Usage:
  *   npm install

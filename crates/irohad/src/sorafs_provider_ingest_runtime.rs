@@ -346,6 +346,7 @@ struct GovernedCompletionSignerV1 {
 fn completion_payload_matches_resolution_context(
     payload: &TransactionPayload,
     context: &ProviderIngestCompletionSignerResolutionContextV1,
+    expected_provider_id: ProviderId,
 ) -> bool {
     if !context.is_valid() || payload.authority() != &context.provider_owner {
         return false;
@@ -367,7 +368,7 @@ fn completion_payload_matches_resolution_context(
     let authority = completion.expected_authority();
     let anchor = completion.finalized_anchor();
     completion.order_id().as_bytes() != &[0; 32]
-        && completion.provider_id().as_bytes() != &[0; 32]
+        && completion.provider_id() == &expected_provider_id
         && *completion.completion_epoch() != 0
         && *completion.expected_assignment_revision() == context.expected_assignment_revision
         && authority.is_valid()
@@ -438,7 +439,11 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
     > {
         Box::pin(async move {
-            if !completion_payload_matches_resolution_context(&payload, &self.expected_context) {
+            if !completion_payload_matches_resolution_context(
+                &payload,
+                &self.expected_context,
+                self.provider_id,
+            ) {
                 return Err(ProviderIngestCompletionSignerErrorV1::Rejected);
             }
             self.current_eligibility()?;
@@ -449,6 +454,7 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
                 || !completion_payload_matches_resolution_context(
                     transaction.payload(),
                     &self.expected_context,
+                    self.provider_id,
                 )
             {
                 return Err(ProviderIngestCompletionSignerErrorV1::Rejected);
@@ -3272,6 +3278,31 @@ mod tests {
             signer.sign_calls.load(Ordering::SeqCst),
             1,
             "substituted assignment revision must not reach the HSM signer"
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
+        let (signer, owner_authority, provider_id, _exact_payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
+        let governed = adapter
+            .resolve(signer_resolution_context(provider_owner))
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        let substituted_payload =
+            test_completion_payload(&signer.key, ProviderId::new([0x42; 32]), 8, 1);
+        assert_eq!(
+            governed.sign(substituted_payload).await,
+            Err(ProviderIngestCompletionSignerErrorV1::Rejected)
+        );
+        assert_eq!(
+            signer.sign_calls.load(Ordering::SeqCst),
+            0,
+            "a completion for another provider must not reach the HSM signer"
         );
     }
 

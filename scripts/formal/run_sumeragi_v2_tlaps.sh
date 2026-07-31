@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_proof_ledger.py"
 readonly EVIDENCE_DIR="${REPO_ROOT}/target/formal/sumeragi_v2"
 readonly EVIDENCE_PATH="${EVIDENCE_DIR}/proof_evidence.json"

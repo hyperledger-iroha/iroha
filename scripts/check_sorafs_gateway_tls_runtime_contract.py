@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import re
 import sys
 from pathlib import Path
@@ -22,11 +21,6 @@ from sorafs_evidence_paths import (  # noqa: E402
 
 REQUIRED_RUNTIME_NOTICE = "> **Runtime ACME boundary (V1):**"
 MAX_CONTRACT_SOURCE_BYTES = 8 * 1024 * 1024
-GENERATED_STUB_HEADER_RE = re.compile(
-    r"<!-- Auto-generated stub for [^<>\r\n]+ "
-    r"\((?P<lang>[a-z0-9-]+)\) translation\. "
-    r"Replace this content with the full translation\. -->\n\n"
-)
 FORBIDDEN_DOC_CLAIMS = (
     "sorafs-gateway tls renew",
     "fall back to stored cert",
@@ -36,55 +30,6 @@ FORBIDDEN_DOC_CLAIMS = (
     "Route53 support is available by default",
     "Generate a replacement bundle with the repository wrapper",
 )
-
-
-def _generated_stub_error(
-    text: str,
-    *,
-    locale: str,
-    expected_source: str,
-    expected_hash: str,
-) -> str | None:
-    """Return a reason when a declared generated translation stub is malformed."""
-
-    if not re.search(r"(?m)^status: needs-translation$", text):
-        return None
-    delimiters = list(re.finditer(r"(?m)^---$", text))
-    if len(delimiters) != 2:
-        return "generated-stub-front-matter"
-    start, end = delimiters
-    prefix = text[: start.start()]
-    header = GENERATED_STUB_HEADER_RE.fullmatch(prefix)
-    if header is None or header.group("lang") != locale:
-        return "generated-stub-header"
-    metadata: dict[str, str] = {}
-    for line in text[start.end() + 1 : end.start()].splitlines():
-        if not line or line.lstrip().startswith("#"):
-            continue
-        if ":" not in line:
-            return "generated-stub-front-matter"
-        key, value = line.split(":", 1)
-        key = key.strip()
-        if not key or key in metadata:
-            return "generated-stub-front-matter"
-        metadata[key] = value.strip().strip('"').strip("'")
-    required = {
-        "lang": locale,
-        "source": expected_source,
-        "status": "needs-translation",
-        "generator": "scripts/sync_docs_i18n.py",
-        "source_hash": expected_hash,
-        "translation_last_reviewed": "null",
-    }
-    if any(metadata.get(key) != value for key, value in required.items()):
-        return "generated-stub-metadata"
-    if metadata.get("direction") not in {"ltr", "rtl"}:
-        return "generated-stub-direction"
-    if not metadata.get("source_last_modified"):
-        return "generated-stub-source-mtime"
-    if not text[end.end() + 1 :].strip():
-        return "generated-stub-empty-body"
-    return ""
 
 
 def _repository_root_identity(root: Path, failures: list[str]) -> Path | None:
@@ -258,46 +203,15 @@ def check_contract(root: Path) -> list[str]:
         if marker not in irohad:
             failures.append(failure)
 
-    canonical_relative = "docs/source/sorafs_gateway_tls_automation.md"
-    canonical_path = root_identity / canonical_relative
+    canonical_relative = "specs/sorafs_gateway_tls_automation.md"
     canonical = _read(root_identity, canonical_relative, failures)
     if canonical is None:
         return failures
-    expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    try:
-        localized_docs = sorted(
-            canonical_path.parent.glob("sorafs_gateway_tls_automation.*.md")
-        )
-    except (OSError, RuntimeError):
-        failures.append("docs/source:gateway-tls-mirror-scan-failed")
-        return failures
-    docs = [canonical_path, *localized_docs]
-    for path in docs:
-        relative = path.relative_to(root_identity).as_posix()
-        text = _read(root_identity, relative, failures)
-        if text is None:
-            continue
-        generated_stub = False
-        if path != canonical_path:
-            locale = path.name.split(".")[-2]
-            stub_error = _generated_stub_error(
-                text,
-                locale=locale,
-                expected_source=canonical_relative,
-                expected_hash=expected_hash,
-            )
-            if stub_error:
-                failures.append(f"{relative}:{stub_error}")
-            generated_stub = stub_error == ""
-        if not generated_stub and REQUIRED_RUNTIME_NOTICE not in text:
-            failures.append(f"{relative}:missing-runtime-notice")
-        for claim in FORBIDDEN_DOC_CLAIMS:
-            if claim in text:
-                failures.append(f"{relative}:stale-claim:{claim}")
-        if path != canonical_path:
-            match = re.search(r"^source_hash: ([0-9a-f]{64})$", text, re.MULTILINE)
-            if match is None or match.group(1) != expected_hash:
-                failures.append(f"{relative}:stale-source-hash")
+    if REQUIRED_RUNTIME_NOTICE not in canonical:
+        failures.append(f"{canonical_relative}:missing-runtime-notice")
+    for claim in FORBIDDEN_DOC_CLAIMS:
+        if claim in canonical:
+            failures.append(f"{canonical_relative}:stale-claim:{claim}")
 
     return failures
 

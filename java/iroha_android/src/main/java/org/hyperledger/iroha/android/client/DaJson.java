@@ -67,7 +67,7 @@ final class DaJson {
   static DaModels.CommitmentListResponse parseCommitmentList(
       final Object value, final String field) {
     final Map<String, Object> object =
-        exactObject(value, field, keys("policies", "commitments"));
+        exactObject(value, field, keys("policies", "commitments", "next_cursor"));
     final List<Object> raw =
         list(object.get("commitments"), field + ".commitments");
     final List<DaModels.CommitmentWithLocation> commitments =
@@ -79,7 +79,11 @@ final class DaJson {
     }
     return new DaModels.CommitmentListResponse(
         parsePolicyBundle(object.get("policies"), field + ".policies"),
-        commitments);
+        commitments,
+        object.get("next_cursor") == null
+            ? null
+            : parseCommitmentListCursor(
+                object.get("next_cursor"), field + ".next_cursor"));
   }
 
   static DaModels.CommitmentProofResponse parseCommitmentProofResponse(
@@ -116,14 +120,23 @@ final class DaJson {
         parsePath(object.get("path"), field + ".path"));
   }
 
-  static List<DaModels.PinIntentWithLocation> parsePinIntentList(
+  static DaModels.PinIntentListResponse parsePinIntentList(
       final Object value, final String field) {
-    final List<Object> raw = list(value, field);
+    final Map<String, Object> object =
+        exactObject(value, field, keys("intents", "next_cursor"));
+    final List<Object> raw = list(object.get("intents"), field + ".intents");
     final List<DaModels.PinIntentWithLocation> intents = new ArrayList<>(raw.size());
     for (int index = 0; index < raw.size(); index++) {
-      intents.add(parsePinIntentWithLocation(raw.get(index), field + "[" + index + "]"));
+      intents.add(
+          parsePinIntentWithLocation(
+              raw.get(index), field + ".intents[" + index + "]"));
     }
-    return Collections.unmodifiableList(intents);
+    return new DaModels.PinIntentListResponse(
+        intents,
+        object.get("next_cursor") == null
+            ? null
+            : parsePinIntentListCursor(
+                object.get("next_cursor"), field + ".next_cursor"));
   }
 
   static DaModels.PinIntentProof parsePinIntentProof(
@@ -302,6 +315,45 @@ final class DaJson {
     return new DaModels.PinIntentWithLocation(
         parsePinIntent(object.get("intent"), field + ".intent"),
         parseLocation(object.get("location"), field + ".location"));
+  }
+
+  private static DaModels.ListSnapshot parseListSnapshot(
+      final Object value, final String field) {
+    final Map<String, Object> object =
+        exactObject(value, field, keys("block_height", "block_hash"));
+    return new DaModels.ListSnapshot(
+        u64(object.get("block_height"), field + ".block_height"),
+        object.get("block_hash") == null
+            ? null
+            : string(object.get("block_hash"), field + ".block_hash"));
+  }
+
+  private static DaModels.CommitmentKey parseCommitmentKey(
+      final Object value, final String field) {
+    final Map<String, Object> object =
+        exactObject(value, field, keys("lane_id", "epoch", "sequence"));
+    return new DaModels.CommitmentKey(
+        u32(object.get("lane_id"), field + ".lane_id"),
+        u64(object.get("epoch"), field + ".epoch"),
+        u64(object.get("sequence"), field + ".sequence"));
+  }
+
+  private static DaModels.CommitmentListCursor parseCommitmentListCursor(
+      final Object value, final String field) {
+    final Map<String, Object> object =
+        exactObject(value, field, keys("snapshot", "after"));
+    return new DaModels.CommitmentListCursor(
+        parseListSnapshot(object.get("snapshot"), field + ".snapshot"),
+        parseCommitmentKey(object.get("after"), field + ".after"));
+  }
+
+  private static DaModels.PinIntentListCursor parsePinIntentListCursor(
+      final Object value, final String field) {
+    final Map<String, Object> object =
+        exactObject(value, field, keys("snapshot", "after"));
+    return new DaModels.PinIntentListCursor(
+        parseListSnapshot(object.get("snapshot"), field + ".snapshot"),
+        parseLocation(object.get("after"), field + ".after"));
   }
 
   private static DaModels.Location parseLocation(final Object value, final String field) {

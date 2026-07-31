@@ -33,7 +33,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=738
+readonly canonical_production_test_count=806
 
 require_nonignored_test() {
   local path="$1"
@@ -114,13 +114,13 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=280"
+  "readonly expected_multilane_focus_test_count=299"
 require_exact_token \
   "$release_runner" \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=81"
+  "  readonly expected_corridor_leg_count=82"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -155,7 +155,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 280"
+  "_G_UNIT_TEST_COUNT = 299"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -243,13 +243,13 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 38:
-    reject("receipt writer must bind exactly 38 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 39:
+    reject("receipt writer must bind exactly 39 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 38
+    len(module_counts) != 39
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -257,11 +257,14 @@ if (
         f"{canonical_production_test_count}"
     )
 expected_changed_module_counts = {
-    "sumeragi::authoritative_runtime_gate_tests": 32,
+    "sumeragi::authoritative_runtime_gate_tests": 40,
+    "sumeragi::serviced_candidate_store::tests": 1,
+    "sumeragi::v2_effects::tests": 66,
+    "sumeragi::v2_runtime::tests": 52,
     "merge_sidecar::tests": 118,
     "sumeragi::v2_lane_work::tests": 53,
-    "sumeragi::v2_runner::tests": 32,
-    "sumeragi::v2_worker::tests": 88,
+    "sumeragi::v2_runner::tests": 34,
+    "sumeragi::v2_worker::tests": 129,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -288,8 +291,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "fd82f2dc3b93bb7ae8fdb277a84b7d56"
-    "50dbbf524730afab884e347c907d32fe"
+    "1873bbd68c9736db1991842c5f34b0ff"
+    "4b98460567a76649619d256d4e510700"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -442,8 +445,8 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 104,
-    "required_multilane_queue_journal_focus_tests": 119,
+    "required_multilane_core_focus_tests": 105,
+    "required_multilane_queue_journal_focus_tests": 137,
     "required_multilane_config_lib_focus_tests": 3,
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
@@ -486,9 +489,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 280 or len(set(all_focus_entries)) != 280:
+if len(all_focus_entries) != 299 or len(set(all_focus_entries)) != 299:
     reject(
-        "multilane focus-test arrays must contain 280 globally distinct tests; "
+        "multilane focus-test arrays must contain 299 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -498,14 +501,14 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        104,
+        105,
         "--lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        119,
+        137,
         "--lib",
     ),
     (
@@ -570,7 +573,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 280 count is not published exactly once")
+        reject("G-UNIT expected 299 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1163,4 +1166,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 280/280 G-UNIT (104 core, 119 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 299/299 G-UNIT (105 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

@@ -21,15 +21,20 @@ use crate::refinement::{
     CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT, CONTINUATION_NONE, CONTINUATION_SIGN,
     EFFECT_PERSIST, EVENT_PERSISTED, EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY,
     EVENT_SIGNED, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_SUBJECT,
-    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CONSENSUS_CONTEXT,
-    IDENTITY_KIND_CONSENSUS_SUBJECT, IDENTITY_KIND_DURABLE_BODY_FRAME,
-    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
-    IDENTITY_KIND_FINALITY_ARTIFACT, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
+    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL,
+    IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+    IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT,
+    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT,
+    IDENTITY_KIND_LEADER_WIRE_LIFECYCLE, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
     IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER, IDENTITY_KIND_QUORUM_CERTIFICATE,
     IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK,
     IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, IDENTITY_KIND_SIDECAR_RESPONSE,
-    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+    LEADER_WIRE_ADMISSION_COALESCE, LEADER_WIRE_ADMISSION_INSERT, LEADER_WIRE_ADMISSION_REACTIVATE,
+    LEADER_WIRE_ADMISSION_REPLACE_TERMINAL, LEADER_WIRE_LIFECYCLE_ABSENT,
+    LEADER_WIRE_LIFECYCLE_DORMANT, LEADER_WIRE_LIFECYCLE_INGRESS, LEADER_WIRE_LIFECYCLE_RUNTIME,
+    LEADER_WIRE_LIFECYCLE_TERMINAL, LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL, REPLAY_EFFECT_NONE,
     WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
     WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
     WAL_RECORD_TIMEOUT_INTENT,
@@ -3774,6 +3779,39 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub queue_capacity: u64,
 }
 
+/// Verus-side total durable leader-wire admission transition.
+#[derive(Copy, Clone)]
+pub struct ProductionLeaderWireAdmissionTraceProjection {
+    pub operation: u8,
+    pub incoming_identity: CanonicalIdentityProjection,
+    pub incumbent_identity: CanonicalIdentityProjection,
+    pub stored_identity: CanonicalIdentityProjection,
+    pub incoming_view: u64,
+    pub incumbent_view: u64,
+    pub stored_view: u64,
+    pub incoming_admission_ordinal: u128,
+    pub incumbent_admission_ordinal: u128,
+    pub stored_admission_ordinal: u128,
+    pub incoming_scheduler_ordinal: u128,
+    pub incumbent_scheduler_ordinal: u128,
+    pub stored_scheduler_ordinal: u128,
+    pub last_admission_ordinal_before: u128,
+    pub last_admission_ordinal_after: u128,
+    pub scheduler_ordinal_high_watermark_before: u128,
+    pub scheduler_ordinal_high_watermark_after: u128,
+    pub records_before: u64,
+    pub records_after: u64,
+    pub capacity: u64,
+    pub status_before: u8,
+    pub status_after: u8,
+    pub replay_dormant_before: bool,
+    pub replay_dormant_after: bool,
+    pub runtime_owner_before: bool,
+    pub runtime_owner_after: bool,
+    pub terminal_evidence_before: bool,
+    pub terminal_evidence_after: bool,
+}
+
 /// Verus-side primitive two-stage daemon retry trace.
 #[derive(Copy, Clone)]
 pub struct ProductionTwoStageRelayRetryTraceProjection {
@@ -3993,6 +4031,24 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub artifact_hash: CanonicalIdentityProjection,
     pub predecessor: ProductionDurablePredecessorIdentityProjection,
     pub pending_successor_activation_present: bool,
+}
+
+/// Verus-side primitive durable owner of one exact lane queue reservation.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightReservationOwnerProjection {
+    pub state: u8,
+    pub reservation_identity: CanonicalIdentityProjection,
+    pub release_identity: CanonicalIdentityProjection,
+}
+
+/// Verus-side mirror of one primitive reservation-journal owner transition.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightReservationTransitionProjection {
+    pub action: u8,
+    pub requested_reservation_identity: CanonicalIdentityProjection,
+    pub requested_release_identity: CanonicalIdentityProjection,
+    pub before: ProductionInFlightReservationOwnerProjection,
+    pub after: ProductionInFlightReservationOwnerProjection,
 }
 
 /// Verus-side complete immutable identity of one durable predecessor.
@@ -4220,6 +4276,17 @@ pub closed spec fn check_production_ingress_transition(
     }
 }
 
+/// Total durable leader-wire admission gate mirrored by production.
+pub closed spec fn check_production_leader_wire_admission_transition(
+    projection: ProductionLeaderWireAdmissionTraceProjection,
+) -> Option<ProductionLeaderWireAdmissionTraceProjection> {
+    if production_leader_wire_admission_refines_lifecycle_ownership_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
 /// Total two-stage retry gate mirrored by production.
 pub closed spec fn check_production_two_stage_relay_retry_transition(
     projection: ProductionTwoStageRelayRetryTraceProjection,
@@ -4281,6 +4348,20 @@ pub closed spec fn check_production_terminal_application_transition(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> Option<ProductionTerminalApplicationWithoutSuccessorActivationProjection> {
     if production_terminal_application_without_successor_activation_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
+/// Total gate over the primitive reservation-owner projection mirrored by production.
+///
+/// This is intentionally not a total refinement checker for the surrounding
+/// QueuePlan/Kura/carrier/WSV/FIFO lifecycle.
+pub closed spec fn check_production_in_flight_reservation_transition(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> Option<ProductionInFlightReservationTransitionProjection> {
+    if production_in_flight_reservation_transition_kernel(projection) {
         Some(projection)
     } else {
         None
@@ -4371,6 +4452,13 @@ pub closed spec fn production_ingress_identity_and_class_trace_refines_protected
     production_ingress_identity_and_class_trace_body!(projection)
 }
 
+/// Exact Verus mirror of the durable leader-wire admission kernel.
+pub closed spec fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
+    projection: ProductionLeaderWireAdmissionTraceProjection,
+) -> bool {
+    production_leader_wire_admission_trace_body!(projection)
+}
+
 /// Exact Verus mirror of the two-stage relay retry fairness kernel.
 pub closed spec fn production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
     projection: ProductionTwoStageRelayRetryTraceProjection,
@@ -4412,6 +4500,13 @@ pub closed spec fn production_terminal_application_without_successor_activation_
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> bool {
     production_terminal_application_without_successor_activation_body!(projection)
+}
+
+/// Exact Verus mirror of the primitive reservation-owner production kernel.
+pub closed spec fn production_in_flight_reservation_transition_kernel(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> bool {
+    production_in_flight_reservation_transition_body!(projection)
 }
 
 /// Exact applied predecessor ownership and the prepared successor marker admit
@@ -4693,6 +4788,63 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
 {
     reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+}
+
+/// One durable leader-wire admission preserves immutable identity and ordinal
+/// ownership, consumes restart-dormant potential atomically, or coalesces
+/// without mutation.
+pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
+    projection: ProductionLeaderWireAdmissionTraceProjection,
+)
+    ensures
+        check_production_leader_wire_admission_transition(projection) == Some(projection) ==> (
+            production_leader_wire_admission_refines_lifecycle_ownership_kernel(projection)
+            && projection.operation >= LEADER_WIRE_ADMISSION_INSERT
+            && projection.operation <= LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+            && (
+                projection.operation == LEADER_WIRE_ADMISSION_INSERT
+                    || projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+                ==> projection.incoming_admission_ordinal
+                        == projection.stored_admission_ordinal
+                    && projection.incoming_scheduler_ordinal
+                        == projection.stored_scheduler_ordinal
+            )
+            && (
+                projection.operation == LEADER_WIRE_ADMISSION_REACTIVATE
+                    || projection.operation == LEADER_WIRE_ADMISSION_COALESCE
+                ==> projection.incumbent_admission_ordinal
+                        == projection.stored_admission_ordinal
+                    && projection.incumbent_scheduler_ordinal
+                        == projection.stored_scheduler_ordinal
+            )
+            && (
+                projection.operation == LEADER_WIRE_ADMISSION_COALESCE
+                ==> projection.records_after == projection.records_before
+                    && projection.status_after == projection.status_before
+                    && projection.last_admission_ordinal_after
+                        == projection.last_admission_ordinal_before
+                    && projection.scheduler_ordinal_high_watermark_after
+                        == projection.scheduler_ordinal_high_watermark_before
+            )
+            && (
+                projection.operation == LEADER_WIRE_ADMISSION_REACTIVATE
+                ==> projection.status_before == LEADER_WIRE_LIFECYCLE_DORMANT
+                    && projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && projection.replay_dormant_before
+                    && !projection.replay_dormant_after
+            )
+            && (
+                projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+                ==> projection.incoming_view > projection.incumbent_view
+                    && projection.incoming_admission_ordinal
+                        > projection.incumbent_admission_ordinal
+                    && projection.incoming_scheduler_ordinal
+                        > projection.incumbent_scheduler_ordinal
+            )
+        ),
+{
+    reveal(check_production_leader_wire_admission_transition);
+    reveal(production_leader_wire_admission_refines_lifecycle_ownership_kernel);
 }
 
 /// One exact retry preserves its authenticated source owner and rotates both
@@ -4991,6 +5143,32 @@ pub proof fn production_terminal_application_without_successor_activation_refine
 {
     reveal(check_production_terminal_application_transition);
     reveal(production_terminal_application_without_successor_activation_kernel);
+}
+
+/// A successful primitive checker result is exactly the shared executable
+/// identity/state relation. Collection extraction and cross-store ordering are
+/// deliberately outside this theorem.
+pub proof fn production_in_flight_reservation_transition_preserves_primitive_identity(
+    projection: ProductionInFlightReservationTransitionProjection,
+)
+    ensures
+        check_production_in_flight_reservation_transition(projection) == Some(projection)
+            ==> production_in_flight_reservation_transition_kernel(projection),
+{
+    reveal(check_production_in_flight_reservation_transition);
+}
+
+/// Runtime commit cannot fabricate a commit barrier from absent ownership.
+pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
+    projection: ProductionInFlightReservationTransitionProjection,
+)
+    requires
+        projection.action == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMMIT),
+        projection.before.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT),
+    ensures
+        !production_in_flight_reservation_transition_kernel(projection),
+{
+    reveal(production_in_flight_reservation_transition_kernel);
 }
 
 /// Verus-side shape of one fixed-width effect capability key.

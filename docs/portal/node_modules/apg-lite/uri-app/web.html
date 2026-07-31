@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>apg-exp</title>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/start/jquery-ui.css" />
+<style>
+body {
+	margin: 10px;
+	height: 100%;
+ font-size: 100%
+}
+#parse {
+	width: 100px;
+}
+#string {
+	font-family: monospace;
+}
+.comment {
+	font-size: 100%;
+	font-style: italic;
+}
+</style>
+</head>
+<body>
+  <h3>
+  Uri Parser Demonstration
+  </h3>
+  <p>
+    <b>URI to parse:</b><br>
+    <textarea id="uri" wrap="off" rows="1" cols="100"></textarea>
+  </p>
+  <p>
+  <input type="button" id="parse" value="parse" /><span id="parse-msg" class="comment">
+  </p>
+  <pre id="result"></pre></pre>
+</body>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.2/jquery.min.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js"></script>
+<script src="./web-uri-parser.js" charset="utf-8"></script>
+<script src="./web-app.js" charset="utf-8"></script>
+</html>

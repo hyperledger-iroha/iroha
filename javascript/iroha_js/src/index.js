@@ -1,5 +1,5 @@
 /**
- * Entry point for the experimental Iroha JS SDK.
+ * Entry point for the Iroha JavaScript SDK.
  *
  * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
  * module.

@@ -89,7 +89,8 @@ class HttpClientTransport(
 
     override fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse> {
         val hashHex = SignedTransactionHasher.hashHex(transaction)
-        return flushPendingQueue().exceptionally { null }.thenCompose { submitWithRetryInternal(transaction, hashHex, 1, true) }
+        return flushPendingQueue().exceptionally { null }
+            .thenCompose { submitWithRetryInternal(transaction, hashHex, 1, queuedReplay = false) }
     }
 
     override fun submitTransactionJson(encodedVersionedTransactionJson: ByteArray): CompletableFuture<ClientResponse> {
@@ -100,7 +101,8 @@ class HttpClientTransport(
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
         )
-        return executeAccepted(request, "transaction JSON submit", 202)
+        return ensureTransactionSubmissionCompatibility()
+            .thenCompose { executeAccepted(request, "transaction JSON submit", 202) }
     }
 
     override fun submitSccpDestinationProof(
@@ -127,29 +129,31 @@ class HttpClientTransport(
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
         )
-        notifyRequest(request)
-        return executor.execute(request).handle { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!)
-                val failed = CompletableFuture<ClientResponse>()
-                failed.completeExceptionally(cause)
-                return@handle failed
-            }
-            val clientResponse = ClientResponse(
-                response.statusCode,
-                response.body,
-                response.message,
-                extractTransactionHash(response),
-                extractRejectCode(response),
-            )
-            if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
-                notifyFailure(request, RuntimeException("Torii request failed with status ${clientResponse.statusCode}"))
-            } else {
-                notifyResponse(request, clientResponse)
-            }
-            CompletableFuture.completedFuture(clientResponse)
-        }.thenCompose { it }
+        return ensureTransactionSubmissionCompatibility().thenCompose {
+            notifyRequest(request)
+            executor.execute(request).handle { response, throwable ->
+                if (throwable != null) {
+                    val cause = unwrapCompletion(throwable)
+                    notifyFailure(request, cause)
+                    val failed = CompletableFuture<ClientResponse>()
+                    failed.completeExceptionally(cause)
+                    return@handle failed
+                }
+                val clientResponse = ClientResponse(
+                    response.statusCode,
+                    response.body,
+                    response.message,
+                    extractTransactionHash(response),
+                    extractRejectCode(response),
+                )
+                if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
+                    notifyFailure(request, RuntimeException("Torii request failed with status ${clientResponse.statusCode}"))
+                } else {
+                    notifyResponse(request, clientResponse)
+                }
+                CompletableFuture.completedFuture(clientResponse)
+            }.thenCompose { it }
+        }
     }
 
     override fun submitTransactionEntrypointJson(encodedVersionedEntrypointJson: ByteArray): CompletableFuture<ClientResponse> {
@@ -160,7 +164,8 @@ class HttpClientTransport(
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
         )
-        return executeAccepted(request, "transaction entrypoint JSON submit", 202)
+        return ensureTransactionSubmissionCompatibility()
+            .thenCompose { executeAccepted(request, "transaction entrypoint JSON submit", 202) }
     }
 
     override fun waitForTransactionStatus(hashHex: String, options: PipelineStatusOptions?): CompletableFuture<Map<String, Any>> {
@@ -835,16 +840,30 @@ class HttpClientTransport(
         for (i in pending.indices) {
             val index = i; val queuedTx = pending[i]
             chain = chain.thenCompose {
-                submitWithRetryInternal(queuedTx, SignedTransactionHasher.hashHex(queuedTx), 1, true)
+                submitWithRetryInternal(
+                    queuedTx,
+                    SignedTransactionHasher.hashHex(queuedTx),
+                    1,
+                    queuedReplay = true,
+                )
                     .thenApply<Void?> { null }
-                    .exceptionally { ex -> requeueRemaining(pending, index + 1); throw if (ex is CompletionException) ex else CompletionException(ex) }
+                    .exceptionally { ex ->
+                        val cause = unwrapCompletion(ex)
+                        val requeueFrom = if (cause is ToriiTransactionCompatibilityException) index else index + 1
+                        requeueRemaining(pending, requeueFrom)
+                        throw if (ex is CompletionException) ex else CompletionException(ex)
+                    }
             }
         }
         return chain
     }
 
-    private fun submitWithRetryInternal(transaction: SignedTransaction, hashHex: String, attempt: Int, skipFlush: Boolean): CompletableFuture<ClientResponse> {
-        if (!skipFlush) return flushPendingQueue().exceptionally { null }.thenCompose { submitWithRetryInternal(transaction, hashHex, attempt, true) }
+    private fun submitWithRetryInternal(
+        transaction: SignedTransaction,
+        hashHex: String,
+        attempt: Int,
+        queuedReplay: Boolean,
+    ): CompletableFuture<ClientResponse> {
         val request = ToriiRequestBuilder.buildSubmitRequest(
             config.baseUri(),
             transaction,
@@ -852,27 +871,68 @@ class HttpClientTransport(
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
         )
-        notifyRequest(request)
-        return executor.execute(request).handle { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!); return@handle scheduleRetry(transaction, hashHex, attempt, request, null, cause)
-            }
-            val clientResponse = ClientResponse(response.statusCode, response.body, response.message, extractTransactionHash(response) ?: hashHex, extractRejectCode(response))
-            if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
-                if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) return@handle scheduleRetry(transaction, hashHex, attempt, request, clientResponse, null)
-                if (config.retryPolicy().isRetryableStatus(clientResponse.statusCode)) {
-                    val error = RuntimeException("Torii request failed with status ${clientResponse.statusCode}")
-                    notifyFailure(request, error); enqueuePending(transaction)
-                    return@handle CompletableFuture<ClientResponse>().also { it.completeExceptionally(error) }
+
+        return ensureTransactionSubmissionCompatibility()
+            .handle { _, throwable ->
+                if (throwable != null) {
+                    val cause = unwrapCompletion(throwable)
+                    if (!queuedReplay && cause is ToriiTransactionCompatibilityProbeException) {
+                        enqueuePending(transaction)
+                    }
+                    throw CompletionException(cause)
                 }
-                notifyResponse(request, clientResponse); return@handle CompletableFuture.completedFuture(clientResponse)
+                Unit
             }
-            notifyResponse(request, clientResponse); CompletableFuture.completedFuture(clientResponse)
-        }.thenCompose { it }
+            .thenCompose {
+                notifyRequest(request)
+                executor.execute(request).handle { response, throwable ->
+                    if (throwable != null) {
+                        val cause = unwrapCompletion(throwable)
+                        notifyFailure(request, cause)
+                        return@handle scheduleRetry(
+                            transaction,
+                            hashHex,
+                            attempt,
+                            queuedReplay,
+                            request,
+                            null,
+                            cause,
+                        )
+                    }
+                    val clientResponse = ClientResponse(response.statusCode, response.body, response.message, extractTransactionHash(response) ?: hashHex, extractRejectCode(response))
+                    if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
+                        if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
+                            return@handle scheduleRetry(
+                                transaction,
+                                hashHex,
+                                attempt,
+                                queuedReplay,
+                                request,
+                                clientResponse,
+                                null,
+                            )
+                        }
+                        if (config.retryPolicy().isRetryableStatus(clientResponse.statusCode)) {
+                            val error = RuntimeException("Torii request failed with status ${clientResponse.statusCode}")
+                            notifyFailure(request, error); enqueuePending(transaction)
+                            return@handle CompletableFuture<ClientResponse>().also { it.completeExceptionally(error) }
+                        }
+                        notifyResponse(request, clientResponse); return@handle CompletableFuture.completedFuture(clientResponse)
+                    }
+                    notifyResponse(request, clientResponse); CompletableFuture.completedFuture(clientResponse)
+                }.thenCompose { it }
+            }
     }
 
-    private fun scheduleRetry(transaction: SignedTransaction, hashHex: String, attempt: Int, request: TransportRequest, lastResponse: ClientResponse?, lastError: Throwable?): CompletableFuture<ClientResponse> {
+    private fun scheduleRetry(
+        transaction: SignedTransaction,
+        hashHex: String,
+        attempt: Int,
+        queuedReplay: Boolean,
+        request: TransportRequest,
+        lastResponse: ClientResponse?,
+        lastError: Throwable?,
+    ): CompletableFuture<ClientResponse> {
         val isNetworkFailure = lastError != null && lastResponse == null
         val hasAnotherAttempt = if (isNetworkFailure) config.retryPolicy().shouldRetryError(attempt) else config.retryPolicy().allowsRetry(attempt)
         if (!hasAnotherAttempt) {
@@ -886,7 +946,12 @@ class HttpClientTransport(
         emitRetryTelemetry(request, attempt, delayMillis, lastResponse, lastError)
         val retryFuture = CompletableFuture<ClientResponse>()
         scheduler.schedule({
-            submitWithRetryInternal(transaction, hashHex, attempt + 1, true).whenComplete { result, error ->
+            submitWithRetryInternal(
+                transaction,
+                hashHex,
+                attempt + 1,
+                queuedReplay,
+            ).whenComplete { result, error ->
                 if (error != null) retryFuture.completeExceptionally(error) else retryFuture.complete(result)
             }
         }, delayMillis, TimeUnit.MILLISECONDS)
@@ -1097,6 +1162,40 @@ class HttpClientTransport(
         return URI.create(if (base.endsWith("/")) base + normalized else "$base/$normalized")
     }
 
+    private fun ensureTransactionSubmissionCompatibility(): CompletableFuture<Unit> {
+        val request = buildJsonGetRequest(
+            "/v1/node/capabilities",
+            emptyMap(),
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES,
+        )
+        return fetchJson(
+            request,
+            Function { payload ->
+                ToriiTransactionCompatibility.requireCompatible(payload)
+                Unit
+            },
+            "transaction submission compatibility",
+            200,
+        ).handle { _, throwable ->
+            if (throwable != null) {
+                val cause = unwrapCompletion(throwable)
+                if (cause is ToriiTransactionCompatibilityException) {
+                    throw CompletionException(cause)
+                }
+                throw CompletionException(ToriiTransactionCompatibilityProbeException(cause))
+            }
+            Unit
+        }
+    }
+
+    private fun unwrapCompletion(throwable: Throwable): Throwable {
+        var current = throwable
+        while (current is CompletionException && current.cause != null) {
+            current = current.cause!!
+        }
+        return current
+    }
+
     private fun <T> fetchJson(
         request: TransportRequest,
         parser: Function<ByteArray, T>,
@@ -1267,6 +1366,7 @@ class HttpClientTransport(
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"
         private const val U32_MAX = 4_294_967_295L
         private const val SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
+        private const val NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
 

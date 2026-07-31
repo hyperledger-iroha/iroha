@@ -155,7 +155,7 @@ generated `README.md` into the output directory.
 - `iroha3-taira` and `iroha3-nexus` require `--vrf-seed-hex` when generating
   or verifying NPoS manifests
 
-See [docs/source/kagami_profiles.md](../../docs/source/kagami_profiles.md) for
+See [specs/kagami_profiles.md](../../specs/kagami_profiles.md) for
 the profile-specific defaults.
 
 ## Validator PoP and Genesis Signing

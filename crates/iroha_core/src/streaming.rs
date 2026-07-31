@@ -5900,7 +5900,6 @@ mod tests {
     ) {
         use norito::streaming::TransportCapabilities;
         use tokio::time::{Duration as TokioDuration, sleep};
-
         let mut conn = server.accept().await.expect("accept");
         let mut publisher_caps = TransportCapabilities::kyber768_default();
         publisher_caps.max_segment_datagram_size = 1_100;
@@ -5976,7 +5975,6 @@ mod tests {
 
         use iroha_p2p::streaming::{StreamingServer, quic::TransportConfigSettings};
         use norito::streaming::CapabilityFlags;
-
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let server = StreamingServer::bind(server_addr, settings)
@@ -6043,7 +6041,6 @@ mod tests {
     #[test]
     fn privacy_requirement_without_provider_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0));
         let report = CapabilityReport {
             stream_id: hash_with(0xCA),
@@ -6338,7 +6335,6 @@ mod tests {
     #[test]
     fn bundled_entropy_requires_viewer_support() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let mut handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let mut codec = actual::StreamingCodec::from_defaults();
@@ -6495,7 +6491,6 @@ mod tests {
     #[test]
     fn unsupported_feature_bits_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0));
         // Request a feature bit outside the allowed mask (bit 14).
         let report = CapabilityReport {
@@ -6529,7 +6524,6 @@ mod tests {
     #[test]
     fn zero_capability_report_protocol_version_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let report = CapabilityReport {
             stream_id: hash_with(0xDE),

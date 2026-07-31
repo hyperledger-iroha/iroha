@@ -21,6 +21,11 @@ assert SPEC and SPEC.loader  # pragma: no cover
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
+from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+
 
 SNAPSHOT_ID = "11" * 16
 MERKLE_ROOT = "22" * 32
@@ -30,6 +35,12 @@ NOW_UNIX = 1_800_100_000
 GENERATED_AT = NOW_UNIX - 120
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
+CHECKER = TopologyBoundChecker(
+    MODULE.main,
+    deployment_id=DEPLOYMENT_ID,
+    environment=ENVIRONMENT,
+    name="reputation-checker",
+)
 
 
 def provider_inventory() -> list[dict[str, str]]:
@@ -263,7 +274,7 @@ def test_schema_less_filename_fallback_rejects_alias_shapes() -> None:
 
 
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
+    return CHECKER(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
 
 def run_gate_with_explicit_evidence(root: Path, *extra: str) -> int:
@@ -271,7 +282,7 @@ def run_gate_with_explicit_evidence(root: Path, *extra: str) -> int:
     for kind_name, file_name in EXPLICIT_EVIDENCE_FILES:
         args.extend(["--evidence", f"{kind_name}={root / file_name}"])
     args.extend(extra)
-    return MODULE.main(args)
+    return CHECKER(args)
 
 
 def set_merkle_root_mismatch(payload: dict) -> None:
@@ -479,7 +490,7 @@ def test_schema_less_explicit_evidence_advertises_required_schema(tmp_path: Path
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"latest={latest_path}",
@@ -524,7 +535,7 @@ def test_schema_less_directory_alias_filename_does_not_satisfy_provider(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -556,7 +567,7 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert MODULE.main([f"@{args}"]) == 0
+    assert CHECKER([f"@{args}"]) == 0
 
 
 def test_deployment_context_is_required(tmp_path: Path) -> None:
@@ -576,7 +587,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
 
 
 def test_missing_evidence_sources_fail_shared_preflight(capsys) -> None:
-    assert MODULE.main(["--now-unix", str(NOW_UNIX)]) == 2
+    assert CHECKER(["--now-unix", str(NOW_UNIX)]) == 2
 
     captured = capsys.readouterr()
     assert "ERROR: provide --evidence-dir or --evidence" in captured.err
@@ -1652,7 +1663,7 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 str(path),
@@ -1680,7 +1691,7 @@ def test_explicit_unknown_schema_stdout_does_not_echo_schema_or_path(
     path = write_json(tmp_path / "unknown.json", {"schema": unknown_schema})
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 str(path),
@@ -1713,7 +1724,7 @@ def test_explicit_untyped_evidence_without_inferred_kind_does_not_echo_path(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 str(path),
@@ -1740,7 +1751,7 @@ def test_explicit_untyped_evidence_stdout_without_inferred_kind_does_not_echo_pa
     path = write_json(tmp_path / "opaque.json", deployment_context())
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 str(path),
@@ -1769,7 +1780,7 @@ def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"metrics={path}",
@@ -1800,7 +1811,7 @@ def test_explicit_kind_schema_mismatch_stdout_does_not_echo_kind_or_path(
     path = write_json(tmp_path / "typed.json", transport_evidence())
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"metrics={path}",
@@ -1833,7 +1844,7 @@ def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"transport={path}",
@@ -1866,7 +1877,7 @@ def test_explicit_conflicting_kinds_stdout_does_not_echo_kind_or_path(
     path = write_json(tmp_path / "typed.json", transport_evidence())
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"transport={path}",
@@ -1924,7 +1935,7 @@ def test_malformed_explicit_evidence_kind_main_summary_sanitizes_exception_text(
     monkeypatch.setattr(MODULE, "parse_evidence_spec", raise_malformed_evidence_spec)
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 "latest=/tmp/evidence.json",
@@ -1982,7 +1993,7 @@ def test_unknown_explicit_evidence_kind_main_summary_does_not_echo_kind(
     unknown_kind = "private-key-placeholder"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"{unknown_kind}=/tmp/evidence.json",
@@ -2006,7 +2017,7 @@ def test_typed_explicit_evidence_unsafe_path_fails_before_load_without_leaking(
     capsys,
 ) -> None:
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"latest={tmp_path / 'private%26%2395%3Bkey.json'}",
@@ -2032,7 +2043,7 @@ def test_typed_explicit_evidence_unsafe_path_fails_before_load_without_leaking(
 def test_typed_explicit_evidence_empty_path_fails_before_load_without_leaking(
     capsys,
 ) -> None:
-    assert MODULE.main(["--evidence", "latest=", "--now-unix", str(NOW_UNIX)]) == 2
+    assert CHECKER(["--evidence", "latest=", "--now-unix", str(NOW_UNIX)]) == 2
 
     captured = capsys.readouterr()
     assert "--evidence must use canonical path or KIND=PATH spec" in captured.err
@@ -2078,7 +2089,7 @@ def test_prefixed_explicit_evidence_matching_summary_out_fails_before_write(
     summary_out = path
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 f"latest={path}",
@@ -2101,7 +2112,7 @@ def test_explicit_malformed_json_reports_shared_load_error(
     path = tmp_path / "malformed.json"
     path.write_text("{not-json", encoding="utf-8")
 
-    assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
+    assert CHECKER(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
 
     captured = capsys.readouterr()
     summary = json.loads(captured.out)
@@ -2117,7 +2128,7 @@ def test_explicit_missing_file_reports_discovery_error(
 ) -> None:
     path = tmp_path / "missing.json"
 
-    assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
+    assert CHECKER(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
 
     captured = capsys.readouterr()
     summary = json.loads(captured.out)

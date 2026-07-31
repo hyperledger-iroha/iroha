@@ -12,7 +12,7 @@ use hex::encode as hex_encode;
 use norito::json::{self, JsonDeserialize, Map, Value};
 use sha2::{Digest, Sha256};
 
-const RUNBOOK_PATH: &str = "docs/source/runbooks/address_manifest_ops.md";
+const RUNBOOK_PATH: &str = "specs/runbooks/address_manifest_ops.md";
 
 #[derive(Clone)]
 pub struct VerifyOptions {

@@ -9721,8 +9721,13 @@ fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) ->
         | ModerationOrchestratorError::CheckpointIo(_)
         | ModerationOrchestratorError::CheckpointDurabilityUncertain(_)
         | ModerationOrchestratorError::DurabilityFaulted
+        | ModerationOrchestratorError::CheckpointStoreUnavailable
+        | ModerationOrchestratorError::CheckpointStoreAmbiguous
+        | ModerationOrchestratorError::CheckpointStoreFenced
+        | ModerationOrchestratorError::CheckpointStoreEquivocation
         | ModerationOrchestratorError::GenerationOverflow
-        | ModerationOrchestratorError::StateLockPoisoned => (
+        | ModerationOrchestratorError::StateLockPoisoned
+        | ModerationOrchestratorError::CheckpointStoreLockPoisoned => (
             StatusCode::SERVICE_UNAVAILABLE,
             "durable moderation orchestration is unavailable",
             "durability_failure",
@@ -20077,6 +20082,23 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
     ];
     for response in responses {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn moderation_checkpoint_store_failures_map_to_service_unavailable() {
+    let responses = [
+        ModerationOrchestratorError::CheckpointStoreUnavailable,
+        ModerationOrchestratorError::CheckpointStoreAmbiguous,
+        ModerationOrchestratorError::CheckpointStoreFenced,
+        ModerationOrchestratorError::CheckpointStoreEquivocation,
+        ModerationOrchestratorError::CheckpointStoreLockPoisoned,
+    ]
+    .map(moderation_orchestrator_error_response);
+
+    for response in responses {
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
 
@@ -45720,42 +45742,7 @@ mod advert_tests {
         (challenge, proof, verdict)
     }
 
-    #[test]
-    fn formats_admission_error_reasons() {
-        let provider_id = [0u8; 32];
-        assert_eq!(
-            admission_error_reason(&AdvertError::AdmissionMissing { provider_id }),
-            "admission_missing"
-        );
-        let expired = AdvertError::Validation(AdvertValidationError::Expired {
-            now: 11,
-            expires_at: 10,
-        });
-        assert_eq!(admission_error_reason(&expired), "stale",);
-        let future = AdvertError::Validation(AdvertValidationError::IssuedInFuture {
-            now: 10,
-            issued_at: 11,
-        });
-        assert_eq!(admission_error_reason(&future), "future_issued");
-        assert_eq!(
-            admission_error_reason(&AdvertError::SignaturePolicyDisabled),
-            "signature_policy_disabled"
-        );
-        assert_eq!(
-            admission_error_reason(&AdvertError::NonMonotonicIssuedAt {
-                provider_id,
-                current_issued_at: 11,
-                incoming_issued_at: 10,
-            }),
-            "non_monotonic_issued_at"
-        );
-        assert_eq!(
-            admission_error_reason(&AdvertError::ReplayCheckpoint(
-                crate::sorafs::ReplayCheckpointError::CapacityExceeded { maximum: 1 }
-            )),
-            "replay_checkpoint"
-        );
-    }
+    include!("api/admission_format_tests.rs");
 
     #[test]
     fn snapshot_to_json_renders_counts() {

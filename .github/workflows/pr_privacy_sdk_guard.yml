@@ -147,7 +147,7 @@ on:
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs"
-      - "docs/source/offline_kagemusha.md"
+      - "specs/offline_kagemusha.md"
       - "roadmap.md"
       - "status.md"
   workflow_dispatch:

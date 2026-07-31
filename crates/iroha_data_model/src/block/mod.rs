@@ -28,6 +28,8 @@ use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
 use crate::da::commitment::{
     DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
+use crate::da::pin_intent::DaPinIntentBundle;
 
 pub mod proofs;
 

@@ -72,7 +72,7 @@ body:
       label: Logs
       description: |
         Provide an output log in JSON format, so we could determine what caused the issue faster.
-        To configure a file path and level for logs, check the [reference documentation](https://docs.iroha.tech/reference/torii-endpoints.html#configuration-retrieve) or [peer configuration](https://docs.iroha.tech/guide/configure/peer-configuration.html#logger).
+        To configure a file path and level for logs, check the [reference documentation](https://docs.iroha.tech/reference/torii-endpoints.html#configuration-retrieve) or [peer configuration](https://docs.iroha.tech/reference/peer-config/params.html#logger).
         **Please** leave JSON [syntax highlighting](https://help.github.com/en/github/writing-on-github/creating-and-highlighting-code-blocks#syntax-highlighting) and [collapsed sections](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-collapsed-sections) (`<details>` tag) enabled.
         If the log indentation is broken, use the [js-beautify](https://beautifier.io/) service to format it.
       value: |

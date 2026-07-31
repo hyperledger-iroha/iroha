@@ -18,9 +18,10 @@ public final class DaToriiClientTests {
   private DaToriiClientTests() {}
 
   public static void main(final String[] args) {
-    listCommitmentsUsesCanonicalDigestWrapperAndTypedResponse();
+    listCommitmentsUsesSnapshotCursorAndTypedResponse();
     proveAndVerifyPinIntentPreserveUnsignedIntegersAndProofShape();
     proveReturnsNullForMissingRecord();
+    listPinIntentsUsesLocationCursorAndRequiresResponseEnvelope();
     proofParserRejectsLegacyLocationOnlyPayloadAndMalformedTags();
     pinIntentAliasesUseServerUtf8ByteBound();
     verifyResponseRejectsContradictoryValidityAndError();
@@ -28,22 +29,32 @@ public final class DaToriiClientTests {
     System.out.println("[IrohaAndroid] DaToriiClientTests passed.");
   }
 
-  private static void listCommitmentsUsesCanonicalDigestWrapperAndTypedResponse() {
+  private static void listCommitmentsUsesSnapshotCursorAndTypedResponse() {
     final CapturingDaExecutor executor =
         new CapturingDaExecutor(
             "{\"policies\":{\"version\":1,\"policy_hash\":\""
                 + HASH
-                + "\",\"policies\":[]},\"commitments\":[]}");
-    final DaModels.CommitmentQuery query =
-        new DaModels.CommitmentQuery(
-            DaModels.Digest32.fromHex("11".repeat(32)),
-            7L,
+                + "\",\"policies\":[]},\"commitments\":[],"
+                + "\"next_cursor\":{\"snapshot\":{\"block_height\":"
+                + "18446744073709551615,\"block_hash\":\""
+                + HASH
+                + "\"},\"after\":{\"lane_id\":7,\"epoch\":"
+                + "18446744073709551615,\"sequence\":9}}}");
+    final DaModels.ListSnapshot snapshot =
+        new DaModels.ListSnapshot(
+            new BigInteger("18446744073709551615"), HASH);
+    final DaModels.CommitmentListRequest requestModel =
+        new DaModels.CommitmentListRequest(
             new BigInteger("18446744073709551615"),
-            BigInteger.valueOf(9),
-            new DaModels.Pagination(BigInteger.valueOf(3), BigInteger.ONE));
+            new DaModels.CommitmentListCursor(
+                snapshot,
+                new DaModels.CommitmentKey(
+                    7L,
+                    new BigInteger("18446744073709551615"),
+                    BigInteger.valueOf(9))));
 
     final DaModels.CommitmentListResponse response =
-        client(executor).listCommitments(query).join();
+        client(executor).listCommitments(requestModel).join();
 
     assert "POST".equals(executor.lastRequest.method()) : "commitment query must use POST";
     assert "/v1/da/commitments".equals(executor.lastRequest.uri().getPath())
@@ -51,19 +62,29 @@ public final class DaToriiClientTests {
     assert Long.valueOf(8L * 1024L * 1024L)
         .equals(executor.lastRequest.maximumResponseBytes())
         : "DA response limit must be enforced by the executor";
-    final Map<String, Object> request = object(DaJson.parse(executor.lastRequest.body(), "request"));
-    final List<Object> digest = list(request.get("manifest_hash"));
-    assert digest.size() == 1 : "digest wrapper must contain one item";
-    final List<Object> digestBytes = list(digest.get(0));
-    assert digestBytes.size() == 32 : "digest must contain 32 bytes";
-    for (final Object value : digestBytes) {
-      assert Long.valueOf(0x11).equals(value) : "digest byte mismatch";
-    }
-    assert new BigInteger("18446744073709551615").equals(request.get("epoch"))
-        : "u64::MAX must remain exact";
+    final Map<String, Object> request =
+        object(DaJson.parse(executor.lastRequest.body(), "request"));
+    assert request.size() == 2
+            && request.containsKey("cursor")
+            && request.containsKey("limit")
+        : "commitment list must only send cursor fields";
+    assert new BigInteger("18446744073709551615").equals(request.get("limit"))
+        : "u64::MAX list limit must remain exact";
+    final Map<String, Object> cursor = object(request.get("cursor"));
+    final Map<String, Object> encodedSnapshot = object(cursor.get("snapshot"));
+    assert new BigInteger("18446744073709551615")
+        .equals(encodedSnapshot.get("block_height")) : "snapshot height mismatch";
+    assert HASH.equals(encodedSnapshot.get("block_hash")) : "snapshot hash mismatch";
+    assert new BigInteger("18446744073709551615")
+        .equals(object(cursor.get("after")).get("epoch")) : "cursor epoch mismatch";
     assert response.policies().version() == 1 : "policy version mismatch";
     assert HASH.equals(response.policies().policyHash()) : "policy hash mismatch";
     assert response.commitments().isEmpty() : "commitment list must be empty";
+    assert response.nextCursor() != null : "continuation cursor must decode";
+    assert snapshot.blockHeight().equals(response.nextCursor().snapshot().blockHeight())
+        : "response snapshot mismatch";
+    assert new BigInteger("18446744073709551615")
+        .equals(response.nextCursor().after().epoch()) : "response cursor epoch mismatch";
   }
 
   private static void proveAndVerifyPinIntentPreserveUnsignedIntegersAndProofShape() {
@@ -72,10 +93,9 @@ public final class DaToriiClientTests {
     final DaModels.PinIntentProof proof =
         client(proveExecutor)
             .provePinIntent(
-                new DaModels.PinIntentQuery(
+                new DaModels.PinIntentQueryRequest(
                     null,
                     DaModels.Digest32.fromHex("22".repeat(32)),
-                    null,
                     null,
                     null,
                     null,
@@ -83,6 +103,10 @@ public final class DaToriiClientTests {
             .join();
 
     assert proof != null : "proof must be present";
+    final Map<String, Object> proveRequest =
+        object(DaJson.parse(proveExecutor.lastRequest.body(), "request"));
+    assert proveRequest.size() == 1 && proveRequest.containsKey("storage_ticket")
+        : "pin proof request must contain selector fields only";
     assert new BigInteger("18446744073709551615").equals(proof.intent().epoch())
         : "proof epoch must remain exact";
     assert proof.bundleLength() == 2 : "bundle length mismatch";
@@ -115,10 +139,80 @@ public final class DaToriiClientTests {
 
   private static void proveReturnsNullForMissingRecord() {
     final CapturingDaExecutor executor = new CapturingDaExecutor("null");
-    assert client(executor).proveCommitment().join() == null
+    assert client(executor)
+            .proveCommitment(
+                new DaModels.CommitmentProofRequest(
+                    DaModels.Digest32.fromHex("11".repeat(32)),
+                    7L,
+                    new BigInteger("18446744073709551615"),
+                    BigInteger.ONE))
+            .join()
+        == null
         : "missing proof must decode as null";
     assert "/v1/da/commitments/prove".equals(executor.lastRequest.uri().getPath())
         : "commitment prove path mismatch";
+    final Map<String, Object> request =
+        object(DaJson.parse(executor.lastRequest.body(), "request"));
+    assert request.size() == 4
+            && request.containsKey("manifest_hash")
+            && request.containsKey("lane_id")
+            && request.containsKey("epoch")
+            && request.containsKey("sequence")
+        : "commitment proof request must contain selectors only";
+    assert !request.containsKey("limit")
+            && !request.containsKey("cursor")
+            && !request.containsKey("pagination")
+        : "commitment proof request must not carry list pagination";
+  }
+
+  private static void listPinIntentsUsesLocationCursorAndRequiresResponseEnvelope() {
+    final CapturingDaExecutor executor =
+        new CapturingDaExecutor(
+            "{\"intents\":[],\"next_cursor\":{"
+                + "\"snapshot\":{\"block_height\":10,\"block_hash\":\""
+                + HASH
+                + "\"},\"after\":{\"block_height\":9,"
+                + "\"index_in_bundle\":4294967295}}}");
+    final DaModels.PinIntentListRequest request =
+        new DaModels.PinIntentListRequest(
+            BigInteger.valueOf(5),
+            new DaModels.PinIntentListCursor(
+                new DaModels.ListSnapshot(BigInteger.TEN, HASH),
+                new DaModels.Location(BigInteger.valueOf(9), 4_294_967_295L)));
+
+    final DaModels.PinIntentListResponse response =
+        client(executor).listPinIntents(request).join();
+
+    assert response.intents().isEmpty() : "pin list must decode its envelope";
+    assert response.nextCursor() != null : "pin continuation cursor must decode";
+    assert BigInteger.TEN.equals(response.nextCursor().snapshot().blockHeight())
+        : "pin snapshot height mismatch";
+    assert response.nextCursor().after().indexInBundle() == 4_294_967_295L
+        : "pin cursor location mismatch";
+    final Map<String, Object> posted =
+        object(DaJson.parse(executor.lastRequest.body(), "request"));
+    assert posted.size() == 2
+            && posted.containsKey("cursor")
+            && posted.containsKey("limit")
+        : "pin list request must carry cursor fields only";
+    assert Long.valueOf(9)
+        .equals(object(object(posted.get("cursor")).get("after")).get("block_height"))
+        : "pin cursor location must round-trip";
+
+    final DaModels.PinIntentListResponse finalPage =
+        client(new CapturingDaExecutor("{\"intents\":[],\"next_cursor\":null}"))
+            .listPinIntents()
+            .join();
+    assert finalPage.intents().isEmpty() : "final pin page must decode";
+    assert finalPage.nextCursor() == null : "final pin cursor must be explicit null";
+
+    boolean rejected = false;
+    try {
+      client(new CapturingDaExecutor("[]")).listPinIntents().join();
+    } catch (final CompletionException error) {
+      rejected = error.getCause() instanceof DaToriiException;
+    }
+    assert rejected : "legacy bare-array pin lists must be rejected";
   }
 
   private static void proofParserRejectsLegacyLocationOnlyPayloadAndMalformedTags() {
@@ -186,12 +280,42 @@ public final class DaToriiClientTests {
       rejected = true;
     }
     assert rejected : "non-canonical hash checksums must be rejected";
+
+    rejected = false;
+    try {
+      DaJson.parseCommitmentList(
+          DaJson.parse(
+              ("{\"policies\":{\"version\":1,\"policy_hash\":\""
+                      + HASH
+                      + "\",\"policies\":[]},\"commitments\":[]}")
+                  .getBytes(StandardCharsets.UTF_8),
+              "response"),
+          "response");
+    } catch (final IllegalArgumentException expected) {
+      rejected = true;
+    }
+    assert rejected : "commitment list responses must carry explicit next_cursor";
+
+    rejected = false;
+    try {
+      DaJson.parsePinIntentList(
+          DaJson.parse(
+              ("{\"intents\":[],\"next_cursor\":{"
+                      + "\"snapshot\":{\"block_height\":10},"
+                      + "\"after\":{\"block_height\":9,\"index_in_bundle\":0}}}")
+                  .getBytes(StandardCharsets.UTF_8),
+              "response"),
+          "response");
+    } catch (final IllegalArgumentException expected) {
+      rejected = true;
+    }
+    assert rejected : "cursor snapshots must carry explicit block_hash";
   }
 
   private static void pinIntentAliasesUseServerUtf8ByteBound() {
-    new DaModels.PinIntentQuery(null, null, "", null, null, null, null);
-    new DaModels.PinIntentQuery(
-        null, null, "é".repeat(128), null, null, null, null);
+    new DaModels.PinIntentQueryRequest(null, null, "", null, null, null);
+    new DaModels.PinIntentQueryRequest(
+        null, null, "é".repeat(128), null, null, null);
     new DaModels.RetentionPolicy(
         BigInteger.ZERO,
         BigInteger.ZERO,
@@ -200,12 +324,30 @@ public final class DaToriiClientTests {
         "");
     boolean rejected = false;
     try {
-      new DaModels.PinIntentQuery(
-          null, null, "é".repeat(129), null, null, null, null);
+      new DaModels.PinIntentQueryRequest(
+          null, null, "é".repeat(129), null, null, null);
     } catch (final IllegalArgumentException expected) {
       rejected = true;
     }
     assert rejected : "pin-intent aliases must be bounded by UTF-8 bytes";
+
+    rejected = false;
+    try {
+      new DaModels.CommitmentListRequest(BigInteger.ZERO, null);
+    } catch (final IllegalArgumentException expected) {
+      rejected = true;
+    }
+    assert rejected : "list limits must be nonzero";
+
+    rejected = false;
+    try {
+      new DaModels.PinIntentListCursor(
+          new DaModels.ListSnapshot(BigInteger.ONE, null),
+          new DaModels.Location(BigInteger.ONE, 0));
+    } catch (final IllegalArgumentException expected) {
+      rejected = true;
+    }
+    assert rejected : "non-empty snapshots must bind a block hash";
   }
 
   private static void verifyResponseRejectsContradictoryValidityAndError() {

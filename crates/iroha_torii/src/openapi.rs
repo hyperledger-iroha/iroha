@@ -22,6 +22,8 @@ use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 
 use crate::utils;
 
+mod sorafs_evidence;
+
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
 const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
 const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
@@ -1022,47 +1024,38 @@ fn da_paths() -> Map {
     );
     paths.insert(
         "/v1/da/pin-intents".to_owned(),
-        Value::Object(operation_with_id(
-            json_post_operation(
-                "DataAvailability",
-                "List DA pin intents.",
-                "List pin intent commitments indexed by the node.",
-                "#/components/schemas/DaPinIntentQueryRequest",
-                "#/components/schemas/DaPinIntentWithLocationList",
-                Vec::new(),
-            ),
-            "post",
+        Value::Object(da_post_operation(
+            "List DA pin intents.",
+            "Traverse pin intent commitments in canonical block-location order. Each page scans at most `limit` raw index rows (default 100, maximum 1,000); filtered rows still consume that bound. Continue only with the server-issued forward cursor, which is bound to the exact canonical ledger tip and is rejected after the tip changes.",
+            "#/components/schemas/DaPinIntentListRequest",
+            "#/components/schemas/DaPinIntentListResponse",
             "daPinIntentsList",
+            "Malformed JSON, a zero list limit, or a noncanonical, stale, or unknown pin-intent cursor.",
+            true,
         )),
     );
     paths.insert(
         "/v1/da/pin-intents/prove".to_owned(),
-        Value::Object(operation_with_id(
-            json_post_operation(
-                "DataAvailability",
-                "Build a DA pin-intent Merkle proof.",
-                "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return a Merkle membership proof bound to the V1 tree descriptor recorded in its canonical locally stored block header.",
-                "#/components/schemas/DaPinIntentQueryRequest",
-                "#/components/schemas/DaPinIntentProofResponse",
-                Vec::new(),
-            ),
-            "post",
+        Value::Object(da_post_operation(
+            "Build a DA pin-intent Merkle proof.",
+            "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return a Merkle membership proof bound to the V1 tree descriptor recorded in its canonical locally stored block header.",
+            "#/components/schemas/DaPinIntentQueryRequest",
+            "#/components/schemas/DaPinIntentProofResponse",
             "daPinIntentsProve",
+            "Malformed JSON or an invalid proof selector, including an alias longer than 256 UTF-8 bytes.",
+            false,
         )),
     );
     paths.insert(
         "/v1/da/pin-intents/verify".to_owned(),
-        Value::Object(operation_with_id(
-            json_post_operation(
-                "DataAvailability",
-                "Verify a DA pin-intent Merkle proof.",
-                "Load the referenced canonical block from local Kura and verify a DA pin-intent Merkle membership proof against the V1 tree descriptor (version, leaf count, and Merkle root) recorded in its header. This endpoint does not return or independently verify block-finality material.",
-                "#/components/schemas/DaPinIntentProof",
-                "#/components/schemas/DaPinIntentVerifyResponse",
-                Vec::new(),
-            ),
-            "post",
+        Value::Object(da_post_operation(
+            "Verify a DA pin-intent Merkle proof.",
+            "Load the referenced canonical block from local Kura and verify a DA pin-intent Merkle membership proof against the V1 tree descriptor (version, leaf count, and Merkle root) recorded in its header. This endpoint does not return or independently verify block-finality material.",
+            "#/components/schemas/DaPinIntentProof",
+            "#/components/schemas/DaPinIntentVerifyResponse",
             "daPinIntentsVerify",
+            "Malformed JSON or an invalid pin-intent proof payload.",
+            false,
         )),
     );
     paths
@@ -1078,6 +1071,68 @@ fn operation_with_id(mut methods: Map, method: &str, operation_id: &str) -> Map 
             Value::String(operation_id.to_owned()),
         );
     methods
+}
+
+fn da_post_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    operation_id: &str,
+    bad_request_description: &str,
+    include_snapshot_conflict: bool,
+) -> Map {
+    let mut methods = operation_with_id(
+        json_post_operation(
+            "DataAvailability",
+            summary,
+            description,
+            request_schema_ref,
+            response_schema_ref,
+            Vec::new(),
+        ),
+        "post",
+        operation_id,
+    );
+    let responses = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .and_then(|operation| operation.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .expect("DA POST operation responses");
+    insert_da_post_error_responses(
+        responses,
+        bad_request_description,
+        include_snapshot_conflict,
+    );
+    methods
+}
+
+fn insert_da_post_error_responses(
+    responses: &mut Map,
+    bad_request_description: &str,
+    include_snapshot_conflict: bool,
+) {
+    responses.insert(
+        "400".to_owned(),
+        json_response(bad_request_description, error_schema_reference()),
+    );
+    if include_snapshot_conflict {
+        responses.insert(
+            "409".to_owned(),
+            json_response(
+                "The canonical ledger tip changed while the page was being read; restart from the first page.",
+                error_schema_reference(),
+            ),
+        );
+    }
+    responses.insert(
+        "413".to_owned(),
+        json_response(
+            "The JSON request body exceeds the 64 KiB DA endpoint limit; the handler did not run.",
+            error_schema_reference(),
+        ),
+    );
 }
 
 fn musubi_paths() -> Map {
@@ -7237,7 +7292,7 @@ fn sorafs_paths() -> Map {
     let mut evidence_audit_operation = json_get_operation(
         "SoraFS",
         "Read signed evidence access receipts.",
-        "Return a bounded exact-cursor projection of canonical Norito, Ed25519-signed, globally sequenced and hash-chained payload-free receipts from one exact signed checkpoint. The only accepted genesis query wire is expected_checkpoint_digest_hex then limit, in that order. A continuation inserts after_sequence then after_receipt_digest_hex between those fields. Percent/plus aliases, reordered fields, duplicate or empty fields, omitted explicit limits, and non-canonical decimal or lowercase hexadecimal values are rejected. after_sequence and after_receipt_digest_hex must be supplied together and match the exact retained signed receipt; sequence-only or digest-only continuation is rejected. A checkpoint change returns 409 rather than silently repaginating. The response returns the signed checkpoint_anchor, digest-bound page_limit, predecessor and next_cursor exact pairs, canonical projection_norito_b64, projection_digest_hex, has_more, and receipts; it never emits a sequence-only continuation. X-Iroha canonical authentication and the explicit sorafs_evidence_auditor or sorafs_legal_reviewer role are required; operator role alone is insufficient.",
+        "Return a bounded exact-cursor projection of canonical Norito, Ed25519-signed, globally sequenced and hash-chained payload-free receipts from one exact signed checkpoint. The only accepted genesis query wire is expected_checkpoint_digest_hex then limit, in that order. A continuation inserts after_sequence then after_receipt_digest_hex between those fields. Percent/plus aliases, reordered fields, duplicate or empty fields, omitted explicit limits, and non-canonical decimal or lowercase hexadecimal values are rejected. after_sequence and after_receipt_digest_hex must be supplied together and match the exact retained signed receipt; sequence-only or digest-only continuation is rejected. A checkpoint change returns 409 rather than silently repaginating. The response returns the signed checkpoint_anchor with authoritative store generation/predecessor pins, its exact signed compaction_archive_head, digest-bound page_limit, predecessor and next_cursor exact pairs, canonical projection_norito_b64, projection_digest_hex, has_more, and receipts; it never emits a sequence-only continuation. X-Iroha canonical authentication and the explicit sorafs_evidence_auditor or sorafs_legal_reviewer role are required; operator role alone is insufficient.",
         "#/components/schemas/SorafsEvidenceAuditProjectionV1",
         evidence_audit_parameters,
     );
@@ -7252,7 +7307,7 @@ fn sorafs_paths() -> Map {
     evidence_audit_success.insert(
         "description".into(),
         Value::String(
-            "Exact signed-checkpoint projection with checkpoint_anchor, digest-bound page_limit, predecessor and next_cursor `(sequence, receipt_digest_hex)` pairs, projection_norito_b64, projection_digest_hex, has_more, and payload-free receipts. No sequence-only continuation is returned."
+            "Exact signed-checkpoint projection with checkpoint_anchor, signed compaction_archive_head, digest-bound page_limit, predecessor and next_cursor `(sequence, receipt_digest_hex)` pairs, projection_norito_b64, projection_digest_hex, has_more, and payload-free receipts. No sequence-only continuation is returned."
                 .to_owned(),
         ),
     );
@@ -12971,7 +13026,7 @@ fn da_commitments_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns DA commitments captured from recent blocks. Results can be filtered by manifest hash or lane/epoch/sequence and paginated."
+            "Traverse DA commitments in canonical `(lane_id, epoch, sequence)` order. Each page scans at most `limit` raw index rows (default 100, maximum 1,000). Continue only with the server-issued forward cursor, which is bound to the exact canonical ledger tip and is rejected after the tip changes."
                 .to_owned(),
         ),
     );
@@ -12979,7 +13034,10 @@ fn da_commitments_operation() -> Map {
         "operationId".into(),
         Value::String("daCommitmentsList".to_owned()),
     );
-    operation.insert("requestBody".into(), da_commitment_request_body());
+    operation.insert(
+        "requestBody".into(),
+        da_commitment_request_body_with_schema("DaCommitmentListRequest"),
+    );
     operation.insert(
         "responses".into(),
         Value::Object(da_commitments_list_responses()),
@@ -13088,6 +13146,11 @@ fn da_commitments_list_responses() -> Map {
         "500".to_owned(),
         json_response("Internal server error.", error_schema_reference()),
     );
+    insert_da_post_error_responses(
+        &mut responses,
+        "Malformed JSON, a zero list limit, or a noncanonical, stale, or unknown commitment cursor.",
+        true,
+    );
     responses
 }
 
@@ -13104,6 +13167,11 @@ fn da_commitments_prove_responses() -> Map {
         "500".to_owned(),
         json_response("Internal server error.", error_schema_reference()),
     );
+    insert_da_post_error_responses(
+        &mut responses,
+        "Malformed JSON or an invalid commitment proof selector.",
+        false,
+    );
     responses
 }
 
@@ -13119,6 +13187,11 @@ fn da_commitments_verify_responses() -> Map {
     responses.insert(
         "500".to_owned(),
         json_response("Internal server error.", error_schema_reference()),
+    );
+    insert_da_post_error_responses(
+        &mut responses,
+        "Malformed JSON or an invalid commitment proof payload.",
+        false,
     );
     responses
 }
@@ -18738,242 +18811,6 @@ fn subscription_schemas(schemas: &mut Map) {
     );
 }
 
-fn insert_sorafs_evidence_schemas(schemas: &mut Map) {
-    schemas.insert(
-        "SorafsEvidenceHex32V1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 64,
-            "maxLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "description": "Canonical lowercase 32-byte hexadecimal value without a prefix."
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceNonzeroHex32V1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 64,
-            "maxLength": 64,
-            "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
-            "description": "Canonical lowercase non-zero 32-byte hexadecimal value without a prefix."
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceSignatureHexV1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 128,
-            "maxLength": 128,
-            "pattern": "^[0-9a-f]{128}$",
-            "description": "Canonical lowercase 64-byte Ed25519 signature."
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceReceiptCursorV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["sequence", "receipt_digest_hex"],
-            "properties": {
-                "sequence": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "receipt_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceSignedCheckpointAnchorV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "version",
-                "checkpoint_digest_hex",
-                "receipt_count",
-                "chain_head",
-                "signer_handle",
-                "signer_public_key_hex",
-                "signature_hex"
-            ],
-            "properties": {
-                "version": { "type": "integer", "format": "uint16", "enum": [1] },
-                "checkpoint_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "receipt_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "chain_head": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/SorafsEvidenceReceiptCursorV1" },
-                        { "type": "null" }
-                    ],
-                    "description": "Null exactly when receipt_count is zero; otherwise sequence equals receipt_count."
-                },
-                "signer_handle": { "type": "string", "minLength": 1, "maxLength": 256 },
-                "signer_public_key_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "signature_hex": { "$ref": "#/components/schemas/SorafsEvidenceSignatureHexV1" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceSignedReceiptV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "schema",
-                "receipt_norito_b64",
-                "sequence",
-                "kind",
-                "receipt_digest_hex",
-                "previous_receipt_digest_hex",
-                "issued_at_unix_ms",
-                "signer_handle",
-                "signer_public_key_hex",
-                "signature_hex"
-            ],
-            "properties": {
-                "schema": { "type": "string", "const": "sorafs.evidence.signed_receipt.v1" },
-                "receipt_norito_b64": { "type": "string", "minLength": 1 },
-                "sequence": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "kind": {
-                    "type": "string",
-                    "enum": [
-                        "challenge_issued",
-                        "session_issued",
-                        "manifest_accessed",
-                        "range_accessed",
-                        "interaction_recorded",
-                        "legal_hold_placed",
-                        "legal_hold_released",
-                        "retention_evaluated",
-                        "erasure_completed",
-                        "erasure_denied_legal_hold"
-                    ]
-                },
-                "receipt_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "previous_receipt_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceHex32V1" },
-                "issued_at_unix_ms": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "signer_handle": { "type": "string", "minLength": 1, "maxLength": 256 },
-                "signer_public_key_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "signature_hex": { "$ref": "#/components/schemas/SorafsEvidenceSignatureHexV1" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceAuditProjectionV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "schema",
-                "version",
-                "projection_norito_b64",
-                "checkpoint_anchor",
-                "predecessor",
-                "page_limit",
-                "has_more",
-                "next_cursor",
-                "projection_digest_hex",
-                "receipts"
-            ],
-            "properties": {
-                "schema": {
-                    "type": "string",
-                    "const": "sorafs.evidence.audit_transparency_projection.v1"
-                },
-                "version": { "type": "integer", "format": "uint16", "enum": [1] },
-                "projection_norito_b64": { "type": "string", "minLength": 1 },
-                "checkpoint_anchor": {
-                    "$ref": "#/components/schemas/SorafsEvidenceSignedCheckpointAnchorV1"
-                },
-                "predecessor": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/SorafsEvidenceReceiptCursorV1" },
-                        { "type": "null" }
-                    ]
-                },
-                "page_limit": {
-                    "type": "integer",
-                    "format": "uint16",
-                    "minimum": 1,
-                    "maximum": 256
-                },
-                "has_more": { "type": "boolean" },
-                "next_cursor": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/SorafsEvidenceReceiptCursorV1" },
-                        { "type": "null" }
-                    ]
-                },
-                "projection_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceHex32V1" },
-                "receipts": {
-                    "type": "array",
-                    "maxItems": 256,
-                    "items": { "$ref": "#/components/schemas/SorafsEvidenceSignedReceiptV1" }
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceAuditStatusV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "schema",
-                "status_norito_b64",
-                "challenge_count",
-                "session_count",
-                "receipt_count",
-                "active_legal_hold_count",
-                "retention_count",
-                "erasure_count",
-                "checkpoint_anchor"
-            ],
-            "properties": {
-                "schema": { "type": "string", "const": "sorafs.evidence.audit_status.v1" },
-                "status_norito_b64": { "type": "string", "minLength": 1 },
-                "challenge_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "session_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "receipt_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "active_legal_hold_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "retention_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "erasure_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "checkpoint_anchor": {
-                    "$ref": "#/components/schemas/SorafsEvidenceSignedCheckpointAnchorV1"
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceApiErrorV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["schema", "error"],
-            "properties": {
-                "schema": { "type": "string", "const": "sorafs.evidence.error.v1" },
-                "error": {
-                    "type": "string",
-                    "enum": [
-                        "canonical_authentication_required",
-                        "explicit_evidence_auditor_or_legal_role_required",
-                        "invalid_query",
-                        "after_sequence",
-                        "after_receipt_digest_hex",
-                        "expected_checkpoint_digest_hex",
-                        "limit",
-                        "unexpected_query",
-                        "invalid_evidence_request",
-                        "evidence_checkpoint_changed",
-                        "evidence_resource_exhausted",
-                        "evidence_viewer_unavailable",
-                        "canonical_encoding_unavailable"
-                    ]
-                }
-            }
-        }),
-    );
-}
-
 fn insert_sorafs_pin_register_schemas(schemas: &mut Map) {
     schemas.insert(
         "SorafsPinRegisterResponseV1".to_owned(),
@@ -20964,7 +20801,7 @@ fn openapi_schemas() -> Map {
     );
     insert_vpn_schemas(&mut schemas);
     insert_sorafs_proof_stream_schemas(&mut schemas);
-    insert_sorafs_evidence_schemas(&mut schemas);
+    sorafs_evidence::insert_sorafs_evidence_schemas(&mut schemas);
     insert_sorafs_pin_register_schemas(&mut schemas);
     insert_sorafs_pin_manifest_readback_schemas(&mut schemas);
     insert_sorafs_replication_schemas(&mut schemas);
@@ -27510,24 +27347,87 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "DaPagination".to_owned(),
+        "DaListSnapshot".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["offset"],
+            "required": ["block_height", "block_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Committed chain height observed when the first page was constructed."
+                },
+                "block_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/DaIrohaHash" },
+                        { "type": "null" }
+                    ],
+                    "description": "Canonical block hash at `block_height`; null only when `block_height` is zero."
+                }
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "block_height": { "const": 0 },
+                        "block_hash": { "type": "null" }
+                    }
+                },
+                {
+                    "properties": {
+                        "block_height": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1
+                        },
+                        "block_hash": { "$ref": "#/components/schemas/DaIrohaHash" }
+                    }
+                }
+            ],
+            "description": "Exact canonical ledger tip that binds every continuation cursor to one immutable view."
+        }),
+    );
+    schemas.insert(
+        "DaCommitmentKey".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "epoch", "sequence"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "type": "integer", "format": "uint32" },
+                "epoch": { "type": "integer", "format": "uint64" },
+                "sequence": { "type": "integer", "format": "uint64" }
+            },
+            "description": "Canonical DA commitment ordering key."
+        }),
+    );
+    schemas.insert(
+        "DaCommitmentListCursor".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["snapshot", "after"],
+            "additionalProperties": false,
+            "properties": {
+                "snapshot": { "$ref": "#/components/schemas/DaListSnapshot" },
+                "after": { "$ref": "#/components/schemas/DaCommitmentKey" }
+            },
+            "description": "Server-issued forward-only commitment cursor. Torii rejects noncanonical, unknown, or stale cursors."
+        }),
+    );
+    schemas.insert(
+        "DaCommitmentListRequest".to_owned(),
+        norito::json!({
+            "type": "object",
             "additionalProperties": false,
             "properties": {
                 "limit": {
                     "type": "integer",
                     "format": "uint64",
-                    "nullable": true,
                     "minimum": 1,
-                    "description": "Maximum number of records to return; the server caps it at 1000."
+                    "default": 100,
+                    "description": "Maximum raw index rows to inspect. Defaults to 100; larger values are capped at 1,000. Filtered rows still consume the bound."
                 },
-                "offset": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Number of records to skip from the ordered index."
-                }
+                "cursor": { "$ref": "#/components/schemas/DaCommitmentListCursor" }
             }
         }),
     );
@@ -27540,8 +27440,7 @@ fn openapi_schemas() -> Map {
                 "manifest_hash": { "$ref": "#/components/schemas/DaDigest32" },
                 "lane_id": { "type": "integer", "format": "uint32" },
                 "epoch": { "type": "integer", "format": "uint64" },
-                "sequence": { "type": "integer", "format": "uint64" },
-                "pagination": { "$ref": "#/components/schemas/DaPagination" }
+                "sequence": { "type": "integer", "format": "uint64" }
             }
         }),
     );
@@ -27561,8 +27460,7 @@ fn openapi_schemas() -> Map {
                 },
                 "lane_id": { "type": "integer", "format": "uint32" },
                 "epoch": { "type": "integer", "format": "uint64" },
-                "sequence": { "type": "integer", "format": "uint64" },
-                "pagination": { "$ref": "#/components/schemas/DaPagination" }
+                "sequence": { "type": "integer", "format": "uint64" }
             }
         }),
     );
@@ -27659,6 +27557,36 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "DaPinIntentListCursor".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["snapshot", "after"],
+            "additionalProperties": false,
+            "properties": {
+                "snapshot": { "$ref": "#/components/schemas/DaListSnapshot" },
+                "after": { "$ref": "#/components/schemas/DaCommitmentLocation" }
+            },
+            "description": "Server-issued forward-only pin-intent cursor. Torii rejects noncanonical, unknown, or stale cursors."
+        }),
+    );
+    schemas.insert(
+        "DaPinIntentListRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "default": 100,
+                    "description": "Maximum raw index rows to inspect. Defaults to 100; larger values are capped at 1,000. Filtered or inactive rows still consume the bound."
+                },
+                "cursor": { "$ref": "#/components/schemas/DaPinIntentListCursor" }
+            }
+        }),
+    );
+    schemas.insert(
         "DaCommitmentWithLocation".to_owned(),
         norito::json!({
             "type": "object",
@@ -27671,23 +27599,23 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "DaCommitmentWithLocationList".to_owned(),
-        norito::json!({
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/DaCommitmentWithLocation" }
-        }),
-    );
-    schemas.insert(
         "DaCommitmentListResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["policies", "commitments"],
+            "required": ["policies", "commitments", "next_cursor"],
             "additionalProperties": false,
             "properties": {
                 "policies": { "$ref": "#/components/schemas/DaProofPolicyBundle" },
                 "commitments": {
                     "type": "array",
                     "items": { "$ref": "#/components/schemas/DaCommitmentWithLocation" }
+                },
+                "next_cursor": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/DaCommitmentListCursor" },
+                        { "type": "null" }
+                    ],
+                    "description": "Continuation for the next bounded scan, or null when the raw index is exhausted."
                 }
             }
         }),
@@ -27841,10 +27769,24 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "DaPinIntentWithLocationList".to_owned(),
+        "DaPinIntentListResponse".to_owned(),
         norito::json!({
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/DaPinIntentWithLocation" }
+            "type": "object",
+            "required": ["intents", "next_cursor"],
+            "additionalProperties": false,
+            "properties": {
+                "intents": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/DaPinIntentWithLocation" }
+                },
+                "next_cursor": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/DaPinIntentListCursor" },
+                        { "type": "null" }
+                    ],
+                    "description": "Continuation for the next bounded scan, or null when the raw index is exhausted."
+                }
+            }
         }),
     );
     schemas.insert(
@@ -42519,6 +42461,26 @@ mod tests {
 
     #[test]
     fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
+        fn operation_responses<'a>(paths: &'a Map, path: &str) -> &'a Map {
+            paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("post"))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing DA POST responses for `{path}`"))
+        }
+
+        fn schema_properties<'a>(schemas: &'a Map, schema: &str) -> &'a Map {
+            schemas
+                .get(schema)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{schema}` properties"))
+        }
+
         fn operation_schema_ref<'a>(paths: &'a Map, path: &str, request: bool) -> &'a str {
             let operation = paths
                 .get(path)
@@ -42558,11 +42520,15 @@ mod tests {
 
         assert_eq!(
             operation_schema_ref(paths, "/v1/da/commitments", true),
-            "#/components/schemas/DaCommitmentProofRequest"
+            "#/components/schemas/DaCommitmentListRequest"
         );
         assert_eq!(
             operation_schema_ref(paths, "/v1/da/commitments", false),
             "#/components/schemas/DaCommitmentListResponse"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/commitments/prove", true),
+            "#/components/schemas/DaCommitmentProofRequest"
         );
         assert_eq!(
             operation_schema_ref(paths, "/v1/da/commitments/prove", false),
@@ -42574,11 +42540,15 @@ mod tests {
         );
         assert_eq!(
             operation_schema_ref(paths, "/v1/da/pin-intents", true),
-            "#/components/schemas/DaPinIntentQueryRequest"
+            "#/components/schemas/DaPinIntentListRequest"
         );
         assert_eq!(
             operation_schema_ref(paths, "/v1/da/pin-intents", false),
-            "#/components/schemas/DaPinIntentWithLocationList"
+            "#/components/schemas/DaPinIntentListResponse"
+        );
+        assert_eq!(
+            operation_schema_ref(paths, "/v1/da/pin-intents/prove", true),
+            "#/components/schemas/DaPinIntentQueryRequest"
         );
         assert_eq!(
             operation_schema_ref(paths, "/v1/da/pin-intents/prove", false),
@@ -42611,8 +42581,239 @@ mod tests {
                 "{path}"
             );
         }
+        for path in [
+            "/v1/da/commitments",
+            "/v1/da/commitments/prove",
+            "/v1/da/commitments/verify",
+            "/v1/da/pin-intents",
+            "/v1/da/pin-intents/prove",
+            "/v1/da/pin-intents/verify",
+        ] {
+            let responses = operation_responses(paths, path);
+            assert!(responses.contains_key("400"), "{path} malformed JSON");
+            assert!(responses.contains_key("413"), "{path} 64 KiB body limit");
+        }
+        for path in ["/v1/da/commitments", "/v1/da/pin-intents"] {
+            assert!(
+                operation_responses(paths, path).contains_key("409"),
+                "{path} mid-read snapshot change"
+            );
+        }
+        for path in [
+            "/v1/da/commitments/prove",
+            "/v1/da/commitments/verify",
+            "/v1/da/pin-intents/prove",
+            "/v1/da/pin-intents/verify",
+        ] {
+            assert!(
+                !operation_responses(paths, path).contains_key("409"),
+                "{path} does not issue list snapshots"
+            );
+        }
+        assert!(
+            operation_responses(paths, "/v1/da/pin-intents/prove")
+                .get("400")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("description"))
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("256 UTF-8 bytes")),
+            "pin-intent proof errors must document the alias byte limit"
+        );
 
         let schemas = component_schemas(&document);
+        assert!(
+            !schemas.contains_key("DaPagination"),
+            "offset pagination must not remain in the first-release DA list contract"
+        );
+        assert!(
+            !schemas.contains_key("DaCommitmentWithLocationList"),
+            "the commitment list route uses its cursor-bearing page envelope"
+        );
+        assert!(
+            !schemas.contains_key("DaPinIntentWithLocationList"),
+            "the pin-intent list route uses its cursor-bearing page envelope"
+        );
+
+        for (request, cursor) in [
+            ("DaCommitmentListRequest", "DaCommitmentListCursor"),
+            ("DaPinIntentListRequest", "DaPinIntentListCursor"),
+        ] {
+            let request_schema = schemas
+                .get(request)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{request}` schema"));
+            assert_eq!(
+                request_schema
+                    .get("additionalProperties")
+                    .and_then(Value::as_bool),
+                Some(false),
+                "{request}"
+            );
+            let properties = schema_properties(schemas, request);
+            let mut property_names = properties.keys().map(String::as_str).collect::<Vec<_>>();
+            property_names.sort_unstable();
+            assert_eq!(property_names, vec!["cursor", "limit"], "{request}");
+            let limit = properties
+                .get("limit")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{request}.limit` schema"));
+            assert_eq!(limit.get("minimum").and_then(Value::as_u64), Some(1));
+            assert!(
+                !limit.contains_key("maximum"),
+                "{request}.limit accepts the full nonzero u64 range before server capping"
+            );
+            assert_eq!(limit.get("default").and_then(Value::as_u64), Some(100));
+            assert!(
+                limit
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| description.contains("capped at 1,000")),
+                "{request}.limit must document the raw-row cap"
+            );
+            let expected_cursor_ref = format!("#/components/schemas/{cursor}");
+            assert_eq!(
+                properties
+                    .get("cursor")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(expected_cursor_ref.as_str()),
+                "{request}"
+            );
+        }
+
+        for (request, expected) in [
+            (
+                "DaCommitmentProofRequest",
+                vec!["epoch", "lane_id", "manifest_hash", "sequence"],
+            ),
+            (
+                "DaPinIntentQueryRequest",
+                vec![
+                    "alias",
+                    "epoch",
+                    "lane_id",
+                    "manifest_hash",
+                    "sequence",
+                    "storage_ticket",
+                ],
+            ),
+        ] {
+            let mut property_names = schema_properties(schemas, request)
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            property_names.sort_unstable();
+            assert_eq!(property_names, expected, "{request}");
+        }
+
+        let snapshot = schemas
+            .get("DaListSnapshot")
+            .and_then(Value::as_object)
+            .expect("DA list snapshot schema");
+        assert_eq!(
+            snapshot
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|required| required
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()),
+            Some(vec!["block_height", "block_hash"])
+        );
+        assert_eq!(
+            snapshot
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2),
+            "empty and non-empty canonical snapshot shapes"
+        );
+
+        for (cursor, after) in [
+            ("DaCommitmentListCursor", "DaCommitmentKey"),
+            ("DaPinIntentListCursor", "DaCommitmentLocation"),
+        ] {
+            let properties = schema_properties(schemas, cursor);
+            assert_eq!(
+                properties
+                    .get("snapshot")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/DaListSnapshot"),
+                "{cursor}"
+            );
+            let expected_after_ref = format!("#/components/schemas/{after}");
+            assert_eq!(
+                properties
+                    .get("after")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(expected_after_ref.as_str()),
+                "{cursor}"
+            );
+        }
+
+        for (response, items, cursor) in [
+            (
+                "DaCommitmentListResponse",
+                "commitments",
+                "DaCommitmentListCursor",
+            ),
+            (
+                "DaPinIntentListResponse",
+                "intents",
+                "DaPinIntentListCursor",
+            ),
+        ] {
+            let response_schema = schemas
+                .get(response)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{response}` schema"));
+            assert!(
+                response_schema
+                    .get("required")
+                    .and_then(Value::as_array)
+                    .is_some_and(|required| {
+                        required
+                            .iter()
+                            .any(|field| field.as_str() == Some("next_cursor"))
+                    }),
+                "{response}.next_cursor must be explicit, including null"
+            );
+            assert!(
+                schema_properties(schemas, response).contains_key(items),
+                "{response}.{items}"
+            );
+            let next_cursor = schema_properties(schemas, response)
+                .get("next_cursor")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("anyOf"))
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("missing `{response}.next_cursor` union"));
+            let expected_cursor_ref = format!("#/components/schemas/{cursor}");
+            assert_eq!(
+                next_cursor
+                    .first()
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(expected_cursor_ref.as_str()),
+                "{response}"
+            );
+            assert_eq!(
+                next_cursor
+                    .get(1)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str),
+                Some("null"),
+                "{response}"
+            );
+        }
+
         let digest = schemas
             .get("DaDigest32")
             .and_then(Value::as_object)

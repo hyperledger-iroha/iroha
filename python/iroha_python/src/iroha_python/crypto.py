@@ -1145,7 +1145,11 @@ def ed25519_public_key_account_id(
     *,
     discriminant: int = _DEFAULT_I105_DISCRIMINANT,
 ) -> str:
-    """Return the canonical I105 account id using the public key within `domain`."""
+    """Return the canonical domainless I105 account id for ``public_key``.
+
+    ``domain`` is validated for compatibility with existing callers but is not
+    encoded into the account identity.
+    """
 
     domain = domain.strip()
     if not domain or "@" in domain:

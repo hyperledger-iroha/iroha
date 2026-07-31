@@ -21,9 +21,9 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
 FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
-    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
-    "mutations, bounded TLC, trace replay, and production Verus"
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
+    "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
+    "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
 )
 CHAOS_MARKER = (
     "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
@@ -1969,7 +1969,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 f"{'a' * 64}\t{'b' * 64}\t{'c' * 64}",
                 "result\tinflight-first-release-layout\t"
                 "SumeragiV2InFlightFirstRelease\t"
-                "inflight_first_release_fixed.cfg\t10\tNoError\t"
+                "inflight_first_release_fixed.cfg\t18\tNoError\t"
                 f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
             )
         )

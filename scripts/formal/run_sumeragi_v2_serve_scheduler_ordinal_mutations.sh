@@ -6,9 +6,8 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2ServeSchedulerOrdinalMutation.tla"
 readonly SHARED_FIXED_CONFIG="serve_scheduler_shared_ordinal_fixed.cfg"
 readonly SEPARATE_BUG_CONFIG="serve_scheduler_separate_ordinal_bug.cfg"
@@ -16,7 +15,14 @@ readonly OLDER_FIXED_CONFIG="serve_scheduler_older_runtime_fixed.cfg"
 readonly TARGET_FIRST_BUG_CONFIG="serve_scheduler_always_target_first_bug.cfg"
 readonly OLDER_LOCAL_FIXED_CONFIG="serve_scheduler_older_local_fixed.cfg"
 readonly LOCAL_TARGET_FIRST_BUG_CONFIG="serve_scheduler_local_target_first_bug.cfg"
+readonly CONTINUATION_CUT_FIXED_CONFIG="serve_scheduler_continuation_cut_fixed.cfg"
+readonly CONTINUATION_OVERTAKE_BUG_CONFIG="serve_scheduler_continuation_overtake_bug.cfg"
+readonly CLAIM_PHYSICAL_CUT_FIXED_CONFIG="serve_scheduler_claim_physical_cut_fixed.cfg"
+readonly CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG="serve_scheduler_claim_logical_overtake_bug.cfg"
+readonly CLAIM_RANKED_REENTRY_FIXED_CONFIG="serve_scheduler_claim_ranked_reentry_fixed.cfg"
+readonly CLAIM_RAW_DESCENT_BUG_CONFIG="serve_scheduler_claim_raw_descent_bug.cfg"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then
   echo "usage: $0" >&2
@@ -80,34 +86,12 @@ common=(
   -cleanup -workers 1 -fp 87 -seed 490671825330118247
 )
 
-assert_nonzero_state_space() {
-  local label="$1"
-  local log="$2"
-  local state_line
-  local generated
-  local distinct
-  state_line="$(grep -E '^[0-9][0-9,]* states generated, [0-9][0-9,]* distinct states found' "$log" | tail -n 1 || true)"
-  [[ -n "$state_line" ]] || {
-    echo "${label} emitted no TLC state-count summary" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  generated="$(awk '{print $1}' <<<"$state_line" | tr -d ',')"
-  distinct="$(awk '{print $4}' <<<"$state_line" | tr -d ',')"
-  if ((generated <= 0 || distinct <= 0)); then
-    echo "${label} explored a zero-state model: ${state_line}" >&2
-    cat "$log" >&2
-    exit 1
-  fi
-}
-
 run_tlc() {
   local label="$1"
   local config="$2"
   local expected_status="$3"
   local log="${run_dir}/${label}.log"
   local actual_status
-  local last_nonblank
   set +e
   (
     cd "$FORMAL_DIR"
@@ -121,25 +105,24 @@ run_tlc() {
     cat "$log" >&2
     exit 1
   fi
-  assert_nonzero_state_space "$label" "$log"
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   printf '%s\n' "$log"
 }
 
 shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"
 older_fixed_log="$(run_tlc older-runtime-fixed "$OLDER_FIXED_CONFIG" 0)"
 older_local_fixed_log="$(run_tlc older-local-fixed "$OLDER_LOCAL_FIXED_CONFIG" 0)"
-for log in "$shared_fixed_log" "$older_fixed_log" "$older_local_fixed_log"; do
+continuation_cut_fixed_log="$(run_tlc continuation-cut-fixed "$CONTINUATION_CUT_FIXED_CONFIG" 0)"
+claim_physical_cut_fixed_log="$(run_tlc claim-physical-cut-fixed "$CLAIM_PHYSICAL_CUT_FIXED_CONFIG" 0)"
+claim_ranked_reentry_fixed_log="$(run_tlc claim-ranked-reentry-fixed "$CLAIM_RANKED_REENTRY_FIXED_CONFIG" 0)"
+for log in "$shared_fixed_log" "$older_fixed_log" "$older_local_fixed_log" \
+  "$continuation_cut_fixed_log" "$claim_physical_cut_fixed_log" \
+  "$claim_ranked_reentry_fixed_log"; do
   [[ "$(grep -Fxc "Model checking completed. No error has been found." "$log" || true)" == 1 ]] || {
     echo "repaired Serve scheduler-ordinal case missed exact completion" >&2
     cat "$log" >&2
@@ -155,14 +138,29 @@ done
 separate_bug_log="$(run_tlc separate-ordinal "$SEPARATE_BUG_CONFIG" 13)"
 target_first_bug_log="$(run_tlc always-target-first "$TARGET_FIRST_BUG_CONFIG" 13)"
 local_target_first_bug_log="$(run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 13)"
-for log in "$separate_bug_log" "$target_first_bug_log" "$local_target_first_bug_log"; do
-  for marker in "Temporal properties were violated." "Stuttering"; do
-    grep -Fq "$marker" "$log" || {
-      echo "Serve scheduler mutant missed TLC marker: ${marker}" >&2
-      cat "$log" >&2
-      exit 1
-    }
-  done
+continuation_overtake_bug_log="$(run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 13)"
+claim_logical_overtake_bug_log="$(run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 13)"
+claim_raw_descent_bug_log="$(run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 13)"
+for log in "$separate_bug_log" "$target_first_bug_log" "$local_target_first_bug_log" \
+  "$continuation_overtake_bug_log" "$claim_logical_overtake_bug_log" \
+  "$claim_raw_descent_bug_log"; do
+  sumeragi_v2_tlc_assert_exact_line \
+    "Serve scheduler lasso" "$log" \
+    "Error: Temporal properties were violated."
+  grep -Fq "Stuttering" "$log" || {
+    echo "Serve scheduler mutant missed TLC marker: Stuttering" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  [[ "$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )" == 1 ]] || {
+    echo "Serve scheduler mutant emitted an ambiguous primary diagnostic" >&2
+    cat "$log" >&2
+    exit 1
+  }
   if grep -Fq "Error: Invariant " "$log"; then
     echo "Serve scheduler lasso was misclassified as an invariant failure" >&2
     cat "$log" >&2
@@ -170,5 +168,5 @@ for log in "$separate_bug_log" "$target_first_bug_log" "$local_target_first_bug_
   fi
 done
 
-echo "[tlc] repaired shared Serve scheduler ordinal and older Runtime/Local interleave models passed"
-echo "[tlc] separate-ordinal and Runtime/Local target-first mutants produced exact liveness status 13"
+echo "[tlc] repaired shared Serve ordinal, Runtime/Local interleave, continuation cut, claim physical cut, and claim ranked re-entry models passed"
+echo "[tlc] separate ordinal, target-first, continuation/claim overtake, and raw claim-rank descent mutants produced exact liveness status 13"

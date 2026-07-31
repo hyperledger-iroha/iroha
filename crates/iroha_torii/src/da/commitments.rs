@@ -761,7 +761,10 @@ mod tests {
         assert_eq!(first.commitments[0].location.index_in_bundle, 0);
         assert_eq!(first.commitments[1].location.index_in_bundle, 1);
         let cursor = first.next_cursor.expect("third row requires continuation");
-        assert_eq!(cursor.after, DaCommitmentKey::from_record(&first.commitments[1].commitment));
+        assert_eq!(
+            cursor.after,
+            DaCommitmentKey::from_record(&first.commitments[1].commitment)
+        );
 
         let second = list_page_from_store(
             &store,
@@ -1004,16 +1007,12 @@ mod tests {
 
     #[tokio::test]
     async fn list_handler_rejects_cursor_bound_to_another_tip() {
-        let app = app_with_da_commitment_bundle(vec![
-            sample_record(1, 1, 1),
-            sample_record(1, 2, 2),
-        ]);
-        let JsonBody(first) = super::handler_list_commitments(
-            State(app.clone()),
-            NoritoJson(list_request(Some(1))),
-        )
-        .await
-        .expect("first page");
+        let app =
+            app_with_da_commitment_bundle(vec![sample_record(1, 1, 1), sample_record(1, 2, 2)]);
+        let JsonBody(first) =
+            super::handler_list_commitments(State(app.clone()), NoritoJson(list_request(Some(1))))
+                .await
+                .expect("first page");
         let mut cursor = first.next_cursor.expect("second row requires continuation");
         cursor.snapshot.block_hash =
             Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])));
@@ -1535,10 +1534,7 @@ mod tests {
                 .method(Method::POST)
                 .uri(path)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(vec![
-                    b' ';
-                    DA_COMMITMENT_REQUEST_MAX_BYTES + 1
-                ]))
+                .body(Body::from(vec![b' '; DA_COMMITMENT_REQUEST_MAX_BYTES + 1]))
                 .expect("oversized request");
             let response = router.clone().oneshot(request).await.expect("response");
             assert_eq!(

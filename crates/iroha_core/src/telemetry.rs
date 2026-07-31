@@ -2280,7 +2280,6 @@ impl StateTelemetry {
         proposals: impl IntoIterator<Item = ([u8; 32], crate::state::GovernanceProposalStatus)>,
     ) {
         use crate::state::GovernanceProposalStatus as GPS;
-
         let mut counts = [0u64; 5];
         let mut cache = self
             .governance_status_cache
@@ -2592,7 +2591,6 @@ impl StateTelemetry {
         headroom_pct: u64,
     ) -> norito::json::Value {
         use norito::json::{Map, Value};
-
         let mut buckets = Map::new();
         buckets.insert("floor".into(), Value::from(update.buckets.floor));
         buckets.insert("headroom".into(), Value::from(update.buckets.headroom));
@@ -3841,7 +3839,6 @@ impl StateTelemetry {
         statuses: impl IntoIterator<Item = crate::state::GovernanceProposalStatus>,
     ) {
         use crate::state::GovernanceProposalStatus as GPS;
-
         let collected: Vec<GPS> = statuses.into_iter().collect();
 
         #[cfg(feature = "telemetry")]
@@ -12212,7 +12209,6 @@ mod tests {
     fn oracle_metrics_recorded() {
         use iroha_crypto::Hash;
         use iroha_primitives::numeric::Numeric;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.observe_oracle_settlement_context(
@@ -12314,7 +12310,6 @@ mod tests {
     #[cfg(feature = "telemetry")]
     fn audit_outcome_event_includes_expected_fields() {
         use norito::json::to_string as to_json_string;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics, true);
         let outcome = TelemetryAuditOutcome {
@@ -12883,7 +12878,6 @@ mod tests {
     #[test]
     fn sumeragi_new_view_counters_and_highest_qc_gauge() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let tel = Telemetry::new(metrics.clone(), true);
 
@@ -12921,7 +12915,6 @@ mod tests {
     #[test]
     fn queue_backpressure_metrics_updated() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 

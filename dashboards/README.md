@@ -50,7 +50,7 @@ parity/CI dashboards that feed the roadmap and `status.md`.
   coverage for gateway availability, TTFB P95, and proof-failure spikes.
 
 The JSON structure for these dashboards is documented in
-`docs/source/references/ios_metrics.md`. Exporters should populate real feeds in
+`specs/references/ios_metrics.md`. Exporters should populate real feeds in
 `dashboards/data/` (see `.gitignore` for the ignore rules) and re-use the scripts
 to emit summaries for weekly reports or ad-hoc checks.
 
@@ -92,8 +92,8 @@ make swift-dashboards
 # CI pipelines can call `ci/check_swift_dashboards.sh` to reuse the same steps.
 
 # Validate against the JSON schema explicitly (optional):
-python3 -m jsonschema --output pretty docs/source/references/ios_metrics.schema.json dashboards/data/mobile_parity.sample.json
-python3 -m jsonschema --output pretty docs/source/references/ios_metrics.schema.json dashboards/data/mobile_ci.sample.json
+python3 -m jsonschema --output pretty specs/references/ios_metrics.schema.json dashboards/data/mobile_parity.sample.json
+python3 -m jsonschema --output pretty specs/references/ios_metrics.schema.json dashboards/data/mobile_ci.sample.json
 ```
 
 ### Shared Pipeline Metadata Feed

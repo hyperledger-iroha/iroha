@@ -144,6 +144,7 @@ class MutationCase:
     mutation_id: str
     diagnostic_class: str
     diagnostic_fragment: str
+    expected_aggregate_contract_errors: tuple[str, ...] = ()
 
 
 MUTATION_CASES = (
@@ -152,6 +153,10 @@ MUTATION_CASES = (
         "lane_summary_binding_mismatch",
         "foundational prerequisite lane summary binding for ai_prescreen "
         "does not match the supplied readiness summary",
+        (
+            "ai_prescreen aggregate foundational lane digest must match "
+            "required row sha256",
+        ),
     ),
     MutationCase(
         "stale-explicit-clock",
@@ -1115,6 +1120,21 @@ def _known_diagnostic_classes(errors: Sequence[Any]) -> tuple[str, ...]:
     )
 
 
+def _aggregate_contract_matches_case(
+    case: MutationCase,
+    summary_errors: object,
+    observed_errors: Sequence[str],
+) -> bool:
+    """Return whether derived aggregate errors exactly match one matrix case."""
+
+    expected = case.expected_aggregate_contract_errors
+    return (
+        tuple(observed_errors) == expected
+        and isinstance(summary_errors, list)
+        and all(summary_errors.count(error) == 1 for error in expected)
+    )
+
+
 def validate_receipt(
     receipt: object,
     *,
@@ -1233,7 +1253,11 @@ def _execute_mutation(
         DEFAULT_REQUIRED_GATES,
         aggregate_contract_errors,
     )
-    if aggregate_contract_errors:
+    if not _aggregate_contract_matches_case(
+        case,
+        summary.get("errors"),
+        aggregate_contract_errors,
+    ):
         raise NegativeArchiveError(
             "negative-promotion checker output failed its schema contract"
         )

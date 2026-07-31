@@ -871,6 +871,17 @@ public sealed class TransactionBuilderTests
         var statusPollCount = 0;
         using var handler = new RecordingHandler(request =>
         {
+            if (request.RequestUri!.AbsolutePath == "/v1/node/capabilities")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        ToriiClientTests.TransactionSubmissionCapabilitiesJson(),
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
             if (request.RequestUri!.AbsolutePath == "/transaction")
             {
                 return new HttpResponseMessage(HttpStatusCode.Accepted)

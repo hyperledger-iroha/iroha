@@ -70,11 +70,11 @@ public final class DaToriiClient {
                 DaJson.parse(bytes, "DA proof-policy response"), "response"));
   }
 
-  /** Lists DA commitments matching {@code query}. */
+  /** Lists DA commitments from the bounded cursor {@code request}. */
   public CompletableFuture<DaModels.CommitmentListResponse> listCommitments(
-      final DaModels.CommitmentQuery query) {
-    final DaModels.CommitmentQuery actual =
-        query == null ? new DaModels.CommitmentQuery() : query;
+      final DaModels.CommitmentListRequest request) {
+    final DaModels.CommitmentListRequest actual =
+        request == null ? new DaModels.CommitmentListRequest() : request;
     return executePost(
         COMMITMENTS_PATH,
         actual.toJsonBytes(),
@@ -88,11 +88,11 @@ public final class DaToriiClient {
     return listCommitments(null);
   }
 
-  /** Produces the first DA commitment proof matching {@code query}, if any. */
+  /** Produces the first DA commitment proof matching {@code request}, if any. */
   public CompletableFuture<DaModels.CommitmentProofResponse> proveCommitment(
-      final DaModels.CommitmentQuery query) {
-    final DaModels.CommitmentQuery actual =
-        query == null ? new DaModels.CommitmentQuery() : query;
+      final DaModels.CommitmentProofRequest request) {
+    final DaModels.CommitmentProofRequest actual =
+        request == null ? new DaModels.CommitmentProofRequest() : request;
     return executePost(
         COMMITMENTS_PROVE_PATH,
         actual.toJsonBytes(),
@@ -117,11 +117,11 @@ public final class DaToriiClient {
                 DaJson.parse(bytes, "DA commitment verification response"), "response"));
   }
 
-  /** Lists DA pin intents matching {@code query}. */
-  public CompletableFuture<List<DaModels.PinIntentWithLocation>> listPinIntents(
-      final DaModels.PinIntentQuery query) {
-    final DaModels.PinIntentQuery actual =
-        query == null ? new DaModels.PinIntentQuery() : query;
+  /** Lists DA pin intents from the bounded cursor {@code request}. */
+  public CompletableFuture<DaModels.PinIntentListResponse> listPinIntents(
+      final DaModels.PinIntentListRequest request) {
+    final DaModels.PinIntentListRequest actual =
+        request == null ? new DaModels.PinIntentListRequest() : request;
     return executePost(
         PIN_INTENTS_PATH,
         actual.toJsonBytes(),
@@ -131,15 +131,15 @@ public final class DaToriiClient {
   }
 
   /** Lists all DA pin intents. */
-  public CompletableFuture<List<DaModels.PinIntentWithLocation>> listPinIntents() {
+  public CompletableFuture<DaModels.PinIntentListResponse> listPinIntents() {
     return listPinIntents(null);
   }
 
-  /** Produces the first DA pin-intent proof matching {@code query}, if any. */
+  /** Produces the first DA pin-intent proof matching {@code request}, if any. */
   public CompletableFuture<DaModels.PinIntentProof> provePinIntent(
-      final DaModels.PinIntentQuery query) {
-    final DaModels.PinIntentQuery actual =
-        query == null ? new DaModels.PinIntentQuery() : query;
+      final DaModels.PinIntentQueryRequest request) {
+    final DaModels.PinIntentQueryRequest actual =
+        request == null ? new DaModels.PinIntentQueryRequest() : request;
     return executePost(
         PIN_INTENTS_PROVE_PATH,
         actual.toJsonBytes(),

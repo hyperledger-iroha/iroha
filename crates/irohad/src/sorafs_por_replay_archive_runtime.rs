@@ -1,9 +1,10 @@
-//! Supervised finalized-PoR reputation reconciliation and archive compaction.
+//! Supervised finalized-PoR reputation reconciliation and optional archive compaction.
 //!
 //! The worker never owns archive credentials or signing material. It operates
-//! only through the archive already qualified and installed in
-//! [`sorafs_node::NodeHandle`] and the committed reputation runtime's durable
-//! native-outcome admission boundary.
+//! through the committed reputation runtime's durable native-outcome admission
+//! boundary. When finalized replay archival is configured, the same bounded
+//! worker also uses the archive already qualified and installed in
+//! [`sorafs_node::NodeHandle`].
 
 use std::{sync::Arc, time::Duration};
 
@@ -20,7 +21,7 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Payload-free worker failure category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorReplayArchiveWorkerErrorV1 {
-    /// The node has no valid configured archive worker policy.
+    /// The selected worker mode has no valid bounded policy.
     InvalidConfiguration,
     /// Durable PoR-to-reputation admission or acknowledgement failed.
     ReputationReconciliation,
@@ -31,7 +32,9 @@ pub(crate) enum PorReplayArchiveWorkerErrorV1 {
 impl std::fmt::Display for PorReplayArchiveWorkerErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidConfiguration => "finalized PoR archive worker configuration is invalid",
+            Self::InvalidConfiguration => {
+                "finalized PoR reputation worker configuration is invalid"
+            }
             Self::ReputationReconciliation => {
                 "finalized PoR reputation reconciliation failed closed"
             }
@@ -41,6 +44,12 @@ impl std::fmt::Display for PorReplayArchiveWorkerErrorV1 {
 }
 
 impl std::error::Error for PorReplayArchiveWorkerErrorV1 {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PorReputationWorkerModeV1 {
+    ReputationOnly,
+    ReputationAndArchive,
+}
 
 /// Payload-free result of one bounded worker tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,18 +62,13 @@ pub(crate) struct PorReplayArchiveTickOutcomeV1 {
     pub compacted_records: u32,
 }
 
-/// Run one bounded reconciliation and compaction tick.
-pub(crate) fn reconcile_and_compact_once(
+/// Reconcile one bounded retained PoR-terminal batch into reputation.
+pub(crate) fn reconcile_reputation_once(
     node: &NodeHandle,
     admission: &dyn ReputationNativeOutcomeAdmissionApiV1,
     maximum_records: u32,
 ) -> Result<PorReplayArchiveTickOutcomeV1, PorReplayArchiveWorkerErrorV1> {
-    if maximum_records == 0
-        || node
-            .config()
-            .por_replay_archive_policy()
-            .is_none_or(|policy| policy.max_records_per_tick() != maximum_records)
-    {
+    if maximum_records == 0 {
         return Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration);
     }
     match admission
@@ -92,17 +96,117 @@ pub(crate) fn reconcile_and_compact_once(
             }
         }
     }
-    let compacted_records = node
-        .compact_configured_por_replay_archive()
-        .map_err(|_| PorReplayArchiveWorkerErrorV1::ArchiveCompaction)?;
     Ok(PorReplayArchiveTickOutcomeV1 {
         reputation_deferred: false,
         reconciled_records,
-        compacted_records,
+        compacted_records: 0,
     })
 }
 
-/// Start the bounded supervised worker from the node's exact configured policy.
+/// Run one bounded reconciliation and compaction tick.
+pub(crate) fn reconcile_and_compact_once(
+    node: &NodeHandle,
+    admission: &dyn ReputationNativeOutcomeAdmissionApiV1,
+    maximum_records: u32,
+) -> Result<PorReplayArchiveTickOutcomeV1, PorReplayArchiveWorkerErrorV1> {
+    if maximum_records == 0
+        || node
+            .config()
+            .por_replay_archive_policy()
+            .is_none_or(|policy| policy.max_records_per_tick() != maximum_records)
+    {
+        return Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration);
+    }
+    let mut outcome = reconcile_reputation_once(node, admission, maximum_records)?;
+    if outcome.reputation_deferred {
+        return Ok(outcome);
+    }
+    outcome.compacted_records = node
+        .compact_configured_por_replay_archive()
+        .map_err(|_| PorReplayArchiveWorkerErrorV1::ArchiveCompaction)?;
+    Ok(outcome)
+}
+
+fn start_supervised(
+    node: NodeHandle,
+    admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    mode: PorReputationWorkerModeV1,
+    poll_interval: Duration,
+    maximum_records: u32,
+    shutdown_signal: ShutdownSignal,
+) -> Child {
+    let task = tokio::task::spawn(async move {
+        let mut interval = tokio::time::interval(poll_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let tick_node = node.clone();
+                    let tick_admission = Arc::clone(&admission);
+                    let result = tokio::task::spawn_blocking(move || {
+                        match mode {
+                            PorReputationWorkerModeV1::ReputationOnly => {
+                                reconcile_reputation_once(
+                                    &tick_node,
+                                    tick_admission.as_ref(),
+                                    maximum_records,
+                                )
+                            }
+                            PorReputationWorkerModeV1::ReputationAndArchive => {
+                                reconcile_and_compact_once(
+                                    &tick_node,
+                                    tick_admission.as_ref(),
+                                    maximum_records,
+                                )
+                            }
+                        }
+                    })
+                    .await;
+                    if !matches!(result, Ok(Ok(_))) {
+                        iroha_logger::error!(
+                            ?mode,
+                            "supervised finalized PoR reputation worker failed closed"
+                        );
+                        shutdown_signal.send();
+                        return;
+                    }
+                }
+                () = shutdown_signal.receive() => return,
+                else => return,
+            }
+        }
+    });
+    Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT))
+}
+
+/// Start bounded durable PoR-to-reputation reconciliation without requiring
+/// optional finalized replay archival.
+///
+/// # Errors
+///
+/// Returns an error for an inert cadence or record bound.
+pub(crate) fn start_reputation_reconciliation(
+    node: NodeHandle,
+    admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    poll_interval: Duration,
+    maximum_records: u32,
+    shutdown_signal: ShutdownSignal,
+) -> Result<Child, PorReplayArchiveWorkerErrorV1> {
+    if poll_interval.is_zero() || maximum_records == 0 {
+        return Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration);
+    }
+    Ok(start_supervised(
+        node,
+        admission,
+        PorReputationWorkerModeV1::ReputationOnly,
+        poll_interval,
+        maximum_records,
+        shutdown_signal,
+    ))
+}
+
+/// Start the bounded supervised reconciliation and compaction worker from the
+/// node's exact configured archive policy.
 ///
 /// # Errors
 ///
@@ -121,37 +225,14 @@ pub(crate) fn start(
     if poll_interval.is_zero() || maximum_records == 0 {
         return Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration);
     }
-
-    let task = tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(poll_interval);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    let tick_node = node.clone();
-                    let tick_admission = Arc::clone(&admission);
-                    let result = tokio::task::spawn_blocking(move || {
-                        reconcile_and_compact_once(
-                            &tick_node,
-                            tick_admission.as_ref(),
-                            maximum_records,
-                        )
-                    })
-                    .await;
-                    if !matches!(result, Ok(Ok(_))) {
-                        iroha_logger::error!(
-                            "supervised finalized PoR replay-archive worker failed closed"
-                        );
-                        shutdown_signal.send();
-                        return;
-                    }
-                }
-                () = shutdown_signal.receive() => return,
-                else => return,
-            }
-        }
-    });
-    Ok(Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT)))
+    Ok(start_supervised(
+        node,
+        admission,
+        PorReputationWorkerModeV1::ReputationAndArchive,
+        poll_interval,
+        maximum_records,
+        shutdown_signal,
+    ))
 }
 
 #[cfg(test)]
@@ -313,14 +394,46 @@ mod tests {
     }
 
     #[test]
-    fn worker_entrypoints_reject_a_node_without_an_archive_policy() {
+    fn reputation_reconciliation_does_not_require_an_archive_policy() {
         let node = NodeHandle::new(StorageConfig::default());
+        assert_eq!(
+            reconcile_reputation_once(&node, &RejectingAdmission, 1),
+            Ok(PorReplayArchiveTickOutcomeV1 {
+                reputation_deferred: false,
+                reconciled_records: 0,
+                compacted_records: 0,
+            })
+        );
+        assert_eq!(
+            reconcile_reputation_once(&node, &RejectingAdmission, 0),
+            Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
+        );
         assert_eq!(
             reconcile_and_compact_once(&node, &RejectingAdmission, 1),
             Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
         );
         let admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1> =
             Arc::new(RejectingAdmission);
+        assert!(matches!(
+            start_reputation_reconciliation(
+                node.clone(),
+                Arc::clone(&admission),
+                Duration::ZERO,
+                1,
+                ShutdownSignal::new(),
+            ),
+            Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
+        ));
+        assert!(matches!(
+            start_reputation_reconciliation(
+                node.clone(),
+                Arc::clone(&admission),
+                Duration::from_secs(1),
+                0,
+                ShutdownSignal::new(),
+            ),
+            Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
+        ));
         assert!(matches!(
             start(node, admission, ShutdownSignal::new()),
             Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)

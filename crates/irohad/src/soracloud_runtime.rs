@@ -1687,6 +1687,8 @@ pub struct SoracloudRuntimeManagerHandle {
     hf_local_workers: SharedHfLocalRunnerWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
+    hf_inference_credential_provider:
+        Option<Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
     generated_hf_reconcile_attempts_ms: Arc<Mutex<BTreeMap<Hash, u64>>>,
     ivm_runtime_cache: Arc<SoracloudPreparedRuntimeCache>,
 }
@@ -2150,6 +2152,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                     self.state_dir.as_ref(),
                     &self.config.egress,
                     &self.config.hf,
+                    self.hf_inference_credential_provider.as_deref(),
                     &self.hf_local_workers,
                     &self.host_violation_reporter,
                     self.ivm_runtime_cache.as_ref(),
@@ -3913,6 +3916,8 @@ pub(crate) struct SoracloudRuntimeManager {
     hosted_http_workers: SharedHostedHttpWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
+    hf_inference_credential_provider:
+        Option<Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
     last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
@@ -4033,6 +4038,7 @@ impl SoracloudRuntimeManager {
             hosted_http_workers: Arc::new(Mutex::new(BTreeMap::new())),
             host_violation_reporter: SoracloudModelHostViolationReporter::disabled(),
             mutation_sink: None,
+            hf_inference_credential_provider: None,
             last_model_host_heartbeat_attempt_ms: Mutex::new(None),
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
@@ -4053,6 +4059,16 @@ impl SoracloudRuntimeManager {
         self.host_violation_reporter =
             SoracloudModelHostViolationReporter::with_mutation_sink(Arc::clone(&mutation_sink));
         self.mutation_sink = Some(mutation_sink);
+        self
+    }
+
+    /// Attach the deployment-owned authenticated HF credential provider.
+    #[must_use]
+    pub(crate) fn with_hf_inference_credential_provider(
+        mut self,
+        provider: Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
+    ) -> Self {
+        self.hf_inference_credential_provider = Some(provider);
         self
     }
 
@@ -4082,7 +4098,7 @@ impl SoracloudRuntimeManager {
     /// persisted state cannot be restored, or the initial authoritative
     /// reconciliation does not complete.
     pub fn start(
-        self,
+        mut self,
         shutdown_signal: ShutdownSignal,
     ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
         if self.config.production_mode {
@@ -4096,6 +4112,42 @@ impl SoracloudRuntimeManager {
                 .ensure_production_qualified()
                 .wrap_err("revalidate production Soracloud runtime mutation sink")?;
         }
+        if self.config.hf.allow_inference_bridge_fallback {
+            let configured = self
+                .config
+                .hf
+                .inference_credential_provider
+                .as_ref()
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "authenticated HF inference requires an exact credential-provider binding"
+                    )
+                })?;
+            let exact = crate::soracloud_hf_credential::
+                SoracloudHfCredentialProviderBindingV1::try_from_config(configured)
+                .map_err(|_| {
+                    eyre::eyre!(
+                        "authenticated HF inference credential-provider binding is invalid"
+                    )
+                })?;
+            let provider = self
+                .hf_inference_credential_provider
+                .take()
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "authenticated HF inference requires a deployment-owned credential provider"
+                    )
+                })?;
+            self.hf_inference_credential_provider = Some(
+                crate::soracloud_hf_credential::
+                    qualify_soracloud_hf_inference_credential_provider_v1(exact, provider)
+                    .map_err(|_| {
+                        eyre::eyre!(
+                            "authenticated HF inference credential provider is missing, substituted, stale, unavailable, or test-marked"
+                        )
+                    })?,
+            );
+        }
         let manager = Arc::new(self);
         manager.initialize_for_startup()?;
         let handle = SoracloudRuntimeManagerHandle {
@@ -4106,6 +4158,10 @@ impl SoracloudRuntimeManager {
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
             mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
+            hf_inference_credential_provider: manager
+                .hf_inference_credential_provider
+                .as_ref()
+                .map(Arc::clone),
             generated_hf_reconcile_attempts_ms: Arc::new(Mutex::new(BTreeMap::new())),
             ivm_runtime_cache: Arc::new(SoracloudPreparedRuntimeCache::from_config(
                 &manager.config,
@@ -7744,6 +7800,9 @@ fn execute_query_local_read(
     state_dir: &Path,
     egress: &iroha_config::parameters::actual::SoracloudRuntimeEgress,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
     ivm_runtime_cache: &SoracloudPreparedRuntimeCache,
@@ -7757,6 +7816,7 @@ fn execute_query_local_read(
             context,
             state_dir,
             hf_config,
+            hf_inference_credential_provider,
             hf_local_workers,
             host_violation_reporter,
             &binding,
@@ -8354,6 +8414,9 @@ fn execute_generated_hf_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
@@ -8368,6 +8431,7 @@ fn execute_generated_hf_local_read(
             context,
             state_dir,
             hf_config,
+            hf_inference_credential_provider,
             hf_local_workers,
             host_violation_reporter,
             binding,
@@ -8451,10 +8515,8 @@ fn execute_generated_hf_metadata_local_read(
             .as_ref()
             .and_then(|manifest| manifest.import_error.clone()),
         inference_local_enabled: hf_config.local_execution_enabled,
-        inference_bridge_enabled: hf_config
-            .inference_token
-            .as_ref()
-            .is_some_and(|token| !token.trim().is_empty()),
+        inference_bridge_enabled: hf_config.allow_inference_bridge_fallback
+            && hf_config.inference_credential_provider.is_some(),
     };
     let response_bytes = norito::json::to_vec(&response).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
@@ -8489,6 +8551,9 @@ fn execute_generated_hf_infer_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
@@ -8540,7 +8605,11 @@ fn execute_generated_hf_infer_local_read(
 
     let bridge_response = if hf_config.allow_inference_bridge_fallback && bridge_fallback_opt_in {
         Some(execute_generated_hf_inference_bridge_local_read(
-            request, context, hf_config, binding,
+            request,
+            context,
+            hf_config,
+            hf_inference_credential_provider,
+            binding,
         ))
     } else {
         None
@@ -8967,18 +9036,16 @@ fn execute_generated_hf_inference_bridge_local_read(
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
-    let Some(token) = hf_config
-        .inference_token
-        .as_ref()
-        .map(|token| token.trim())
-        .filter(|token| !token.is_empty())
-    else {
+    let Some(provider) = hf_inference_credential_provider else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "generated HF inference for source `{}` requires `soracloud_runtime.hf.inference_token`",
+                "generated HF inference for source `{}` requires a qualified runtime credential provider",
                 binding.source_id
             ),
         ));
@@ -8991,71 +9058,57 @@ fn execute_generated_hf_inference_bridge_local_read(
             )
         })?;
     url.set_query(request.request_query.as_deref());
-    let client = reqwest::blocking::Client::builder()
-        .timeout(hf_config.request_timeout)
-        .build()
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!("build generated HF inference HTTP client: {error}"),
-            )
-        })?;
-    let mut builder = client
-        .post(url.clone())
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-    if let Some(content_type) = request.request_headers.get("content-type") {
-        builder = builder.header(reqwest::header::CONTENT_TYPE, content_type);
-    } else {
-        builder = builder.header(reqwest::header::CONTENT_TYPE, "application/json");
-    }
-    if let Some(accept) = request.request_headers.get("accept") {
-        builder = builder.header(reqwest::header::ACCEPT, accept);
-    }
-    let response = builder
-        .body(request.request_body.clone())
-        .send()
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!("forward generated HF inference request to {url}: {error}"),
-            )
-        })?;
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
-    let content_encoding = response
-        .headers()
-        .get(reqwest::header::CONTENT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
-    let response_bytes = read_soracloud_http_response_bounded(
-        response,
-        hf_config.inference_max_response_bytes,
-        "generated Hugging Face inference",
-    )
-    .map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!("read generated HF inference response from {url}: {error}"),
+    let provider_request =
+        crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+            url.to_string(),
+            request
+                .request_headers
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| "application/json".to_owned()),
+            request.request_headers.get("accept").cloned(),
+            request.request_body.clone(),
+            hf_config.inference_max_response_bytes,
         )
-    })?;
-    if !status.is_success() {
-        let detail = String::from_utf8_lossy(&response_bytes).into_owned();
+        .map_err(|_| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "generated HF inference request exceeds the credential-provider boundary"
+                    .to_owned(),
+            )
+        })?;
+    let provider_response = provider
+        .execute_authenticated(&provider_request)
+        .map_err(|error| {
+            use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
+            let kind = if error == Error::Refused {
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest
+            } else {
+                SoracloudRuntimeExecutionErrorKind::Unavailable
+            };
+            SoracloudRuntimeExecutionError::new(
+                kind,
+                "authenticated HF inference provider refused or could not complete the request"
+                    .to_owned(),
+            )
+        })?;
+    let status = provider_response.status();
+    let content_type = provider_response.content_type().map(ToOwned::to_owned);
+    let content_encoding = provider_response.content_encoding().map(ToOwned::to_owned);
+    if !(200..=299).contains(&status) {
         return Err(SoracloudRuntimeExecutionError::new(
-            if status.is_client_error() {
+            if (400..=499).contains(&status) {
                 SoracloudRuntimeExecutionErrorKind::InvalidRequest
             } else {
                 SoracloudRuntimeExecutionErrorKind::Unavailable
             },
             format!(
-                "generated HF inference request for `{}` failed with {}: {}",
-                binding.repo_id, status, detail
+                "authenticated HF inference request for `{}` failed with status {}",
+                binding.repo_id, status
             ),
         ));
     }
+    let response_bytes = provider_response.into_body();
     let result_commitment = Hash::new(&response_bytes);
     Ok(SoracloudLocalReadResponse {
         response_bytes,
@@ -20466,6 +20519,129 @@ mod tests {
         ))
     }
 
+    const TEST_HF_CREDENTIAL_PROVIDER_HANDLE: &str = "kms://soracloud/hf-inference-fixture";
+    const TEST_HF_CREDENTIAL_PROVIDER_REVISION: u64 = 7;
+    const TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];
+
+    fn test_hf_credential_provider_binding()
+    -> iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
+        iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
+            handle: TEST_HF_CREDENTIAL_PROVIDER_HANDLE.to_owned(),
+            revision: TEST_HF_CREDENTIAL_PROVIDER_REVISION,
+            policy_digest: TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST,
+        }
+    }
+
+    struct TestHfCredentialProvider {
+        bearer_token: String,
+    }
+
+    impl fmt::Debug for TestHfCredentialProvider {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestHfCredentialProvider")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
+        for TestHfCredentialProvider
+    {
+        fn handle(&self) -> &str {
+            TEST_HF_CREDENTIAL_PROVIDER_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1,
+        > {
+            Ok(
+                crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
+                    TEST_HF_CREDENTIAL_PROVIDER_REVISION,
+                    TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST,
+                    true,
+                    false,
+                ),
+            )
+        }
+
+        fn check_readiness(
+            &self,
+        ) -> Result<(), crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1>
+        {
+            Ok(())
+        }
+
+        fn execute_authenticated(
+            &self,
+            request: &crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1,
+        ) -> Result<
+            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1,
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
+        > {
+            use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
+
+            let client = reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| Error::Unavailable)?;
+            let mut send = client
+                .post(request.url())
+                .bearer_auth(&self.bearer_token)
+                .header(reqwest::header::CONTENT_TYPE, request.content_type())
+                .body(request.body().to_vec());
+            if let Some(accept) = request.accept() {
+                send = send.header(reqwest::header::ACCEPT, accept);
+            }
+            let response = send.send().map_err(|_| Error::Unavailable)?;
+            let status = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
+            let content_encoding = response
+                .headers()
+                .get(reqwest::header::CONTENT_ENCODING)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
+            let body = read_soracloud_http_response_bounded(
+                response,
+                request.maximum_response_bytes(),
+                "test authenticated HF inference",
+            )
+            .map_err(|_| Error::InvalidResponse)?;
+            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                status,
+                content_type,
+                content_encoding,
+                body,
+                request.maximum_response_bytes(),
+            )
+        }
+    }
+
+    fn test_hf_credential_provider(
+        token: &str,
+    ) -> Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1> {
+        let provider: Arc<
+            dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+        > = Arc::new(TestHfCredentialProvider {
+            bearer_token: token.to_owned(),
+        });
+        let binding =
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_from_config(
+                &test_hf_credential_provider_binding(),
+            )
+            .expect("test credential-provider binding must be valid");
+        crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
+            binding, provider,
+        )
+        .expect("test credential provider must qualify")
+    }
+
     fn spawn_remote_hydration_fixture(
         fixtures: &[RemoteManifestFixture],
     ) -> Result<HttpRouteFixture> {
@@ -20926,6 +21102,10 @@ mod tests {
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
             mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
+            hf_inference_credential_provider: manager
+                .hf_inference_credential_provider
+                .as_ref()
+                .map(Arc::clone),
             generated_hf_reconcile_attempts_ms: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             ivm_runtime_cache: Arc::new(SoracloudPreparedRuntimeCache::from_config(
                 &manager.config,
@@ -21630,7 +21810,7 @@ mod tests {
                 model_info_max_response_bytes: 4 * 1024 * 1024,
                 inference_max_response_bytes: 16 * 1024 * 1024,
                 import_file_allowlist: vec!["config.json".to_owned(), "*.safetensors".to_owned()],
-                inference_token: Some("fixture-token".to_owned()),
+                inference_credential_provider: Some(test_hf_credential_provider_binding()),
             },
         };
 
@@ -23108,9 +23288,11 @@ mod tests {
         config.hf.hub_base_url = server.base_url.clone();
         config.hf.api_base_url = format!("{}/api", server.base_url);
         config.hf.import_file_allowlist = vec!["config.json".to_owned()];
-        config.hf.inference_token = Some("hf-runtime-token".to_owned());
+        config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
 
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_hf_inference_credential_provider(test_hf_credential_provider("hf-runtime-token"));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -23322,11 +23504,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_local_read_generated_hf_infer_requires_configured_token() -> Result<()> {
+    fn execute_local_read_generated_hf_infer_requires_injected_credential_provider() -> Result<()> {
         let mut state = test_state()?;
         let fixture = insert_generated_hf_service_fixture(
             &mut state,
-            "hf_infer_requires_token",
+            "hf_infer_requires_provider",
             "openai-community/gpt2",
             "main",
             "gpt2",
@@ -23345,6 +23527,7 @@ mod tests {
         config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
         config.hf.local_execution_enabled = false;
         config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
@@ -23366,14 +23549,34 @@ mod tests {
                     "1".to_owned(),
                 )]),
                 request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-infer-no-token"),
+                request_commitment: Hash::new(b"hf-infer-no-credential-provider"),
             })
-            .expect_err("generated HF inference should require a configured token");
+            .expect_err("generated HF inference should require an injected credential provider");
         assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
         assert!(
             error
                 .message
-                .contains("requires `soracloud_runtime.hf.inference_token`")
+                .contains("requires a qualified runtime credential provider")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_start_rejects_missing_hf_credential_provider() -> Result<()> {
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
+
+        let error = match SoracloudRuntimeManager::new(config, state).start(ShutdownSignal::new()) {
+            Ok(_) => panic!("startup must reject a missing HF credential provider"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("requires a deployment-owned credential provider")
         );
         Ok(())
     }
@@ -23403,8 +23606,9 @@ mod tests {
         config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
         config.hf.local_execution_enabled = false;
         config.hf.allow_inference_bridge_fallback = true;
-        config.hf.inference_token = Some("hf-test-token".to_owned());
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_hf_inference_credential_provider(test_hf_credential_provider("hf-test-token"));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -24805,9 +25009,10 @@ mod tests {
         config.hf.local_execution_enabled = false;
         config.hf.allow_inference_bridge_fallback = true;
         config.hf.import_file_allowlist = vec!["config.json".to_owned()];
-        config.hf.inference_token = Some("hf-test-token".to_owned());
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
 
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_hf_inference_credential_provider(test_hf_credential_provider("hf-test-token"));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -29461,433 +29666,5 @@ exec python3 /tmp/inrou-shared-volume.py
         Ok(())
     }
 
-    #[test]
-    fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary()
-    -> Result<()> {
-        let mut state = test_state()?;
-        let fixture = insert_generated_hf_service_fixture(
-            &mut state,
-            "hf_agent_service",
-            "openai-community/gpt2",
-            "main",
-            "gpt2",
-        )?;
-        set_generated_hf_service_route_visibility(
-            &mut state,
-            &fixture,
-            SoraRouteVisibilityV1::Public,
-        );
-        let apartment_name: Name = "hf_agent".parse().expect("valid apartment name");
-        let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
-            apartment_name.clone(),
-            &fixture.bundle,
-        );
-        let run = SoraAgentAutonomyRunRecordV1 {
-            run_id: "hf_agent:autonomy:42".to_owned(),
-            artifact_hash: "hash:HFAGENT#01".to_owned(),
-            provenance_hash: Some("hash:HFPROV#01".to_owned()),
-            budget_units: 75,
-            run_label: "fallback label".to_owned(),
-            workflow_input_json: Some(
-                "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}"
-                    .to_owned(),
-            ),
-            approved_process_generation: 1,
-            request_commitment: Hash::new(b"hf-agent-run"),
-            approved_sequence: 42,
-        };
-        let apartment = SoraAgentApartmentRecordV1 {
-            schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            manifest_hash: Hash::new(Encode::encode(&manifest)),
-            status: SoraAgentRuntimeStatusV1::Running,
-            deployed_sequence: 1,
-            lease_started_sequence: 1,
-            lease_expires_sequence: 400,
-            last_renewed_sequence: 1,
-            restart_count: 0,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-            process_generation: 1,
-            process_started_sequence: 1,
-            last_active_sequence: 42,
-            last_checkpoint_sequence: Some(42),
-            checkpoint_count: 1,
-            persistent_state: SoraAgentPersistentStateV1 {
-                total_bytes: 128,
-                key_sizes: BTreeMap::from([("/autonomy/hf_agent:autonomy:42".to_owned(), 128)]),
-            },
-            revoked_policy_capabilities: BTreeSet::new(),
-            pending_wallet_requests: BTreeMap::new(),
-            wallet_daily_spend: BTreeMap::new(),
-            mailbox_queue: Vec::new(),
-            autonomy_budget_ceiling_units: 1_000,
-            autonomy_budget_remaining_units: 925,
-            artifact_allowlist: BTreeMap::from([(
-                run.artifact_hash.clone(),
-                SoraAgentArtifactAllowRuleV1 {
-                    artifact_hash: run.artifact_hash.clone(),
-                    provenance_hash: run.provenance_hash.clone(),
-                    added_sequence: 41,
-                },
-            )]),
-            autonomy_run_history: vec![run.clone()],
-            manifest,
-        };
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_agent_apartments_mut_for_testing()
-                .insert(apartment_name.to_string(), apartment.clone());
-        }
-        let local_peer_id = "12D3KooWHfAgentAutonomyRuntimeHost";
-        insert_generated_hf_placement_fixture(
-            &mut state,
-            &fixture,
-            SoraHfPlacementHostRoleV1::Primary,
-            SoraHfPlacementHostStatusV1::Warm,
-            local_peer_id,
-        );
-
-        let temp_dir = tempfile::tempdir()?;
-        let source_root = temp_dir
-            .path()
-            .join("hf_sources")
-            .join(sanitize_path_component(&fixture.source_id.to_string()));
-        let files_root = source_root.join("files");
-        fs::create_dir_all(&files_root)?;
-        let config_json = br#"{
-  "model_type": "gpt2",
-  "_soracloud_fixture": {
-    "mode": "echo",
-    "prefix": "agent:"
-  }
-}"#;
-        let config_path = files_root.join("config.json");
-        write_bytes_atomic(&config_path, config_json)?;
-        write_json_atomic(
-            &source_root.join("import_manifest.json"),
-            &HfLocalImportManifestV1 {
-                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-                source_id: fixture.source_id.to_string(),
-                repo_id: "openai-community/gpt2".to_owned(),
-                requested_revision: "main".to_owned(),
-                resolved_commit: Some("main".to_owned()),
-                model_name: "gpt2".to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                pipeline_tag: Some("text-generation".to_owned()),
-                library_name: Some("transformers".to_owned()),
-                tags: vec!["text-generation".to_owned()],
-                imported_at_ms: 20,
-                imported_files: vec![HfImportedFileV1 {
-                    path: "config.json".to_owned(),
-                    content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
-                    payload_hash: Hash::new(config_json).to_string(),
-                    local_path: config_path.display().to_string(),
-                }],
-                skipped_files: Vec::new(),
-                raw_model_info_path: None,
-                import_error: None,
-            },
-        )?;
-
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf())
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        );
-        manager.reconcile_once()?;
-        let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
-        let request = SoracloudApartmentExecutionRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            apartment_name: apartment_name.to_string(),
-            process_generation: apartment.process_generation,
-            operation: format!("autonomy-run:{}", run.run_id),
-            request_commitment: run.request_commitment,
-        };
-        let result = handle
-            .execute_apartment(request.clone())
-            .map_err(|error| eyre::eyre!("{error:?}"))?;
-        assert_eq!(result.status, SoraAgentRuntimeStatusV1::Running);
-        assert!(result.checkpoint_artifact_hash.is_some());
-        assert!(result.journal_artifact_hash.is_some());
-
-        let (summary, journal_hash) = read_apartment_autonomy_execution_summary(
-            temp_dir.path(),
-            apartment_name.as_ref(),
-            &run.run_id,
-        )
-        .map_err(|error| eyre::eyre!("{error:?}"))?
-        .expect("persisted autonomy execution summary");
-        assert!(summary.succeeded);
-        assert!(summary.workflow_steps.is_empty());
-        assert_eq!(
-            summary.service_name.as_deref(),
-            Some(fixture.bundle.service.service_name.as_ref())
-        );
-        let runtime_receipt = summary
-            .runtime_receipt
-            .as_ref()
-            .expect("runtime receipt persisted");
-        assert_eq!(
-            runtime_receipt.service_name.as_ref(),
-            fixture.bundle.service.service_name.as_ref()
-        );
-        assert_eq!(runtime_receipt.handler_name.as_ref(), "infer");
-        let response_json = summary.response_json.as_ref().expect("response json");
-        assert_eq!(
-            response_json
-                .get("backend")
-                .and_then(norito::json::Value::as_str),
-            Some("local_fixture")
-        );
-        assert_eq!(
-            response_json
-                .get("inputs")
-                .and_then(norito::json::Value::as_array)
-                .and_then(|inputs| inputs.first())
-                .and_then(norito::json::Value::as_str),
-            Some("alpha")
-        );
-        assert_eq!(
-            response_json
-                .get("inputs")
-                .and_then(norito::json::Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-        assert_eq!(
-            response_json
-                .get("parameters")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|parameters| parameters.get("max_new_tokens"))
-                .and_then(norito::json::Value::as_u64),
-            Some(4)
-        );
-        assert_eq!(
-            response_json
-                .get("text")
-                .and_then(norito::json::Value::as_str),
-            Some("agent:['alpha', 'beta']")
-        );
-        assert_eq!(result.journal_artifact_hash, Some(journal_hash));
-        assert_eq!(
-            result.checkpoint_artifact_hash,
-            summary.checkpoint_artifact_hash
-        );
-
-        let second = handle
-            .execute_apartment(request)
-            .map_err(|error| eyre::eyre!("{error:?}"))?;
-        assert_eq!(second.result_commitment, result.result_commitment);
-        assert_eq!(second.journal_artifact_hash, result.journal_artifact_hash);
-        assert_eq!(
-            second.checkpoint_artifact_hash,
-            result.checkpoint_artifact_hash
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_locally()
-    -> Result<()> {
-        let mut state = test_state()?;
-        let fixture = insert_generated_hf_service_fixture(
-            &mut state,
-            "hf_agent_workflow_service",
-            "openai-community/gpt2",
-            "main",
-            "gpt2",
-        )?;
-        set_generated_hf_service_route_visibility(
-            &mut state,
-            &fixture,
-            SoraRouteVisibilityV1::Public,
-        );
-        let apartment_name: Name = "hf_workflow_agent".parse().expect("valid apartment name");
-        let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
-            apartment_name.clone(),
-            &fixture.bundle,
-        );
-        let run = SoraAgentAutonomyRunRecordV1 {
-            run_id: "hf_workflow_agent:autonomy:9".to_owned(),
-            artifact_hash: "hash:HFAGENT#WF".to_owned(),
-            provenance_hash: Some("hash:HFPROV#WF".to_owned()),
-            budget_units: 90,
-            run_label: "workflow".to_owned(),
-            workflow_input_json: Some(
-                "{\"workflow_version\":1,\"steps\":[{\"step_id\":\"draft\",\"request\":{\"inputs\":\"alpha\"}},{\"step_id\":\"refine\",\"request\":{\"inputs\":\"${steps.draft.text}\",\"parameters\":{\"max_new_tokens\":2}}}]}"
-                    .to_owned(),
-            ),
-            approved_process_generation: 1,
-            request_commitment: Hash::new(b"hf-agent-workflow-run"),
-            approved_sequence: 9,
-        };
-        let apartment = SoraAgentApartmentRecordV1 {
-            schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            manifest_hash: Hash::new(Encode::encode(&manifest)),
-            status: SoraAgentRuntimeStatusV1::Running,
-            deployed_sequence: 1,
-            lease_started_sequence: 1,
-            lease_expires_sequence: 400,
-            last_renewed_sequence: 1,
-            restart_count: 0,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-            process_generation: 1,
-            process_started_sequence: 1,
-            last_active_sequence: 9,
-            last_checkpoint_sequence: Some(9),
-            checkpoint_count: 1,
-            persistent_state: SoraAgentPersistentStateV1 {
-                total_bytes: 128,
-                key_sizes: BTreeMap::from([(
-                    "/autonomy/hf_workflow_agent:autonomy:9".to_owned(),
-                    128,
-                )]),
-            },
-            revoked_policy_capabilities: BTreeSet::new(),
-            pending_wallet_requests: BTreeMap::new(),
-            wallet_daily_spend: BTreeMap::new(),
-            mailbox_queue: Vec::new(),
-            autonomy_budget_ceiling_units: 1_000,
-            autonomy_budget_remaining_units: 910,
-            artifact_allowlist: BTreeMap::from([(
-                run.artifact_hash.clone(),
-                SoraAgentArtifactAllowRuleV1 {
-                    artifact_hash: run.artifact_hash.clone(),
-                    provenance_hash: run.provenance_hash.clone(),
-                    added_sequence: 8,
-                },
-            )]),
-            autonomy_run_history: vec![run.clone()],
-            manifest,
-        };
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_agent_apartments_mut_for_testing()
-                .insert(apartment_name.to_string(), apartment.clone());
-        }
-        let local_peer_id = "12D3KooWHfWorkflowAutonomyRuntimeHost";
-        insert_generated_hf_placement_fixture(
-            &mut state,
-            &fixture,
-            SoraHfPlacementHostRoleV1::Primary,
-            SoraHfPlacementHostStatusV1::Warm,
-            local_peer_id,
-        );
-
-        let temp_dir = tempfile::tempdir()?;
-        let source_root = temp_dir
-            .path()
-            .join("hf_sources")
-            .join(sanitize_path_component(&fixture.source_id.to_string()));
-        let files_root = source_root.join("files");
-        fs::create_dir_all(&files_root)?;
-        let config_json = br#"{
-  "model_type": "gpt2",
-  "_soracloud_fixture": {
-    "mode": "echo",
-    "prefix": "wf:"
-  }
-}"#;
-        let config_path = files_root.join("config.json");
-        write_bytes_atomic(&config_path, config_json)?;
-        write_json_atomic(
-            &source_root.join("import_manifest.json"),
-            &HfLocalImportManifestV1 {
-                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-                source_id: fixture.source_id.to_string(),
-                repo_id: "openai-community/gpt2".to_owned(),
-                requested_revision: "main".to_owned(),
-                resolved_commit: Some("main".to_owned()),
-                model_name: "gpt2".to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                pipeline_tag: Some("text-generation".to_owned()),
-                library_name: Some("transformers".to_owned()),
-                tags: vec!["text-generation".to_owned()],
-                imported_at_ms: 20,
-                imported_files: vec![HfImportedFileV1 {
-                    path: "config.json".to_owned(),
-                    content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
-                    payload_hash: Hash::new(config_json).to_string(),
-                    local_path: config_path.display().to_string(),
-                }],
-                skipped_files: Vec::new(),
-                raw_model_info_path: None,
-                import_error: None,
-            },
-        )?;
-
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf())
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        );
-        manager.reconcile_once()?;
-        let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
-        let result = handle
-            .execute_apartment(SoracloudApartmentExecutionRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                apartment_name: apartment_name.to_string(),
-                process_generation: apartment.process_generation,
-                operation: format!("autonomy-run:{}", run.run_id),
-                request_commitment: run.request_commitment,
-            })
-            .map_err(|error| eyre::eyre!("{error:?}"))?;
-
-        let (summary, _journal_hash) = read_apartment_autonomy_execution_summary(
-            temp_dir.path(),
-            apartment_name.as_ref(),
-            &run.run_id,
-        )
-        .map_err(|error| eyre::eyre!("{error:?}"))?
-        .expect("persisted workflow summary");
-        assert!(summary.succeeded);
-        assert_eq!(summary.workflow_steps.len(), 2);
-        assert_eq!(summary.workflow_steps[0].step_id.as_deref(), Some("draft"));
-        assert_eq!(
-            summary.workflow_steps[0]
-                .response_json
-                .as_ref()
-                .and_then(|value| value.get("text"))
-                .and_then(norito::json::Value::as_str),
-            Some("wf:alpha")
-        );
-        assert_eq!(summary.workflow_steps[1].step_id.as_deref(), Some("refine"));
-        assert_eq!(
-            summary.workflow_steps[1]
-                .response_json
-                .as_ref()
-                .and_then(|value| value.get("inputs"))
-                .and_then(norito::json::Value::as_str),
-            Some("wf:alpha")
-        );
-        let response_json = summary
-            .response_json
-            .as_ref()
-            .expect("workflow response json");
-        assert_eq!(
-            response_json
-                .get("step_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            response_json
-                .get("final_response")
-                .and_then(|value| value.get("text"))
-                .and_then(norito::json::Value::as_str),
-            Some("wf:wf:alpha")
-        );
-        assert_eq!(
-            result.checkpoint_artifact_hash,
-            summary.checkpoint_artifact_hash
-        );
-        Ok(())
-    }
+    include!("soracloud_runtime/autonomy_execution_tests.rs");
 }

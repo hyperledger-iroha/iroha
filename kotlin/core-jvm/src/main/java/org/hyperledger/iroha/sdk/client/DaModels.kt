@@ -58,37 +58,80 @@ object DaModels {
         }
     }
 
-    /** Query pagination using the complete unsigned 64-bit wire range. */
-    data class Pagination(
-        val limit: BigInteger? = null,
-        val offset: BigInteger = BigInteger.ZERO,
+    /** Canonical ledger tip binding a DA list cursor to one immutable view. */
+    data class ListSnapshot(
+        val blockHeight: BigInteger,
+        val blockHash: String?,
     ) {
         init {
-            if (limit != null) {
-                require(limit > BigInteger.ZERO && limit <= U64_MAX) {
-                    "DA pagination limit must be in 1..u64::MAX"
-                }
+            requireU64(blockHeight, "blockHeight")
+            if (blockHash != null) {
+                DaJson.requireHash(blockHash, "blockHash")
             }
-            require(offset >= BigInteger.ZERO && offset <= U64_MAX) {
-                "DA pagination offset must fit u64"
+            require((blockHeight == BigInteger.ZERO) == (blockHash == null)) {
+                "DA list snapshots require no block hash at height zero and one at nonzero height"
             }
         }
 
-        internal fun toJsonValue(): Map<String, Any?> {
+        internal fun toJsonValue(): Map<String, Any?> = linkedMapOf(
+            "block_height" to blockHeight,
+            "block_hash" to blockHash,
+        )
+    }
+
+    /** Canonical `(lane_id, epoch, sequence)` ordering key for commitments. */
+    data class CommitmentKey(
+        val laneId: Long,
+        val epoch: BigInteger,
+        val sequence: BigInteger,
+    ) {
+        init {
+            requireU32(BigInteger.valueOf(laneId), "laneId")
+            requireU64(epoch, "epoch")
+            requireU64(sequence, "sequence")
+        }
+
+        internal fun toJsonValue(): Map<String, Any?> = linkedMapOf(
+            "lane_id" to laneId,
+            "epoch" to epoch,
+            "sequence" to sequence,
+        )
+    }
+
+    /** Forward-only cursor for canonically ordered commitments. */
+    data class CommitmentListCursor(
+        val snapshot: ListSnapshot,
+        val after: CommitmentKey,
+    ) {
+        internal fun toJsonValue(): Map<String, Any?> = linkedMapOf(
+            "snapshot" to snapshot.toJsonValue(),
+            "after" to after.toJsonValue(),
+        )
+    }
+
+    /** Cursor request for bounded commitment traversal. */
+    data class CommitmentListRequest(
+        val limit: BigInteger? = null,
+        val cursor: CommitmentListCursor? = null,
+    ) {
+        init {
+            requireOptionalNonZeroU64(limit, "limit")
+        }
+
+        internal fun toJsonBytes(): ByteArray {
             val value = LinkedHashMap<String, Any?>()
             if (limit != null) value["limit"] = limit
-            value["offset"] = offset
-            return value
+            if (cursor != null) value["cursor"] = cursor.toJsonValue()
+            return DaJson.encode(value)
         }
     }
 
-    /** Commitment list/prove request. */
-    data class CommitmentQuery(
+    /** Exact selector for producing one commitment proof. */
+    data class CommitmentProofRequest(
         val manifestHash: Digest32? = null,
         val laneId: Long? = null,
         val epoch: BigInteger? = null,
         val sequence: BigInteger? = null,
-        val pagination: Pagination? = null,
     ) {
         init {
             requireOptionalU32(laneId, "laneId")
@@ -102,20 +145,46 @@ object DaModels {
             if (laneId != null) value["lane_id"] = laneId
             if (epoch != null) value["epoch"] = epoch
             if (sequence != null) value["sequence"] = sequence
-            if (pagination != null) value["pagination"] = pagination.toJsonValue()
             return DaJson.encode(value)
         }
     }
 
-    /** Pin-intent list/prove request. */
-    data class PinIntentQuery(
+    /** Forward-only cursor for canonically ordered pin intents. */
+    data class PinIntentListCursor(
+        val snapshot: ListSnapshot,
+        val after: Location,
+    ) {
+        internal fun toJsonValue(): Map<String, Any?> = linkedMapOf(
+            "snapshot" to snapshot.toJsonValue(),
+            "after" to after.toJsonValue(),
+        )
+    }
+
+    /** Cursor request for bounded pin-intent traversal. */
+    data class PinIntentListRequest(
+        val limit: BigInteger? = null,
+        val cursor: PinIntentListCursor? = null,
+    ) {
+        init {
+            requireOptionalNonZeroU64(limit, "limit")
+        }
+
+        internal fun toJsonBytes(): ByteArray {
+            val value = LinkedHashMap<String, Any?>()
+            if (limit != null) value["limit"] = limit
+            if (cursor != null) value["cursor"] = cursor.toJsonValue()
+            return DaJson.encode(value)
+        }
+    }
+
+    /** Exact selector for producing one pin-intent proof. */
+    data class PinIntentQueryRequest(
         val manifestHash: Digest32? = null,
         val storageTicket: Digest32? = null,
         val alias: String? = null,
         val laneId: Long? = null,
         val epoch: BigInteger? = null,
         val sequence: BigInteger? = null,
-        val pagination: Pagination? = null,
     ) {
         init {
             if (alias != null) {
@@ -134,7 +203,6 @@ object DaModels {
             if (laneId != null) value["lane_id"] = laneId
             if (epoch != null) value["epoch"] = epoch
             if (sequence != null) value["sequence"] = sequence
-            if (pagination != null) value["pagination"] = pagination.toJsonValue()
             return DaJson.encode(value)
         }
     }
@@ -422,11 +490,17 @@ object DaModels {
     data class CommitmentListResponse(
         val policies: ProofPolicyBundle,
         val commitments: List<CommitmentWithLocation>,
+        val nextCursor: CommitmentListCursor?,
     )
 
     data class CommitmentProofResponse(
         val policies: ProofPolicyBundle,
         val proof: CommitmentProof,
+    )
+
+    data class PinIntentListResponse(
+        val intents: List<PinIntentWithLocation>,
+        val nextCursor: PinIntentListCursor?,
     )
 
     data class VerifyResponse(val valid: Boolean, val error: String?) {
@@ -448,6 +522,13 @@ object DaModels {
 
     private fun requireOptionalU64(value: BigInteger?, field: String) {
         if (value != null) requireU64(value, field)
+    }
+
+    private fun requireOptionalNonZeroU64(value: BigInteger?, field: String) {
+        if (value != null) {
+            requireU64(value, field)
+            require(value > BigInteger.ZERO) { "$field must be nonzero" }
+        }
     }
 
     private fun requirePinIntentAlias(value: String, field: String) {
@@ -538,7 +619,11 @@ internal object DaJson {
     }
 
     fun parseCommitmentList(value: Any?, field: String): DaModels.CommitmentListResponse {
-        val objectValue = exactObject(value, field, setOf("policies", "commitments"))
+        val objectValue = exactObject(
+            value,
+            field,
+            setOf("policies", "commitments", "next_cursor"),
+        )
         val policies = parsePolicyBundle(objectValue["policies"], "$field.policies")
         val commitments = list(objectValue["commitments"], "$field.commitments")
             .mapIndexed { index, raw ->
@@ -547,6 +632,9 @@ internal object DaJson {
         return DaModels.CommitmentListResponse(
             policies,
             Collections.unmodifiableList(commitments),
+            objectValue["next_cursor"]?.let {
+                parseCommitmentListCursor(it, "$field.next_cursor")
+            },
         )
     }
 
@@ -578,12 +666,18 @@ internal object DaJson {
         )
     }
 
-    fun parsePinIntentList(value: Any?, field: String): List<DaModels.PinIntentWithLocation> =
-        Collections.unmodifiableList(
-            list(value, field).mapIndexed { index, raw ->
-                parsePinIntentWithLocation(raw, "$field[$index]")
+    fun parsePinIntentList(value: Any?, field: String): DaModels.PinIntentListResponse {
+        val objectValue = exactObject(value, field, setOf("intents", "next_cursor"))
+        val intents = list(objectValue["intents"], "$field.intents").mapIndexed { index, raw ->
+            parsePinIntentWithLocation(raw, "$field.intents[$index]")
+        }
+        return DaModels.PinIntentListResponse(
+            Collections.unmodifiableList(intents),
+            objectValue["next_cursor"]?.let {
+                parsePinIntentListCursor(it, "$field.next_cursor")
             },
         )
+    }
 
     fun parsePinIntentProof(value: Any?, field: String): DaModels.PinIntentProof? {
         if (value == null) return null
@@ -734,6 +828,45 @@ internal object DaJson {
         return DaModels.PinIntentWithLocation(
             parsePinIntent(objectValue["intent"], "$field.intent"),
             parseLocation(objectValue["location"], "$field.location"),
+        )
+    }
+
+    private fun parseListSnapshot(value: Any?, field: String): DaModels.ListSnapshot {
+        val objectValue = exactObject(value, field, setOf("block_height", "block_hash"))
+        return DaModels.ListSnapshot(
+            u64(objectValue["block_height"], "$field.block_height"),
+            objectValue["block_hash"]?.let { string(it, "$field.block_hash") },
+        )
+    }
+
+    private fun parseCommitmentKey(value: Any?, field: String): DaModels.CommitmentKey {
+        val objectValue = exactObject(value, field, setOf("lane_id", "epoch", "sequence"))
+        return DaModels.CommitmentKey(
+            u32(objectValue["lane_id"], "$field.lane_id"),
+            u64(objectValue["epoch"], "$field.epoch"),
+            u64(objectValue["sequence"], "$field.sequence"),
+        )
+    }
+
+    private fun parseCommitmentListCursor(
+        value: Any?,
+        field: String,
+    ): DaModels.CommitmentListCursor {
+        val objectValue = exactObject(value, field, setOf("snapshot", "after"))
+        return DaModels.CommitmentListCursor(
+            parseListSnapshot(objectValue["snapshot"], "$field.snapshot"),
+            parseCommitmentKey(objectValue["after"], "$field.after"),
+        )
+    }
+
+    private fun parsePinIntentListCursor(
+        value: Any?,
+        field: String,
+    ): DaModels.PinIntentListCursor {
+        val objectValue = exactObject(value, field, setOf("snapshot", "after"))
+        return DaModels.PinIntentListCursor(
+            parseListSnapshot(objectValue["snapshot"], "$field.snapshot"),
+            parseLocation(objectValue["after"], "$field.after"),
         )
     }
 

@@ -100,7 +100,7 @@ use iroha_data_model::{
         },
         time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     },
-    executor::{ContractRejection, ValidationFail},
+    executor::ValidationFail,
     isi::{
         BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
         Revoke, SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
@@ -8948,7 +8948,7 @@ mod tests {
             "NotPermitted"
         );
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
-            ContractRejection {
+            iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
                 namespace: "FiLiquidityError".into(),
                 name: "BelowMinimum".into(),

@@ -267,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     edns = sub.add_parser("edns-matrix", help="Run EDNS buffer-size probes.")
     edns.add_argument("--resolver", default="127.0.0.1", help="Resolver address (default: 127.0.0.1)")
-    edns.add_argument("--qname", default="docs-preview.sora.link.", help="Query name for probes.")
+    edns.add_argument("--qname", default="property-preview.sora.link.", help="Query name for probes.")
     edns.add_argument("--type", dest="record_type", default="A", help="Record type to query.")
     edns.add_argument(
         "--bufsize",

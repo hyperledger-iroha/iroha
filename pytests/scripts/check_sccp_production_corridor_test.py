@@ -342,7 +342,7 @@ def test_workflow_path_filters_cover_release_trust_and_fixture_inputs() -> None:
         '"contracts/ethereum/sccp/**"',
         '"fixtures/sccp/**"',
         '"integration_tests/**"',
-        '"docs/portal/static/openapi/**"',
+        '"artifacts/openapi/**"',
         '"scripts/sccp_*"',
         '"scripts/contract_tooling/**"',
         '"scripts/tests/contract_artifact_corridor_test.py"',

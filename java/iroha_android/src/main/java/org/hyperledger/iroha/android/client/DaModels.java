@@ -104,58 +104,152 @@ public final class DaModels {
     }
   }
 
-  /** Query pagination using the complete unsigned 64-bit wire range. */
-  public static final class Pagination {
-    private final BigInteger limit;
-    private final BigInteger offset;
+  /** Canonical ledger tip binding a DA list cursor to one immutable view. */
+  public static final class ListSnapshot {
+    private final BigInteger blockHeight;
+    private final String blockHash;
 
-    public Pagination(final BigInteger limit, final BigInteger offset) {
-      if (limit != null
-          && (limit.signum() <= 0 || limit.compareTo(U64_MAX) > 0)) {
-        throw new IllegalArgumentException(
-            "DA pagination limit must be in 1..u64::MAX");
+    public ListSnapshot(final BigInteger blockHeight, final String blockHash) {
+      requireU64(blockHeight, "blockHeight");
+      if (blockHash != null) {
+        DaJson.requireHash(blockHash, "blockHash");
       }
-      requireU64(Objects.requireNonNull(offset, "offset"), "offset");
-      this.limit = limit;
-      this.offset = offset;
-    }
-
-    public Pagination() {
-      this(null, BigInteger.ZERO);
+      if ((blockHeight.signum() == 0) != (blockHash == null)) {
+        throw new IllegalArgumentException(
+            "DA list snapshots require no block hash at height zero and one at nonzero height");
+      }
+      this.blockHeight = blockHeight;
+      this.blockHash = blockHash;
     }
 
     Map<String, Object> toJsonValue() {
       final Map<String, Object> value = new LinkedHashMap<>();
+      value.put("block_height", blockHeight);
+      value.put("block_hash", blockHash);
+      return value;
+    }
+
+    public BigInteger blockHeight() {
+      return blockHeight;
+    }
+
+    public String blockHash() {
+      return blockHash;
+    }
+  }
+
+  /** Canonical {@code (lane_id, epoch, sequence)} ordering key for commitments. */
+  public static final class CommitmentKey {
+    private final long laneId;
+    private final BigInteger epoch;
+    private final BigInteger sequence;
+
+    public CommitmentKey(
+        final long laneId, final BigInteger epoch, final BigInteger sequence) {
+      requireU32(BigInteger.valueOf(laneId), "laneId");
+      requireU64(epoch, "epoch");
+      requireU64(sequence, "sequence");
+      this.laneId = laneId;
+      this.epoch = epoch;
+      this.sequence = sequence;
+    }
+
+    Map<String, Object> toJsonValue() {
+      final Map<String, Object> value = new LinkedHashMap<>();
+      value.put("lane_id", laneId);
+      value.put("epoch", epoch);
+      value.put("sequence", sequence);
+      return value;
+    }
+
+    public long laneId() {
+      return laneId;
+    }
+
+    public BigInteger epoch() {
+      return epoch;
+    }
+
+    public BigInteger sequence() {
+      return sequence;
+    }
+  }
+
+  /** Forward-only cursor for canonically ordered commitments. */
+  public static final class CommitmentListCursor {
+    private final ListSnapshot snapshot;
+    private final CommitmentKey after;
+
+    public CommitmentListCursor(
+        final ListSnapshot snapshot, final CommitmentKey after) {
+      this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+      this.after = Objects.requireNonNull(after, "after");
+    }
+
+    Map<String, Object> toJsonValue() {
+      final Map<String, Object> value = new LinkedHashMap<>();
+      value.put("snapshot", snapshot.toJsonValue());
+      value.put("after", after.toJsonValue());
+      return value;
+    }
+
+    public ListSnapshot snapshot() {
+      return snapshot;
+    }
+
+    public CommitmentKey after() {
+      return after;
+    }
+  }
+
+  /** Cursor request for bounded commitment traversal. */
+  public static final class CommitmentListRequest {
+    private final BigInteger limit;
+    private final CommitmentListCursor cursor;
+
+    public CommitmentListRequest(
+        final BigInteger limit, final CommitmentListCursor cursor) {
+      requireOptionalNonZeroU64(limit, "limit");
+      this.limit = limit;
+      this.cursor = cursor;
+    }
+
+    public CommitmentListRequest() {
+      this(null, null);
+    }
+
+    byte[] toJsonBytes() {
+      final Map<String, Object> value = new LinkedHashMap<>();
       if (limit != null) {
         value.put("limit", limit);
       }
-      value.put("offset", offset);
-      return value;
+      if (cursor != null) {
+        value.put("cursor", cursor.toJsonValue());
+      }
+      return DaJson.encode(value);
     }
 
     public BigInteger limit() {
       return limit;
     }
 
-    public BigInteger offset() {
-      return offset;
+    public CommitmentListCursor cursor() {
+      return cursor;
     }
   }
 
-  /** Commitment list/prove request. */
-  public static final class CommitmentQuery {
+  /** Exact selector for producing one commitment proof. */
+  public static final class CommitmentProofRequest {
     private final Digest32 manifestHash;
     private final Long laneId;
     private final BigInteger epoch;
     private final BigInteger sequence;
-    private final Pagination pagination;
 
-    public CommitmentQuery(
+    public CommitmentProofRequest(
         final Digest32 manifestHash,
         final Long laneId,
         final BigInteger epoch,
-        final BigInteger sequence,
-        final Pagination pagination) {
+        final BigInteger sequence) {
       if (laneId != null) {
         requireU32(BigInteger.valueOf(laneId), "laneId");
       }
@@ -169,11 +263,10 @@ public final class DaModels {
       this.laneId = laneId;
       this.epoch = epoch;
       this.sequence = sequence;
-      this.pagination = pagination;
     }
 
-    public CommitmentQuery() {
-      this(null, null, null, null, null);
+    public CommitmentProofRequest() {
+      this(null, null, null, null);
     }
 
     byte[] toJsonBytes() {
@@ -189,9 +282,6 @@ public final class DaModels {
       }
       if (sequence != null) {
         value.put("sequence", sequence);
-      }
-      if (pagination != null) {
-        value.put("pagination", pagination.toJsonValue());
       }
       return DaJson.encode(value);
     }
@@ -211,30 +301,86 @@ public final class DaModels {
     public BigInteger sequence() {
       return sequence;
     }
+  }
 
-    public Pagination pagination() {
-      return pagination;
+  /** Forward-only cursor for canonically ordered pin intents. */
+  public static final class PinIntentListCursor {
+    private final ListSnapshot snapshot;
+    private final Location after;
+
+    public PinIntentListCursor(final ListSnapshot snapshot, final Location after) {
+      this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+      this.after = Objects.requireNonNull(after, "after");
+    }
+
+    Map<String, Object> toJsonValue() {
+      final Map<String, Object> value = new LinkedHashMap<>();
+      value.put("snapshot", snapshot.toJsonValue());
+      value.put("after", after.toJsonValue());
+      return value;
+    }
+
+    public ListSnapshot snapshot() {
+      return snapshot;
+    }
+
+    public Location after() {
+      return after;
     }
   }
 
-  /** Pin-intent list/prove request. */
-  public static final class PinIntentQuery {
+  /** Cursor request for bounded pin-intent traversal. */
+  public static final class PinIntentListRequest {
+    private final BigInteger limit;
+    private final PinIntentListCursor cursor;
+
+    public PinIntentListRequest(
+        final BigInteger limit, final PinIntentListCursor cursor) {
+      requireOptionalNonZeroU64(limit, "limit");
+      this.limit = limit;
+      this.cursor = cursor;
+    }
+
+    public PinIntentListRequest() {
+      this(null, null);
+    }
+
+    byte[] toJsonBytes() {
+      final Map<String, Object> value = new LinkedHashMap<>();
+      if (limit != null) {
+        value.put("limit", limit);
+      }
+      if (cursor != null) {
+        value.put("cursor", cursor.toJsonValue());
+      }
+      return DaJson.encode(value);
+    }
+
+    public BigInteger limit() {
+      return limit;
+    }
+
+    public PinIntentListCursor cursor() {
+      return cursor;
+    }
+  }
+
+  /** Exact selector for producing one pin-intent proof. */
+  public static final class PinIntentQueryRequest {
     private final Digest32 manifestHash;
     private final Digest32 storageTicket;
     private final String alias;
     private final Long laneId;
     private final BigInteger epoch;
     private final BigInteger sequence;
-    private final Pagination pagination;
 
-    public PinIntentQuery(
+    public PinIntentQueryRequest(
         final Digest32 manifestHash,
         final Digest32 storageTicket,
         final String alias,
         final Long laneId,
         final BigInteger epoch,
-        final BigInteger sequence,
-        final Pagination pagination) {
+        final BigInteger sequence) {
       if (alias != null) {
         requirePinIntentAlias(alias, "DA pin-intent alias");
       }
@@ -253,11 +399,10 @@ public final class DaModels {
       this.laneId = laneId;
       this.epoch = epoch;
       this.sequence = sequence;
-      this.pagination = pagination;
     }
 
-    public PinIntentQuery() {
-      this(null, null, null, null, null, null, null);
+    public PinIntentQueryRequest() {
+      this(null, null, null, null, null, null);
     }
 
     byte[] toJsonBytes() {
@@ -279,9 +424,6 @@ public final class DaModels {
       }
       if (sequence != null) {
         value.put("sequence", sequence);
-      }
-      if (pagination != null) {
-        value.put("pagination", pagination.toJsonValue());
       }
       return DaJson.encode(value);
     }
@@ -308,10 +450,6 @@ public final class DaModels {
 
     public BigInteger sequence() {
       return sequence;
-    }
-
-    public Pagination pagination() {
-      return pagination;
     }
   }
 
@@ -972,13 +1110,16 @@ public final class DaModels {
   public static final class CommitmentListResponse {
     private final ProofPolicyBundle policies;
     private final List<CommitmentWithLocation> commitments;
+    private final CommitmentListCursor nextCursor;
 
     CommitmentListResponse(
         final ProofPolicyBundle policies,
-        final List<CommitmentWithLocation> commitments) {
+        final List<CommitmentWithLocation> commitments,
+        final CommitmentListCursor nextCursor) {
       this.policies = Objects.requireNonNull(policies, "policies");
       this.commitments =
           Collections.unmodifiableList(new ArrayList<>(commitments));
+      this.nextCursor = nextCursor;
     }
 
     public ProofPolicyBundle policies() {
@@ -987,6 +1128,10 @@ public final class DaModels {
 
     public List<CommitmentWithLocation> commitments() {
       return commitments;
+    }
+
+    public CommitmentListCursor nextCursor() {
+      return nextCursor;
     }
   }
 
@@ -1006,6 +1151,28 @@ public final class DaModels {
 
     public CommitmentProof proof() {
       return proof;
+    }
+  }
+
+  public static final class PinIntentListResponse {
+    private final List<PinIntentWithLocation> intents;
+    private final PinIntentListCursor nextCursor;
+
+    PinIntentListResponse(
+        final List<PinIntentWithLocation> intents,
+        final PinIntentListCursor nextCursor) {
+      this.intents =
+          Collections.unmodifiableList(
+              new ArrayList<>(Objects.requireNonNull(intents, "intents")));
+      this.nextCursor = nextCursor;
+    }
+
+    public List<PinIntentWithLocation> intents() {
+      return intents;
+    }
+
+    public PinIntentListCursor nextCursor() {
+      return nextCursor;
     }
   }
 
@@ -1047,6 +1214,16 @@ public final class DaModels {
         || value.signum() < 0
         || value.compareTo(U64_MAX) > 0) {
       throw new IllegalArgumentException(field + " must fit u64");
+    }
+  }
+
+  private static void requireOptionalNonZeroU64(
+      final BigInteger value, final String field) {
+    if (value != null) {
+      requireU64(value, field);
+      if (value.signum() == 0) {
+        throw new IllegalArgumentException(field + " must be nonzero");
+      }
     }
   }
 

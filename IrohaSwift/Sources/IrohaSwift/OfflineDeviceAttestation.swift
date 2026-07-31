@@ -1121,9 +1121,9 @@ public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedEr
         case .authorityMismatch:
             return "The embedded transaction authority does not match the expected authority."
         case .transactionHashMismatch:
-            return "The signed transaction bytes do not match the expected transaction hash."
+            return "The transaction payload does not match the expected canonical transaction hash."
         case .statusTransactionHashMismatch:
-            return "The pipeline status transaction hash does not match the persisted signed transaction."
+            return "The pipeline status transaction hash does not match the persisted transaction payload."
         }
     }
 }
@@ -1131,7 +1131,7 @@ public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedEr
 /// Strict inspection of persisted bytes for a signed device-registration transaction.
 ///
 /// This type is intended for crash-safe status-first replay. It retains the exact
-/// submitted bytes, recomputes their transaction hash, and proves that the sole
+/// submitted bytes, recomputes their canonical payload identity, and proves that the sole
 /// embedded instruction carries the expected canonical device registration.
 public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
     public let envelope: SignedTransactionEnvelope
@@ -1178,7 +1178,7 @@ public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
         self.authority = inspected.authority
     }
 
-    /// Require a pipeline/status response to name this exact persisted transaction.
+    /// Require a pipeline/status response to name this persisted transaction payload.
     public func validateStatusTransactionHash(_ hashHex: String) throws {
         guard hashHex.count == 64,
               hashHex == hashHex.lowercased(),

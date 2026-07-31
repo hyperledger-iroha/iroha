@@ -1,0 +1,9 @@
+"use strict";
+
+var _interopRequireDefault = require("@babel/runtime/helpers/interopRequireDefault");
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports["default"] = void 0;
+var _jsx = _interopRequireDefault(require("refractor/jsx"));
+var _default = exports["default"] = _jsx["default"];

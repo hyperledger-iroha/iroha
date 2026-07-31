@@ -79,7 +79,7 @@ final class ConnectFixtureLoader {
 
     init(bundleURL: URL? = nil, filePath: String = #filePath) throws {
         let root = ConnectFixtureLoader.repositoryRoot(from: filePath)
-        let resolvedURL = bundleURL ?? root.appendingPathComponent("docs/source/sdk/swift/readiness/archive/2026-05/connect",
+        let resolvedURL = bundleURL ?? root.appendingPathComponent("specs/sdk/swift/readiness/archive/2026-05/connect",
                                                                    isDirectory: true)
         self.bundleURL = resolvedURL
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {

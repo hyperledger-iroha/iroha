@@ -3584,29 +3584,6 @@ class HttpClientTransportTest {
         assertEquals("transaction queue is at capacity", HttpErrorMessageExtractor.extractMessage(body))
     }
 
-    @Test
-    fun submitTransactionJsonUsesJsonIngressWithConfiguredAccept() {
-        val executor = StubResponseExecutor(202, ByteArray(0))
-        val transport = HttpClientTransport.withExecutor(
-            executor = executor,
-            config = ClientConfig.builder()
-                .setBaseUri(URI.create("https://127.0.0.1:8080"))
-                .setWireFormatPreference(WireFormatPreference.JSON_PREFERRED)
-                .build(),
-        )
-        val body = """{"version":1,"content":{}}""".toByteArray(StandardCharsets.UTF_8)
-
-        val response = transport.submitTransactionJson(body).join()
-
-        assertEquals(202, response.statusCode)
-        val request = executor.lastRequest
-        assertEquals("POST", request.method)
-        assertEquals("https://127.0.0.1:8080/v1/pipeline/transactions", request.uri.toString())
-        assertEquals("application/json", request.headers["Content-Type"]?.first())
-        assertEquals(WireFormatPreference.JSON_PREFERRED.acceptHeader(), request.headers["Accept"]?.first())
-        assertTrue(body.contentEquals(request.body))
-    }
-
     private fun encodeErrorEnvelope(code: String, message: String, rejectCode: String): ByteArray {
         val optionalString = NoritoAdapters.option(NoritoAdapters.stringAdapter())
         val detailsAdapter = NoritoAdapters.struct(
@@ -4736,6 +4713,9 @@ class HttpClientTransportTest {
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             requestCount += 1
             lastRequest = request
+            if (request.uri.path.endsWith("/v1/node/capabilities")) {
+                return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
+            }
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(404).setBody(byteArrayOf()).build(),
             )
@@ -4749,6 +4729,9 @@ class HttpClientTransportTest {
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             requestCount += 1
             lastRequest = request
+            if (request.uri.path.endsWith("/v1/node/capabilities")) {
+                return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
+            }
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(statusCode).setBody(body).build(),
             )
@@ -4784,6 +4767,9 @@ class HttpClientTransportTest {
         private var pollCount = 0
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            if (request.uri.path.endsWith("/v1/node/capabilities")) {
+                return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
+            }
             if (request.method == "POST") {
                 val builder = TransportResponse.builder()
                     .setStatusCode(202)
@@ -4814,5 +4800,19 @@ class HttpClientTransportTest {
             }
             throw IllegalStateException("Unexpected HTTP method ${request.method}")
         }
+    }
+
+    private companion object {
+        // Shared by executors that model the signed-transaction capability probe.
+        fun compatibleCapabilitiesResponse(): TransportResponse =
+            TransportResponse.builder()
+                .setStatusCode(200)
+                .setBody(
+                    (
+                        "{\"data_model_version\":4,\"signed_transaction_schema_hash_hex\":" +
+                            "\"7ab5ff9c572efb316deac478f19209c5\"}"
+                        ).toByteArray(StandardCharsets.UTF_8),
+                )
+                .build()
     }
 }

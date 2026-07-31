@@ -115,7 +115,7 @@
 			GCC_C_LANGUAGE_STANDARD = gnu11;
 			GENERATE_INFOPLIST_FILE = NO;
 			INFOPLIST_FILE = NoritoDemoXcode/Info.plist;
-			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 			LD_RUNPATH_SEARCH_PATHS = (
 				"$(inherited)",
 				"@executable_path/Frameworks",
@@ -137,7 +137,7 @@
 			GCC_C_LANGUAGE_STANDARD = gnu11;
 			GENERATE_INFOPLIST_FILE = NO;
 			INFOPLIST_FILE = NoritoDemoXcode/Info.plist;
-			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 			LD_RUNPATH_SEARCH_PATHS = (
 				"$(inherited)",
 				"@executable_path/Frameworks",
@@ -196,7 +196,7 @@
 			CODE_SIGN_STYLE = Automatic;
 			DEVELOPMENT_TEAM = "";
 			INFOPLIST_FILE = NoritoDemoXcodeTests/Info.plist;
-			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 			LD_RUNPATH_SEARCH_PATHS = (
 				"$(inherited)",
 				"@executable_path/Frameworks",
@@ -215,7 +215,7 @@
 			CODE_SIGN_STYLE = Automatic;
 			DEVELOPMENT_TEAM = "";
 			INFOPLIST_FILE = NoritoDemoXcodeTests/Info.plist;
-			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 			LD_RUNPATH_SEARCH_PATHS = (
 				"$(inherited)",
 				"@executable_path/Frameworks",

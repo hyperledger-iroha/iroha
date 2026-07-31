@@ -1,9 +1,34 @@
 # Roadmap
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## First-release security remediation validation
+
+The source and cross-SDK remediation described in `status.md` is complete.
+Release evidence still requires the serialized build lane to become available,
+then regeneration of the canonical DA reconstruction fixture and unsigned
+OpenAPI development provenance from the final source state, focused Rust
+crate/test validation, and a broad locked offline workspace compile attempt.
+Do not promote the private audit ledger to complete until those source-bound
+commands and the final reconciliation pass are recorded.
+
+## Repository structure follow-ups
+
+- Continue extracting cohesive production modules from the exact source-budget
+  exceptions, prioritizing Kura, Torii routing/API, core state, and other files
+  still above 20,000 lines. Preserve public facades and wire behavior; every
+  split must ratchet the checked-in line count downward.
+- Reduce the data-model frontend and monomorphization surface without exceeding
+  the 41-unit compile baseline or its 44-unit hard limit. Prefer bounded
+  internal modules and derive-family isolation over new crates or feature
+  fragmentation.
+- Move additional SDK/code-generation callers onto the focused
+  `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
+  until every documented and CI caller has migrated, then remove only the
+  adapters whose replacement paths have parity evidence.
 
 ## Taira testnet recovery and offline-cash release closure
 
@@ -56,7 +81,7 @@ evidence.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
-[`docs/source/sumeragi_v2_multilane_closure_ledger.md`](./docs/source/sumeragi_v2_multilane_closure_ledger.md).
+[`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
 TODO are gone; no remaining lane/autoscale/merge/Native multilane TODO was
 found. This is source implementation closure, not release completion.
@@ -76,24 +101,32 @@ semantic request-kernel validation, atomic constant-scan batch cleanup,
 mandatory first-release journaling, and successful backpressure refresh are
 now pinned across restart. Three additional Native latest-index regressions
 reject a legacy V1 pointer filename, a fully unbacked pointer, and
-receipt-absent executed-wire/finality/manifest binding drift. They raise the
-pending G-UNIT execution inventory to 280 exact tests. The fresh 24-test
-queue/configuration slice and 130-test Native AMX slice are green; the complete
-280-test archived execution receipt is still outstanding.
+receipt-absent executed-wire/finality/manifest binding drift. They establish
+the prior 280-test G-UNIT checkpoint. One exact in-flight refinement-kernel
+regression and eight reservation-journal checked-application/adversarial
+regressions now raise the current source inventory to 289 tests. The fresh
+24-test queue/configuration slice and 130-test Native AMX slice are green; the
+exact-source isolated reservation-journal slice is green at `65/65`, and the
+identity-bound in-flight refinement regression is green at `1/1`. The complete
+289-test archived execution receipt is still outstanding.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
-container, QueuePlan journal V4, and reservation journal V5. Schema 3 of the
+container, QueuePlan journal V4, and reservation journal V5. Schema 4 of the
 multilane binding ledger keeps this as
 `layout_only_no_transition_refinement`, source-binds exact payload,
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
-after the four refinement rows. The structural checker, exact 738-test/280
-G-UNIT inventory, 12 fail-closed layout tests, two receipt parser tests, and
-12 Apalache-runner contract controls are fresh and green. The TLC trace
-normalizer also imports on the supported Xcode Python 3.9 runtime again and
-passes all 15 focused tests. No TLC or Apalache execution is claimed by those
-static checks, and the total Rust transition projection remains open.
+after the four refinement rows. The schema-4 structural/source-binding checks,
+exact 738-test production inventory, 289-test G-UNIT source inventory, 12
+fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
+contract controls are fresh and green. The G-UNIT inventory has 290 TSV lines
+and SHA-256
+`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
+The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
+again and passes all 15 focused tests. No TLC or Apalache engine execution is
+claimed by those static checks, and the total Rust transition projection
+remains open.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -130,13 +163,21 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 280 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 289 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
-  `4/4`; it is not the remaining SDK blocker.
+  `ML-API-04`/`G-SDK`. The current harness contract requires OpenAPI `7`,
+  Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases. Its
+  exact fixture SHA-256 is
+  `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`,
+  and its suite-source manifest SHA-256 is
+  `ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
+  Current standalone OpenAPI and installed-package Python runs pass `7/7` and
+  `56/56`, respectively. Those results are not an archived all-surface replay;
+  the remaining SDK blocker is one archived release replay of every required
+  language surface together.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
@@ -195,7 +236,7 @@ remain outside its scope.
 
 The canonical first-release implementation, validation, documentation,
 authority-removal, and rollout-evidence mapping is
-[`docs/source/sorafs/v1_closure_ledger.md`](./docs/source/sorafs/v1_closure_ledger.md).
+[`specs/sorafs/v1_closure_ledger.md`](./specs/sorafs/v1_closure_ledger.md).
 Repository conformance and production promotion are separate: the current
 production aggregate remains blocked with zero recognized lane summaries and
 no trusted foundational envelope. Promotion requires one reviewed production
@@ -2087,7 +2128,7 @@ excluded from the first release.
   `app_attest_public_key_base64` and `device_public_key` must reject, and
   `offline_v2_vectors` must reject noncanonical fixture platform aliases
   instead of mapping them to canonical profiles. The
-  `docs/source/offline_note_v2_attestation.md` contract must describe
+  `specs/offline_note_v2_attestation.md` contract must describe
   structured redemption aliases as rejected. The policy guard's
   `--negative-control-torii-offline-v2-retired-ios-app-attest-profile` and
   `--negative-control-torii-offline-v2-retired-assertion-key-aliases` plus
@@ -5161,7 +5202,7 @@ excluded from the first release.
   guards must preserve the shipped authenticated provider routes while keeping
   only the remaining production service, authoritative repair, and promotion
   surfaces unshipped.
-  `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
+  `fixtures/documentation/sorafs_reference_sdk/` ships a runnable cookbook that validates
   committed fixtures, exercises advert/order/governance signing, checks
   orderbook receipt validation and bundle cross-links, and emits manifest/CAR
   replay outcomes for SDK and release smoke testing. The docs portal SoraFS
@@ -6042,7 +6083,7 @@ excluded from the first release.
   rejecting `x...`, `not-...`, `/...`, `/internal/...`, and canary/evidence/
   local/fixture suffixed fragments so diagnostic command text cannot satisfy an
   exact warning-only exposure check. Those warning-only command scans now cover
-  top-level SoraFS source docs, nested `docs/source/sorafs/**` docs,
+  top-level SoraFS source docs, nested `specs/sorafs/**` docs,
   portal SoraFS docs, and portal i18n SoraFS mirrors, so reserved operator
   commands cannot be published through mirrored runbooks outside the top-level
   plan files. It now also pins deployed AI
@@ -6229,7 +6270,7 @@ excluded from the first release.
   public-route block. The warning-only public
   route scan now shares the broad SoraFS docs path inventory used by reserved
   operator-command checks, covering top-level source docs, nested
-  `docs/source/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
+  `specs/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
   mirrors before mirrored public evidence routes can be published outside the
   reviewed warning context. The same static contract now also pins the
   deployed-only SFM-4c source-entry producer, GAR/moderation/appeal/legal-hold/

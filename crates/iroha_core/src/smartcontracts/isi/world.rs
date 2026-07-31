@@ -10565,7 +10565,7 @@ pub mod isi {
         Ok(())
     }
 
-    // Runtime Upgrade Governance — minimal implementation (see docs/source/runtime_upgrades.md)
+    // Runtime Upgrade Governance — minimal implementation (see specs/runtime_upgrades.md)
     impl Execute for runtime_upgrade::ProposeRuntimeUpgrade {
         fn execute(
             self,

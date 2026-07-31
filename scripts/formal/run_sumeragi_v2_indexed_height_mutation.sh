@@ -4,10 +4,11 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly HEIGHT_MODULE="${FORMAL_DIR}/SumeragiV2ChainLivenessProofs.tla"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_indexed_height_contract.py"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 source_only=false
 if (($# == 1)) && [[ "$1" == "--source-only" ]]; then
@@ -194,11 +195,16 @@ run_pass() {
   local name="$1"
   local config="$2"
   local log="$run_dir/$name.log"
+  local status
+  set +e
   (
     cd "$FORMAL_DIR"
     "${common[@]}" -metadir "$run_dir/$name" \
       -config "$config" SumeragiV2IndexedHeightLivenessMutation.tla
   ) >"$log" 2>&1
+  status=$?
+  set -e
+  sumeragi_v2_tlc_assert_fixed_success "$name" "$log" "$status"
   grep -Fq "Model checking completed. No error has been found." "$log" || {
     cat "$log" >&2
     exit 1
@@ -222,13 +228,24 @@ run_liveness_failure() {
     cat "$log" >&2
     exit 1
   }
-  for marker in "Temporal properties were violated." "Stuttering"; do
-    grep -Fq "$marker" "$log" || {
-      echo "$name mutation missed TLC marker '$marker'" >&2
-      cat "$log" >&2
-      exit 1
-    }
-  done
+  sumeragi_v2_tlc_assert_nonzero_state_space "$name" "$log"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$name" "$log" "Error: Temporal properties were violated."
+  [[ "$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )" == 1 ]] || {
+    echo "$name mutation emitted an ambiguous primary diagnostic" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  grep -Fq "Stuttering" "$log" || {
+    echo "$name mutation missed TLC marker 'Stuttering'" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  sumeragi_v2_tlc_assert_terminal "$name" "$log"
 }
 
 run_pass exact indexed_height_exact.cfg

@@ -149,38 +149,106 @@ final class ToriiDaClientTests: XCTestCase {
         XCTAssertEqual(value.policyHash.literal, canonicalDaHash)
     }
 
-    func testListDaCommitmentsPostsNormalizedRequest() async throws {
+    func testListDaCommitmentsPostsSnapshotCursorRequest() async throws {
         ToriiDaStubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/da/commitments")
             XCTAssertEqual(request.httpMethod, "POST")
             let payload = requestBodyData(from: request)
             XCTAssertFalse(payload.isEmpty)
-            let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
-            let manifestWrapper = json?["manifest_hash"] as? [[Int]]
-            XCTAssertEqual(manifestWrapper?.count, 1)
-            XCTAssertEqual(manifestWrapper?.first, Array(repeating: 0x11, count: 32))
-            XCTAssertEqual(json?["lane_id"] as? Int, 7)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(Set(json.keys), ["limit", "cursor"])
+            XCTAssertEqual(json["limit"] as? Int, 3)
+            let cursor = try XCTUnwrap(json["cursor"] as? [String: Any])
+            let snapshot = try XCTUnwrap(cursor["snapshot"] as? [String: Any])
+            XCTAssertEqual(snapshot["block_height"] as? Int, 10)
+            XCTAssertEqual(snapshot["block_hash"] as? String, canonicalDaHash)
+            let after = try XCTUnwrap(cursor["after"] as? [String: Any])
+            XCTAssertEqual(after["lane_id"] as? Int, 7)
+            XCTAssertEqual(after["sequence"] as? Int, 11)
             let response = try JSONSerialization.data(withJSONObject: [
                 "policies": [
                     "version": 1,
                     "policy_hash": canonicalDaHash,
                     "policies": []
                 ],
-                "commitments": []
+                "commitments": [],
+                "next_cursor": NSNull()
             ], options: [.sortedKeys])
             return (200, ["Content-Type": "application/json"], response)
         }
 
         let client = makeHTTPClient()
-        let request = ToriiDaCommitmentProofRequest(
-            manifestHash: "0x" + String(repeating: "1", count: 64),
-            laneId: 7,
-            epoch: 9,
-            sequence: 11,
-            pagination: ToriiQueryPagination(limit: 3, offset: 1)
+        let request = ToriiDaCommitmentListRequest(
+            limit: 3,
+            cursor: ToriiDaCommitmentListCursor(
+                snapshot: try ToriiDaListSnapshot(
+                    blockHeight: 10,
+                    blockHash: ToriiDaHash(canonicalDaHash)
+                ),
+                after: ToriiDaCommitmentKey(
+                    laneId: 7,
+                    epoch: UInt64.max,
+                    sequence: 11
+                )
+            )
         )
         let response = try await client.listDaCommitments(request)
         XCTAssertEqual(response.commitments.count, 0)
+        XCTAssertNil(response.nextCursor)
+    }
+
+    func testListDaPinIntentsUsesPageEnvelopeAndCursor() async throws {
+        let responseCursor: [String: Any] = [
+            "snapshot": [
+                "block_height": 10,
+                "block_hash": canonicalDaHash
+            ],
+            "after": [
+                "block_height": 9,
+                "index_in_bundle": 2
+            ]
+        ]
+        ToriiDaStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/da/pin-intents")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = requestBodyData(from: request)
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            XCTAssertEqual(Set(json.keys), ["limit", "cursor"])
+            XCTAssertEqual(json["limit"] as? Int, 5)
+            let cursor = try XCTUnwrap(json["cursor"] as? [String: Any])
+            let after = try XCTUnwrap(cursor["after"] as? [String: Any])
+            XCTAssertEqual(after["block_height"] as? Int, 7)
+            XCTAssertEqual(after["index_in_bundle"] as? Int, 1)
+            let response = try JSONSerialization.data(withJSONObject: [
+                "intents": [],
+                "next_cursor": responseCursor
+            ], options: [.sortedKeys])
+            return (200, ["Content-Type": "application/json"], response)
+        }
+
+        let snapshot = try ToriiDaListSnapshot(
+            blockHeight: 10,
+            blockHash: ToriiDaHash(canonicalDaHash)
+        )
+        let request = ToriiDaPinIntentListRequest(
+            limit: 5,
+            cursor: ToriiDaPinIntentListCursor(
+                snapshot: snapshot,
+                after: try ToriiDaCommitmentLocation(
+                    blockHeight: 7,
+                    indexInBundle: 1
+                )
+            )
+        )
+        let response = try await makeHTTPClient().listDaPinIntents(request)
+        XCTAssertTrue(response.intents.isEmpty)
+        XCTAssertEqual(response.nextCursor?.snapshot, snapshot)
+        XCTAssertEqual(response.nextCursor?.after.blockHeight, 9)
+        XCTAssertEqual(response.nextCursor?.after.indexInBundle, 2)
     }
 
     func testProveDaPinIntentHandlesNullResponse() async throws {
@@ -304,6 +372,109 @@ final class ToriiDaClientTests: XCTestCase {
                 from: Data(#"{"valid":true,"error":null,"ignored":1}"#.utf8)
             )
         )
+    }
+
+    func testDaCursorModelsRejectLegacyAndNonCanonicalShapes() throws {
+        XCTAssertThrowsError(
+            try JSONEncoder().encode(ToriiDaCommitmentListRequest(limit: 0))
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaCommitmentListRequest.self,
+                from: Data(#"{"pagination":{"offset":1}}"#.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaCommitmentProofRequest.self,
+                from: Data(#"{"pagination":{"offset":1}}"#.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaPinIntentQueryRequest.self,
+                from: Data(#"{"pagination":{"offset":1}}"#.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaListSnapshot.self,
+                from: Data(
+                    #"{"block_height":0,"block_hash":"\#(canonicalDaHash)"}"#.utf8
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaListSnapshot.self,
+                from: Data(#"{"block_height":1,"block_hash":null}"#.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaListSnapshot.self,
+                from: Data(#"{"block_height":0}"#.utf8)
+            )
+        )
+
+        let legacyCommitmentPage = """
+        {
+          "policies":{"version":1,"policy_hash":"\(canonicalDaHash)","policies":[]},
+          "commitments":[]
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaCommitmentListResponse.self,
+                from: Data(legacyCommitmentPage.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaPinIntentListResponse.self,
+                from: Data("[]".utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaPinIntentListResponse.self,
+                from: Data(#"{"intents":[]}"#.utf8)
+            )
+        )
+    }
+
+    func testDaCursorPreservesFullUnsignedRangeAndExplicitNullHash() throws {
+        let emptySnapshot = try ToriiDaListSnapshot(
+            blockHeight: 0,
+            blockHash: nil
+        )
+        let emptyWire = try JSONEncoder().encode(emptySnapshot)
+        let emptyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: emptyWire) as? [String: Any]
+        )
+        XCTAssertTrue(emptyObject["block_hash"] is NSNull)
+
+        let cursor = ToriiDaCommitmentListCursor(
+            snapshot: try ToriiDaListSnapshot(
+                blockHeight: UInt64.max,
+                blockHash: ToriiDaHash(canonicalDaHash)
+            ),
+            after: ToriiDaCommitmentKey(
+                laneId: UInt32.max,
+                epoch: UInt64.max,
+                sequence: UInt64.max
+            )
+        )
+        let encoded = try JSONEncoder().encode(cursor)
+        let decoded = try JSONDecoder().decode(
+            ToriiDaCommitmentListCursor.self,
+            from: encoded
+        )
+        XCTAssertEqual(decoded, cursor)
+        XCTAssertEqual(decoded.snapshot.blockHeight, UInt64.max)
+        XCTAssertEqual(decoded.after.laneId, UInt32.max)
+        XCTAssertEqual(decoded.after.epoch, UInt64.max)
+        XCTAssertEqual(decoded.after.sequence, UInt64.max)
     }
 
     func testPinIntentAliasUsesServerUtf8ByteBound() throws {

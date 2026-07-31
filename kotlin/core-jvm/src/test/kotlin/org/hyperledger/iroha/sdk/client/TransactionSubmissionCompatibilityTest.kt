@@ -1,0 +1,296 @@
+package org.hyperledger.iroha.sdk.client
+
+import java.net.URI
+import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.util.ArrayDeque
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.tx.SignedTransaction
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+
+class TransactionSubmissionCompatibilityTest {
+    @Test
+    fun `all four transaction ingress forms guard immediately before post`() {
+        val cases = listOf<Pair<String, (HttpClientTransport) -> Unit>>(
+            "/v1/pipeline/transactions" to { client ->
+                client.submitTransaction(sampleTransaction(1)).join()
+            },
+            "/v1/pipeline/transactions" to { client ->
+                client.submitTransactionJson("""{"version":1}""".toByteArray()).join()
+            },
+            "/v1/pipeline/transaction-entrypoints" to { client ->
+                client.submitTransactionEntrypoint(byteArrayOf(1, 2, 3)).join()
+            },
+            "/v1/pipeline/transaction-entrypoints" to { client ->
+                client.submitTransactionEntrypointJson("""{"version":1}""".toByteArray()).join()
+            },
+        )
+
+        for ((postPath, submit) in cases) {
+            val executor = CompatibilityExecutor(listOf(capabilities()))
+            submit(transport(executor))
+
+            assertEquals(
+                listOf(
+                    "GET /v1/node/capabilities",
+                    "POST $postPath",
+                ),
+                executor.requests,
+            )
+        }
+    }
+
+    @Test
+    fun `data model drift fails before transaction post`() {
+        val executor = CompatibilityExecutor(listOf(capabilities(dataModelVersion = 5)))
+
+        val error = assertFailsWith<CompletionException> {
+            transport(executor)
+                .submitTransactionJson("""{"version":1}""".toByteArray())
+                .join()
+        }
+
+        val mismatch = assertIs<ToriiDataModelMismatchException>(error.cause)
+        assertEquals(4, mismatch.expected)
+        assertEquals(5, mismatch.actual)
+        assertEquals(listOf("GET /v1/node/capabilities"), executor.requests)
+    }
+
+    @Test
+    fun `signed transaction schema drift fails before entrypoint post`() {
+        val executor = CompatibilityExecutor(
+            listOf(capabilities(schemaHash = "0".repeat(32))),
+        )
+
+        val error = assertFailsWith<CompletionException> {
+            transport(executor)
+                .submitTransactionEntrypoint(byteArrayOf(1))
+                .join()
+        }
+
+        val mismatch = assertIs<ToriiTransactionSchemaMismatchException>(error.cause)
+        assertEquals(
+            ToriiTransactionCompatibility.EXPECTED_SIGNED_TRANSACTION_SCHEMA_HASH_HEX,
+            mismatch.expected,
+        )
+        assertEquals("0".repeat(32), mismatch.actual)
+        assertEquals(listOf("GET /v1/node/capabilities"), executor.requests)
+    }
+
+    @Test
+    fun `guard fetches fresh capabilities for each submission`() {
+        val executor = CompatibilityExecutor(
+            listOf(
+                capabilities(),
+                capabilities(dataModelVersion = 3),
+            ),
+        )
+        val client = transport(executor)
+
+        client.submitTransactionJson("""{"version":1}""".toByteArray()).join()
+        val error = assertFailsWith<CompletionException> {
+            client.submitTransactionJson("""{"version":1}""".toByteArray()).join()
+        }
+
+        assertIs<ToriiDataModelMismatchException>(error.cause)
+        assertEquals(
+            listOf(
+                "GET /v1/node/capabilities",
+                "POST /v1/pipeline/transactions",
+                "GET /v1/node/capabilities",
+            ),
+            executor.requests,
+        )
+    }
+
+    @Test
+    fun `retry probes fresh capabilities before a second post`() {
+        val executor = CompatibilityExecutor(
+            capabilities = listOf(
+                capabilities(),
+                capabilities(dataModelVersion = 8),
+            ),
+            postStatuses = listOf(503, 202),
+        )
+        val client = transport(
+            executor,
+            retryPolicy = RetryPolicy.builder()
+                .setMaxAttempts(2)
+                .setBaseDelay(Duration.ZERO)
+                .build(),
+        )
+
+        val error = assertFailsWith<CompletionException> {
+            client.submitTransaction(sampleTransaction(5)).join()
+        }
+
+        assertIs<ToriiDataModelMismatchException>(error.cause)
+        assertEquals(
+            listOf(
+                "GET /v1/node/capabilities",
+                "POST /v1/pipeline/transactions",
+                "GET /v1/node/capabilities",
+            ),
+            executor.requests,
+        )
+    }
+
+    @Test
+    fun `queued replay and live submission each use a fresh guard`() {
+        val queue = MemoryPendingQueue()
+        queue.enqueue(sampleTransaction(10))
+        val executor = CompatibilityExecutor(listOf(capabilities()))
+        val client = transport(executor, queue)
+
+        client.submitTransaction(sampleTransaction(11)).join()
+
+        assertEquals(0, queue.size())
+        assertEquals(
+            listOf(
+                "GET /v1/node/capabilities",
+                "POST /v1/pipeline/transactions",
+                "GET /v1/node/capabilities",
+                "POST /v1/pipeline/transactions",
+            ),
+            executor.requests,
+        )
+    }
+
+    @Test
+    fun `queued replay drift retains current transaction and sends no post`() {
+        val queue = MemoryPendingQueue()
+        queue.enqueue(sampleTransaction(20))
+        val executor = CompatibilityExecutor(
+            listOf(capabilities(dataModelVersion = 9)),
+        )
+
+        val error = assertFailsWith<CompletionException> {
+            transport(executor, queue)
+                .submitTransaction(sampleTransaction(21))
+                .join()
+        }
+
+        assertIs<ToriiDataModelMismatchException>(error.cause)
+        assertEquals(1, queue.size())
+        assertEquals(
+            listOf(
+                "GET /v1/node/capabilities",
+                "GET /v1/node/capabilities",
+            ),
+            executor.requests,
+        )
+    }
+
+    private fun transport(
+        executor: HttpTransportExecutor,
+        queue: PendingTransactionQueue? = null,
+        retryPolicy: RetryPolicy = RetryPolicy.none(),
+    ): HttpClientTransport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .setPendingQueue(queue)
+                .setRetryPolicy(retryPolicy)
+                .build(),
+        )
+
+    private fun sampleTransaction(seed: Int): SignedTransaction {
+        val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val authority = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x37), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val payload = TransactionPayload(
+            chainId = String.format("%08x", seed),
+            authority = authority,
+            creationTimeMs = 1_700_000_000_000L + seed,
+            executable = Executable.instructions(emptyList()),
+            timeToLiveMs = 5_000L,
+            nonce = seed.toLong() + 1L,
+            feePayment = FeePaymentIntent.authority(emptyList(), 1L),
+            metadata = mapOf("note" to JsonValue.string("compat-$seed")),
+        )
+        return SignedTransaction(
+            codec.encodeTransaction(payload),
+            ByteArray(64) { (seed + 1).toByte() },
+            TestEd25519Keys.publicKey(seed + 2),
+            codec.schemaName(),
+        )
+    }
+
+    private class CompatibilityExecutor(
+        capabilities: List<String>,
+        postStatuses: List<Int> = listOf(202),
+    ) : HttpTransportExecutor {
+        val requests = mutableListOf<String>()
+        private val capabilityResponses = ArrayDeque(capabilities)
+        private val postResponses = ArrayDeque(postStatuses)
+        private var lastCapability = capabilities.last()
+        private var lastPostStatus = postStatuses.last()
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requests.add("${request.method} ${request.uri.path}")
+            if (request.method == "GET" && request.uri.path.endsWith("/v1/node/capabilities")) {
+                if (capabilityResponses.isNotEmpty()) {
+                    lastCapability = capabilityResponses.removeFirst()
+                }
+                return CompletableFuture.completedFuture(
+                    TransportResponse.builder()
+                        .setStatusCode(200)
+                        .setBody(lastCapability.toByteArray(StandardCharsets.UTF_8))
+                        .build(),
+                )
+            }
+            if (postResponses.isNotEmpty()) {
+                lastPostStatus = postResponses.removeFirst()
+            }
+            return CompletableFuture.completedFuture(
+                TransportResponse.builder()
+                    .setStatusCode(lastPostStatus)
+                    .setBody(byteArrayOf())
+                    .build(),
+            )
+        }
+    }
+
+    private class MemoryPendingQueue : PendingTransactionQueue {
+        private val pending = mutableListOf<SignedTransaction>()
+
+        override fun enqueue(transaction: SignedTransaction) {
+            pending.add(transaction)
+        }
+
+        override fun drain(): List<SignedTransaction> {
+            val drained = pending.toList()
+            pending.clear()
+            return drained
+        }
+
+        override fun size(): Int = pending.size
+
+        override fun telemetryQueueName(): String = "memory"
+    }
+
+    private companion object {
+        fun capabilities(
+            dataModelVersion: Int = ToriiTransactionCompatibility.EXPECTED_DATA_MODEL_VERSION,
+            schemaHash: String =
+                ToriiTransactionCompatibility.EXPECTED_SIGNED_TRANSACTION_SCHEMA_HASH_HEX,
+        ): String =
+            """{"data_model_version":$dataModelVersion,"signed_transaction_schema_hash_hex":"$schemaHash"}"""
+    }
+}

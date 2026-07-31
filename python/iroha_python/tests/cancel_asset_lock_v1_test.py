@@ -137,6 +137,33 @@ def test_bare_cancel_asset_lock_v1_rejects_all_shared_negative_fixtures() -> Non
 
 
 @pytest.mark.parametrize(
+    "fields",
+    [
+        {"escrow_id": _ESCROW_ID},
+        {"expected_remaining_amount": "20"},
+        {
+            "escrow_id": _ESCROW_ID,
+            "expected_remaining_amount": "20",
+            "legacy": {},
+        },
+    ],
+)
+def test_bare_cancel_asset_lock_v1_rejects_missing_and_extra_fields(
+    fields: dict[str, Any],
+) -> None:
+    with pytest.raises(TypeError):
+        cast(Any, CancelAssetLockV1)(**fields)
+
+
+def test_bare_cancel_asset_lock_v1_encoder_requires_exactly_two_arguments() -> None:
+    encode = cast(Any, encode_cancel_asset_lock_v1)
+    with pytest.raises(TypeError):
+        encode(_ESCROW_ID)
+    with pytest.raises(TypeError):
+        encode(_ESCROW_ID, "20", {})
+
+
+@pytest.mark.parametrize(
     "escrow_id",
     [
         _ESCROW_ID[5:69],

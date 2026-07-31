@@ -13,7 +13,7 @@ The samples cover two common targets:
 
 All manifests consume the same Norito JSON configuration file and rely on the
 `RelayDescriptorManifestV1` secret format documented in
-`docs/source/soranet_handshake.md`.
+`specs/soranet_handshake.md`.
 
 ## Directory Layout
 
@@ -92,7 +92,7 @@ All manifests consume the same Norito JSON configuration file and rely on the
      each event into `/var/spool/soranet/audit` so downstream jobs can ship entries
      into the central audit pipeline. Remote hashes are salted so auditors can
      correlate events without exposing client identities. See
-     `docs/source/soranet/relay_audit_pipeline.md` for automation tips.
+     `specs/soranet/relay_audit_pipeline.md` for automation tips.
 3. Place the descriptor manifest (for example copied from
    `config/relay-descriptor-manifest.sample.json`) at
    `/etc/soranet/relay/secrets/relay-descriptor-manifest.json` with

@@ -35,7 +35,7 @@ on:
       - "scripts/tests/package_csharp_native_artifacts_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
-      - "docs/source/sorafs_reference_sdk_plan.md"
+      - "specs/sorafs_reference_sdk_plan.md"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"

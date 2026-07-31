@@ -1872,7 +1872,7 @@ fn minimal_config_snapshot() {
                         "vocab.json",
                         "vocab.txt",
                     ],
-                    inference_token: None,
+                    inference_credential_provider: None,
                 },
             },
             kura: Kura {

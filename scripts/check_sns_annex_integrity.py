@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-DEFAULT_JOBS = "docs/source/sns/regulatory/annex_jobs.json"
-DEFAULT_REPORT_ROOT = "docs/source/sns/reports"
+DEFAULT_JOBS = "specs/sns/regulatory/annex_jobs.json"
+DEFAULT_REPORT_ROOT = "specs/sns/reports"
 
 
 def load_jobs(path: Path) -> List[dict]:
@@ -181,7 +181,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--report-root",
         default=DEFAULT_REPORT_ROOT,
-        help=f"Directory containing localized annex reports (default: {DEFAULT_REPORT_ROOT})",
+        help=f"Directory containing canonical annex reports (default: {DEFAULT_REPORT_ROOT})",
     )
     parser.add_argument(
         "--base-dir",

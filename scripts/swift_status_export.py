@@ -164,8 +164,8 @@ class _HealthAccumulator:
 DEFAULT_HEALTH_THRESHOLDS = HealthThresholds()
 _SEVERITY_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 DEFAULT_READINESS_DOCS = [
-    Path("docs/source/sdk/swift/reproducibility_checklist.md"),
-    Path("docs/source/sdk/swift/support_playbook.md"),
+    Path("specs/sdk/swift/reproducibility_checklist.md"),
+    Path("specs/sdk/swift/support_playbook.md"),
 ]
 
 

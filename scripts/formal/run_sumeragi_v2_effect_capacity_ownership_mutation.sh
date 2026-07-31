@@ -4,8 +4,9 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -58,6 +59,10 @@ run_case() {
   shift 4
   local log="${run_dir}/${label}.log"
   local actual_status
+  local expected_diagnostic
+  local expected_diagnostic_count=0
+  local initial_state_counterexample=0
+  local primary_diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -71,13 +76,58 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  elif [[ "$expected_status" -eq 12 || "$expected_status" -eq 13 ]]; then
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   for marker in "$@"; do
-    if ! grep -Fq "$marker" "$log"; then
-      echo "${label} missed expected marker: ${marker}" >&2
+    case "$marker" in
+      "Invariant "*)
+        expected_diagnostic="Error: ${marker}"
+        if [[ "$marker" == *" is violated by the initial state" ]]; then
+          expected_diagnostic="${expected_diagnostic}:"
+          initial_state_counterexample=1
+        fi
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      "Action property "*|"Temporal properties were violated.")
+        expected_diagnostic="Error: ${marker}"
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      *)
+        if ! grep -Fq "$marker" "$log"; then
+          echo "${label} missed expected marker: ${marker}" >&2
+          cat "$log" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done
+  if [[ "$expected_status" -eq 12 || "$expected_status" -eq 13 ]]; then
+    [[ "$expected_diagnostic_count" -eq 1 ]] || {
+      echo "${label} did not declare exactly one failure diagnostic" >&2
       cat "$log" >&2
       exit 1
+    }
+    primary_diagnostic_count="$(
+      grep -Ec \
+        "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+        "$log" || true
+    )"
+    [[ "$primary_diagnostic_count" -eq 1 ]] || {
+      echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+    if [[ "$initial_state_counterexample" -eq 0 ]]; then
+      sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
     fi
-  done
+  fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }
 
@@ -108,70 +158,89 @@ run_case timeout-sign-retained-and-protected "$OWNERSHIP_MODULE" \
   "depth of the complete state graph search is 5"
 
 readonly CERTIFIED_REQUEST_MODULE="SumeragiV2CertifiedRequestCapacityMutation.tla"
-run_case certified-request-capacity-lost "$CERTIFIED_REQUEST_MODULE" \
+run_case certified-request-retained-owner-drop "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_lost_bug.cfg 12 \
   "TLC2 Version 2.19" \
-  "Invariant CapacityBlockedFetchBRemainsMissing is violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
-  "retainedFetchB = FALSE" \
-  "missingFetchB = FALSE" \
-  "fatal = FALSE" \
-  "3 states generated, 3 distinct states found, 1 states left on queue."
+  "Invariant RetainedFetchBIsNotDropped is violated." \
+  "State 2: <RetainCapacityBlockedFetchB" \
+  "retainedEffects = <<>>"
+
+run_case certified-request-retained-owner-substitution "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_substitute_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBHasExactAuthorityAndTask is violated." \
+  "State 2: <RetainCapacityBlockedFetchB"
+
+run_case certified-request-retained-owner-duplication "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_duplicate_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBHasOneOwner is violated." \
+  "State 2: <RetainCapacityBlockedFetchB"
+
+run_case certified-request-retained-owner-overtake "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_overtake_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBRemainsFifoHead is violated." \
+  "State 2: <RetainCapacityBlockedFetchB"
 
 run_case certified-request-capacity-fatal "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_fatal_bug.cfg 12 \
   "TLC2 Version 2.19" \
   "Invariant CertifiedRequestPressureIsNonfatal is violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
-  "retainedFetchB = FALSE" \
-  "missingFetchB = TRUE" \
-  "fatal = TRUE" \
-  "3 states generated, 3 distinct states found, 1 states left on queue."
+  "State 2: <RetainCapacityBlockedFetchB" \
+  "fatal = TRUE"
 
 run_case certified-response-count-reserve-missing "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_response_count_reserve_bug.cfg 13 \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
+  "State 2: <RetainCapacityBlockedFetchB" \
   "outerGenericCountOwned = TRUE" \
   "responseAAdmitted = FALSE" \
-  "State 3: Stuttering" \
-  "4 states generated, 4 distinct states found, 0 states left on queue."
+  "State 3: Stuttering"
 
 run_case certified-response-byte-reserve-missing "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_response_byte_reserve_bug.cfg 13 \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
+  "State 2: <RetainCapacityBlockedFetchB" \
   "outerGenericBytesOwned = TRUE" \
   "responseAAdmitted = FALSE" \
-  "State 3: Stuttering" \
-  "4 states generated, 4 distinct states found, 0 states left on queue."
+  "State 3: Stuttering"
 
 run_case certified-response-blocked-by-unrelated-retained-debt "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_response_blocked_bug.cfg 13 \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
-  "retainedFetchB = FALSE" \
+  "State 2: <RetainCapacityBlockedFetchB" \
   "unrelatedRetainedT = TRUE" \
   "fatal = FALSE" \
   "State 3: <AdmitOuterTransportResponseA" \
   "responseAQueued = TRUE" \
-  "State 4: Stuttering" \
-  "6 states generated, 6 distinct states found, 0 states left on queue."
+  "State 4: Stuttering"
 
-run_case certified-request-capacity-released-and-retransmitted "$CERTIFIED_REQUEST_MODULE" \
+run_case certified-request-partial-pq-drain "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_partial_pq_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBInstallsExactPQAtomically is violated." \
+  "<AdmitRetainedFetchBAtReleasedCapacity"
+
+run_case certified-request-upgrade-barrier-lost "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant UpgradeFetchBKeepsExactRetryBarrier is violated." \
+  "<AdmitRetainedFetchBAtReleasedCapacity"
+
+run_case certified-request-retained-owner-installs-atomically "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_fixed.cfg 0 \
   "TLC2 Version 2.19" \
-  "Finished computing initial states: 2 distinct states generated" \
+  "Finished computing initial states: 3 distinct states generated" \
   "Model checking completed. No error has been found." \
-  "<EmitHigherAuthorityFetchB" \
+  "<RetainCapacityBlockedFetchB" \
   "<AdmitOuterTransportResponseA" \
   "<ConsumeTransportOnlyResponseA" \
-  "<RetransmitMissingFetchB" \
-  "10 states generated, 10 distinct states found, 0 states left on queue." \
-  "depth of the complete state graph search is 5"
+  "<ReleaseOrdinaryWorkCapacityA" \
+  "<AdmitRetainedFetchBAtReleasedCapacity"
 
 readonly OUTER_TRANSPORT_MODULE="SumeragiV2EffectCapacityOuterTransportMutation.tla"
 run_case outer-certified-response-classification-missing "$OUTER_TRANSPORT_MODULE" \
@@ -331,9 +400,9 @@ run_case retained-oversize-installed "$BATCH_MODULE" \
 echo "[tlc] a persisted TimeoutVote Sign without a retained owner fails immediately"
 echo "[tlc] fair Fetch retirement plus unprotected refill has a capacity-full lasso"
 echo "[tlc] bounded FIFO priority and deterministic reconstructible-Fetch preemption force rank descent and Sign admission"
-echo "[tlc] Q-full Fetch B remains reconstructible Missing debt without partial P/Q/T ownership"
+echo "[tlc] capacity-blocked Fetch B keeps one exact task/authority/lifecycle FIFO owner without partial P/Q installation"
 echo "[tlc] transport-only response A crosses unrelated retained T and releases exact P/Q ownership"
-echo "[tlc] periodic retransmission atomically installs or upgrades Fetch B after request capacity is released"
+echo "[tlc] capacity release atomically installs Fetch B P/Q; new B drains T while an authority upgrade retains its exact retry barrier"
 echo "[tlc] certified responses and payload chunks share one independent per-validator outer transport-completion reserve"
 echo "[tlc] decided/non-Fetch terminating owners retire fairly while full-capacity Fetch remains reconstructible Missing debt"
 echo "[tlc] six permutations enforce stable (class, work_id) preemption and decided-owner exclusion"

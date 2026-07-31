@@ -29,16 +29,16 @@ class DaToriiClient private constructor(builder: Builder) {
         }
 
     fun listCommitments(
-        query: DaModels.CommitmentQuery = DaModels.CommitmentQuery(),
+        request: DaModels.CommitmentListRequest = DaModels.CommitmentListRequest(),
     ): CompletableFuture<DaModels.CommitmentListResponse> =
-        executePost(COMMITMENTS_PATH, query.toJsonBytes()) {
+        executePost(COMMITMENTS_PATH, request.toJsonBytes()) {
             DaJson.parseCommitmentList(DaJson.parse(it, "DA commitment response"), "response")
         }
 
     fun proveCommitment(
-        query: DaModels.CommitmentQuery = DaModels.CommitmentQuery(),
+        request: DaModels.CommitmentProofRequest = DaModels.CommitmentProofRequest(),
     ): CompletableFuture<DaModels.CommitmentProofResponse?> =
-        executePost(COMMITMENTS_PROVE_PATH, query.toJsonBytes()) {
+        executePost(COMMITMENTS_PROVE_PATH, request.toJsonBytes()) {
             DaJson.parseCommitmentProofResponse(
                 DaJson.parse(it, "DA commitment proof response"),
                 "response",
@@ -56,16 +56,16 @@ class DaToriiClient private constructor(builder: Builder) {
         }
 
     fun listPinIntents(
-        query: DaModels.PinIntentQuery = DaModels.PinIntentQuery(),
-    ): CompletableFuture<List<DaModels.PinIntentWithLocation>> =
-        executePost(PIN_INTENTS_PATH, query.toJsonBytes()) {
+        request: DaModels.PinIntentListRequest = DaModels.PinIntentListRequest(),
+    ): CompletableFuture<DaModels.PinIntentListResponse> =
+        executePost(PIN_INTENTS_PATH, request.toJsonBytes()) {
             DaJson.parsePinIntentList(DaJson.parse(it, "DA pin-intent response"), "response")
         }
 
     fun provePinIntent(
-        query: DaModels.PinIntentQuery = DaModels.PinIntentQuery(),
+        request: DaModels.PinIntentQueryRequest = DaModels.PinIntentQueryRequest(),
     ): CompletableFuture<DaModels.PinIntentProof?> =
-        executePost(PIN_INTENTS_PROVE_PATH, query.toJsonBytes()) {
+        executePost(PIN_INTENTS_PROVE_PATH, request.toJsonBytes()) {
             DaJson.parsePinIntentProof(
                 DaJson.parse(it, "DA pin-intent proof response"),
                 "response",

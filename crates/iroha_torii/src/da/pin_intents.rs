@@ -10,8 +10,8 @@ use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::{
     da::{
-        ActiveLaneProofPolicyContext, build_da_pin_intent_proof, pin_store::DaPinStore,
-        verify_da_pin_intent_proof,
+        ActiveLaneProofPolicyContext, MAX_DA_PIN_INTENT_ALIAS_BYTES, build_da_pin_intent_proof,
+        pin_store::DaPinStore, verify_da_pin_intent_proof,
     },
     state::WorldStateSnapshot,
 };
@@ -159,6 +159,7 @@ pub async fn handler_prove_pin_intent(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaPinIntentQueryRequest>,
 ) -> Result<JsonBody<Option<DaPinIntentProof>>, Error> {
+    validate_pin_intent_query_request(&request)?;
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PIN_INTENTS_PROVE)?;
     let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
@@ -185,6 +186,22 @@ fn list_active_from_store(
     let policy_context = ActiveLaneProofPolicyContext::new(nexus);
     list_page_from_store(store, request, snapshot, |entry| {
         pin_intent_lane_is_active(&policy_context, entry)
+    })
+}
+
+fn validate_pin_intent_query_request(request: &DaPinIntentQueryRequest) -> Result<(), Error> {
+    let Some(alias) = request.alias.as_ref() else {
+        return Ok(());
+    };
+    if alias.len() <= MAX_DA_PIN_INTENT_ALIAS_BYTES {
+        return Ok(());
+    }
+    Err(Error::AppQueryValidation {
+        code: "invalid_da_pin_intent_alias",
+        message: format!(
+            "DA pin-intent alias is {} UTF-8 bytes; maximum is {MAX_DA_PIN_INTENT_ALIAS_BYTES}",
+            alias.len()
+        ),
     })
 }
 
@@ -495,6 +512,30 @@ mod tests {
             limit: limit.and_then(NonZeroU64::new),
             cursor: None,
         }
+    }
+
+    #[test]
+    fn pin_intent_query_rejects_alias_over_utf8_byte_bound() {
+        let accepted = DaPinIntentQueryRequest {
+            alias: Some("é".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES / 2)),
+            ..DaPinIntentQueryRequest::default()
+        };
+        validate_pin_intent_query_request(&accepted)
+            .expect("alias at the exact UTF-8 byte bound must be accepted");
+
+        let rejected = DaPinIntentQueryRequest {
+            alias: Some("é".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES / 2 + 1)),
+            ..DaPinIntentQueryRequest::default()
+        };
+        let error = validate_pin_intent_query_request(&rejected)
+            .expect_err("alias above the UTF-8 byte bound must fail closed");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "invalid_da_pin_intent_alias",
+                ..
+            }
+        ));
     }
 
     fn lane_catalog_with_lane_ids(lane_ids: &[u32]) -> LaneCatalog {
@@ -892,16 +933,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_handler_rejects_cursor_bound_to_another_tip() {
-        let app = app_with_pin_intent_bundle(vec![
-            sample_intent(1, 1, 1),
-            sample_intent(2, 1, 2),
-        ]);
-        let JsonBody(first) = super::handler_list_pin_intents(
-            State(app.clone()),
-            NoritoJson(list_request(Some(1))),
-        )
-        .await
-        .expect("first page");
+        let app = app_with_pin_intent_bundle(vec![sample_intent(1, 1, 1), sample_intent(2, 1, 2)]);
+        let JsonBody(first) =
+            super::handler_list_pin_intents(State(app.clone()), NoritoJson(list_request(Some(1))))
+                .await
+                .expect("first page");
         let mut cursor = first.next_cursor.expect("second row requires continuation");
         cursor.snapshot.block_hash =
             Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])));
@@ -1175,10 +1211,7 @@ mod tests {
                 .method(Method::POST)
                 .uri(path)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(vec![
-                    b' ';
-                    DA_PIN_INTENT_REQUEST_MAX_BYTES + 1
-                ]))
+                .body(Body::from(vec![b' '; DA_PIN_INTENT_REQUEST_MAX_BYTES + 1]))
                 .expect("oversized request");
             let response = router.clone().oneshot(request).await.expect("response");
             assert_eq!(

@@ -3,7 +3,7 @@
 // dashboards/mobile_ci.swift
 //
 // Generates a summary of the Swift CI dashboard data. The script expects a JSON
-// payload matching the schema described in docs/source/references/ios_metrics.md.
+// payload matching the schema described in specs/references/ios_metrics.md.
 // Sample data is provided in dashboards/data/mobile_ci.sample.json.
 
 import Foundation

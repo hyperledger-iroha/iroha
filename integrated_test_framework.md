@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Hyperledger Iroha v2 provides a rich set of Iroha Special Instructions (ISI) for domain, asset, permission, and peer management. This document specifies an integration test framework for a 7‑peer network to validate correctness, consensus, and cross‑peer consistency under normal and faulty conditions (tolerating up to 2 faulty peers).
+Hyperledger Iroha 3 provides a rich set of Iroha Special Instructions (ISI) for domain, asset, permission, and peer management. This document specifies an integration test framework for a 7‑peer network to validate correctness, consensus, and cross‑peer consistency under normal and faulty conditions (tolerating up to 2 faulty peers).
 
 These guidelines reflect the recent genesis schema migration to multi-transaction blocks.
 
@@ -37,7 +37,7 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 
 **Data Storage:**
 
-- Kura: Iroha v2 block storage (no RocksDB/Postgres container needed). Configure via `[kura]` (e.g., `store_dir`). Disable snapshots for tests via `[snapshot]`.
+- Kura: Iroha 3 block storage (no RocksDB/Postgres container needed). Configure via `[kura]` (e.g., `store_dir`). Disable snapshots for tests via `[snapshot]`.
 
 **Harness flow:**
 
@@ -114,7 +114,7 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 
 ## Conclusion
 
-This framework leverages the in‑repo Rust harness (`iroha_test_network`) and HTTP‑based client (`iroha::client::Client`) to validate a 7‑peer Iroha v2 network. It emphasizes cross‑peer consistency, realistic fault scenarios, and repeatable setup/teardown suitable for CI. Docker Compose via `iroha_swarm` is available when containerization is preferred.
+This framework leverages the in‑repo Rust harness (`iroha_test_network`) and HTTP‑based client (`iroha::client::Client`) to validate a 7‑peer Iroha 3 network. It emphasizes cross‑peer consistency, realistic fault scenarios, and repeatable setup/teardown suitable for CI. Docker Compose via `iroha_swarm` is available when containerization is preferred.
 
 ## Explorer
 

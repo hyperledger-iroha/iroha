@@ -47,7 +47,7 @@ const FIXTURE_PATH: &str = "crates/iroha_core/tests/fixtures/sorafs_pin_registry
 
 fn main() -> Result<(), Box<dyn Error>> {
     let state = make_state();
-    commit_completion_anchor(&state)?;
+    seed_completion_anchor(&state);
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -534,13 +534,10 @@ fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     }
 }
 
-fn commit_completion_anchor(state: &State) -> Result<(), Box<dyn Error>> {
-    let mut block = state.block(completion_anchor_header());
-    block
-        .block_hashes
-        .push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
-    block.commit()?;
-    Ok(())
+fn seed_completion_anchor(state: &State) {
+    let mut committed_hashes = state.block_hashes.block();
+    committed_hashes.push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
+    committed_hashes.commit_for_tests();
 }
 
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {

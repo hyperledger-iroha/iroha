@@ -4,28 +4,28 @@ This guide outlines the steps required to publish the `NoritoBridge` Swift bindi
 an XCFramework that can be consumed from Swift Package Manager and CocoaPods. The
 workflow keeps the Swift artifacts in lock-step with the Rust crate releases that ship
 Iroha's Norito codec. For end-to-end instructions on consuming the published
-artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
-`docs/connect_swift_integration.md`.
+artifacts inside an app, see the
+[public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
-> **Note:** CI automation for this flow will land once macOS builders with the required
-> Apple tooling come online (tracked in the Release Engineering macOS builder backlog).
-> Until then the steps below must be executed manually on a development Mac.
+The `.github/workflows/mobile_sdk_artifacts.yml` workflow builds, validates,
+packages, and publishes tagged Apple artifacts on macOS. The steps below mirror
+that workflow for local release verification.
 
 ## Prerequisites
 
 - A macOS host with the latest stable Xcode command line tools installed.
 - Rust toolchain that matches the workspace `rust-toolchain.toml`.
-- Swift toolchain 5.7 or newer.
+- Swift toolchain 5.9 or newer.
 - CocoaPods (via Ruby gems) if publishing to the central specs repository.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
 ## Versioning model
 
 1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
-2. Tag the workspace with the release identifier (e.g. `v2.1.0`).
+2. Tag the workspace with the release identifier (`v<version>`).
 3. Use the same semantic version for the Swift package and the CocoaPods podspec.
-4. When the Rust crate increments its version, repeat the process and publish a matching
-   Swift artifact. Versions may include metadata suffixes (e.g. `-alpha.1`) while testing.
+4. When the Rust crate increments its version, publish a matching Swift
+   artifact.
 
 ## Build steps
 
@@ -114,14 +114,10 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
 
 ## CI considerations
 
-- Create a macOS job that runs the packaging script, archives artifacts, and uploads the
-  generated checksum as a workflow output.
-- Gate releases on the Swift demo app building against the freshly produced framework.
-- Store build logs to assist in diagnosing failures.
-
-## Additional automation ideas
-
-- Use `xcodebuild -create-xcframework` directly once all required targets are exposed.
-- Integrate signing/notarisation for distribution outside developer machines.
-- Keep integration tests in lock-step with the packaged version by pinning the SPM
-  dependency to the release tag.
+- `.github/workflows/mobile_sdk_artifacts.yml` runs the packaging and artifact
+  checkers on `macos-14`, uploads the generated archives, and publishes release
+  assets for `v*` tags.
+- `ci/check_swift_samples.sh` gates the Swift demos against the freshly
+  generated framework.
+- Release logs and artifact manifests retain the source fingerprint, ABI,
+  feature state, required-symbol inventory, and per-slice hashes.

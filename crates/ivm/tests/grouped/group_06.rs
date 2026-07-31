@@ -2,6 +2,8 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[path = "../kotodama_documentation_examples.rs"]
+mod kotodama_documentation_examples;
 #[path = "../metal_fallback.rs"]
 mod metal_fallback;
 #[path = "../metal_sha256.rs"]
@@ -20,8 +22,6 @@ mod mock_wsv_instruction_box;
 mod nop;
 #[path = "../norito_nft_decode.rs"]
 mod norito_nft_decode;
-#[path = "../norito_portal_snippets_compile.rs"]
-mod norito_portal_snippets_compile;
 #[path = "../nullifier.rs"]
 mod nullifier;
 #[path = "../nullifier_computation.rs"]

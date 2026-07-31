@@ -2,7 +2,7 @@
 """
 Aggregate Android partner SLA session data.
 
-This helper walks `docs/source/sdk/android/partner_sla_sessions/`, loads each
+This helper walks `specs/sdk/android/partner_sla_sessions/`, loads each
 `session.json`, and writes a concise summary capturing partner counts,
 acknowledgements, blackout windows, and open action items. The output can be
 used directly as the roadmap/status evidence for AND8 coordination.
@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Iterable, List, Mapping, MutableMapping, Sequence, Set
 
 
-DEFAULT_ROOT = Path("docs/source/sdk/android/partner_sla_sessions")
-DEFAULT_RELEASE_PACKET = "docs/source/sdk/android/readiness/archive/ga-2027-10/release_calendar_ga-2027-10.md"
-DEFAULT_ACK_LOG = "docs/source/sdk/android/readiness/archive/ga-2027-10/ack_log_ga-2027-10.md"
-DEFAULT_ACTION_LOG = "docs/source/sdk/android/readiness/partner_sla_action_log.md"
-DEFAULT_SUPPORT_MATRIX = "docs/source/sdk/android/android_support_playbook.md#section-7-5-cutover-and-support-matrix"
-DEFAULT_FORUM_BUNDLE = "docs/source/sdk/android/readiness/partner_enablement_forum/2026-03/"
+DEFAULT_ROOT = Path("specs/sdk/android/partner_sla_sessions")
+DEFAULT_RELEASE_PACKET = "specs/sdk/android/readiness/archive/ga-2027-10/release_calendar_ga-2027-10.md"
+DEFAULT_ACK_LOG = "specs/sdk/android/readiness/archive/ga-2027-10/ack_log_ga-2027-10.md"
+DEFAULT_ACTION_LOG = "specs/sdk/android/readiness/partner_sla_action_log.md"
+DEFAULT_SUPPORT_MATRIX = "specs/sdk/android/android_support_playbook.md#section-7-5-cutover-and-support-matrix"
+DEFAULT_FORUM_BUNDLE = "specs/sdk/android/readiness/partner_enablement_forum/2026-03/"
 
 
 @dataclass(frozen=True)

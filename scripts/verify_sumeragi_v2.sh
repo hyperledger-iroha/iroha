@@ -110,7 +110,7 @@ python3 "$REPO_ROOT/scripts/formal/check_sumeragi_v2_proof_ledger.py" --check-pr
 # Keep the explicit Verus-to-TLA action-name table from silently drifting.
 # This is a spelling/existence guard, not a claim that two independently
 # parsed action bodies are already proved equivalent.
-tla_core="$REPO_ROOT/docs/formal/sumeragi_v2/SumeragiV2Core.tla"
+tla_core="$REPO_ROOT/formal/sumeragi_v2/SumeragiV2Core.tla"
 verus_model="$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"
 for action in \
   BeginLocalProposal BeginPrepare BeginObservePrepare BeginLockCommit \

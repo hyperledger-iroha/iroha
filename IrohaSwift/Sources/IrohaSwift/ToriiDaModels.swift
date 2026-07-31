@@ -167,6 +167,144 @@ public struct ToriiDaHash: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+/// Canonical ledger tip binding a DA list cursor to one immutable view.
+public struct ToriiDaListSnapshot: Codable, Sendable, Equatable, Hashable {
+    public let blockHeight: UInt64
+    public let blockHash: ToriiDaHash?
+
+    private enum CodingKeys: String, CodingKey {
+        case blockHeight = "block_height"
+        case blockHash = "block_hash"
+    }
+
+    public init(blockHeight: UInt64, blockHash: ToriiDaHash?) throws {
+        guard (blockHeight == 0) == (blockHash == nil) else {
+            throw ToriiClientError.invalidPayload(
+                "DA list snapshots require no block hash at height zero and one block hash at nonzero height"
+            )
+        }
+        self.blockHeight = blockHeight
+        self.blockHash = blockHash
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownDaFields(
+            from: decoder,
+            allowed: ["block_height", "block_hash"],
+            type: "DA list snapshot"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.blockHash) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.blockHash,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA list snapshots require an explicit block_hash field"
+                )
+            )
+        }
+        try self.init(
+            blockHeight: container.decode(UInt64.self, forKey: .blockHeight),
+            blockHash: container.decodeIfPresent(ToriiDaHash.self, forKey: .blockHash)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(blockHeight, forKey: .blockHeight)
+        if let blockHash {
+            try container.encode(blockHash, forKey: .blockHash)
+        } else {
+            try container.encodeNil(forKey: .blockHash)
+        }
+    }
+}
+
+/// Canonical `(lane_id, epoch, sequence)` ordering key for DA commitments.
+public struct ToriiDaCommitmentKey: Codable, Sendable, Equatable, Hashable {
+    public let laneId: UInt32
+    public let epoch: UInt64
+    public let sequence: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case laneId = "lane_id"
+        case epoch
+        case sequence
+    }
+
+    public init(laneId: UInt32, epoch: UInt64, sequence: UInt64) {
+        self.laneId = laneId
+        self.epoch = epoch
+        self.sequence = sequence
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownDaFields(
+            from: decoder,
+            allowed: ["lane_id", "epoch", "sequence"],
+            type: "DA commitment key"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        laneId = try container.decode(UInt32.self, forKey: .laneId)
+        epoch = try container.decode(UInt64.self, forKey: .epoch)
+        sequence = try container.decode(UInt64.self, forKey: .sequence)
+    }
+}
+
+/// Forward-only cursor for canonically ordered DA commitments.
+public struct ToriiDaCommitmentListCursor: Codable, Sendable, Equatable, Hashable {
+    public let snapshot: ToriiDaListSnapshot
+    public let after: ToriiDaCommitmentKey
+
+    public init(snapshot: ToriiDaListSnapshot, after: ToriiDaCommitmentKey) {
+        self.snapshot = snapshot
+        self.after = after
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownDaFields(
+            from: decoder,
+            allowed: ["snapshot", "after"],
+            type: "DA commitment-list cursor"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        snapshot = try container.decode(ToriiDaListSnapshot.self, forKey: .snapshot)
+        after = try container.decode(ToriiDaCommitmentKey.self, forKey: .after)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case snapshot
+        case after
+    }
+}
+
+/// Forward-only cursor for canonically ordered DA pin intents.
+public struct ToriiDaPinIntentListCursor: Codable, Sendable, Equatable, Hashable {
+    public let snapshot: ToriiDaListSnapshot
+    public let after: ToriiDaCommitmentLocation
+
+    public init(snapshot: ToriiDaListSnapshot, after: ToriiDaCommitmentLocation) {
+        self.snapshot = snapshot
+        self.after = after
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownDaFields(
+            from: decoder,
+            allowed: ["snapshot", "after"],
+            type: "DA pin-intent-list cursor"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        snapshot = try container.decode(ToriiDaListSnapshot.self, forKey: .snapshot)
+        after = try container.decode(ToriiDaCommitmentLocation.self, forKey: .after)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case snapshot
+        case after
+    }
+}
+
 public enum ToriiDaProofScheme: String, Sendable, Equatable, Hashable {
     case merkleSha256 = "MerkleSha256"
 }

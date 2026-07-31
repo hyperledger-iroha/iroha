@@ -16,7 +16,7 @@ Operators merge these catalogues with their own `operator_jurisdictions` list
 before wiring the resulting `compliance` block into the orchestrator or SDK
 configuration. Attestation manifests remain deployment-specific and should be
 recorded in the `compliance.attestations` array alongside the signed paperwork.
-See `docs/source/soranet/gar_compliance_playbook.md` for the end-to-end workflow
+See `specs/soranet/gar_compliance_playbook.md` for the end-to-end workflow
 and audit procedures.
 
 To refresh the manifest digests:

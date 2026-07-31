@@ -51,7 +51,16 @@ const FIXTURE_PATH: &str = "tests/fixtures/sorafs_pin_registry/snapshot.json";
 #[test]
 fn pin_registry_snapshot_matches_fixture() {
     let state = make_state();
-    commit_completion_anchor(&state);
+    seed_completion_anchor(&state);
+    assert_eq!(
+        state
+            .view()
+            .block_hashes()
+            .first()
+            .map(|hash| *hash.as_ref()),
+        Some(completion_anchor().block_hash),
+        "provider completion anchor must name the exact committed prefix"
+    );
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -844,12 +853,10 @@ fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     }
 }
 
-fn commit_completion_anchor(state: &State) {
-    let mut block = state.block(completion_anchor_header());
-    block
-        .block_hashes
-        .push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
-    block.commit().expect("commit completion anchor");
+fn seed_completion_anchor(state: &State) {
+    let mut committed_hashes = state.block_hashes.block();
+    committed_hashes.push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
+    committed_hashes.commit_for_tests();
 }
 
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {

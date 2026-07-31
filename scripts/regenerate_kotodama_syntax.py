@@ -30,7 +30,7 @@ POLICY_SCHEMA = 1
 
 SEMANTIC_PATH = Path("crates/kotodama_lang/src/semantic.rs")
 IVM_ABI_ACCESS_HINTS_PATH = Path("crates/ivm_abi/src/access_hints.rs")
-GRAMMAR_DOC_PATH = Path("docs/source/kotodama_grammar.md")
+GRAMMAR_DOC_PATH = Path("specs/kotodama_grammar.md")
 TEXTMATE_PATH = Path(
     "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json"
 )

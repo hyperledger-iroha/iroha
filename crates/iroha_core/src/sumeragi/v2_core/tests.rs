@@ -1056,6 +1056,42 @@ fn stale_generation_completion_is_rejected_after_view_change() {
 }
 
 #[test]
+fn queued_timeout_tag_cannot_cross_a_timeout_certificate_view_install() {
+    let context = context();
+    let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(8)).unwrap();
+    let expired_tag = reducer.current_tag();
+    let timeout = tc_without_high(&context, expired_tag.view(), &[1, 2, 3]);
+    let entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: expired_tag,
+                certificate: timeout,
+            })
+            .expect("the timeout certificate acquires the persistence slot"),
+    );
+
+    let entered = acknowledge(&mut reducer, &entry);
+    assert!(matches!(entered.effects(), [Effect::EnterView { .. }]));
+    assert_eq!(reducer.current_tag().view(), expired_tag.view() + 1);
+    assert_ne!(reducer.current_tag().generation(), expired_tag.generation());
+
+    let after_install = reducer.clone();
+    let stale_timeout = reducer
+        .step(Event::TimeoutElapsed { tag: expired_tag })
+        .expect("the queued pre-install timeout is an accepted stale stutter");
+    assert_eq!(
+        stale_timeout.disposition(),
+        StepDisposition::Ignored(IgnoreReason::StaleGeneration)
+    );
+    assert!(stale_timeout.effects().is_empty());
+    assert_eq!(
+        reducer, after_install,
+        "a pre-install timeout tag cannot mint a timeout intent in the fresh view"
+    );
+    assert!(reducer.pending_persistence_record().is_none());
+}
+
+#[test]
 fn stale_persistence_completions_stutter_while_current_append_is_pending() {
     let context = context();
     let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(9)).unwrap();
@@ -4519,6 +4555,53 @@ fn delayed_old_view_commit_qc_still_finalizes_after_timeout_fence() {
             .map(QuorumCertificate::subject),
         Some(subject)
     );
+}
+
+#[test]
+fn decision_persistence_fences_timeout_certificate_view_change() {
+    let context = context();
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(1)), Generation::new(46)).expect("reducer");
+    let original_tag = reducer.current_tag();
+    let subject = Subject::repeat(0x92);
+    let commit = qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]);
+
+    let decision_entry = only_persist(
+        reducer
+            .step(Event::QuorumCertificateReceived {
+                tag: original_tag,
+                certificate: commit.clone(),
+            })
+            .expect("CommitQC atomically acquires Decision persistence"),
+    );
+    assert!(matches!(
+        reducer.pending_persistence_record(),
+        Some(WalRecord::Decision(certificate)) if certificate == &commit
+    ));
+
+    let timeout = tc_without_high(&context, 0, &[1, 2, 3]);
+    let before_timeout = reducer.clone();
+    let busy = reducer
+        .step(Event::TimeoutCertificateReceived {
+            tag: original_tag,
+            certificate: timeout,
+        })
+        .expect("TC cannot invalidate an admitted Decision persistence owner");
+    assert_eq!(
+        busy.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Busy)
+    );
+    assert!(busy.effects().is_empty());
+    assert_eq!(reducer, before_timeout);
+    assert_eq!(reducer.current_tag(), original_tag);
+
+    let decided = acknowledge(&mut reducer, &decision_entry);
+    assert!(decided.effects().iter().any(
+        |effect| matches!(effect, Effect::FetchBody { subject: value, .. } if *value == subject)
+    ));
+    assert_eq!(reducer.durable_state().decision(), Some(&commit));
+    assert_eq!(reducer.current_tag().view(), original_tag.view());
+    assert_eq!(reducer.progress_witness_violation(), None);
 }
 
 #[test]

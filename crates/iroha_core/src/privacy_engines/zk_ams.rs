@@ -95,6 +95,8 @@ pub const ZK_AMS_RING_SIZES_V1: [usize; 3] = [16, 32, 64];
 /// The fixed fields occupy 45 bytes and each canonical `[u8; 32]` response
 /// occupies 65 bytes in this wire profile: `45 + 64 * 65 = 4_205`.
 pub const MAX_ZK_AMS_LSAG_PROOF_BYTES_V1: usize = 4_205;
+/// Closed cumulative allocation ceiling for one bounded LSAG wire decode.
+pub const ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1: usize = 32 * 1024;
 /// Hard cap checked before holder-possession proof decoding.
 pub const MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1: usize = 256;
 /// Hard cap checked before the composed batch proof is decoded.
@@ -682,7 +684,7 @@ fn zk_ams_lsag_decode_limits(ring_size: usize, payload_len: usize) -> norito::De
         ring_size,
         payload_len,
         ring_size,
-        MAX_ZK_AMS_LSAG_PROOF_BYTES_V1.saturating_mul(4),
+        ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1,
         8,
     )
 }

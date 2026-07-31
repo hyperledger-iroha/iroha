@@ -18208,26 +18208,14 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
-        expected_remaining_amount: Optional[QuantityLike] = None,
+        expected_remaining_amount: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Cancel a lock while binding the latest signed remaining amount."""
+        """Cancel a lock with the caller's exact remaining-amount precondition."""
 
-        if expected_remaining_amount is None:
-            escrow = self.get_asset_escrow(
-                escrow_id=escrow_id,
-                authority=authority,
-                private_key=private_key,
-                private_key_hex=private_key_hex,
-            )
-            expected_remaining_amount = escrow.get("remaining_amount")
-            if expected_remaining_amount is None:
-                raise RuntimeError(
-                    "native escrow record omitted remaining_amount"
-                )
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,

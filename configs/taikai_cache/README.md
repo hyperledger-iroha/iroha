@@ -31,5 +31,5 @@ profiles. Each document mirrors the structure consumed by the orchestrator:
 
 Run `cargo xtask sorafs-taikai-cache-bundle` to convert the profiles under
 `profiles/` into governance-ready bundles (JSON + Norito + manifest) under
-`artifacts/taikai_cache`. See `docs/source/taikai_cache_hierarchy.md` for the
+`artifacts/taikai_cache`. See `specs/taikai_cache_hierarchy.md` for the
 rollout playbook.

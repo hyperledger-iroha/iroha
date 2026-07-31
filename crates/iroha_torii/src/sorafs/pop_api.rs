@@ -30,6 +30,7 @@ use sorafs_node::pop_credentials::{
     PopEnrollmentStateV1, PopEnrollmentStatusV1, PopFinalizedRegistryProjectionV1,
     PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerHsm, PopOutboxSubmitOutcomeV1,
     PopRegistrySubmitter, PopWalletKeyWrapper, PopWalletVault,
+    pop_enrollment_recipient_public_key_digest_v1,
 };
 use tokio::sync::Mutex;
 
@@ -114,6 +115,8 @@ pub struct PopCredentialRuntimeConfigV1 {
     pub worker_interval: Duration,
     /// Maximum absolute skew between finalized and runtime clock time.
     pub max_finalized_time_skew: Duration,
+    /// Digest of the exact hybrid enrollment-recipient public key.
+    pub enrollment_recipient_public_key_digest: [u8; 32],
     /// Exact non-secret wallet wrapping-key handle.
     pub wallet_wrapping_key_id: String,
     /// Exact non-secret deployment runtime-provider registry handle.
@@ -135,6 +138,7 @@ impl PopCredentialRuntimeConfigV1 {
             || self.worker_interval > Duration::from_secs(60 * 60)
             || self.max_finalized_time_skew > Duration::from_secs(5 * 60)
             || self.max_finalized_time_skew.subsec_nanos() != 0
+            || self.enrollment_recipient_public_key_digest == [0; 32]
             || self.runtime_provider_registry_revision == 0
             || self.runtime_provider_registry_policy_digest == [0; 32]
         {
@@ -186,6 +190,7 @@ impl From<&iroha_config::parameters::actual::SorafsPopCredentialService>
             wallet_state_dir: value.wallet_state_dir.clone(),
             worker_interval: value.worker_interval,
             max_finalized_time_skew: value.max_finalized_time_skew,
+            enrollment_recipient_public_key_digest: value.enrollment_recipient_public_key_digest,
             wallet_wrapping_key_id: value.wallet_wrapping_key_id.clone(),
             runtime_provider_registry_handle: value.runtime_provider_registry_handle.clone(),
             runtime_provider_registry_revision: value.runtime_provider_registry_revision,
@@ -217,6 +222,7 @@ pub struct PopCredentialRuntimeProviderBindingsV1 {
     issuer_hsm_key_id: String,
     issuer_public_key: [u8; 32],
     enrollment_recipient_key_id: String,
+    enrollment_recipient_public_key_digest: [u8; 32],
     wallet_wrapping_key_id: String,
 }
 
@@ -231,6 +237,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
         issuer_hsm_key_id: String,
         issuer_public_key: [u8; 32],
         enrollment_recipient_key_id: String,
+        enrollment_recipient_public_key_digest: [u8; 32],
         wallet_wrapping_key_id: String,
     ) -> Result<Self, PopCredentialServiceError> {
         if issuer_policy_digest == [0; 32] {
@@ -258,12 +265,18 @@ impl PopCredentialRuntimeProviderBindingsV1 {
                 field: "issuer_public_key",
             });
         }
+        if enrollment_recipient_public_key_digest == [0; 32] {
+            return Err(PopCredentialServiceError::InvalidInput {
+                field: "enrollment_recipient_public_key_digest",
+            });
+        }
         Ok(Self {
             issuer_policy_digest,
             issuer_id,
             issuer_hsm_key_id,
             issuer_public_key,
             enrollment_recipient_key_id,
+            enrollment_recipient_public_key_digest,
             wallet_wrapping_key_id,
         })
     }
@@ -277,6 +290,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
             config.service_policy.issuer_hsm_key_id.clone(),
             config.service_policy.issuer_public_key,
             config.service_policy.enrollment_recipient_key_id.clone(),
+            config.enrollment_recipient_public_key_digest,
             config.wallet_wrapping_key_id.clone(),
         )
     }
@@ -309,6 +323,12 @@ impl PopCredentialRuntimeProviderBindingsV1 {
     #[must_use]
     pub fn enrollment_recipient_key_id(&self) -> &str {
         &self.enrollment_recipient_key_id
+    }
+
+    /// Digest of the exact hybrid enrollment-recipient public key.
+    #[must_use]
+    pub const fn enrollment_recipient_public_key_digest(&self) -> [u8; 32] {
+        self.enrollment_recipient_public_key_digest
     }
 
     /// Exact non-secret wallet wrapping-key handle.
@@ -867,7 +887,8 @@ impl fmt::Debug for PopCredentialToriiRuntimeV1 {
 impl PopCredentialToriiRuntimeV1 {
     /// Construct the runtime through an explicit deployment provider registry.
     ///
-    /// Registry identity, revision, policy digest, and resolved public HSM
+    /// Registry identity, revision, policy digest, resolved public HSM
+    /// identity, enrollment-recipient public key digest, and wallet wrapper
     /// identity are checked before issuer or wallet state is opened.
     pub fn open(
         config: PopCredentialRuntimeConfigV1,
@@ -890,6 +911,12 @@ impl PopCredentialToriiRuntimeV1 {
             || secrets.issuer_hsm.public_key() != config.service_policy.issuer_public_key
         {
             return Err(PopCredentialServiceError::HsmPolicyMismatch);
+        }
+        if pop_enrollment_recipient_public_key_digest_v1(
+            secrets.enrollment_recipient_secret.public(),
+        ) != config.enrollment_recipient_public_key_digest
+        {
+            return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
         }
         if secrets.wallet_key_wrapper.active_key_id() != config.wallet_wrapping_key_id {
             return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
@@ -2521,6 +2548,7 @@ mod tests {
             "pkcs11:pop/issuer:primary".to_owned(),
             issuer_public_key,
             "kms:pop/enrollment:primary".to_owned(),
+            [0x42; 32],
             "kms:pop/wallet:primary".to_owned(),
         )
         .expect("canonical exact bindings");
@@ -2532,6 +2560,10 @@ mod tests {
             bindings.enrollment_recipient_key_id(),
             "kms:pop/enrollment:primary"
         );
+        assert_eq!(
+            bindings.enrollment_recipient_public_key_digest(),
+            [0x42; 32]
+        );
         assert_eq!(bindings.wallet_wrapping_key_id(), "kms:pop/wallet:primary");
 
         let assert_rejected = |issuer_policy_digest,
@@ -2539,6 +2571,7 @@ mod tests {
                                issuer_hsm_key_id: &str,
                                issuer_public_key,
                                enrollment_recipient_key_id: &str,
+                               enrollment_recipient_public_key_digest,
                                wallet_wrapping_key_id: &str,
                                field| {
             assert_eq!(
@@ -2548,6 +2581,7 @@ mod tests {
                     issuer_hsm_key_id.to_owned(),
                     issuer_public_key,
                     enrollment_recipient_key_id.to_owned(),
+                    enrollment_recipient_public_key_digest,
                     wallet_wrapping_key_id.to_owned(),
                 ),
                 Err(PopCredentialServiceError::InvalidInput { field })
@@ -2559,6 +2593,7 @@ mod tests {
             "pkcs11:pop/issuer:primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
+            [0x42; 32],
             "kms:pop/wallet:primary",
             "issuer_policy_digest",
         );
@@ -2573,6 +2608,7 @@ mod tests {
                 "pkcs11:pop/issuer:primary",
                 issuer_public_key,
                 "kms:pop/enrollment:primary",
+                [0x42; 32],
                 "kms:pop/wallet:primary",
                 "issuer_id",
             );
@@ -2584,6 +2620,7 @@ mod tests {
             "pkcs11:pop/issuer:primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
+            [0x42; 32],
             "kms:pop/wallet:primary",
             "issuer_id",
         );
@@ -2613,6 +2650,7 @@ mod tests {
                 issuer_hsm_key_id,
                 issuer_public_key,
                 enrollment_key_id,
+                [0x42; 32],
                 wallet_key_id,
                 field,
             );
@@ -2623,8 +2661,19 @@ mod tests {
             "pkcs11:pop/issuer:primary",
             [0; 32],
             "kms:pop/enrollment:primary",
+            [0x42; 32],
             "kms:pop/wallet:primary",
             "issuer_public_key",
+        );
+        assert_rejected(
+            [0x41; 32],
+            "pop-issuer-runtime-primary",
+            "pkcs11:pop/issuer:primary",
+            issuer_public_key,
+            "kms:pop/enrollment:primary",
+            [0; 32],
+            "kms:pop/wallet:primary",
+            "enrollment_recipient_public_key_digest",
         );
     }
 
@@ -2644,6 +2693,10 @@ mod tests {
         });
         let approver_a = ed25519(0x42);
         let approver_b = ed25519(0x43);
+        let mut rng = OsRng;
+        let enrollment_recipient =
+            HybridKeyPair::generate(&mut rng).expect("enrollment recipient key");
+        let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
         let config = PopCredentialRuntimeConfigV1 {
             service_policy: PopCredentialServicePolicyV1 {
                 version: POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
@@ -2675,15 +2728,14 @@ mod tests {
             wallet_state_dir: root.join("wallet"),
             worker_interval: Duration::from_secs(1),
             max_finalized_time_skew: Duration::from_secs(30),
+            enrollment_recipient_public_key_digest: pop_enrollment_recipient_public_key_digest_v1(
+                enrollment_recipient.public(),
+            ),
             wallet_wrapping_key_id: "kms:pop/wallet:primary".to_owned(),
             runtime_provider_registry_handle: expected_registry_handle.to_owned(),
             runtime_provider_registry_revision: 7,
             runtime_provider_registry_policy_digest: [0x61; 32],
         };
-        let mut rng = OsRng;
-        let enrollment_recipient =
-            HybridKeyPair::generate(&mut rng).expect("enrollment recipient key");
-        let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
         let revision = Arc::new(AtomicU64::new(7));
         let finalized_time_provider = Arc::new(FixedFinalizedTimeProvider {
             calls: AtomicUsize::new(0),
@@ -2778,6 +2830,10 @@ mod tests {
         assert_eq!(
             observed.enrollment_recipient_key_id(),
             config.service_policy.enrollment_recipient_key_id
+        );
+        assert_eq!(
+            observed.enrollment_recipient_public_key_digest(),
+            config.enrollment_recipient_public_key_digest
         );
         assert_eq!(
             observed.wallet_wrapping_key_id(),
@@ -3031,7 +3087,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_startup_rejects_substituted_hsm_and_wallet_identities_before_state() {
+    fn runtime_startup_rejects_substituted_hsm_enrollment_and_wallet_identities_before_state() {
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let (mut config, registry, _) = runtime_fixture(
             temporary.path(),
@@ -3043,6 +3099,28 @@ mod tests {
             config,
             Some(as_runtime_registry(&registry)),
             PopCredentialServiceError::HsmPolicyMismatch,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let mut rng = OsRng;
+        let substituted_enrollment_recipient =
+            HybridKeyPair::generate(&mut rng).expect("substituted enrollment recipient key");
+        registry
+            .secrets
+            .lock()
+            .expect("runtime secrets lock")
+            .as_mut()
+            .expect("runtime secrets")
+            .enrollment_recipient_secret = substituted_enrollment_recipient.secret().clone();
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
         );
 
         let temporary = tempfile::tempdir().expect("temporary runtime root");

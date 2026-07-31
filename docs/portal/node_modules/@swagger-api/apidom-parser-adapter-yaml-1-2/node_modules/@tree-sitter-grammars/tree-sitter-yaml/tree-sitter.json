@@ -1,0 +1,37 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "yaml",
+      "camelcase": "YAML",
+      "title": "YAML",
+      "scope": "source.yaml",
+      "file-types": [
+        "yml",
+        "yaml"
+      ],
+      "highlights": "queries/highlights.scm",
+      "class-name": "TreeSitterYAML",
+      "injection-regex": "^yaml$"
+    }
+  ],
+  "metadata": {
+    "version": "0.7.1",
+    "license": "MIT",
+    "description": "YAML grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Ika",
+        "email": "ikatyang@gmail.com",
+        "url": "https://github.com/ikatyang"
+      },
+      {
+        "name": "Amaan Qureshi",
+        "email": "amaanq12@gmail.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/tree-sitter-grammars/tree-sitter-yaml"
+    }
+  }
+}

@@ -22,16 +22,12 @@ mod zk_proofs_query_integration;
 mod zk_prover_integration;
 #[path = "../zk_roots_handler_integration.rs"]
 mod zk_roots_handler_integration;
-#[path = "../zk_submit_proof_handler_integration.rs"]
-mod zk_submit_proof_handler_integration;
 #[path = "../zk_subrouter_smoke.rs"]
 mod zk_subrouter_smoke;
 #[path = "../zk_verify_batch_handler_integration.rs"]
 mod zk_verify_batch_handler_integration;
 #[path = "../zk_verify_batch_json_handler_integration.rs"]
 mod zk_verify_batch_json_handler_integration;
-#[path = "../zk_verify_handler_integration.rs"]
-mod zk_verify_handler_integration;
 #[path = "../zk_vk_get_integration.rs"]
 mod zk_vk_get_integration;
 #[path = "../zk_vk_list_integration.rs"]

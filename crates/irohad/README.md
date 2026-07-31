@@ -6,7 +6,7 @@ Pass the `--language <code>` flag to override automatic language detection for i
 
 ## Build
 
-**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.62.1), installed and configured.
+**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.93.1), installed and configured.
 
 Optionally, [Docker](https://www.docker.com/) can be used to build images containing any of the provided binaries. Using [Docker buildx](https://docs.docker.com/buildx/working-with-buildx/) is recommended, but not required.
 
@@ -177,7 +177,8 @@ Refer to [generating key pairs with `kagami`](../iroha_kagami/CommandLineHelp.md
 
 ### Configuration file
 
-**Note:** this section is under development. You can track it in the [issue](https://github.com/hyperledger-iroha/iroha-2-docs/issues/392).
+See the current [peer configuration reference](https://docs.iroha.tech/reference/peer-config/params.html)
+for the complete parameter list and examples.
 
 ## Deployment
 
@@ -257,8 +258,9 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       public_key = "<PEER_PUBLIC_KEY>"
       ```
 
-      See `crates/iroha_kagami/CommandLineHelp.md` and `docs/genesis*.md` for
-      additional subcommands such as `validate` and `embed-pop`.
+      See `crates/iroha_kagami/CommandLineHelp.md` and the
+      [public genesis reference](https://docs.iroha.tech/reference/genesis.html)
+      for additional subcommands such as `validate` and `embed-pop`.
 
 5. **Start an Iroha peer.** Point the daemon at your staged configuration (add
    `--sora` when using the Nexus profile from `defaults/nexus/`):

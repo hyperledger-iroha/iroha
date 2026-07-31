@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOCS_DIR="${ROOT_DIR}/docs/source/sdk/android/generated"
+DOCS_DIR="${ROOT_DIR}/specs/sdk/android/generated"
 ARTIFACT_DIR="${ROOT_DIR}/artifacts/android/codegen_docs"
 SUMMARY_SRC="${ROOT_DIR}/artifacts/android/codegen_parity_summary.json"
 

@@ -1376,7 +1376,7 @@ public extension KagemushaRecursiveSpend {
     /// Native reauthenticates every ordered input/opening pair, the exact signed
     /// receiver request and value conservation, then uses a peer-split-only KDF
     /// domain. The returned opening is local secret material.
-    public static func preparePeerSplitChangeV4(
+    static func preparePeerSplitChangeV4(
         inputs: [KagemushaRecursiveSpendSpendableBranchV4],
         recipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         changeAmount: KagemushaScaledAmount,
@@ -1451,7 +1451,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    public static func initSpendV4(
+    static func initSpendV4(
         request: KagemushaRecursiveSpendInitLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendInitResultV4 {
@@ -1477,7 +1477,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    public static func appendSpendV4(
+    static func appendSpendV4(
         request: KagemushaRecursiveSpendAppendLocalRequestV4,
         signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
@@ -1509,7 +1509,7 @@ public extension KagemushaRecursiveSpend {
 
     /// Resumes an append whose secret-bearing local carrier was committed in
     /// encrypted wallet state before process death.
-    public static func appendSpendV4(
+    static func appendSpendV4(
         persistedRequest: KagemushaRecursiveSpendPersistedAppendLocalRequestV4,
         signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
@@ -1542,7 +1542,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    public static func verifySpendV4(
+    static func verifySpendV4(
         request: KagemushaRecursiveSpendVerifyLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendVerifyResultV4 {
@@ -1567,7 +1567,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    public static func buildRedeemV4(
+    static func buildRedeemV4(
         request: KagemushaRecursiveSpendRedeemLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendRedeemBuildResultV4 {

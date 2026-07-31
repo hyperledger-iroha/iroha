@@ -1,0 +1,5871 @@
+{
+  "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
+  "generated_at": "2026-07-15T09:29:42Z",
+  "root": "iroha",
+  "total_refs": 745,
+  "unique_vars": 194,
+  "variables": {
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let request_token = env::var(\"ACTIONS_ID_TOKEN_REQUEST_TOKEN\").map_err(|_| {",
+          "line": 462,
+          "path": "crates/sorafs_orchestrator/src/bin/sorafs_cli.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "ACTIONS_ID_TOKEN_REQUEST_URL": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let raw_url = env::var(\"ACTIONS_ID_TOKEN_REQUEST_URL\").map_err(|_| {",
+          "line": 459,
+          "path": "crates/sorafs_orchestrator/src/bin/sorafs_cli.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "ANDROID_SDK_ROOT": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "if let Some(android_sdk_root) = std::env::var_os(\"ANDROID_SDK_ROOT\") {",
+          "line": 14293,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "BLOCK_DUMP_HEIGHTS": {
+      "counts": {
+        "example": 1
+      },
+      "paths": [
+        {
+          "context": "let height_filter = env::var(\"BLOCK_DUMP_HEIGHTS\").ok().map(|raw| {",
+          "line": 61,
+          "path": "crates/iroha_core/examples/block_dump.rs",
+          "scope": "example"
+        }
+      ]
+    },
+    "BLOCK_DUMP_SUM_ASSET": {
+      "counts": {
+        "example": 1
+      },
+      "paths": [
+        {
+          "context": "let sum_asset = env::var(\"BLOCK_DUMP_SUM_ASSET\")",
+          "line": 50,
+          "path": "crates/iroha_core/examples/block_dump.rs",
+          "scope": "example"
+        }
+      ]
+    },
+    "BLOCK_DUMP_VERBOSE": {
+      "counts": {
+        "example": 1
+      },
+      "paths": [
+        {
+          "context": "let verbose = env::var(\"BLOCK_DUMP_VERBOSE\").is_ok();",
+          "line": 49,
+          "path": "crates/iroha_core/examples/block_dump.rs",
+          "scope": "example"
+        }
+      ]
+    },
+    "CARGO": {
+      "counts": {
+        "prod": 3,
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "let running_under_cargo = std::env::var_os(\"CARGO\").is_some();",
+          "line": 1965,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let cargo = env::var_os(\"CARGO\").unwrap_or_else(|| \"cargo\".into());",
+          "line": 36,
+          "path": "crates/norito_derive/tests/ui.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let cargo = env::var(\"CARGO\").unwrap_or_else(|_| \"cargo\".to_owned());",
+          "line": 137,
+          "path": "integration_tests/src/kagami.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let cargo = env::var_os(\"CARGO\")",
+          "line": 943,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let cargo = env::var_os(\"CARGO\")",
+          "line": 998,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let cargo = env::var_os(\"CARGO\")",
+          "line": 1052,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_attachment_sanitizer": {
+      "counts": {
+        "test": 9
+      },
+      "paths": [
+        {
+          "context": "let mut cmd = Command::new(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 98,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 138,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 163,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 314,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 339,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 362,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 379,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 396,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let sanitizer_path = PathBuf::from(env!(\"CARGO_BIN_EXE_attachment_sanitizer\"));",
+          "line": 414,
+          "path": "crates/iroha_torii/tests/zk_attachments_subprocess.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_iroha": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "env!(\"CARGO_BIN_EXE_iroha\")",
+          "line": 51,
+          "path": "crates/iroha_cli/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_BIN_EXE_iroha\")",
+          "line": 22,
+          "path": "crates/iroha_cli/tests/taikai_policy.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_iroha_monitor": {
+      "counts": {
+        "test": 4
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"CARGO_BIN_EXE_iroha_monitor\").map(PathBuf::from)",
+          "line": 13,
+          "path": "crates/iroha_monitor/tests/attach_render.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var_os(\"CARGO_BIN_EXE_iroha_monitor\").map(PathBuf::from)",
+          "line": 12,
+          "path": "crates/iroha_monitor/tests/http_limits.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var_os(\"CARGO_BIN_EXE_iroha_monitor\").map(PathBuf::from)",
+          "line": 11,
+          "path": "crates/iroha_monitor/tests/invalid_credentials.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var_os(\"CARGO_BIN_EXE_iroha_monitor\").map(PathBuf::from)",
+          "line": 11,
+          "path": "crates/iroha_monitor/tests/smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_kagami": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "let output = Command::new(env!(\"CARGO_BIN_EXE_kagami\"))",
+          "line": 21,
+          "path": "crates/iroha_kagami/tests/common/mod.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let status = Command::new(env!(\"CARGO_BIN_EXE_kagami\"))",
+          "line": 36,
+          "path": "crates/iroha_kagami/tests/pop_embed.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Ok(path) = env::var(\"CARGO_BIN_EXE_kagami\") {",
+          "line": 47,
+          "path": "integration_tests/src/kagami.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_kagami_mock": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let kagami = env!(\"CARGO_BIN_EXE_kagami_mock\");",
+          "line": 33,
+          "path": "mochi/mochi-integration/tests/supervisor.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_koto": {
+      "counts": {
+        "test": 4
+      },
+      "paths": [
+        {
+          "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
+          "line": 6,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
+          "line": 59,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
+          "line": 96,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
+          "line": 135,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_EXE_sorafs_chunk_dump": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let chunk_dump_path = std::env::var(\"CARGO_BIN_EXE_sorafs_chunk_dump\")",
+          "line": 105,
+          "path": "crates/sorafs_chunker/tests/one_gib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_BIN_NAME": {
+      "counts": {
+        "prod": 4
+      },
+      "paths": [
+        {
+          "context": "BuildLine::from_bin_name(env!(\"CARGO_BIN_NAME\"))",
+          "line": 69,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "#[command(name = env!(\"CARGO_BIN_NAME\"), version = env!(\"CARGO_PKG_VERSION\"), author)]",
+          "line": 209,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "BuildLine::from_bin_name(env!(\"CARGO_BIN_NAME\"))",
+          "line": 894,
+          "path": "crates/iroha_kagami/src/genesis/generate.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "resolve_build_line_from_env(env::var(BUILD_LINE_ENV).ok(), env!(\"CARGO_BIN_NAME\"))",
+          "line": 8988,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "CARGO_BUILD_TARGET": {
+      "counts": {
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": ".unwrap_or_else(|_| std::env::var(\"CARGO_BUILD_TARGET\").unwrap_or_default()),",
+          "line": 89,
+          "path": "xtask/src/poseidon_bench.rs",
+          "scope": "tool"
+        },
+        {
+          "context": ".unwrap_or_else(|_| std::env::var(\"CARGO_BUILD_TARGET\").unwrap_or_default()),",
+          "line": 69,
+          "path": "xtask/src/stage1_bench.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "CARGO_CFG_FEATURE": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let parsed_features = env::var(\"CARGO_CFG_FEATURE\")",
+          "line": 28,
+          "path": "crates/build-support/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "CARGO_CFG_TARGET_ARCH": {
+      "counts": {
+        "prod": 2,
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "let arch = env::var(\"CARGO_CFG_TARGET_ARCH\").unwrap_or_else(|_| env::consts::ARCH.to_owned());",
+          "line": 707,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let arch = env::var(\"CARGO_CFG_TARGET_ARCH\").unwrap_or_else(|_| env::consts::ARCH.to_owned());",
+          "line": 743,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "arch: std::env::var(\"CARGO_CFG_TARGET_ARCH\")",
+          "line": 90,
+          "path": "xtask/src/poseidon_bench.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "arch: std::env::var(\"CARGO_CFG_TARGET_ARCH\")",
+          "line": 70,
+          "path": "xtask/src/stage1_bench.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "CARGO_CFG_TARGET_OS": {
+      "counts": {
+        "build": 4,
+        "prod": 2,
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
+          "line": 29,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
+          "line": 33,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_else(|_| env::consts::OS.to_owned());",
+          "line": 708,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_else(|_| env::consts::OS.to_owned());",
+          "line": 744,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
+          "line": 184,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
+          "line": 37,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "os: std::env::var(\"CARGO_CFG_TARGET_OS\")",
+          "line": 92,
+          "path": "xtask/src/poseidon_bench.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "os: std::env::var(\"CARGO_CFG_TARGET_OS\")",
+          "line": 72,
+          "path": "xtask/src/stage1_bench.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "CARGO_FEATURE_CUDA": {
+      "counts": {
+        "build": 2
+      },
+      "paths": [
+        {
+          "context": "let cuda_feature = env::var_os(\"CARGO_FEATURE_CUDA\").is_some();",
+          "line": 27,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "if env::var_os(\"CARGO_FEATURE_CUDA\").is_some()",
+          "line": 25,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CARGO_FEATURE_CUDA_KERNEL": {
+      "counts": {
+        "build": 2
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"CARGO_FEATURE_CUDA_KERNEL\").is_none() {",
+          "line": 17,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let feature_enabled = env::var_os(\"CARGO_FEATURE_CUDA_KERNEL\").is_some();",
+          "line": 17,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CARGO_FEATURE_FASTPQ_GPU": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "let fastpq_gpu_feature = env::var_os(\"CARGO_FEATURE_FASTPQ_GPU\").is_some();",
+          "line": 28,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CARGO_FEATURE_FFI_EXPORT": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let ffi_export = std::env::var_os(\"CARGO_FEATURE_FFI_EXPORT\").is_some();",
+          "line": 201,
+          "path": "crates/build-support/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "CARGO_FEATURE_FFI_IMPORT": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let ffi_import = std::env::var_os(\"CARGO_FEATURE_FFI_IMPORT\").is_some();",
+          "line": 200,
+          "path": "crates/build-support/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "CARGO_MANIFEST_DIR": {
+      "counts": {
+        "bench": 3,
+        "build": 5,
+        "example": 1,
+        "prod": 44,
+        "test": 249,
+        "tool": 4
+      },
+      "paths": [
+        {
+          "context": "let manifest_dir = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\").ok()?);",
+          "line": 84,
+          "path": "crates/build-support/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "fs::read(format!(\"{}/../../{}\", env!(\"CARGO_MANIFEST_DIR\"), path))",
+          "line": 42250,
+          "path": "crates/connect_norito_bridge/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 10,
+          "path": "crates/fastpq_prover/src/poseidon_manifest.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 17,
+          "path": "crates/fastpq_prover/tests/packing.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let metal_path = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/metal/kernels/poseidon2.metal\");",
+          "line": 9,
+          "path": "crates/fastpq_prover/tests/poseidon_manifest_consistency.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let cuda_path = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/cuda/fastpq_cuda.cu\");",
+          "line": 28,
+          "path": "crates/fastpq_prover/tests/poseidon_manifest_consistency.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 24,
+          "path": "crates/fastpq_prover/tests/proof_fixture.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures\")",
+          "line": 27,
+          "path": "crates/fastpq_prover/tests/trace_commitment.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 96,
+          "path": "crates/fastpq_prover/tests/transcript_replay.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 23322,
+          "path": "crates/iroha/src/client.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 219,
+          "path": "crates/iroha/src/sm.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 36,
+          "path": "crates/iroha/tests/sm_signing.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 520,
+          "path": "crates/iroha_cli/src/compute.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 1366,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 14193,
+          "path": "crates/iroha_cli/src/soracloud.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 177,
+          "path": "crates/iroha_cli/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 5792,
+          "path": "crates/iroha_cli/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 4789,
+          "path": "crates/iroha_config/src/parameters/user.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 19293,
+          "path": "crates/iroha_config/src/parameters/user.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/base.toml\");",
+          "line": 10,
+          "path": "crates/iroha_config/tests/autoscale_config.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::set_current_dir(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 15,
+          "path": "crates/iroha_config/tests/fastpq_queue_overrides.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::set_current_dir(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 41,
+          "path": "crates/iroha_config/tests/fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let config_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 3212,
+          "path": "crates/iroha_config/tests/fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let config_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 4259,
+          "path": "crates/iroha_config/tests/fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/base.toml\");",
+          "line": 9,
+          "path": "crates/iroha_config/tests/pipeline_cycle_ceiling.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/base.toml\");",
+          "line": 68,
+          "path": "crates/iroha_config/tests/pipeline_cycle_ceiling.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/base.toml\");",
+          "line": 9,
+          "path": "crates/iroha_config/tests/sccp_route_manifest_aliases.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/base.toml\");",
+          "line": 15,
+          "path": "crates/iroha_config/tests/trusted_peers_pop_validation.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/executor.to\");",
+          "line": 302,
+          "path": "crates/iroha_core/benches/blocks/common.rs",
+          "scope": "bench"
+        },
+        {
+          "context": "std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/executor.to\");",
+          "line": 273,
+          "path": "crates/iroha_core/benches/blocks/common/mod.rs",
+          "scope": "bench"
+        },
+        {
+          "context": "std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/executor.to\");",
+          "line": 101,
+          "path": "crates/iroha_core/benches/validation.rs",
+          "scope": "bench"
+        },
+        {
+          "context": "let manifest_dir = env::var(\"CARGO_MANIFEST_DIR\").ok()?;",
+          "line": 30,
+          "path": "crates/iroha_core/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let mut p = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 19,
+          "path": "crates/iroha_core/examples/generate_parity_fixtures.rs",
+          "scope": "example"
+        },
+        {
+          "context": "let repository_root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1062,
+          "path": "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let repository_root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1113,
+          "path": "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "fs::canonicalize(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\"))?;",
+          "line": 1471,
+          "path": "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let src = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"src\");",
+          "line": 22555,
+          "path": "crates/iroha_core/src/block.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/executor.to\");",
+          "line": 14574,
+          "path": "crates/iroha_core/src/executor.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path1 = std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 16133,
+          "path": "crates/iroha_core/src/executor.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/executor.to\");",
+          "line": 16540,
+          "path": "crates/iroha_core/src/executor.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 2363,
+          "path": "crates/iroha_core/src/smartcontracts/isi/repo.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 2367,
+          "path": "crates/iroha_core/src/smartcontracts/isi/repo.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 25722,
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 25731,
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 42494,
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../iroha_config/iroha_test_config.toml\");",
+          "line": 40255,
+          "path": "crates/iroha_core/src/state.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 55230,
+          "path": "crates/iroha_core/src/state.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 3614,
+          "path": "crates/iroha_core/src/streaming.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut path = std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 12587,
+          "path": "crates/iroha_core/src/tx.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 29,
+          "path": "crates/iroha_core/tests/executor_migration_introspect.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(FIXTURE_PATH);",
+          "line": 116,
+          "path": "crates/iroha_core/tests/pin_registry.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 1475,
+          "path": "crates/iroha_core/tests/pin_registry.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut p = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 35,
+          "path": "crates/iroha_core/tests/snapshots.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 71,
+          "path": "crates/iroha_core/tests/sumeragi_doc_sync.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 57,
+          "path": "crates/iroha_crypto/tests/confidential_keyset_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 55,
+          "path": "crates/iroha_crypto/tests/sm2_fixture_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 19,
+          "path": "crates/iroha_crypto/tests/sm_cli_matrix.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 28,
+          "path": "crates/iroha_data_model/src/bin/axt_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 32,
+          "path": "crates/iroha_data_model/src/bin/axt_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 36,
+          "path": "crates/iroha_data_model/src/bin/axt_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 13,
+          "path": "crates/iroha_data_model/src/bin/qr_stream_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 17,
+          "path": "crates/iroha_data_model/src/bin/qr_stream_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 26,
+          "path": "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let fixture_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 839,
+          "path": "crates/iroha_data_model/src/identifier.rs",
+          "scope": "test"
+        },
+        {
+          "context": "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/transparent_api.rs\"));",
+          "line": 213,
+          "path": "crates/iroha_data_model/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 217,
+          "path": "crates/iroha_data_model/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1039,
+          "path": "crates/iroha_data_model/src/nexus/manifest.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1176,
+          "path": "crates/iroha_data_model/src/nexus/manifest.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1186,
+          "path": "crates/iroha_data_model/src/nexus/manifest.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 849,
+          "path": "crates/iroha_data_model/src/qr_stream.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(FIXTURE_PATH)",
+          "line": 2566,
+          "path": "crates/iroha_data_model/src/soranet/vpn.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 17,
+          "path": "crates/iroha_data_model/src/testing/axt.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 21,
+          "path": "crates/iroha_data_model/src/testing/axt.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 25,
+          "path": "crates/iroha_data_model/src/testing/axt.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 3073,
+          "path": "crates/iroha_data_model/src/transaction/signed.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 3082,
+          "path": "crates/iroha_data_model/src/transaction/signed.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 136,
+          "path": "crates/iroha_data_model/tests/account_address_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let registry_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 33,
+          "path": "crates/iroha_data_model/tests/address_curve_registry.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 50,
+          "path": "crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 15,
+          "path": "crates/iroha_data_model/tests/confidential_wallet_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1355,
+          "path": "crates/iroha_data_model/tests/consensus_roundtrip.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 25,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 29,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 33,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 37,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 41,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 46,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 50,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 54,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 58,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 62,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 203,
+          "path": "crates/iroha_data_model/tests/oracle_reference_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "crates/iroha_data_model/tests/runtime_doc_sync.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 55,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 59,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 63,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 67,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 71,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 75,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 79,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 88,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 92,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 96,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 100,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 104,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 108,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 112,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 116,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 2509,
+          "path": "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/genesis.json\");",
+          "line": 1927,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/genesis.json\");",
+          "line": 5537,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 5563,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 5622,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 5717,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/genesis.json\");",
+          "line": 6606,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/genesis.json\");",
+          "line": 6621,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(relative);",
+          "line": 496,
+          "path": "crates/iroha_i18n/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 19014,
+          "path": "crates/iroha_js_host/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 21392,
+          "path": "crates/iroha_js_host/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let out_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"samples/codec\");",
+          "line": 13,
+          "path": "crates/iroha_kagami/samples/codec/generate.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 35,
+          "path": "crates/iroha_kagami/samples/codec/src/main.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 407,
+          "path": "crates/iroha_kagami/src/codec.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1094,
+          "path": "crates/iroha_kagami/src/genesis/sign.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1120,
+          "path": "crates/iroha_kagami/src/genesis/sign.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1170,
+          "path": "crates/iroha_kagami/src/genesis/sign.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1202,
+          "path": "crates/iroha_kagami/src/genesis/sign.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 2360,
+          "path": "crates/iroha_kagami/src/genesis/sign.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 493,
+          "path": "crates/iroha_kagami/src/localnet.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 3050,
+          "path": "crates/iroha_kagami/src/localnet.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "|| PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")),",
+          "line": 3054,
+          "path": "crates/iroha_kagami/src/localnet.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let repo_root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");",
+          "line": 1138,
+          "path": "crates/iroha_kagami/src/wizard.rs",
+          "scope": "test"
+        },
+        {
+          "context": "const SAMPLE_DIR: &str = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/samples/codec\");",
+          "line": 14,
+          "path": "crates/iroha_kagami/tests/codec.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 10,
+          "path": "crates/iroha_telemetry/tests/drill_log.rs",
+          "scope": "test"
+        },
+        {
+          "context": "const DATA_FILE: &str = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/.iroha_test_network_run.json\");",
+          "line": 30,
+          "path": "crates/iroha_test_network/src/fslock_ports.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 32,
+          "path": "crates/iroha_test_network/src/fslock_ports.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 797,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 264,
+          "path": "crates/iroha_test_samples/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 301,
+          "path": "crates/iroha_test_samples/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../fixtures/da/ingest\");",
+          "line": 8640,
+          "path": "crates/iroha_torii/src/da/tests.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let fixture_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 678,
+          "path": "crates/iroha_torii/src/identifier_resolution.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 14374,
+          "path": "crates/iroha_torii/src/soracloud.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 594,
+          "path": "crates/iroha_torii/src/sorafs/admission.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let matrix_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 26788,
+          "path": "crates/iroha_torii/src/sorafs/api.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 46493,
+          "path": "crates/iroha_torii/src/sorafs/api.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 2113,
+          "path": "crates/iroha_torii/src/zk_attachments.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 135,
+          "path": "crates/iroha_torii/tests/account_address_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 104,
+          "path": "crates/iroha_torii/tests/accounts_portfolio.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1530,
+          "path": "crates/iroha_torii/tests/sorafs_discovery.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 476,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/nexus/config.toml\");",
+          "line": 8351,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/nexus/config.toml\");",
+          "line": 8381,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 15579,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 15586,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\")?);",
+          "line": 37,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\")?);",
+          "line": 172,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 13,
+          "path": "crates/ivm/src/bin/gen_abi_hash_doc.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 64,
+          "path": "crates/ivm/src/bin/gen_header_doc.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 39,
+          "path": "crates/ivm/src/bin/gen_pointer_types_doc.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 544,
+          "path": "crates/ivm/src/bin/gen_syscalls_doc.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 37,
+          "path": "crates/ivm/src/bin/ivm_fixture_export.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let crate_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 22,
+          "path": "crates/ivm/src/bin/ivm_prebuild.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let _crate_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 23,
+          "path": "crates/ivm/src/bin/ivm_predecoder_export.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/predecoder/mixed\")",
+          "line": 227,
+          "path": "crates/ivm/src/predecoder_fixtures.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 23,
+          "path": "crates/ivm/tests/axt_descriptor_builder.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 7,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 60,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
+          "line": 97,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 136,
+          "path": "crates/ivm/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"docs/syscalls.md\");",
+          "line": 3,
+          "path": "crates/ivm/tests/docs_consistency.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 4,
+          "path": "crates/ivm/tests/ivm_abi_doc_sync.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "crates/ivm/tests/ivm_header_doc_sync.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let samples_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../kotodama_lang/src/samples\");",
+          "line": 2535,
+          "path": "crates/ivm/tests/kotodama.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 54,
+          "path": "crates/ivm/tests/kotodama_argument_record.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let crate_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 25,
+          "path": "crates/ivm/tests/kotodama_documentation_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 16,
+          "path": "crates/ivm/tests/numeric_v1_sdk_fixture.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 24,
+          "path": "crates/ivm/tests/numeric_v1_sdk_fixture.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"docs/pointer_abi.md\");",
+          "line": 7,
+          "path": "crates/ivm/tests/pointer_types_doc_generated.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "crates/ivm/tests/pointer_types_doc_generated_ivm_md.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 21,
+          "path": "crates/ivm/tests/repository_ivm_artifacts.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"docs/syscalls.md\");",
+          "line": 7,
+          "path": "crates/ivm/tests/syscalls_doc_generated.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"docs/syscalls.md\");",
+          "line": 8,
+          "path": "crates/ivm/tests/syscalls_doc_sync.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"docs/syscalls.md\");",
+          "line": 11,
+          "path": "crates/ivm/tests/syscalls_gas_names.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let source_dir = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"src\");",
+          "line": 2036,
+          "path": "crates/kotodama_lang/src/diagnostic.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 17,
+          "path": "crates/kotodama_lang/src/doc_consistency.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 224,
+          "path": "crates/kotodama_lang/src/doc_consistency.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 13,
+          "path": "crates/kotodama_lang/tests/documentation_fences.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\").expect(\"CARGO_MANIFEST_DIR not set\"));",
+          "line": 22,
+          "path": "crates/norito/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11,
+          "path": "crates/norito/src/bin/norito_regen_goldens.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let path = std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11207,
+          "path": "crates/norito/src/streaming.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(rel);",
+          "line": 199,
+          "path": "crates/norito/tests/aos_ncb_more_golden.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 16,
+          "path": "crates/norito/tests/json_golden_loader.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 353,
+          "path": "crates/norito/tests/ncb_enum_iter_samples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 387,
+          "path": "crates/norito/tests/ncb_enum_iter_samples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(rel_path);",
+          "line": 553,
+          "path": "crates/norito/tests/ncb_enum_iter_samples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/data/enum_offsets_nested_window.hex\");",
+          "line": 664,
+          "path": "crates/norito/tests/ncb_enum_iter_samples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(rel_path);",
+          "line": 36,
+          "path": "crates/norito/tests/ncb_enum_large_fixture.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 688,
+          "path": "crates/sorafs_car/src/bin/da_reconstruct.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1002,
+          "path": "crates/sorafs_car/src/bin/da_reconstruct.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let committed_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1088,
+          "path": "crates/sorafs_car/src/bin/provider_admission_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 195,
+          "path": "crates/sorafs_car/src/bin/soranet_trustless_verifier.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 309,
+          "path": "crates/sorafs_car/src/reference.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 10,
+          "path": "crates/sorafs_car/tests/capacity_simulation_toolkit.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11,
+          "path": "crates/sorafs_car/tests/da_reconstruct_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 59,
+          "path": "crates/sorafs_car/tests/fetch_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1063,
+          "path": "crates/sorafs_car/tests/fetch_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1191,
+          "path": "crates/sorafs_car/tests/fetch_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 22,
+          "path": "crates/sorafs_car/tests/taikai_viewer_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 13,
+          "path": "crates/sorafs_car/tests/trustless_verifier.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 204,
+          "path": "crates/sorafs_chunker/src/bin/export_vectors.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 7,
+          "path": "crates/sorafs_chunker/tests/backpressure.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 10,
+          "path": "crates/sorafs_chunker/tests/vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 3151,
+          "path": "crates/sorafs_manifest/src/bin/sorafs-validate.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 6860,
+          "path": "crates/sorafs_manifest/src/reference.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1584,
+          "path": "crates/sorafs_manifest/src/reference_ffi.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 16,
+          "path": "crates/sorafs_manifest/tests/orderbook_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 15,
+          "path": "crates/sorafs_manifest/tests/pdp_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 12,
+          "path": "crates/sorafs_manifest/tests/por_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 21,
+          "path": "crates/sorafs_manifest/tests/provider_admission_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 8,
+          "path": "crates/sorafs_manifest/tests/replication_order_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 23,
+          "path": "crates/sorafs_manifest/tests/sorafs_validate_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../fixtures/sorafs_gateway/1.0.0\");",
+          "line": 3326,
+          "path": "crates/sorafs_node/src/gateway.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../fixtures/sorafs_gateway/1.0.0\");",
+          "line": 3688,
+          "path": "crates/sorafs_node/src/gateway.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../fixtures/sorafs_gateway/1.0.0\");",
+          "line": 3708,
+          "path": "crates/sorafs_node/src/gateway.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../fixtures/sorafs_gateway/1.0.0\");",
+          "line": 3751,
+          "path": "crates/sorafs_node/src/gateway.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 133,
+          "path": "crates/sorafs_node/tests/cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 203,
+          "path": "crates/sorafs_node/tests/cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 24,
+          "path": "crates/sorafs_node/tests/gateway.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 134,
+          "path": "crates/sorafs_node/tests/gateway.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 7227,
+          "path": "crates/sorafs_orchestrator/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 7360,
+          "path": "crates/sorafs_orchestrator/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 9027,
+          "path": "crates/sorafs_orchestrator/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 181,
+          "path": "crates/sorafs_orchestrator/tests/orchestrator_parity.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 3866,
+          "path": "crates/sorafs_orchestrator/tests/sorafs_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let base = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 4971,
+          "path": "crates/sorafs_orchestrator/tests/sorafs_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 9,
+          "path": "crates/soranet_pq/tests/kat_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\").expect(\"CARGO_MANIFEST_DIR\"));",
+          "line": 23,
+          "path": "integration_tests/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let mut dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 447,
+          "path": "integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"..\")",
+          "line": 172,
+          "path": "integration_tests/src/binary_resolver.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 162,
+          "path": "integration_tests/src/kagami.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../fixtures/sorafs_gateway/capability_refusal\")",
+          "line": 157,
+          "path": "integration_tests/src/sorafs_gateway_capability_refusal.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1392,
+          "path": "integration_tests/src/sorafs_gateway_conformance.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 261,
+          "path": "integration_tests/tests/asset.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 10,
+          "path": "integration_tests/tests/fast_dsl_build.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 19,
+          "path": "integration_tests/tests/genesis_json.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let genesis_path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../defaults/genesis.json\");",
+          "line": 38,
+          "path": "integration_tests/tests/genesis_json.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 70,
+          "path": "integration_tests/tests/iroha_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 48,
+          "path": "integration_tests/tests/ivm_header_decode.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 27,
+          "path": "integration_tests/tests/ivm_header_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 74,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 121,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 170,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11,
+          "path": "integration_tests/tests/nexus/cbdc_rollout_bundle.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 27,
+          "path": "integration_tests/tests/nexus/cbdc_whitelist.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 19,
+          "path": "integration_tests/tests/nexus/global_commit.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 13,
+          "path": "integration_tests/tests/nexus/lane_registry.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 35,
+          "path": "integration_tests/tests/norito_burn_fixture.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 36,
+          "path": "integration_tests/tests/repo.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 442,
+          "path": "integration_tests/tests/streaming/mod.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 1572,
+          "path": "mochi/mochi-core/src/compose.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 1576,
+          "path": "mochi/mochi-core/src/compose.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 1580,
+          "path": "mochi/mochi-core/src/compose.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 1584,
+          "path": "mochi/mochi-core/src/compose.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 1588,
+          "path": "mochi/mochi-core/src/compose.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let manifest_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 412,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let manifest_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 934,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 6346,
+          "path": "mochi/mochi-core/src/torii.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 6361,
+          "path": "mochi/mochi-core/src/torii.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 6376,
+          "path": "mochi/mochi-core/src/torii.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 6391,
+          "path": "mochi/mochi-core/src/torii.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/torii_replay\");",
+          "line": 652,
+          "path": "mochi/mochi-integration/src/mock_torii.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let fixture_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/torii_replay\");",
+          "line": 168,
+          "path": "mochi/mochi-integration/tests/supervisor.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 118,
+          "path": "mochi/mochi-ui-egui/src/gui.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 122,
+          "path": "mochi/mochi-ui-egui/src/gui.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 126,
+          "path": "mochi/mochi-ui-egui/src/gui.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 130,
+          "path": "mochi/mochi-ui-egui/src/gui.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 134,
+          "path": "mochi/mochi-ui-egui/src/gui.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let crate_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 6,
+          "path": "tools/soranet-handshake-harness/tests/fixtures_verify.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let crate_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 77,
+          "path": "tools/soranet-handshake-harness/tests/interop_parity.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let crate_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
+          "line": 173,
+          "path": "tools/soranet-handshake-harness/tests/perf_gate.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 362,
+          "path": "xtask/src/bin/control_plane_mock.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 12224,
+          "path": "xtask/src/main.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 29,
+          "path": "xtask/src/sorafs/gateway_fixture.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 33,
+          "path": "xtask/src/sorafs/gateway_fixture.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 7,
+          "path": "xtask/tests/address_vectors.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 7,
+          "path": "xtask/tests/android_dashboard_parity_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 18,
+          "path": "xtask/tests/codec_rans_tables.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "xtask/tests/da_proof_bench.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 7,
+          "path": "xtask/tests/iso_bridge_lint.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "xtask/tests/ministry_agenda.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 6,
+          "path": "xtask/tests/sns_catalog_verify.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 14,
+          "path": "xtask/tests/soradns_cli.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "xtask/tests/sorafs_fetch_fixture.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11,
+          "path": "xtask/tests/soranet_bug_bounty.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 12,
+          "path": "xtask/tests/soranet_gateway_billing.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let repo_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 30,
+          "path": "xtask/tests/soranet_gateway_billing_m0.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11,
+          "path": "xtask/tests/soranet_gateway_m1.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 25,
+          "path": "xtask/tests/soranet_gateway_m2.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 10,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 77,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 131,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 202,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 306,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 356,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let workspace_root = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 489,
+          "path": "xtask/tests/soranet_pop_template.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 11,
+          "path": "xtask/tests/streaming_bundle_check.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 8,
+          "path": "xtask/tests/streaming_entropy_bench.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_PKG_NAME": {
+      "counts": {
+        "prod": 3,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "crate_name: env!(\"CARGO_PKG_NAME\"),",
+          "line": 691,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "crate_name: env!(\"CARGO_PKG_NAME\").to_owned(),",
+          "line": 706,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "|| identity.crate_name != env!(\"CARGO_PKG_NAME\")",
+          "line": 773,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let crate_name = env::var(\"CARGO_PKG_NAME\").unwrap_or_else(|_| \"norito_derive\".to_owned());",
+          "line": 23,
+          "path": "crates/norito_derive/tests/ui.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CARGO_PKG_VERSION": {
+      "counts": {
+        "prod": 19,
+        "test": 3,
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "map.insert(\"version\".into(), JsonValue::from(env!(\"CARGO_PKG_VERSION\")));",
+          "line": 3584,
+          "path": "crates/iroha/src/client.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "metadata.insert(\"version\".into(), Value::from(env!(\"CARGO_PKG_VERSION\")));",
+          "line": 5708,
+          "path": "crates/iroha_cli/src/commands/sorafs.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "#[command(name = env!(\"CARGO_BIN_NAME\"), version = env!(\"CARGO_PKG_VERSION\"), author)]",
+          "line": 209,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let client_version = env!(\"CARGO_PKG_VERSION\");",
+          "line": 1005,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "&[(\"version\", env!(\"CARGO_PKG_VERSION\"))],",
+          "line": 9702,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let expected_version = env!(\"CARGO_PKG_VERSION\");",
+          "line": 601,
+          "path": "crates/iroha_cli/tests/cli_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let mut preimage = env!(\"CARGO_PKG_VERSION\").as_bytes().to_vec();",
+          "line": 1260,
+          "path": "crates/iroha_core/src/bin/pk2_bridge_finality_verify.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let mut build_preimage = env!(\"CARGO_PKG_VERSION\").as_bytes().to_vec();",
+          "line": 1493,
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "metadata.insert(\"version\".into(), Value::from(env!(\"CARGO_PKG_VERSION\")));",
+          "line": 4747,
+          "path": "crates/iroha_js_host/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "env!(\"CARGO_PKG_VERSION\")",
+          "line": 478,
+          "path": "crates/iroha_kagami/src/genesis/generate.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "writeln!(writer, \"kagami_version: {}\", env!(\"CARGO_PKG_VERSION\"))?;",
+          "line": 82,
+          "path": "crates/iroha_kagami/src/verify.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "crate_version: env!(\"CARGO_PKG_VERSION\"),",
+          "line": 692,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "crate_version: env!(\"CARGO_PKG_VERSION\").to_owned(),",
+          "line": 707,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "|| identity.crate_version != env!(\"CARGO_PKG_VERSION\")",
+          "line": 774,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "version: env!(\"CARGO_PKG_VERSION\").to_owned(),",
+          "line": 5467,
+          "path": "crates/iroha_telemetry/src/metrics.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_PKG_VERSION\")",
+          "line": 267,
+          "path": "crates/iroha_telemetry/src/ws.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "version = env!(\"CARGO_PKG_VERSION\"),",
+          "line": 1129,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "version = env!(\"CARGO_PKG_VERSION\"),",
+          "line": 9929,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "const COMPILER_FINGERPRINT: &str = concat!(\"kotodama_lang/\", env!(\"CARGO_PKG_VERSION\"));",
+          "line": 117,
+          "path": "crates/kotodama_lang/src/compiler.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "version = env!(\"CARGO_PKG_VERSION\"),",
+          "line": 130,
+          "path": "crates/musubi/src/cli.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "Value::from(env!(\"CARGO_PKG_VERSION\")),",
+          "line": 1118,
+          "path": "crates/sorafs_car/src/bin/sorafs_fetch.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "const SORAFS_CLI_VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
+          "line": 124,
+          "path": "crates/sorafs_orchestrator/src/bin/sorafs_cli.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "const VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
+          "line": 68,
+          "path": "tools/sora-vpn-helper/src/main.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "tool_version: format!(\"telemetry_schema_diff {}\", env!(\"CARGO_PKG_VERSION\")),",
+          "line": 252,
+          "path": "tools/telemetry-schema-diff/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "CARGO_PRIMARY_PACKAGE": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"CARGO_PRIMARY_PACKAGE\").is_some() {",
+          "line": 6,
+          "path": "crates/soranet_pq/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CARGO_TARGET_DIR": {
+      "counts": {
+        "prod": 5,
+        "test": 6,
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "let target_dir = resolve_target_dir(&repo_root, env::var(\"CARGO_TARGET_DIR\").ok().as_deref());",
+          "line": 3076,
+          "path": "crates/iroha_kagami/src/localnet.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "if let Ok(path) = std::env::var(\"CARGO_TARGET_DIR\") {",
+          "line": 1057,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Ok(path) = std::env::var(\"CARGO_TARGET_DIR\") {",
+          "line": 1394,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Some(target_root) = std::env::var_os(\"CARGO_TARGET_DIR\").map(PathBuf::from)",
+          "line": 81,
+          "path": "integration_tests/src/binary_resolver.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Some(target_dir) = std::env::var_os(\"CARGO_TARGET_DIR\") {",
+          "line": 234,
+          "path": "integration_tests/src/binary_resolver.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Ok(path) = env::var(\"CARGO_TARGET_DIR\") {",
+          "line": 85,
+          "path": "integration_tests/src/kagami.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Ok(path) = env::var(\"CARGO_TARGET_DIR\") {",
+          "line": 113,
+          "path": "integration_tests/src/kagami.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let target_root = env::var_os(\"CARGO_TARGET_DIR\")",
+          "line": 460,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let target_root = env::var_os(\"CARGO_TARGET_DIR\")",
+          "line": 971,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let target_root = env::var_os(\"CARGO_TARGET_DIR\")",
+          "line": 1025,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let target_root = env::var_os(\"CARGO_TARGET_DIR\")",
+          "line": 1079,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "if let Ok(dir) = std::env::var(\"CARGO_TARGET_DIR\") {",
+          "line": 783,
+          "path": "xtask/src/kagami_profiles.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "if let Ok(dir) = env::var(\"CARGO_TARGET_DIR\") {",
+          "line": 391,
+          "path": "xtask/src/mochi.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "CARGO_WORKSPACE_DIR": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Some(workspace_dir) = option_env!(\"CARGO_WORKSPACE_DIR\") {",
+          "line": 55233,
+          "path": "crates/iroha_core/src/state.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "CONNECT_NORITO_SOURCE_REVISION": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "env::var(\"CONNECT_NORITO_SOURCE_REVISION\").unwrap_or_else(|_| \"unknown\".to_owned());",
+          "line": 47,
+          "path": "crates/connect_norito_bridge/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CRYPTO_SM_INTRINSICS": {
+      "counts": {
+        "bench": 1
+      },
+      "paths": [
+        {
+          "context": "let raw_policy = match std::env::var(\"CRYPTO_SM_INTRINSICS\") {",
+          "line": 191,
+          "path": "crates/iroha_crypto/benches/sm_perf.rs",
+          "scope": "bench"
+        }
+      ]
+    },
+    "CUDA_HOME": {
+      "counts": {
+        "build": 5
+      },
+      "paths": [
+        {
+          "context": "env::var_os(\"CUDA_HOME\")",
+          "line": 215,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "for root in env::var_os(\"CUDA_HOME\")",
+          "line": 94,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let root = env::var_os(\"CUDA_HOME\")",
+          "line": 116,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "for root in env::var_os(\"CUDA_HOME\")",
+          "line": 100,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let root = env::var_os(\"CUDA_HOME\")",
+          "line": 122,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CUDA_PATH": {
+      "counts": {
+        "build": 5
+      },
+      "paths": [
+        {
+          "context": ".or_else(|| env::var_os(\"CUDA_PATH\"))",
+          "line": 216,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": ".chain(env::var_os(\"CUDA_PATH\"))",
+          "line": 96,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": ".or_else(|| env::var_os(\"CUDA_PATH\"))",
+          "line": 117,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": ".chain(env::var_os(\"CUDA_PATH\"))",
+          "line": 102,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": ".or_else(|| env::var_os(\"CUDA_PATH\"))",
+          "line": 123,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "CXX": {
+      "counts": {
+        "build": 4
+      },
+      "paths": [
+        {
+          "context": "env::var_os(\"CXX\").is_some()",
+          "line": 264,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "env::var_os(\"CXX\").is_some()",
+          "line": 149,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "env::var_os(\"CXX\").is_some()",
+          "line": 303,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "env::var_os(\"CXX\").is_some()",
+          "line": 157,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "DATASPACE_ADVERSARIAL_ARTIFACT_DIR": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(dir) = std::env::var(\"DATASPACE_ADVERSARIAL_ARTIFACT_DIR\") {",
+          "line": 1034,
+          "path": "integration_tests/tests/nexus/cross_lane.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "DOCS_RS": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"DOCS_RS\").is_some() {",
+          "line": 6,
+          "path": "crates/norito/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "ENUM_BENCH_N": {
+      "counts": {
+        "bench": 1
+      },
+      "paths": [
+        {
+          "context": "let n: usize = std::env::var(\"ENUM_BENCH_N\")",
+          "line": 75,
+          "path": "crates/norito/benches/enum_packed_bench.rs",
+          "scope": "bench"
+        }
+      ]
+    },
+    "FASTPQ_METAL_LIB": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "option_env!(\"FASTPQ_METAL_LIB\")",
+          "line": 891,
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "option_env!(\"FASTPQ_METAL_LIB\")",
+          "line": 2680,
+          "path": "crates/fastpq_prover/src/metal.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "FASTPQ_SKIP_GPU_BUILD": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"FASTPQ_SKIP_GPU_BUILD\").is_some() {",
+          "line": 47,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "FASTPQ_UPDATE_FIXTURES": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "fixture_update_requested_from(std::env::var_os(\"FASTPQ_UPDATE_FIXTURES\").as_deref())",
+          "line": 14,
+          "path": "crates/fastpq_prover/tests/common/mod.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "GENESIS_DEBUG_MODE": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(mode) = std::env::var(\"GENESIS_DEBUG_MODE\") {",
+          "line": 15,
+          "path": "crates/iroha_test_network/examples/genesis_debug.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "GENESIS_DEBUG_PAYLOAD": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let payload = std::env::var(\"GENESIS_DEBUG_PAYLOAD\")",
+          "line": 134,
+          "path": "crates/iroha_test_network/examples/genesis_debug.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "GITHUB_STEP_SUMMARY": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "let summary_target = env::var_os(\"GITHUB_STEP_SUMMARY\").map(PathBuf::from);",
+          "line": 32,
+          "path": "crates/iroha_crypto/src/bin/gost_perf_check.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "summary_target: env::var_os(\"GITHUB_STEP_SUMMARY\").map(PathBuf::from),",
+          "line": 205,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "GIT_COMMIT_HASH": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "option_env!(\"GIT_COMMIT_HASH\")",
+          "line": 1262,
+          "path": "crates/iroha_core/src/bin/pk2_bridge_finality_verify.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "option_env!(\"GIT_COMMIT_HASH\")",
+          "line": 1495,
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "GPUZSTD_CUDA_ARCH": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if let Some(arch_flag) = env::var_os(\"GPUZSTD_CUDA_ARCH\") {",
+          "line": 50,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "GPUZSTD_CUDA_REQUIRE": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"GPUZSTD_CUDA_REQUIRE\").is_some() {",
+          "line": 325,
+          "path": "crates/gpuzstd_cuda/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"GPUZSTD_CUDA_REQUIRE\").is_none() {",
+          "line": 756,
+          "path": "crates/gpuzstd_cuda/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var_os(\"GPUZSTD_CUDA_REQUIRE\").is_some()",
+          "line": 723,
+          "path": "crates/norito/src/core/gpu_zstd.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "GPUZSTD_CUDA_SKIP_BUILD": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"GPUZSTD_CUDA_SKIP_BUILD\").is_some() {",
+          "line": 20,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "HOME": {
+      "counts": {
+        "prod": 2,
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "env::var_os(\"HOME\").map(PathBuf::from)",
+          "line": 51,
+          "path": "crates/iroha/src/config.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "if let Some(home) = std::env::var_os(\"HOME\") {",
+          "line": 14297,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "if let Some(home) = env::var_os(\"HOME\") {",
+          "line": 2239,
+          "path": "tools/sora-vpn-helper/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "HOST_CXX": {
+      "counts": {
+        "build": 4
+      },
+      "paths": [
+        {
+          "context": "|| env::var_os(\"HOST_CXX\").is_some()",
+          "line": 265,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "|| env::var_os(\"HOST_CXX\").is_some()",
+          "line": 150,
+          "path": "crates/gpuzstd_cuda/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "|| env::var_os(\"HOST_CXX\").is_some()",
+          "line": 304,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "|| env::var_os(\"HOST_CXX\").is_some()",
+          "line": 158,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "IROHA_ACCOUNT_ID": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "account_id: std::env::var(\"IROHA_ACCOUNT_ID\").ok(),",
+          "line": 267,
+          "path": "mochi/mochi-core/src/bootstrap.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_ALLOW_NET": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": ".or_else(|_| std::env::var(\"IROHA_ALLOW_NET\"))",
+          "line": 7833,
+          "path": "crates/izanami/src/chaos.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_API_BASE": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "api_base: std::env::var(\"IROHA_API_BASE\")",
+          "line": 260,
+          "path": "mochi/mochi-core/src/bootstrap.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_CHAIN_ID": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "chain_id: std::env::var(\"IROHA_CHAIN_ID\")",
+          "line": 265,
+          "path": "mochi/mochi-core/src/bootstrap.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_CONF_GAS_SEED": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_CONF_GAS_SEED\").ok()",
+          "line": 78,
+          "path": "crates/iroha_test_samples/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_DA_SPOOL_DIR": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"IROHA_DA_SPOOL_DIR\").map(std::path::PathBuf::from)",
+          "line": 26466,
+          "path": "crates/iroha_core/src/state.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_DEBUG_GENESIS_PATH": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "let path = env::var(\"IROHA_DEBUG_GENESIS_PATH\")",
+          "line": 3456,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = env::var(\"IROHA_DEBUG_GENESIS_PATH\")",
+          "line": 3517,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = env::var(\"IROHA_DEBUG_GENESIS_PATH\")",
+          "line": 3548,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_DEBUG_SIGNED_GENESIS_PATH": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let path = env::var(\"IROHA_DEBUG_SIGNED_GENESIS_PATH\")",
+          "line": 3485,
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_DUMP_MANIFEST_JSON": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"IROHA_DUMP_MANIFEST_JSON\").is_some() {",
+          "line": 1172,
+          "path": "crates/iroha_data_model/src/nexus/manifest.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_GENESIS_FILE": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let genesis_path = std::env::var(\"IROHA_GENESIS_FILE\")",
+          "line": 21,
+          "path": "crates/iroha_core/tests/check_genesis_sig.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_GENESIS_PUBLIC_KEY": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let pub_key_str = std::env::var(\"IROHA_GENESIS_PUBLIC_KEY\").unwrap_or_else(|_| {",
+          "line": 23,
+          "path": "crates/iroha_core/tests/check_genesis_sig.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_GIT_COMMIT_HASH": {
+      "counts": {
+        "build": 1,
+        "prod": 5,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let commit = env::var(\"IROHA_GIT_COMMIT_HASH\").ok()?;",
+          "line": 20,
+          "path": "crates/iroha_core/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "const BUILD_SOURCE_ID: Option<&str> = option_env!(\"IROHA_GIT_COMMIT_HASH\");",
+          "line": 58,
+          "path": "crates/iroha_core/src/bin/pk2_bridge_finality_verify.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "assert_eq!(embedded, option_env!(\"IROHA_GIT_COMMIT_HASH\"));",
+          "line": 2064,
+          "path": "crates/iroha_core/src/bin/pk2_bridge_finality_verify.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "option_env!(\"IROHA_GIT_COMMIT_HASH\")",
+          "line": 665,
+          "path": "crates/iroha_js_host/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "option_env!(\"IROHA_GIT_COMMIT_HASH\").unwrap_or(\"unknown\")",
+          "line": 22356,
+          "path": "crates/iroha_js_host/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "const BUILD_SOURCE_ID: Option<&str> = option_env!(\"IROHA_GIT_COMMIT_HASH\");",
+          "line": 45,
+          "path": "crates/iroha_kagami/src/main.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "const BUILD_SOURCE_ID: Option<&str> = option_env!(\"IROHA_GIT_COMMIT_HASH\");",
+          "line": 126,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_INROU_LINUX_KVM": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "if std::env::var(\"IROHA_INROU_LINUX_KVM\").ok().as_deref() != Some(\"1\") {",
+          "line": 16201,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "|| std::env::var(\"IROHA_INROU_LINUX_KVM\").ok().as_deref() != Some(\"1\")",
+          "line": 24615,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "|| std::env::var(\"IROHA_INROU_LINUX_KVM\").ok().as_deref() != Some(\"1\")",
+          "line": 24776,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_INROU_LINUX_KVM_INITRD_IMAGE": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let initrd_image = std::env::var(\"IROHA_INROU_LINUX_KVM_INITRD_IMAGE\")",
+          "line": 24626,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let initrd_image = std::env::var(\"IROHA_INROU_LINUX_KVM_INITRD_IMAGE\")",
+          "line": 24787,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_INROU_PORTABLE": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "if std::env::var(\"IROHA_INROU_PORTABLE\").ok().as_deref() != Some(\"1\") {",
+          "line": 16263,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "|| std::env::var(\"IROHA_INROU_PORTABLE\").ok().as_deref() != Some(\"1\")",
+          "line": 24221,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "|| std::env::var(\"IROHA_INROU_PORTABLE\").ok().as_deref() != Some(\"1\")",
+          "line": 24407,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_INROU_PORTABLE_ACCEL": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "portable_vm_accel_from(std::env::var(\"IROHA_INROU_PORTABLE_ACCEL\").ok().as_deref())",
+          "line": 466,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_INROU_PORTABLE_INITRD_IMAGE": {
+      "counts": {
+        "test": 2,
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "let initrd_image = std::env::var(\"IROHA_INROU_PORTABLE_INITRD_IMAGE\")",
+          "line": 24232,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let initrd_image = std::env::var(\"IROHA_INROU_PORTABLE_INITRD_IMAGE\")",
+          "line": 24418,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Ok(value) = env::var(\"IROHA_INROU_PORTABLE_INITRD_IMAGE\")",
+          "line": 120,
+          "path": "xtask/src/soracloud_inrou.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "IROHA_INROU_PORTABLE_SMOKE_ENTRYPOINT": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let external_entrypoint = std::env::var(\"IROHA_INROU_PORTABLE_SMOKE_ENTRYPOINT\")",
+          "line": 24432,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_INROU_PORTABLE_SMOKE_HEALTHCHECK": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let external_healthcheck = std::env::var(\"IROHA_INROU_PORTABLE_SMOKE_HEALTHCHECK\")",
+          "line": 24434,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_KAGAMI_LOCALNET_KEEP": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"IROHA_KAGAMI_LOCALNET_KEEP\").is_some() {",
+          "line": 79,
+          "path": "integration_tests/tests/sumeragi_kagami_localnet.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_MCP_URL": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "mcp_url: std::env::var(\"IROHA_MCP_URL\").ok().or_else(|| {mcp_url}),",
+          "line": 264,
+          "path": "mochi/mochi-core/src/bootstrap.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_METRICS_PANIC_ON_DUPLICATE": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_METRICS_PANIC_ON_DUPLICATE\")",
+          "line": 15931,
+          "path": "crates/iroha_telemetry/src/metrics.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var(\"IROHA_METRICS_PANIC_ON_DUPLICATE\").unwrap_or_else(|_| \"0\".to_string());",
+          "line": 34,
+          "path": "crates/iroha_torii/tests/metrics_registry.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_PRIVATE_KEY": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "private_key: std::env::var(\"IROHA_PRIVATE_KEY\").ok(),",
+          "line": 268,
+          "path": "mochi/mochi-core/src/bootstrap.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_REALISTIC_30TPS_LOAD_KIND": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let Some(raw) = std::env::var(\"IROHA_REALISTIC_30TPS_LOAD_KIND\")",
+          "line": 524,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_REALISTIC_30TPS_LOG_LEVEL": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_REALISTIC_30TPS_LOG_LEVEL\").unwrap_or_else(|_| \"WARN\".into());",
+          "line": 2876,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_RUN_IGNORED": {
+      "counts": {
+        "test": 47
+      },
+      "paths": [
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 16,
+          "path": "crates/iroha_core/tests/check_genesis_sig.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 8,
+          "path": "crates/iroha_core/tests/gov_finalize_real_vk.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 11,
+          "path": "crates/iroha_core/tests/gov_zk_ballot_lock_verified.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 11,
+          "path": "crates/iroha_core/tests/gov_zk_ballot_real_vk.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 53,
+          "path": "crates/iroha_core/tests/zk_roots_get_cap.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 49,
+          "path": "crates/iroha_core/tests/zk_vote_get_tally.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1544,
+          "path": "crates/iroha_crypto/src/merkle.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1559,
+          "path": "crates/iroha_crypto/src/merkle.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 18,
+          "path": "crates/iroha_crypto/tests/merkle_norito_roundtrip.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 42,
+          "path": "crates/iroha_crypto/tests/merkle_norito_roundtrip.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 14,
+          "path": "crates/iroha_data_model/tests/model_derive_repro.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 36,
+          "path": "crates/iroha_data_model/tests/model_derive_repro.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 57,
+          "path": "crates/iroha_data_model/tests/model_derive_repro.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 83,
+          "path": "crates/iroha_data_model/tests/model_derive_repro.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 491,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 875,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 959,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1061,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1190,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1317,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1445,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1599,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1701,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1830,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 1976,
+          "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 64,
+          "path": "crates/iroha_torii/tests/gov_council_persist_integration.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 21,
+          "path": "crates/iroha_torii/tests/gov_council_vrf.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 34,
+          "path": "crates/iroha_torii/tests/gov_enact_handler.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() == Some(\"1\") {",
+          "line": 44,
+          "path": "crates/iroha_torii/tests/gov_mode_mismatch_and_autoclose.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 16,
+          "path": "crates/iroha_torii/tests/gov_protected_endpoints.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 21,
+          "path": "crates/iroha_torii/tests/gov_protected_endpoints_router.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 42,
+          "path": "crates/iroha_torii/tests/gov_read_endpoints_router.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 16195,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 16257,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\")",
+          "line": 24220,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\")",
+          "line": 24406,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\")",
+          "line": 24614,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\")",
+          "line": 24775,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 7,
+          "path": "crates/ivm/tests/beep_test.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 13,
+          "path": "crates/ivm/tests/kotodama_struct_fields.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 16,
+          "path": "crates/ivm/tests/zk_roots_and_vote_syscalls.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 50,
+          "path": "crates/ivm/tests/zk_roots_and_vote_syscalls.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 303,
+          "path": "integration_tests/tests/permissions.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 461,
+          "path": "integration_tests/tests/permissions.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 527,
+          "path": "integration_tests/tests/permissions.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 18,
+          "path": "integration_tests/tests/pipeline_block_rejected.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
+          "line": 46,
+          "path": "integration_tests/tests/sorting.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_RUN_ZK_WRAPPERS": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_RUN_ZK_WRAPPERS\").ok().as_deref() == Some(\"1\")",
+          "line": 4,
+          "path": "crates/ivm/tests/kotodama_wrappers.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_SCCP_BUILD_FEATURES": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "env!(\"IROHA_SCCP_BUILD_FEATURES\")",
+          "line": 618,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_SCCP_BUILD_PROFILE": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "build_profile: env!(\"IROHA_SCCP_BUILD_PROFILE\"),",
+          "line": 694,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "build_profile: env!(\"IROHA_SCCP_BUILD_PROFILE\").to_owned(),",
+          "line": 709,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_SCCP_BUILD_TARGET": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "target_triple: env!(\"IROHA_SCCP_BUILD_TARGET\"),",
+          "line": 695,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "target_triple: env!(\"IROHA_SCCP_BUILD_TARGET\").to_owned(),",
+          "line": 710,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_SCCP_RUSTC_VERSION": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "rustc_version: env!(\"IROHA_SCCP_RUSTC_VERSION\"),",
+          "line": 696,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "rustc_version: env!(\"IROHA_SCCP_RUSTC_VERSION\").to_owned(),",
+          "line": 711,
+          "path": "crates/iroha_sccp/src/bin/sccp_release_evidence.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_SKIP_BIND_CHECKS": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"IROHA_SKIP_BIND_CHECKS\").is_none() {",
+          "line": 5868,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_SM_CLI": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let configured = env::var(\"IROHA_SM_CLI\").ok().map(|value| {",
+          "line": 47,
+          "path": "crates/iroha_crypto/tests/sm_cli_matrix.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_STARTUP_TRACE": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "env::var_os(\"IROHA_STARTUP_TRACE\").is_some()",
+          "line": 129,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_SWIFT_UNSHIELD_ATTACHMENT_PATH": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let Ok(path) = env::var(\"IROHA_SWIFT_UNSHIELD_ATTACHMENT_PATH\") else {",
+          "line": 21,
+          "path": "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TAIRA_KEEP_LOCALNET": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"IROHA_TAIRA_KEEP_LOCALNET\").is_some() {",
+          "line": 2485,
+          "path": "integration_tests/tests/taira_public_localnet.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"IROHA_TAIRA_KEEP_LOCALNET\").is_some() {",
+          "line": 2494,
+          "path": "integration_tests/tests/taira_public_localnet.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TAIRA_SIM_SEED": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let seed = std::env::var(\"IROHA_TAIRA_SIM_SEED\")",
+          "line": 524,
+          "path": "integration_tests/tests/taira_public_localnet.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_BUILD_PROFILE": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_TEST_BUILD_PROFILE\").ok().as_deref(),",
+          "line": 180,
+          "path": "integration_tests/src/binary_resolver.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_CLIENT_TTL_MS": {
+      "counts": {
+        "test": 5
+      },
+      "paths": [
+        {
+          "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
+          "line": 2855,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
+          "line": 4243,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
+          "line": 4503,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
+          "line": 4778,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
+          "line": 5452,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_DUMP_GENESIS": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(dump_path) = env::var(\"IROHA_TEST_DUMP_GENESIS\") {",
+          "line": 12406,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_NETWORK_PARALLELISM": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(raw) = env::var(\"IROHA_TEST_NETWORK_PARALLELISM\")",
+          "line": 48,
+          "path": "integration_tests/tests/address_canonicalisation.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR": {
+      "counts": {
+        "build": 1,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var(\"IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR\")",
+          "line": 496,
+          "path": "crates/iroha_test_network/src/config.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if env::var(\"IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR\")",
+          "line": 76,
+          "path": "integration_tests/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "IROHA_TEST_SERIALIZE_NETWORKS": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "if let Ok(raw) = env::var(\"IROHA_TEST_SERIALIZE_NETWORKS\")",
+          "line": 43,
+          "path": "integration_tests/tests/address_canonicalisation.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"IROHA_TEST_SERIALIZE_NETWORKS\").is_none() {",
+          "line": 250,
+          "path": "integration_tests/tests/asset.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_SKIP_BUILD": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_TEST_SKIP_BUILD\")",
+          "line": 1960,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var(\"IROHA_TEST_SKIP_BUILD\").ok().as_deref(),",
+          "line": 51,
+          "path": "integration_tests/src/binary_resolver.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TEST_USE_DEFAULT_EXECUTOR": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"IROHA_TEST_USE_DEFAULT_EXECUTOR\")?;",
+          "line": 14572,
+          "path": "crates/iroha_core/src/executor.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var_os(\"IROHA_TEST_USE_DEFAULT_EXECUTOR\")?;",
+          "line": 16132,
+          "path": "crates/iroha_core/src/executor.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"IROHA_TEST_USE_DEFAULT_EXECUTOR\").is_some() {",
+          "line": 55226,
+          "path": "crates/iroha_core/src/state.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_THROUGHPUT_ARTIFACT_DIR": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "if let Some(artifact_root) = std::env::var_os(\"IROHA_THROUGHPUT_ARTIFACT_DIR\") {",
+          "line": 3703,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Some(artifact_root) = std::env::var_os(\"IROHA_THROUGHPUT_ARTIFACT_DIR\") {",
+          "line": 5398,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Some(artifact_root) = std::env::var_os(\"IROHA_THROUGHPUT_ARTIFACT_DIR\") {",
+          "line": 6038,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_THROUGHPUT_DELAY_MS": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(delay) = std::env::var(\"IROHA_THROUGHPUT_DELAY_MS\") {",
+          "line": 479,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_THROUGHPUT_RBC_ENCODING": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_THROUGHPUT_RBC_ENCODING\").unwrap_or_else(|_| \"plain\".to_owned());",
+          "line": 4784,
+          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "|| std::env::var(\"IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE\")",
+          "line": 80518,
+          "path": "crates/iroha_torii/src/routing.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TORII_LOCAL_READ_FANOUT_COORDINATOR": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_TORII_LOCAL_READ_FANOUT_COORDINATOR\")",
+          "line": 1763,
+          "path": "crates/iroha_torii/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_TORII_OPENAPI_ACTUAL": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(actual_path) = std::env::var(\"IROHA_TORII_OPENAPI_ACTUAL\") {",
+          "line": 96,
+          "path": "crates/iroha_torii/tests/router_feature_matrix.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TORII_OPENAPI_EXPECTED": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IROHA_TORII_OPENAPI_EXPECTED\").is_err(),",
+          "line": 90,
+          "path": "crates/iroha_torii/tests/router_feature_matrix.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let Ok(expected_path) = std::env::var(\"IROHA_TORII_OPENAPI_EXPECTED\") else {",
+          "line": 106,
+          "path": "crates/iroha_torii/tests/router_feature_matrix.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IROHA_TORII_OPENAPI_TOKENS": {
+      "counts": {
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "if let Some(env_tokens) = std::env::var_os(\"IROHA_TORII_OPENAPI_TOKENS\") {",
+          "line": 11865,
+          "path": "xtask/src/main.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "token_header = std::env::var(\"IROHA_TORII_OPENAPI_TOKENS\")",
+          "line": 11918,
+          "path": "xtask/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let Ok(raw) = std::env::var(\"IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS\") else {",
+          "line": 1722,
+          "path": "crates/iroha_torii/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IROHA_TORII_URL": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "torii_url: std::env::var(\"IROHA_TORII_URL\")",
+          "line": 262,
+          "path": "mochi/mochi-core/src/bootstrap.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IVM_BIN": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let ivm_bin = env::var(\"IVM_BIN\")",
+          "line": 64,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let ivm_bin = env::var(\"IVM_BIN\")",
+          "line": 160,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_COMPILER_DEBUG": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if cfg!(any(test, debug_assertions)) && std::env::var_os(\"IVM_COMPILER_DEBUG\").is_some() {",
+          "line": 19620,
+          "path": "crates/kotodama_lang/src/compiler.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_CUDA_GENCODE": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "env::var(\"IVM_CUDA_GENCODE\").unwrap_or_else(|_| \"arch=compute_61,code=sm_61\".to_string());",
+          "line": 194,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "IVM_CUDA_NVCC": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "let nvcc = env::var(\"IVM_CUDA_NVCC\")",
+          "line": 181,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "IVM_CUDA_NVCC_EXTRA": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "let extra_flags: Vec<String> = env::var(\"IVM_CUDA_NVCC_EXTRA\")",
+          "line": 195,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "IVM_CUDA_SELFTEST_TRACE": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"IVM_CUDA_SELFTEST_TRACE\").is_some() {",
+          "line": 115,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "IVM_DEBUG_AED_ASSET_DEFINITION": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let aed_asset_raw = std::env::var(\"IVM_DEBUG_AED_ASSET_DEFINITION\").unwrap_or_else(|_| {",
+          "line": 380,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DEBUG_ASSET_DEFINITION": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let asset_raw = std::env::var(\"IVM_DEBUG_ASSET_DEFINITION\")",
+          "line": 248,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DEBUG_CBDC_ASSET_DEFINITION": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let cbdc_asset_raw = std::env::var(\"IVM_DEBUG_CBDC_ASSET_DEFINITION\").unwrap_or_else(|_| {",
+          "line": 386,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DEBUG_DOMAIN": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let domain_raw = std::env::var(\"IVM_DEBUG_DOMAIN\").unwrap_or_else(|_| \"centralbank\".to_owned());",
+          "line": 250,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var(\"IVM_DEBUG_DOMAIN\").unwrap_or_else(|_| \"centralbank.universal\".to_owned());",
+          "line": 393,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DEBUG_FROM_ACCOUNT": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IVM_DEBUG_FROM_ACCOUNT\").expect(\"IVM_DEBUG_FROM_ACCOUNT must be set\");",
+          "line": 246,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var(\"IVM_DEBUG_FROM_ACCOUNT\").expect(\"IVM_DEBUG_FROM_ACCOUNT must be set\");",
+          "line": 378,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DEBUG_METAL_ENUM": {
+      "counts": {
+        "debug": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IVM_DEBUG_METAL_ENUM\")",
+          "line": 477,
+          "path": "crates/ivm/src/vector.rs",
+          "scope": "debug"
+        }
+      ]
+    },
+    "IVM_DEBUG_METAL_SELFTEST": {
+      "counts": {
+        "debug": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IVM_DEBUG_METAL_SELFTEST\")",
+          "line": 1208,
+          "path": "crates/ivm/src/vector.rs",
+          "scope": "debug"
+        }
+      ]
+    },
+    "IVM_DEBUG_RATIO": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let ratio_raw = std::env::var(\"IVM_DEBUG_RATIO\").unwrap_or_else(|_| \"76\".to_owned());",
+          "line": 394,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DEBUG_TO_ACCOUNT": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let to_raw = std::env::var(\"IVM_DEBUG_TO_ACCOUNT\").expect(\"IVM_DEBUG_TO_ACCOUNT must be set\");",
+          "line": 247,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let dst_raw = std::env::var(\"IVM_DEBUG_TO_ACCOUNT\").expect(\"IVM_DEBUG_TO_ACCOUNT must be set\");",
+          "line": 379,
+          "path": "crates/iroha_core/tests/ivm_pointer_abi_apply.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DISABLE_CUDA": {
+      "counts": {
+        "debug": 1,
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "&& std::env::var(\"IVM_DISABLE_CUDA\")",
+          "line": 880,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "debug"
+        },
+        {
+          "context": "original_disable_cuda: std::env::var(\"IVM_DISABLE_CUDA\").ok(),",
+          "line": 47,
+          "path": "crates/ivm/tests/cuda_disable_on_mismatch.rs",
+          "scope": "test"
+        },
+        {
+          "context": "original_disable_cuda: std::env::var(\"IVM_DISABLE_CUDA\").ok(),",
+          "line": 30,
+          "path": "crates/ivm/tests/cuda_env.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_DISABLE_METAL": {
+      "counts": {
+        "debug": 1
+      },
+      "paths": [
+        {
+          "context": "let disabled = std::env::var(\"IVM_DISABLE_METAL\")",
+          "line": 301,
+          "path": "crates/ivm/src/vector.rs",
+          "scope": "debug"
+        }
+      ]
+    },
+    "IVM_FORCE_CUDA_SELFTEST_FAIL": {
+      "counts": {
+        "debug": 1,
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "&& std::env::var(\"IVM_FORCE_CUDA_SELFTEST_FAIL\")",
+          "line": 891,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "debug"
+        },
+        {
+          "context": "original_force_fail: std::env::var(\"IVM_FORCE_CUDA_SELFTEST_FAIL\").ok(),",
+          "line": 46,
+          "path": "crates/ivm/tests/cuda_disable_on_mismatch.rs",
+          "scope": "test"
+        },
+        {
+          "context": "original_force_selftest_fail: std::env::var(\"IVM_FORCE_CUDA_SELFTEST_FAIL\").ok(),",
+          "line": 31,
+          "path": "crates/ivm/tests/cuda_env.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IVM_FORCE_METAL_ENUM": {
+      "counts": {
+        "debug": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IVM_FORCE_METAL_ENUM\")",
+          "line": 447,
+          "path": "crates/ivm/src/vector.rs",
+          "scope": "debug"
+        }
+      ]
+    },
+    "IVM_FORCE_METAL_SELFTEST_FAIL": {
+      "counts": {
+        "debug": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IVM_FORCE_METAL_SELFTEST_FAIL\")",
+          "line": 1195,
+          "path": "crates/ivm/src/vector.rs",
+          "scope": "debug"
+        }
+      ]
+    },
+    "IVM_TOOL_BIN": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let ivm_tool = env::var(\"IVM_TOOL_BIN\")",
+          "line": 111,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IZANAMI_ALLOW_NET": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"IZANAMI_ALLOW_NET\")",
+          "line": 7832,
+          "path": "crates/izanami/src/chaos.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "IZANAMI_TUI_ALLOW_ZERO_SEED": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "if args.seed == Some(0) && std::env::var(\"IZANAMI_TUI_ALLOW_ZERO_SEED\").is_err() {",
+          "line": 188,
+          "path": "crates/izanami/src/tui.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "JSONSTAGE1_CUDA_ARCH": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if let Some(arch_flag) = env::var_os(\"JSONSTAGE1_CUDA_ARCH\") {",
+          "line": 52,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "JSONSTAGE1_CUDA_REQUIRE": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"JSONSTAGE1_CUDA_REQUIRE\").is_some()",
+          "line": 421,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"JSONSTAGE1_CUDA_REQUIRE\").is_some() {",
+          "line": 2696,
+          "path": "crates/norito/src/core.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"JSONSTAGE1_CUDA_REQUIRE\").is_some() {",
+          "line": 5320,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "JSONSTAGE1_CUDA_SKIP_BUILD": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"JSONSTAGE1_CUDA_SKIP_BUILD\").is_some() {",
+          "line": 23,
+          "path": "crates/norito/accelerators/jsonstage1_cuda/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "KAGEMUSHA_SOURCE_SEAL_PYTHON": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let python = env::var_os(\"KAGEMUSHA_SOURCE_SEAL_PYTHON\")",
+          "line": 1115,
+          "path": "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "KOTO_BIN": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let koto_bin = env::var(\"KOTO_BIN\")",
+          "line": 54,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let koto_bin = env::var(\"KOTO_BIN\")",
+          "line": 151,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "LANG": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let old_lang = env::var(\"LANG\").ok();",
+          "line": 14,
+          "path": "crates/ivm/tests/i18n.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let old_lang = env::var(\"LANG\").ok();",
+          "line": 72,
+          "path": "crates/ivm/tests/i18n.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "LC_ALL": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let old_lc_all = env::var(\"LC_ALL\").ok();",
+          "line": 15,
+          "path": "crates/ivm/tests/i18n.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let old_lc_all = env::var(\"LC_ALL\").ok();",
+          "line": 73,
+          "path": "crates/ivm/tests/i18n.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "LC_MESSAGES": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "let old_lc_messages = env::var(\"LC_MESSAGES\").ok();",
+          "line": 16,
+          "path": "crates/ivm/tests/i18n.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let old_lc_messages = env::var(\"LC_MESSAGES\").ok();",
+          "line": 74,
+          "path": "crates/ivm/tests/i18n.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "MOCHI_CONFIG": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "if let Some(value) = env::var_os(\"MOCHI_CONFIG\").filter(|value| !value.is_empty()) {",
+          "line": 484,
+          "path": "mochi/mochi-ui-egui/src/config.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "MOCHI_DATA_ROOT": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"MOCHI_DATA_ROOT\")",
+          "line": 3702,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "MOCHI_DETACHED": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"MOCHI_DETACHED\").is_some() {",
+          "line": 1034,
+          "path": "mochi/mochi-ui-egui/src/gui.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "MOCHI_TEST_USE_INTERNAL_GENESIS": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"MOCHI_TEST_USE_INTERNAL_GENESIS\").is_some() {",
+          "line": 3471,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "NORITO_CHECK_BINDINGS_SYNC": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"NORITO_CHECK_BINDINGS_SYNC\").is_none() {",
+          "line": 17,
+          "path": "crates/norito/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "NORITO_CPU_INFO": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "cpu: std::env::var(\"NORITO_CPU_INFO\").ok(),",
+          "line": 74,
+          "path": "xtask/src/stage1_bench.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "NORITO_CRC64_CUDA_REQUIRE": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"NORITO_CRC64_CUDA_REQUIRE\").is_none() {",
+          "line": 1247,
+          "path": "crates/norito/src/core/simd_crc64.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NORITO_CRC64_GPU_LIB": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let raw = std::env::var_os(\"NORITO_CRC64_GPU_LIB\")?;",
+          "line": 314,
+          "path": "crates/norito/src/core/simd_crc64.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NORITO_DISABLE_PACKED_STRUCT": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "match std::env::var_os(\"NORITO_DISABLE_PACKED_STRUCT\") {",
+          "line": 365,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NORITO_GPU_CRC64_MIN_BYTES": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let configured = std::env::var(\"NORITO_GPU_CRC64_MIN_BYTES\")",
+          "line": 68,
+          "path": "crates/norito/src/core/simd_crc64.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NORITO_PAR_STAGE1_MIN": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"NORITO_PAR_STAGE1_MIN\")",
+          "line": 5592,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NORITO_SKIP_BINDINGS_SYNC": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"NORITO_SKIP_BINDINGS_SYNC\").is_some() {",
+          "line": 13,
+          "path": "crates/norito/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "NORITO_STAGE1_GPU_MIN_BYTES": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"NORITO_STAGE1_GPU_MIN_BYTES\")",
+          "line": 5626,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NORITO_TRACE": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"NORITO_TRACE\").is_some()",
+          "line": 143,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "*ENABLED.get_or_init(|| std::env::var_os(\"NORITO_TRACE\").is_some())",
+          "line": 148,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let env_enabled = env::var_os(\"NORITO_TRACE\").is_some();",
+          "line": 164,
+          "path": "crates/norito/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "NVCC": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": ".or_else(|_| env::var(\"NVCC\"))",
+          "line": 182,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "OUT_DIR": {
+      "counts": {
+        "build": 7,
+        "prod": 14,
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "let out_dir = PathBuf::from(env::var_os(\"OUT_DIR\").expect(\"Cargo sets OUT_DIR\"));",
+          "line": 22,
+          "path": "crates/connect_norito_bridge/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\").map_err(|err| err.to_string())?);",
+          "line": 109,
+          "path": "crates/fastpq_prover/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\").expect(\"OUT_DIR\"));",
+          "line": 13,
+          "path": "crates/iroha_data_model/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "include!(concat!(env!(\"OUT_DIR\"), \"/build_consts.rs\"));",
+          "line": 206,
+          "path": "crates/iroha_data_model/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\")?);",
+          "line": 108,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\")?);",
+          "line": 178,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "if let Some(out_dir) = env::var_os(\"OUT_DIR\") {",
+          "line": 277,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "static PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/add.ptx\"));",
+          "line": 30,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static VEC_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/vector.ptx\"));",
+          "line": 31,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static SHA_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/sha256.ptx\"));",
+          "line": 32,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static SHA_LEAVES_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/sha256_leaves.ptx\"));",
+          "line": 33,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static POSEIDON_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/poseidon.ptx\"));",
+          "line": 34,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static SHA3_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/sha3.ptx\"));",
+          "line": 35,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static AES_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/aes.ptx\"));",
+          "line": 36,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static BN254_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/bn254.ptx\"));",
+          "line": 37,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static SIG_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/signature.ptx\"));",
+          "line": 38,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static SHA_PAIRS_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/sha256_pairs_reduce.ptx\"));",
+          "line": 39,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static BITONIC_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/bitonic_sort.ptx\"));",
+          "line": 41,
+          "path": "crates/ivm/src/cuda.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "static ADD_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/add.ptx\"));",
+          "line": 377,
+          "path": "crates/ivm/src/gpu_manager.rs",
+          "scope": "test"
+        },
+        {
+          "context": "include!(concat!(env!(\"OUT_DIR\"), \"/syscall_signatures.rs\"));",
+          "line": 231,
+          "path": "crates/ivm/src/ivm.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let out_dir = match std::env::var(\"OUT_DIR\") {",
+          "line": 7,
+          "path": "crates/ivm/src/ptx_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let out_dir = env!(\"OUT_DIR\");",
+          "line": 5,
+          "path": "crates/ivm/tests/ptx_kernels.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let out_dir = PathBuf::from(env::var_os(\"OUT_DIR\").expect(\"Cargo supplies OUT_DIR\"));",
+          "line": 207,
+          "path": "crates/kotodama_lang/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "include!(concat!(env!(\"OUT_DIR\"), \"/kotodama_v1_lexical.rs\"));",
+          "line": 122,
+          "path": "crates/kotodama_lang/src/lexer.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "PATH": {
+      "counts": {
+        "prod": 4,
+        "test": 1,
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "let search_path = env::var_os(\"PATH\");",
+          "line": 951,
+          "path": "crates/iroha_torii/src/zk_attachments.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let path = env::var_os(\"PATH\");",
+          "line": 1035,
+          "path": "crates/iroha_torii/src/zk_attachments.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let mut search_roots = std::env::var_os(\"PATH\")",
+          "line": 14223,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let path = env::var_os(\"PATH\")?;",
+          "line": 21,
+          "path": "integration_tests/tests/kotodama_examples.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path_var = env::var_os(\"PATH\")?;",
+          "line": 907,
+          "path": "mochi/mochi-core/src/supervisor.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let Some(path) = env::var_os(\"PATH\") else {",
+          "line": 1294,
+          "path": "tools/sora-vpn-backend/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "PATHEXT": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"PATHEXT\").unwrap_or_else(|_| \".COM;.EXE;.BAT;.CMD\".to_owned());",
+          "line": 14255,
+          "path": "crates/irohad/src/soracloud_runtime.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "PRINT_SORACLES_FIXTURES": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var_os(\"PRINT_SORACLES_FIXTURES\").is_some() {",
+          "line": 3568,
+          "path": "crates/iroha_data_model/src/oracle/mod.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "PRINT_TORII_SPEC": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if std::env::var(\"PRINT_TORII_SPEC\").is_ok() {",
+          "line": 24935,
+          "path": "crates/iroha_torii/src/openapi.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "PROFILE": {
+      "counts": {
+        "build": 2,
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "let profile = env::var(\"PROFILE\").expect(\"Cargo must provide the exact build profile\");",
+          "line": 29,
+          "path": "crates/iroha_sccp/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "if let Ok(profile) = std::env::var(\"PROFILE\") {",
+          "line": 1085,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let profile = if env::var(\"PROFILE\").ok().as_deref() == Some(\"release\") {",
+          "line": 64,
+          "path": "integration_tests/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "if let Ok(profile) = std::env::var(\"PROFILE\")",
+          "line": 247,
+          "path": "integration_tests/src/binary_resolver.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let profile = env::var(\"PROFILE\").unwrap_or_else(|_| \"debug\".to_owned());",
+          "line": 53,
+          "path": "integration_tests/src/kagami.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "PYTHON3": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let python = env::var(\"PYTHON3\").unwrap_or_else(|_| \"python3\".to_string());",
+          "line": 30,
+          "path": "crates/sorafs_car/tests/taikai_viewer_cli.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "PYTHONPATH": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "match env::var(\"PYTHONPATH\") {",
+          "line": 5801,
+          "path": "crates/iroha_cli/tests/cli_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "REPO_PROOF_DIGEST_OUT": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(path) = std::env::var(\"REPO_PROOF_DIGEST_OUT\") {",
+          "line": 2508,
+          "path": "crates/iroha_core/src/smartcontracts/isi/repo.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "REPO_PROOF_SNAPSHOT_OUT": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "if let Ok(path) = std::env::var(\"REPO_PROOF_SNAPSHOT_OUT\") {",
+          "line": 2496,
+          "path": "crates/iroha_core/src/smartcontracts/isi/repo.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "RUSTC": {
+      "counts": {
+        "build": 1
+      },
+      "paths": [
+        {
+          "context": "let rustc = env::var_os(\"RUSTC\").expect(\"Cargo must provide RUSTC to the SCCP build script\");",
+          "line": 17,
+          "path": "crates/iroha_sccp/build.rs",
+          "scope": "build"
+        }
+      ]
+    },
+    "RUST_LOG": {
+      "counts": {
+        "prod": 2,
+        "test": 4
+      },
+      "paths": [
+        {
+          "context": "let original = env::var(\"RUST_LOG\").ok();",
+          "line": 10443,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let original = env::var(\"RUST_LOG\").ok();",
+          "line": 10460,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if let Ok(filter) = std::env::var(\"RUST_LOG\") {",
+          "line": 2438,
+          "path": "crates/izanami/src/chaos.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let filter = std::env::var(\"RUST_LOG\").unwrap_or_else(|_| default_filter.to_string());",
+          "line": 641,
+          "path": "crates/izanami/src/config.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "if std::env::var_os(\"RUST_LOG\").is_none() {",
+          "line": 142,
+          "path": "integration_tests/tests/sumeragi_kagami_localnet.rs",
+          "scope": "test"
+        },
+        {
+          "context": "if std::env::var_os(\"RUST_LOG\").is_none() {",
+          "line": 388,
+          "path": "integration_tests/tests/taira_public_localnet.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "SM_PERF_CPU_LABEL": {
+      "counts": {
+        "prod": 2
+      },
+      "paths": [
+        {
+          "context": "if let Ok(cpu) = env::var(\"SM_PERF_CPU_LABEL\") {",
+          "line": 712,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "if let Ok(cpu) = env::var(\"SM_PERF_CPU_LABEL\") {",
+          "line": 754,
+          "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "SORAFS_NODE_SKIP_INGEST_TESTS": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"SORAFS_NODE_SKIP_INGEST_TESTS\").map_or(true, |value| value != \"1\")",
+          "line": 18,
+          "path": "crates/sorafs_node/tests/cli.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "SORAFS_TORII_SKIP_INGEST_TESTS": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"SORAFS_TORII_SKIP_INGEST_TESTS\").map_or(true, |value| value != \"1\")",
+          "line": 104,
+          "path": "crates/iroha_torii/tests/sorafs_discovery.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "SORANET_VPN_INTERFACE": {
+      "counts": {
+        "test": 1,
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "env::var(\"SORANET_VPN_INTERFACE\")",
+          "line": 2271,
+          "path": "tools/sora-vpn-helper/src/main.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "let original = env::var_os(\"SORANET_VPN_INTERFACE\");",
+          "line": 3108,
+          "path": "tools/sora-vpn-helper/src/main.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "SORANET_VPN_STATE_FILE": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "env::var(\"SORANET_VPN_STATE_FILE\")",
+          "line": 2230,
+          "path": "tools/sora-vpn-helper/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "SUMERAGI_ADVERSARIAL_ARTIFACT_DIR": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let Ok(dir) = std::env::var(\"SUMERAGI_ADVERSARIAL_ARTIFACT_DIR\") else {",
+          "line": 2338,
+          "path": "integration_tests/tests/sumeragi_adversarial.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "SUMERAGI_BASELINE_ARTIFACT_DIR": {
+      "counts": {
+        "prod": 1,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "let env = std::env::var(\"SUMERAGI_BASELINE_ARTIFACT_DIR\").map_err(|_| {",
+          "line": 42,
+          "path": "crates/build-support/src/bin/sumeragi_baseline_report.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let dir = match std::env::var(\"SUMERAGI_BASELINE_ARTIFACT_DIR\") {",
+          "line": 1163,
+          "path": "integration_tests/tests/sumeragi_npos_performance.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "SUMERAGI_DA_ARTIFACT_DIR": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "let env = std::env::var(\"SUMERAGI_DA_ARTIFACT_DIR\").map_err(|_| {",
+          "line": 43,
+          "path": "crates/build-support/src/bin/sumeragi_da_report.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "SystemRoot": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "env::var_os(\"SystemRoot\").map(PathBuf::from)",
+          "line": 581,
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "TARGET": {
+      "counts": {
+        "build": 2,
+        "prod": 1,
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "let target = env::var(\"TARGET\").unwrap_or_else(|_| \"unknown\".to_owned());",
+          "line": 23,
+          "path": "crates/build-support/src/lib.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "let target = env::var(\"TARGET\").expect(\"Cargo must provide the exact target triple\");",
+          "line": 28,
+          "path": "crates/iroha_sccp/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "if let Ok(target) = env::var(\"TARGET\") {",
+          "line": 18,
+          "path": "crates/ivm/build.rs",
+          "scope": "build"
+        },
+        {
+          "context": "target: std::env::var(\"TARGET\")",
+          "line": 88,
+          "path": "xtask/src/poseidon_bench.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "target: std::env::var(\"TARGET\")",
+          "line": 68,
+          "path": "xtask/src/stage1_bench.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "TEST_LOG_FILTER": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "filter: std::env::var(\"TEST_LOG_FILTER\")",
+          "line": 131,
+          "path": "crates/iroha_logger/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "TEST_LOG_LEVEL": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "level: std::env::var(\"TEST_LOG_LEVEL\")",
+          "line": 127,
+          "path": "crates/iroha_logger/src/lib.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "TEST_NETWORK_CARGO": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"TEST_NETWORK_CARGO\").unwrap_or_else(|_| \"cargo\".to_owned());",
+          "line": 1726,
+          "path": "crates/iroha_test_network/src/lib.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "TEST_NETWORK_IROHAD_FEATURES": {
+      "counts": {
+        "test": 3
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"TEST_NETWORK_IROHAD_FEATURES\")",
+          "line": 232,
+          "path": "integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var(\"TEST_NETWORK_IROHAD_FEATURES\")",
+          "line": 50,
+          "path": "integration_tests/tests/zk_ace_localnet.rs",
+          "scope": "test"
+        },
+        {
+          "context": "std::env::var(\"TEST_NETWORK_IROHAD_FEATURES\")",
+          "line": 64,
+          "path": "integration_tests/tests/zk_stark_network.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY\")",
+          "line": 15258,
+          "path": "crates/iroha_config/src/parameters/user.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "TORII_MOCK_HARNESS_METRICS_PATH": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "metrics_path: env::var(\"TORII_MOCK_HARNESS_METRICS_PATH\")",
+          "line": 106,
+          "path": "xtask/src/bin/torii_mock_harness.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "TORII_MOCK_HARNESS_REPO_ROOT": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "repo_root: env::var(\"TORII_MOCK_HARNESS_REPO_ROOT\")",
+          "line": 109,
+          "path": "xtask/src/bin/torii_mock_harness.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "TORII_MOCK_HARNESS_RETRY_TOTAL": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "env::var(\"TORII_MOCK_HARNESS_RETRY_TOTAL\")",
+          "line": 297,
+          "path": "xtask/src/bin/torii_mock_harness.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "TORII_MOCK_HARNESS_RUNNER": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "runner: env::var(\"TORII_MOCK_HARNESS_RUNNER\")",
+          "line": 112,
+          "path": "xtask/src/bin/torii_mock_harness.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "TORII_MOCK_HARNESS_SDK": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "sdk: env::var(\"TORII_MOCK_HARNESS_SDK\").unwrap_or_else(|_| \"android\".to_string()),",
+          "line": 104,
+          "path": "xtask/src/bin/torii_mock_harness.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "TORII_OPENAPI_TOKEN": {
+      "counts": {
+        "tool": 2
+      },
+      "paths": [
+        {
+          "context": "if let Ok(single) = std::env::var(\"TORII_OPENAPI_TOKEN\")",
+          "line": 11860,
+          "path": "xtask/src/main.rs",
+          "scope": "tool"
+        },
+        {
+          "context": "let mut token_header = std::env::var(\"TORII_OPENAPI_TOKEN\")",
+          "line": 11914,
+          "path": "xtask/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "UPDATE_FIXTURES": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "if env::var_os(\"UPDATE_FIXTURES\").is_some() {",
+          "line": 115,
+          "path": "crates/iroha_core/tests/pin_registry.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let update = env::var(\"UPDATE_FIXTURES\")",
+          "line": 48,
+          "path": "crates/iroha_core/tests/snapshots.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "USERPROFILE": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "env::var_os(\"USERPROFILE\").map(PathBuf::from)",
+          "line": 49,
+          "path": "crates/iroha/src/config.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "VERGEN_CARGO_FEATURES": {
+      "counts": {
+        "prod": 1,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "cargo_features: option_env!(\"VERGEN_CARGO_FEATURES\")",
+          "line": 5471,
+          "path": "crates/iroha_telemetry/src/metrics.rs",
+          "scope": "test"
+        },
+        {
+          "context": "const VERGEN_CARGO_FEATURES: &str = match option_env!(\"VERGEN_CARGO_FEATURES\") {",
+          "line": 12088,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "VERGEN_CARGO_TARGET_TRIPLE": {
+      "counts": {
+        "prod": 1,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "target_triple: option_env!(\"VERGEN_CARGO_TARGET_TRIPLE\")",
+          "line": 5474,
+          "path": "crates/iroha_telemetry/src/metrics.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let vergen_target = option_env!(\"VERGEN_CARGO_TARGET_TRIPLE\").unwrap_or(\"unknown\");",
+          "line": 262,
+          "path": "crates/iroha_telemetry/src/ws.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "VERGEN_GIT_SHA": {
+      "counts": {
+        "prod": 3,
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "const VERGEN_GIT_SHA: &str = match option_env!(\"VERGEN_GIT_SHA\") {",
+          "line": 63,
+          "path": "crates/iroha_cli/src/main_shared.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "git_commit_sha: option_env!(\"VERGEN_GIT_SHA\")",
+          "line": 5468,
+          "path": "crates/iroha_telemetry/src/metrics.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let vergen_git_sha = option_env!(\"VERGEN_GIT_SHA\").unwrap_or(\"unknown\");",
+          "line": 261,
+          "path": "crates/iroha_telemetry/src/ws.rs",
+          "scope": "prod"
+        },
+        {
+          "context": "const VERGEN_GIT_SHA: &str = match option_env!(\"VERGEN_GIT_SHA\") {",
+          "line": 12083,
+          "path": "crates/irohad/src/main.rs",
+          "scope": "prod"
+        }
+      ]
+    },
+    "VERIFY_BATCH": {
+      "counts": {
+        "bench": 1
+      },
+      "paths": [
+        {
+          "context": "let verify_batch = std::env::var(\"VERIFY_BATCH\")",
+          "line": 226,
+          "path": "crates/ivm/benches/bench_voting.rs",
+          "scope": "bench"
+        }
+      ]
+    },
+    "VERIFY_EVERY": {
+      "counts": {
+        "bench": 1
+      },
+      "paths": [
+        {
+          "context": "let verify_every: u64 = std::env::var(\"VERIFY_EVERY\")",
+          "line": 214,
+          "path": "crates/ivm/benches/bench_voting.rs",
+          "scope": "bench"
+        }
+      ]
+    },
+    "VOTERS": {
+      "counts": {
+        "bench": 1
+      },
+      "paths": [
+        {
+          "context": "let voters: u64 = std::env::var(\"VOTERS\")",
+          "line": 208,
+          "path": "crates/ivm/benches/bench_voting.rs",
+          "scope": "bench"
+        }
+      ]
+    },
+    "XDG_RUNTIME_DIR": {
+      "counts": {
+        "tool": 1
+      },
+      "paths": [
+        {
+          "context": "if let Some(runtime_dir) = env::var_os(\"XDG_RUNTIME_DIR\") {",
+          "line": 2236,
+          "path": "tools/sora-vpn-helper/src/main.rs",
+          "scope": "tool"
+        }
+      ]
+    },
+    "XTASK_TEST_KAGAMI_BIN": {
+      "counts": {
+        "test": 2
+      },
+      "paths": [
+        {
+          "context": "if std::env::var(\"XTASK_TEST_KAGAMI_BIN\").is_err() {",
+          "line": 1058,
+          "path": "xtask/src/kagami_profiles.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let kagami_path = PathBuf::from(std::env::var(\"XTASK_TEST_KAGAMI_BIN\").unwrap());",
+          "line": 1061,
+          "path": "xtask/src/kagami_profiles.rs",
+          "scope": "test"
+        }
+      ]
+    }
+  }
+}

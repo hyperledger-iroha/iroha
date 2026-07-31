@@ -18,6 +18,7 @@ from iroha_python import (
     AccountAsset,
     AccountAssetsPage,
     AssetHolderRecord,
+    ContractCallIntent,
     DataEventFilter,
     Ed25519KeyPair,
     ExplorerRwaRecord,
@@ -266,7 +267,7 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "stark/fri/sha256_goldilocks.v1",
         }
     )
-    assert len(expected) == 15
+    assert len(expected) == 12
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
         expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
@@ -412,8 +413,6 @@ def test_each_privacy_verifier_registry_label_rejects_structural_mutations() -> 
                 mutation,
                 label,
             )
-
-
 def zk_verifying_key_commitment(backend: str, vk_bytes: bytes) -> str:
     backend_bytes = backend.encode("utf-8")
     preimage = (
@@ -2084,34 +2083,22 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
     ):
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             client.stream_verifying_key_events(backend=backend, name="vk_transfer")
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
     assert session.calls == []
@@ -2327,42 +2314,25 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
 
 
 
-def test_call_contract_and_wait_posts_typed_request() -> None:
+def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     tx_hash = "d" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "submitted": True,
-                    "dataspace": "is",
-                    "code_hash_hex": "b" * 64,
-                    "abi_hash_hex": "c" * 64,
-                    "creation_time_ms": 1,
-                    "contract_alias": "contract::is",
-                    "tx_hash_hex": tx_hash,
-                    "entrypoint": "main",
-                    "operation_receipt": {
-                        "operation_kind": "contract_call",
-                        "status": "submitted",
-                        "transport": "torii",
-                        "dataspace": "is",
-                        "tx_hash_hex": tx_hash,
-                        "entrypoint": "main",
-                        "gas_limit": 5000,
-                        "payload_digest_hex": "a" * 64,
-                    },
-                },
-            ),
-            response(200, {"status": {"kind": "Committed"}, "hash": tx_hash}),
-        ]
-    )
+    session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    captured: dict[str, object] = {}
+
+    def call_batch(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "hash": tx_hash,
+            "submission": {"accepted": True},
+        }
+
+    client.call_contract_batch_and_wait = call_batch  # type: ignore[method-assign]
 
     result = client.call_contract_and_wait(
+        chain_id="chain",
         authority="authority@is",
-        private_key="priv",
+        private_key_hex="11" * 32,
         contract_alias="contract::is",
         entrypoint="main",
         payload={"amount": 7},
@@ -2372,66 +2342,41 @@ def test_call_contract_and_wait_posts_typed_request() -> None:
         interval=0,
     )
 
-    assert result["terminal_kind"] == "Committed"
-    call_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert call_payload["payload"] == {"amount": 7}
+    assert captured["chain_id"] == "chain"
+    assert captured["authority"] == "authority@is"
+    assert captured["private_key"] is None
+    assert captured["private_key_hex"] == "11" * 32
+    entries = captured["entries"]
+    assert isinstance(entries, list) and len(entries) == 1
+    intent = entries[0]
+    assert isinstance(intent, ContractCallIntent)
+    assert intent.to_payload() == {
+        "entrypoint": "main",
+        "contract_alias": "contract::is",
+        "payload": {"amount": 7},
+    }
+    assert result["submit"] == {"accepted": True}
+    assert result["tx_hashes"] == [tx_hash]
+    assert session.calls == []
 
 
-def test_call_contract_and_wait_uses_embedded_pipeline_status_without_polling() -> None:
-    tx_hash = "e" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "submitted": True,
-                    "dataspace": "is",
-                    "code_hash_hex": "b" * 64,
-                    "abi_hash_hex": "c" * 64,
-                    "creation_time_ms": 1,
-                    "contract_alias": "contract::is",
-                    "tx_hash_hex": tx_hash,
-                    "pipeline_status": {
-                        "hash": tx_hash,
-                        "status": {"kind": "Committed", "block_height": 42},
-                        "summary": None,
-                        "diagnostics": [],
-                        "scope": "global",
-                        "resolved_from": "endpoint",
-                    },
-                    "entrypoint": "main",
-                    "operation_receipt": {
-                        "operation_kind": "contract_call",
-                        "status": "submitted",
-                        "transport": "torii",
-                        "dataspace": "is",
-                        "tx_hash_hex": tx_hash,
-                        "entrypoint": "main",
-                        "gas_limit": 5000,
-                        "payload_digest_hex": "a" * 64,
-                    },
-                },
-            ),
-        ]
-    )
+def test_call_contract_and_wait_requires_explicit_chain_id_before_dispatch() -> None:
+    session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    result = client.call_contract_and_wait(
-        authority="authority@is",
-        private_key="priv",
-        contract_alias="contract::is",
-        entrypoint="main",
-        payload={"amount": 7},
-        fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
-        wait=True,
-        timeout_ms=1000,
-        interval=0,
+    client.call_contract_batch_and_wait = (  # type: ignore[method-assign]
+        lambda **_kwargs: pytest.fail("missing chain_id must fail before dispatch")
     )
 
-    assert result["terminal_kind"] == "Committed"
-    assert result["r#final"]["hash"] == tx_hash
-    assert [call["path"] for call in session.calls] == ["/v1/contracts/call"]
+    with pytest.raises(TypeError, match="chain_id"):
+        client.call_contract_and_wait(  # type: ignore[call-arg]
+            authority="authority@is",
+            private_key_hex="11" * 32,
+            contract_alias="contract::is",
+            entrypoint="main",
+            payload={"amount": 7},
+            fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
+        )
+    assert session.calls == []
 
 
 def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:

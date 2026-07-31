@@ -467,7 +467,7 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once(
                 workflow,
                 '          scope_args=(--base "$BASE_SHA")\n',
-                "          scope_args=(--paths docs/source/index.md)\n",
+                "          scope_args=(--paths specs/index.md)\n",
             ),
             "PR Rust classifier is missing required behavior",
         ),

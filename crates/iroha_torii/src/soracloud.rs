@@ -15340,6 +15340,22 @@ mod tests {
     }
 
     #[test]
+    fn require_soracloud_mutation_signer_derives_authority_from_verified_headers() {
+        let key_pair = checked_test_keypair(0x60);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let headers = verified_request_headers(&account, key_pair.public_key());
+        let provenance = ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: checked_test_signature(key_pair.private_key(), b"mutation"),
+        };
+
+        let signer = require_soracloud_mutation_signer(&headers, &provenance)
+            .expect("verified headers and matching provenance must identify the mutation signer");
+        assert_eq!(signer.authority, account);
+        assert_eq!(signer.request_signer, provenance.signer);
+    }
+
+    #[test]
     fn app_infra_request_rejects_inline_signing_fields_in_nested_service_bundles() {
         for field in ["authority", "private_key"] {
             let json = format!(r#"{{"deploy_services":[{{"{field}":"must-not-cross-torii"}}]}}"#);

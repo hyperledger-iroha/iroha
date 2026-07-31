@@ -27,6 +27,7 @@ fn request_with_loopback_connect_info(
     request
 }
 
+#[cfg(feature = "ws_integration_tests")]
 fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
     tokio::spawn(async move {
         axum::serve(
@@ -1045,7 +1046,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
         },
         settlement: iroha_config::parameters::actual::Settlement {
-            repo: iroha_config::parameters::actual::Repo::default(),
             offline: iroha_config::parameters::actual::Offline::default(),
             router: iroha_config::parameters::actual::Router::default(),
         },

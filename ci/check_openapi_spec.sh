@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-OPENAPI_DIR="${REPO_ROOT}/docs/portal/static/openapi"
+OPENAPI_DIR="${REPO_ROOT}/artifacts/openapi"
 SPEC_PATH="${OPENAPI_DIR}/torii.json"
 CURRENT_SPEC_PATH="${OPENAPI_DIR}/versions/current/torii.json"
 MANIFEST_PATH="${OPENAPI_DIR}/manifest.json"
@@ -29,7 +29,7 @@ case "${REQUIRE_SIGNED}" in
 esac
 
 XTASK_VERIFY_POLICY_ARGS=()
-SIGNATURE_VERIFY_POLICY_ARGS=(--allow-unsigned=2025-q2)
+SIGNATURE_VERIFY_POLICY_ARGS=()
 if [[ "${REQUIRE_SIGNED}" == "0" ]]; then
   XTASK_VERIFY_POLICY_ARGS+=(--allow-unsigned)
   SIGNATURE_VERIFY_POLICY_ARGS+=(--allow-unsigned=latest --allow-unsigned=current)
@@ -173,7 +173,7 @@ const allowedSignersFile = resolve(allowedSignersFileArgument);
 const versionsDir = join(outputDir, 'versions');
 const generatedSpec = join(outputDir, 'torii.json');
 const syncModule = pathToFileURL(
-  join(sourceRoot, 'docs', 'portal', 'scripts', 'sync-openapi.mjs'),
+  join(sourceRoot, 'tools', 'openapi', 'scripts', 'sync-openapi.mjs'),
 ).href;
 const {syncOpenApi} = await import(syncModule);
 
@@ -221,8 +221,8 @@ build_unsigned_replay_bundle() {
   run_xtask_in_repo "${source_root}" openapi --unsigned-manifest
   mkdir -p "${output_dir}"
   cp -R "${REPLAY_BASELINE}/." "${output_dir}/"
-  cp "${source_root}/docs/portal/static/openapi/torii.json" "${output_dir}/torii.json"
-  cp "${source_root}/docs/portal/static/openapi/manifest.json" "${output_dir}/manifest.json"
+  cp "${source_root}/artifacts/openapi/torii.json" "${output_dir}/torii.json"
+  cp "${source_root}/artifacts/openapi/manifest.json" "${output_dir}/manifest.json"
   sync_unsigned_replay_bundle \
     "${source_root}" \
     "${output_dir}" \
@@ -251,20 +251,19 @@ print_refresh_help() {
   cat >&2 <<'EOF'
 Refresh the canonical manifest before syncing snapshots:
   development: cargo run --locked --offline -p xtask --bin xtask -- openapi --unsigned-manifest
-               (cd docs/portal && npm run sync-openapi -- --allow-unsigned)
+               (cd tools/openapi && npm run sync-openapi -- --allow-unsigned)
   release payload:
                cargo run --locked --offline -p xtask --bin xtask -- openapi \
                  --unsigned-manifest --signing-payload <operator-staging>/openapi-manifest-v2.payload
   release attach after the Ed25519 HSM signs those exact bytes:
                cargo run --locked --offline -p xtask --bin xtask -- openapi \
                  --signature-envelope <operator-staging>/openapi-manifest-v2.signature.json
-               (cd docs/portal && npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>)
+               (cd tools/openapi && npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>)
 Local private-key signing is intentionally unavailable; release signing is detached-only.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
 OPENAPI_ALLOWED_SIGNERS_FILE=<operator-allowlist-path> when running this gate.
-The checked-in allowlist is intentionally empty. The immutable 2025-q2
-development snapshot remains explicitly unsigned in either mode; signed mode
-requires the mutable root/latest/current release artifacts to be signed.
+The checked-in allowlist is intentionally empty. Signed mode requires the
+root/latest/current release artifacts to be signed.
 This gate always requires a clean checkout and clean mutable generator
 provenance. generator_commit must resolve to a real ancestor of HEAD, and
 generator_source_sha256_hex must match the canonical release-input inventory at
@@ -285,11 +284,11 @@ fi
 
 (
   cd "${REPO_ROOT}"
-  node docs/portal/scripts/verify-openapi-release-inputs.mjs \
+  node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
     >"${RELEASE_INPUT_SUMMARY_FIRST}"
   python3 scripts/check_sorafs_release_version_map.py \
     >"${VERSION_MAP_SUMMARY_FIRST}"
-  node docs/portal/scripts/verify-openapi-versions.mjs
+  node tools/openapi/scripts/verify-openapi-versions.mjs
 )
 
 # xtask intentionally emits manifests only beside the canonical spec path.
@@ -324,14 +323,14 @@ fi
 
 if ! diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" >/dev/null; then
   diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" || true
-  echo "error: docs/portal/static/openapi/torii.json is stale." >&2
+  echo "error: artifacts/openapi/torii.json is stale." >&2
   print_refresh_help
   exit 1
 fi
 
 if ! diff -u "${SPEC_PATH}" "${CURRENT_SPEC_PATH}" >/dev/null; then
   diff -u "${SPEC_PATH}" "${CURRENT_SPEC_PATH}" || true
-  echo "error: docs/portal/static/openapi/versions/current/torii.json is out of sync with the latest spec." >&2
+  echo "error: artifacts/openapi/versions/current/torii.json is out of sync with the latest spec." >&2
   print_refresh_help
   exit 1
 fi
@@ -358,11 +357,11 @@ require_clean_checkout
 
 (
   cd "${REPO_ROOT}"
-  node docs/portal/scripts/verify-openapi-versions.mjs
-  node docs/portal/scripts/check-openapi-signatures.mjs \
+  node tools/openapi/scripts/verify-openapi-versions.mjs
+  node tools/openapi/scripts/check-openapi-signatures.mjs \
     --allowed-signers="${ALLOWED_SIGNERS_PATH}" \
     "${SIGNATURE_VERIFY_POLICY_ARGS[@]}"
-  node docs/portal/scripts/verify-openapi-release-inputs.mjs \
+  node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
     >"${RELEASE_INPUT_SUMMARY_SECOND}"
   python3 scripts/check_sorafs_release_version_map.py \
     >"${VERSION_MAP_SUMMARY_SECOND}"

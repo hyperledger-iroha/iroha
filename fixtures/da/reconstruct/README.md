@@ -1,7 +1,7 @@
 # DA-6 Reconstruction Fixtures
 
 This directory contains the canonical RS parity fixture referenced by the
-`da_reconstruct` harness and the documentation in `docs/source/da/ingest_plan.md`.
+`da_reconstruct` harness and the documentation in `specs/da/ingest_plan.md`.
 It is generated via the ignored test
 
 ```

@@ -2134,9 +2134,9 @@ function validationFeeScaledUnits(value, scale, context) {
  * `requiredOverlayTransfer` is an assertion, not an appended instruction: the
  * deployed router/pool call must emit that exact transfer itself. This keeps the
  * transfer inside both the node-generated proof commitment and the user-signed
- * transaction payload. Pre-release signed/keyset validation-fee inputs are
- * rejected; only the ledger-native Parliament registry may authorize those
- * reserved policy fields.
+ * transaction payload. Signed/keyset validation-fee inputs are unsupported;
+ * only the ledger-native Parliament registry may authorize those reserved
+ * policy fields.
  *
  * @param {ToriiClient} client
  * @param {object} input

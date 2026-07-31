@@ -8510,23 +8510,77 @@ public struct ToriiDaManifestPersistedPaths: Sendable, Equatable {
     public let label: String
 }
 
+public struct ToriiDaCommitmentListRequest: Codable, Sendable, Equatable {
+    public let limit: UInt64?
+    public let cursor: ToriiDaCommitmentListCursor?
+
+    public init(
+        limit: UInt64? = nil,
+        cursor: ToriiDaCommitmentListCursor? = nil
+    ) {
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case cursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "cursor"],
+            debugName: "DA commitment-list request"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let limit = try container.decodeIfPresent(UInt64.self, forKey: .limit)
+        guard limit != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "DA commitment-list limit must be nonzero"
+            )
+        }
+        self.limit = limit
+        cursor = try container.decodeIfPresent(
+            ToriiDaCommitmentListCursor.self,
+            forKey: .cursor
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let limit {
+            guard limit > 0 else {
+                throw EncodingError.invalidValue(
+                    limit,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "DA commitment-list limit must be nonzero"
+                    )
+                )
+            }
+            try container.encode(limit, forKey: .limit)
+        }
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+    }
+}
+
 public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
     public let manifestHash: String?
     public let laneId: UInt32?
     public let epoch: UInt64?
     public let sequence: UInt64?
-    public let pagination: ToriiQueryPagination?
 
     public init(manifestHash: String? = nil,
                 laneId: UInt32? = nil,
                 epoch: UInt64? = nil,
-                sequence: UInt64? = nil,
-                pagination: ToriiQueryPagination? = nil) {
+                sequence: UInt64? = nil) {
         self.manifestHash = manifestHash
         self.laneId = laneId
         self.epoch = epoch
         self.sequence = sequence
-        self.pagination = pagination
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8534,14 +8588,13 @@ public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
         case laneId = "lane_id"
         case epoch
         case sequence
-        case pagination
     }
 
     public init(from decoder: Decoder) throws {
         try rejectUnknownJSONFields(
             from: decoder,
-            allowed: ["manifest_hash", "lane_id", "epoch", "sequence", "pagination"],
-            debugName: "DA commitment request"
+            allowed: ["manifest_hash", "lane_id", "epoch", "sequence"],
+            debugName: "DA commitment-proof request"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         manifestHash = try container
@@ -8550,7 +8603,6 @@ public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
         laneId = try container.decodeIfPresent(UInt32.self, forKey: .laneId)
         epoch = try container.decodeIfPresent(UInt64.self, forKey: .epoch)
         sequence = try container.decodeIfPresent(UInt64.self, forKey: .sequence)
-        pagination = try container.decodeIfPresent(ToriiQueryPagination.self, forKey: .pagination)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -8561,30 +8613,44 @@ public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
         try container.encodeIfPresent(laneId, forKey: .laneId)
         try container.encodeIfPresent(epoch, forKey: .epoch)
         try container.encodeIfPresent(sequence, forKey: .sequence)
-        try container.encodeIfPresent(pagination, forKey: .pagination)
     }
 }
 
 public struct ToriiDaCommitmentListResponse: Decodable, Sendable, Equatable {
     public let policies: ToriiDaProofPolicyBundle
     public let commitments: [ToriiDaCommitmentWithLocation]
+    public let nextCursor: ToriiDaCommitmentListCursor?
 
     private enum CodingKeys: String, CodingKey {
         case policies
         case commitments
+        case nextCursor = "next_cursor"
     }
 
     public init(from decoder: Decoder) throws {
         try rejectUnknownJSONFields(
             from: decoder,
-            allowed: ["policies", "commitments"],
+            allowed: ["policies", "commitments", "next_cursor"],
             debugName: "DA commitment-list response"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA commitment-list responses require next_cursor"
+                )
+            )
+        }
         policies = try container.decode(ToriiDaProofPolicyBundle.self, forKey: .policies)
         commitments = try container.decode(
             [ToriiDaCommitmentWithLocation].self,
             forKey: .commitments
+        )
+        nextCursor = try container.decodeIfPresent(
+            ToriiDaCommitmentListCursor.self,
+            forKey: .nextCursor
         )
     }
 }
@@ -8648,6 +8714,99 @@ public struct ToriiDaCommitmentVerifyResponse: Decodable, Sendable, Equatable {
     }
 }
 
+public struct ToriiDaPinIntentListRequest: Codable, Sendable, Equatable {
+    public let limit: UInt64?
+    public let cursor: ToriiDaPinIntentListCursor?
+
+    public init(
+        limit: UInt64? = nil,
+        cursor: ToriiDaPinIntentListCursor? = nil
+    ) {
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case cursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "cursor"],
+            debugName: "DA pin-intent-list request"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let limit = try container.decodeIfPresent(UInt64.self, forKey: .limit)
+        guard limit != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "DA pin-intent-list limit must be nonzero"
+            )
+        }
+        self.limit = limit
+        cursor = try container.decodeIfPresent(
+            ToriiDaPinIntentListCursor.self,
+            forKey: .cursor
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let limit {
+            guard limit > 0 else {
+                throw EncodingError.invalidValue(
+                    limit,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "DA pin-intent-list limit must be nonzero"
+                    )
+                )
+            }
+            try container.encode(limit, forKey: .limit)
+        }
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+    }
+}
+
+public struct ToriiDaPinIntentListResponse: Decodable, Sendable, Equatable {
+    public let intents: [ToriiDaPinIntentWithLocation]
+    public let nextCursor: ToriiDaPinIntentListCursor?
+
+    private enum CodingKeys: String, CodingKey {
+        case intents
+        case nextCursor = "next_cursor"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["intents", "next_cursor"],
+            debugName: "DA pin-intent-list response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "DA pin-intent-list responses require next_cursor"
+                )
+            )
+        }
+        intents = try container.decode(
+            [ToriiDaPinIntentWithLocation].self,
+            forKey: .intents
+        )
+        nextCursor = try container.decodeIfPresent(
+            ToriiDaPinIntentListCursor.self,
+            forKey: .nextCursor
+        )
+    }
+}
+
 public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
     public let manifestHash: String?
     public let storageTicket: String?
@@ -8655,22 +8814,19 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
     public let laneId: UInt32?
     public let epoch: UInt64?
     public let sequence: UInt64?
-    public let pagination: ToriiQueryPagination?
 
     public init(manifestHash: String? = nil,
                 storageTicket: String? = nil,
                 alias: String? = nil,
                 laneId: UInt32? = nil,
                 epoch: UInt64? = nil,
-                sequence: UInt64? = nil,
-                pagination: ToriiQueryPagination? = nil) {
+                sequence: UInt64? = nil) {
         self.manifestHash = manifestHash
         self.storageTicket = storageTicket
         self.alias = alias
         self.laneId = laneId
         self.epoch = epoch
         self.sequence = sequence
-        self.pagination = pagination
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8680,7 +8836,6 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
         case laneId = "lane_id"
         case epoch
         case sequence
-        case pagination
     }
 
     public init(from decoder: Decoder) throws {
@@ -8693,9 +8848,8 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
                 "lane_id",
                 "epoch",
                 "sequence",
-                "pagination",
             ],
-            debugName: "DA pin-intent query request"
+            debugName: "DA pin-intent-proof request"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         manifestHash = try container
@@ -8710,7 +8864,6 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
         laneId = try container.decodeIfPresent(UInt32.self, forKey: .laneId)
         epoch = try container.decodeIfPresent(UInt64.self, forKey: .epoch)
         sequence = try container.decodeIfPresent(UInt64.self, forKey: .sequence)
-        pagination = try container.decodeIfPresent(ToriiQueryPagination.self, forKey: .pagination)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -8730,7 +8883,6 @@ public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
         try container.encodeIfPresent(laneId, forKey: .laneId)
         try container.encodeIfPresent(epoch, forKey: .epoch)
         try container.encodeIfPresent(sequence, forKey: .sequence)
-        try container.encodeIfPresent(pagination, forKey: .pagination)
     }
 }
 
@@ -9201,7 +9353,7 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-    public static let expectedDataModelVersion = 3
+    public static let expectedDataModelVersion = 4
     /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
     public static let expectedSignedTransactionSchemaHashHex = "7ab5ff9c572efb316deac478f19209c5"
     public let abiVersion: Int
@@ -26086,7 +26238,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func listDaCommitments(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest(),
+    public func listDaCommitments(_ requestBody: ToriiDaCommitmentListRequest = ToriiDaCommitmentListRequest(),
                                   completion: @escaping (Result<ToriiDaCommitmentListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDaCommitments(requestBody) }
     }
@@ -26104,8 +26256,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest(),
-                                 completion: @escaping (Result<[ToriiDaPinIntentWithLocation], Swift.Error>) -> Void) -> Task<Void, Never> {
+    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentListRequest = ToriiDaPinIntentListRequest(),
+                                 completion: @escaping (Result<ToriiDaPinIntentListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDaPinIntents(requestBody) }
     }
 
@@ -28197,8 +28349,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiDaProofPolicyBundle.self, from: data)
     }
 
-    public func listDaCommitments(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest()) async throws -> ToriiDaCommitmentListResponse {
-        let normalized = try normalizeDaCommitmentProofRequest(requestBody)
+    public func listDaCommitments(_ requestBody: ToriiDaCommitmentListRequest = ToriiDaCommitmentListRequest()) async throws -> ToriiDaCommitmentListResponse {
+        let normalized = try normalizeDaCommitmentListRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
         let request = try makeRequest(path: "/v1/da/commitments",
@@ -28240,8 +28392,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiDaCommitmentVerifyResponse.self, from: data)
     }
 
-    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> [ToriiDaPinIntentWithLocation] {
-        let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
+    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentListRequest = ToriiDaPinIntentListRequest()) async throws -> ToriiDaPinIntentListResponse {
+        let normalized = try normalizeDaPinIntentListRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
         let request = try makeRequest(path: "/v1/da/pin-intents",
@@ -28252,7 +28404,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                         "Accept": "application/json"
                                       ])
         let data = try await data(for: request)
-        return try decodeJSON([ToriiDaPinIntentWithLocation].self, from: data)
+        return try decodeJSON(ToriiDaPinIntentListResponse.self, from: data)
     }
 
     public func proveDaPinIntent(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> ToriiDaPinIntentProof? {
@@ -31341,20 +31493,30 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         throw ToriiClientError.invalidPayload("chunkerHandle is required when the manifest omits chunking metadata")
     }
 
+    private func normalizeDaCommitmentListRequest(_ request: ToriiDaCommitmentListRequest) throws -> ToriiDaCommitmentListRequest {
+        if let limit = request.limit, limit == 0 {
+            throw ToriiClientError.invalidPayload("DA commitment-list limit must be nonzero")
+        }
+        return request
+    }
+
     private func normalizeDaCommitmentProofRequest(_ request: ToriiDaCommitmentProofRequest) throws -> ToriiDaCommitmentProofRequest {
         let normalizedManifest = try request.manifestHash.map {
             try ToriiClient.normalizeHex32($0, field: "manifest_hash")
-        }
-        if let limit = request.pagination?.limit, limit == 0 {
-            throw ToriiClientError.invalidPayload("DA pagination limit must be nonzero")
         }
         return ToriiDaCommitmentProofRequest(
             manifestHash: normalizedManifest,
             laneId: request.laneId,
             epoch: request.epoch,
-            sequence: request.sequence,
-            pagination: request.pagination
+            sequence: request.sequence
         )
+    }
+
+    private func normalizeDaPinIntentListRequest(_ request: ToriiDaPinIntentListRequest) throws -> ToriiDaPinIntentListRequest {
+        if let limit = request.limit, limit == 0 {
+            throw ToriiClientError.invalidPayload("DA pin-intent-list limit must be nonzero")
+        }
+        return request
     }
 
     private func normalizeDaPinIntentQueryRequest(_ request: ToriiDaPinIntentQueryRequest) throws -> ToriiDaPinIntentQueryRequest {
@@ -31367,17 +31529,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalizedAlias = try request.alias.map { alias in
             try requireDaPinIntentAlias(alias, field: "DA pin-intent query alias")
         }
-        if let limit = request.pagination?.limit, limit == 0 {
-            throw ToriiClientError.invalidPayload("DA pagination limit must be nonzero")
-        }
         return ToriiDaPinIntentQueryRequest(
             manifestHash: normalizedManifest,
             storageTicket: normalizedTicket,
             alias: normalizedAlias,
             laneId: request.laneId,
             epoch: request.epoch,
-            sequence: request.sequence,
-            pagination: request.pagination
+            sequence: request.sequence
         )
     }
 

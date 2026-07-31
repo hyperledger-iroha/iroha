@@ -7,7 +7,7 @@ Usage:
     scripts/check_swift_dashboard_data.py dashboards/data/mobile_ci.sample.json
 
 The validator ensures the top-level structure matches the schema documented in
-docs/source/references/ios_metrics.md so CI can catch drift early.
+specs/references/ios_metrics.md so CI can catch drift early.
 """
 
 from __future__ import annotations

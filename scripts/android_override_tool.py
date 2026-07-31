@@ -431,7 +431,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log",
         type=Path,
-        default=Path("docs/source/sdk/android/telemetry_override_log.md"),
+        default=Path("specs/sdk/android/telemetry_override_log.md"),
         help="Path to the Markdown audit log (default: %(default)s)",
     )
     parser.add_argument(
@@ -518,7 +518,7 @@ def _cmd_digest(args: argparse.Namespace) -> int:
         output_path = args.out
     else:
         stamp = (timestamp or dt.datetime.now(dt.timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
-        output_path = Path("docs/source/sdk/android/readiness/override_logs") / f"override_digest_{stamp}.json"
+        output_path = Path("specs/sdk/android/readiness/override_logs") / f"override_digest_{stamp}.json"
 
     result = export_override_digest(log_path=args.log, output_path=output_path, now=timestamp)
     print(f"[{result['generated_at']}] Override digest written to {output_path}")

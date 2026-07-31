@@ -2693,8 +2693,8 @@ mod tests {
                 hex::encode(Sha256::digest(proof.encode()))
             ),
             (
-                69_955,
-                "369a807673bdbc8f1a8def68e7b0fae1d637ef096a62000e66a30e6c46dec068".to_owned()
+                69_859,
+                "2293cddd7d3111d232265a3c0226a906bd6d6b71c01de683a3d4f7ffbabad01d".to_owned()
             )
         );
     }

@@ -14,37 +14,55 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class DaToriiClientTest {
     @Test
-    fun listCommitmentsUsesCanonicalDigestWrapperAndTypedResponse() {
+    fun listCommitmentsUsesSnapshotCursorAndTypedResponse() {
         val executor = CapturingDaExecutor(
             """
             {
               "policies":{"version":1,"policy_hash":"$HASH","policies":[]},
-              "commitments":[]
+              "commitments":[],
+              "next_cursor":{
+                "snapshot":{"block_height":18446744073709551615,"block_hash":"$HASH"},
+                "after":{"lane_id":7,"epoch":18446744073709551615,"sequence":9}
+              }
             }
             """.trimIndent(),
         )
         val client = client(executor)
 
+        val snapshot = DaModels.ListSnapshot(
+            blockHeight = BigInteger("18446744073709551615"),
+            blockHash = HASH,
+        )
         val response = client.listCommitments(
-            DaModels.CommitmentQuery(
-                manifestHash = DaModels.Digest32.fromHex("11".repeat(32)),
-                laneId = 7,
-                epoch = BigInteger("18446744073709551615"),
-                sequence = BigInteger.valueOf(9),
-                pagination = DaModels.Pagination(BigInteger.valueOf(3), BigInteger.ONE),
+            DaModels.CommitmentListRequest(
+                limit = BigInteger("18446744073709551615"),
+                cursor = DaModels.CommitmentListCursor(
+                    snapshot,
+                    DaModels.CommitmentKey(
+                        laneId = 7,
+                        epoch = BigInteger("18446744073709551615"),
+                        sequence = BigInteger.valueOf(9),
+                    ),
+                ),
             ),
         ).join()
 
         assertEquals("POST", executor.lastRequest.method)
         assertEquals("/v1/da/commitments", executor.lastRequest.uri.path)
         val request = DaJson.parse(executor.lastRequest.body, "request") as Map<*, *>
-        val digest = request["manifest_hash"] as List<*>
-        assertEquals(1, digest.size)
-        assertEquals(List(32) { 0x11L }, digest[0])
-        assertEquals(BigInteger("18446744073709551615"), request["epoch"])
+        assertEquals(setOf("cursor", "limit"), request.keys)
+        assertEquals(BigInteger("18446744073709551615"), request["limit"])
+        val cursor = request["cursor"] as Map<*, *>
+        val encodedSnapshot = cursor["snapshot"] as Map<*, *>
+        assertEquals(BigInteger("18446744073709551615"), encodedSnapshot["block_height"])
+        assertEquals(HASH, encodedSnapshot["block_hash"])
+        val after = cursor["after"] as Map<*, *>
+        assertEquals(BigInteger("18446744073709551615"), after["epoch"])
         assertEquals(1, response.policies.version)
         assertEquals(HASH, response.policies.policyHash)
         assertTrue(response.commitments.isEmpty())
+        assertEquals(snapshot, response.nextCursor?.snapshot)
+        assertEquals(BigInteger("18446744073709551615"), response.nextCursor?.after?.epoch)
     }
 
     @Test
@@ -52,12 +70,14 @@ class DaToriiClientTest {
         val proofJson = pinIntentProofJson()
         val proveExecutor = CapturingDaExecutor(proofJson)
         val proof = client(proveExecutor).provePinIntent(
-            DaModels.PinIntentQuery(
+            DaModels.PinIntentQueryRequest(
                 storageTicket = DaModels.Digest32.fromHex("22".repeat(32)),
             ),
         ).join()
 
         requireNotNull(proof)
+        val proveRequest = DaJson.parse(proveExecutor.lastRequest.body, "request") as Map<*, *>
+        assertEquals(setOf("storage_ticket"), proveRequest.keys)
         assertEquals(BigInteger("18446744073709551615"), proof.intent.epoch)
         assertEquals(2, proof.bundleLength)
         assertEquals(DaModels.MerkleDirection.RIGHT, proof.path.single().direction)
@@ -83,8 +103,69 @@ class DaToriiClientTest {
     @Test
     fun proveReturnsNullForMissingRecord() {
         val executor = CapturingDaExecutor("null")
-        assertNull(client(executor).proveCommitment().join())
+        assertNull(
+            client(executor).proveCommitment(
+                DaModels.CommitmentProofRequest(
+                    manifestHash = DaModels.Digest32.fromHex("11".repeat(32)),
+                    laneId = 7,
+                    epoch = BigInteger("18446744073709551615"),
+                    sequence = BigInteger.ONE,
+                ),
+            ).join(),
+        )
         assertEquals("/v1/da/commitments/prove", executor.lastRequest.uri.path)
+        val request = DaJson.parse(executor.lastRequest.body, "request") as Map<*, *>
+        assertEquals(setOf("manifest_hash", "lane_id", "epoch", "sequence"), request.keys)
+        assertTrue("limit" !in request)
+        assertTrue("cursor" !in request)
+        assertTrue("pagination" !in request)
+    }
+
+    @Test
+    fun listPinIntentsUsesLocationCursorAndRequiresResponseEnvelope() {
+        val executor = CapturingDaExecutor(
+            """
+            {
+              "intents":[],
+              "next_cursor":{
+                "snapshot":{"block_height":10,"block_hash":"$HASH"},
+                "after":{"block_height":9,"index_in_bundle":4294967295}
+              }
+            }
+            """.trimIndent(),
+        )
+        val request = DaModels.PinIntentListRequest(
+            limit = BigInteger.valueOf(5),
+            cursor = DaModels.PinIntentListCursor(
+                DaModels.ListSnapshot(BigInteger.TEN, HASH),
+                DaModels.Location(BigInteger.valueOf(9), 4_294_967_295L),
+            ),
+        )
+
+        val response = client(executor).listPinIntents(request).join()
+
+        assertTrue(response.intents.isEmpty())
+        assertEquals(BigInteger.TEN, response.nextCursor?.snapshot?.blockHeight)
+        assertEquals(4_294_967_295L, response.nextCursor?.after?.indexInBundle)
+        val posted = DaJson.parse(executor.lastRequest.body, "request") as Map<*, *>
+        assertEquals(setOf("cursor", "limit"), posted.keys)
+        val cursor = posted["cursor"] as Map<*, *>
+        assertEquals(
+            9L,
+            (cursor["after"] as Map<*, *>)["block_height"],
+        )
+
+        val finalPage = client(
+            CapturingDaExecutor("""{"intents":[],"next_cursor":null}"""),
+        ).listPinIntents().join()
+        assertTrue(finalPage.intents.isEmpty())
+        assertNull(finalPage.nextCursor)
+
+        val legacy = CapturingDaExecutor("[]")
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(legacy).listPinIntents().join()
+        }
+        assertTrue(error.cause is DaToriiException)
     }
 
     @Test
@@ -136,12 +217,45 @@ class DaToriiClientTest {
                 "proof",
             )
         }
+
+        assertFailsWith<IllegalArgumentException> {
+            DaJson.parseCommitmentList(
+                DaJson.parse(
+                    """
+                    {
+                      "policies":{"version":1,"policy_hash":"$HASH","policies":[]},
+                      "commitments":[]
+                    }
+                    """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+                    "response",
+                ),
+                "response",
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            DaJson.parsePinIntentList(
+                DaJson.parse(
+                    """
+                    {
+                      "intents":[],
+                      "next_cursor":{
+                        "snapshot":{"block_height":10},
+                        "after":{"block_height":9,"index_in_bundle":0}
+                      }
+                    }
+                    """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+                    "response",
+                ),
+                "response",
+            )
+        }
     }
 
     @Test
     fun pinIntentAliasesUseServerUtf8ByteBound() {
-        DaModels.PinIntentQuery(alias = "")
-        DaModels.PinIntentQuery(alias = "é".repeat(128))
+        DaModels.PinIntentQueryRequest(alias = "")
+        DaModels.PinIntentQueryRequest(alias = "é".repeat(128))
         DaModels.RetentionPolicy(
             hotRetentionSeconds = BigInteger.ZERO,
             coldRetentionSeconds = BigInteger.ZERO,
@@ -150,7 +264,18 @@ class DaToriiClientTest {
             governanceTag = "",
         )
         assertFailsWith<IllegalArgumentException> {
-            DaModels.PinIntentQuery(alias = "é".repeat(129))
+            DaModels.PinIntentQueryRequest(alias = "é".repeat(129))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DaModels.CommitmentListRequest(limit = BigInteger.ZERO)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DaModels.PinIntentListRequest(
+                cursor = DaModels.PinIntentListCursor(
+                    DaModels.ListSnapshot(BigInteger.ONE, null),
+                    DaModels.Location(BigInteger.ONE, 0),
+                ),
+            )
         }
     }
 
