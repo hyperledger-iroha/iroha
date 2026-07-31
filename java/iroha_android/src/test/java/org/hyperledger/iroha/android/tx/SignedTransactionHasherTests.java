@@ -22,7 +22,7 @@ public final class SignedTransactionHasherTests {
       Set.of(
           "schema.version",
           "source.tag",
-          "source.commit",
+          "source.bundle.sha256",
           "reference",
           "versioned.bytes",
           "versioned.sha256",

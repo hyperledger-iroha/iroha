@@ -183,6 +183,8 @@
     "release:provenance": "node ./scripts/record-release-provenance.mjs",
     "release:verify": "node ./scripts/verify-release-tarball.mjs",
     "fixtures:axt": "node ./scripts/refresh-axt-fixtures.mjs",
+    "fixtures:compact": "node ./scripts/regenerate-compact-hash-vector.mjs",
+    "fixtures:compact:check": "node ./scripts/regenerate-compact-hash-vector.mjs --check",
     "release:matrix": "node ./scripts/release-matrix.mjs",
     "release:publish": "npm publish --access public --provenance",
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",

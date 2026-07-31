@@ -38,11 +38,12 @@ duplicate commitments fail closed.
 
 ## Direct Torii API
 
-The lifecycle uses exactly four Torii routes:
+The lifecycle uses exactly five Torii routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/offline/readiness` | Authoritative scale, block, verifier windows, and artifact requirements |
+| `POST` | `/v1/offline/receiver-lineage` | Resolve proof-bearing active receiver-registration lineage |
 | `POST` | `/v1/offline/top-up` | Submit `OfflineTopUpRequest` |
 | `POST` | `/v1/offline/redeem` | Submit `OfflineRedeemRequest` |
 | `GET` | `/v1/offline/operations/{operation_id}` | Observe durable operation state and finality |
@@ -73,6 +74,15 @@ reconstruction, so their explicit schema profiles retain Norito's conservative
 schema-specific nesting limits. A compressed length field, forged collection
 count, oversized unshield proof, or structurally decodable non-canonical
 representation therefore fails within its body and allocation ceilings.
+
+The signed `operation_id` occupies a global namespace across authorities and
+operation kinds. This prevents a second account or a different operation kind
+from claiming an already committed operation identity. Nonce, payload-digest,
+and exact-request replay markers remain authority-scoped, so identical leaf
+values owned by different authorities do not collide unless their global
+operation id also collides. Replay rejection is transactional: it stages none
+of those markers and changes no balances, confidential-tree state, contract
+state, or receipts.
 
 Readiness and operation responses support Torii's typed response negotiation.
 Readiness is authoritative only when its block context, live asset scale,
@@ -140,7 +150,23 @@ committed bytes, the sender bears cash-loss risk exactly as with physical cash.
 
 No network or artifact fetch is permitted during send, receive, proof creation,
 or peer verification. QR and NFC carry the same canonical request, payment, and
-acknowledgement archives.
+acknowledgement archives. Their reviewed release measurements come from the
+feature-gated Rust serializer factory, not hand-maintained size arithmetic:
+
+```bash
+cargo run --locked -p iroha_data_model --features test-fixtures \
+  --bin kagemusha_peer_transport_fixtures -- --check
+```
+
+The checked-in `fixtures/kagemusha/peer_transport_measurements_v1.json` binds
+the generator and factory source digest, complete canonical archive bytes,
+archive sizes, archive SHA-256 values, and the exact dependency resolution in
+`fixtures/kagemusha/cargo-lock.reviewed.v1`. A clean build copies that reviewed
+lock byte-for-byte to the ignored root `Cargo.lock`; the payload gate rejects a
+missing file, symlink, digest drift, or byte mismatch before invoking Cargo
+with `--locked`. Any serializer, factory, dependency, or archive change
+requires regeneration, explicit review of every changed pin, and the payload
+gate's adversarial self-test before release.
 
 ## Offline to online
 
@@ -376,14 +402,14 @@ blocker set is empty; an unrelated issuer or transfer blocker can therefore
 make `ready` false without erasing backend or lineage facts.
 `recursive_lineage_unavailable` is present exactly when lineage is false.
 
-`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` remains `false` in the
-candidate change set. It may be changed only by the final signed promotion
-commit after the authenticated review, benchmark, physical-device, and
-role-threshold evidence has been added. Even after promotion it is not by
-itself an admission or readiness signal: runtime capability stays fail-closed
-until the exact authenticated ABI-21/V4 artifact set is installed, its live
-inventory is revalidated, and both verifier and prover material construct
-successfully.
+`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` is compile-time gated by
+the non-default `kagemusha-production-enabled` Cargo feature. Default and
+candidate builds report `false`; only an explicitly promoted bridge build
+selects the feature after authenticated review, benchmark, physical-device,
+and role-threshold evidence has been added. The flag is a safety gate, not an
+admission or readiness shortcut: runtime capability stays fail-closed until
+the exact authenticated ABI-21/V4 artifact set is installed, its live inventory
+is revalidated, and both verifier and prover material construct successfully.
 Top-up and redemption change additionally require the governed selected
 release's issuance window to be active. Full redemption authenticates the
 parent release for its longer redemption lifetime, so a legitimately issued

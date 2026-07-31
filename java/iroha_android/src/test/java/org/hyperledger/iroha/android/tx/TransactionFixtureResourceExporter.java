@@ -1,7 +1,6 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,7 +8,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,11 +22,11 @@ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 
 /**
- * Regenerates the full canonical and Android transaction fixture sets from the deterministic
- * fixture signing seed.
+ * Regenerates the full shared transaction fixture family from the deterministic fixture signing
+ * seed.
  *
- * <p>Swift and Python intentionally carry selected subsets and must be regenerated from their own
- * payload JSON inputs; this exporter must never flatten those selections.
+ * <p>The canonical, Android, Python, and Swift copies are one reviewed family. Swift's separately
+ * generated {@code swift_*.norito} parity fixtures are preserved.
  */
 public final class TransactionFixtureResourceExporter {
 
@@ -43,28 +41,24 @@ public final class TransactionFixtureResourceExporter {
   private static final List<String> PAYLOAD_JSON_OUTPUTS =
       List.of(
           ANDROID_PAYLOADS,
-          "fixtures/norito_rpc/transaction_payloads.json");
+          "fixtures/norito_rpc/transaction_payloads.json",
+          "python/iroha_python/tests/fixtures/transaction_payloads.json",
+          "IrohaSwift/Fixtures/transaction_payloads.json");
 
   private static final List<String> MANIFEST_OUTPUTS =
       List.of(
           ANDROID_MANIFEST,
-          "fixtures/norito_rpc/transaction_fixtures.manifest.json");
+          "fixtures/norito_rpc/transaction_fixtures.manifest.json",
+          "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json",
+          "IrohaSwift/Fixtures/transaction_fixtures.manifest.json");
 
   private static final List<String> NORITO_OUTPUT_DIRS =
       List.of(
           "java/iroha_android/src/test/resources",
-          "fixtures/norito_rpc");
-
-  private static final List<String[]> SUBSET_HASH_OUTPUTS =
-      List.of(
-          new String[] {
-            "IrohaSwift/Fixtures/transaction_payloads.json",
-            "IrohaSwift/Fixtures/transaction_fixtures.manifest.json"
-          },
-          new String[] {
-            "python/iroha_python/tests/fixtures/transaction_payloads.json",
-            "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json"
-          });
+          "fixtures/norito_rpc",
+          "python/iroha_python/tests/fixtures",
+          "IrohaSwift/Fixtures");
+  private static final String SWIFT_NORITO_OUTPUT_DIR = "IrohaSwift/Fixtures";
 
   private static final NoritoJavaCodecAdapter CODEC = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
@@ -93,7 +87,8 @@ public final class TransactionFixtureResourceExporter {
     for (int i = 0; i < fixtures.size(); i++) {
       final TransactionPayloadFixtures.Fixture fixture = fixtures.get(i);
       final Object rawEntry = rawEntries.get(i);
-      final FixtureOutput output = regenerateFixture(fixture, authority, privateKey, publicKey);
+      final FixtureOutput output =
+          regenerateFixture(fixture, rawEntry, authority, privateKey, publicKey);
       rewriteRawEntry(rawEntry, output);
       manifestFixtures.add(output.toManifestEntry());
       outputs.add(output);
@@ -111,16 +106,8 @@ public final class TransactionFixtureResourceExporter {
       writeString(repoRoot.resolve(relative), renderedManifest);
     }
 
-    for (final String[] subset : SUBSET_HASH_OUTPUTS) {
-      refreshSubsetHashes(repoRoot, subset[0], subset[1], outputs);
-    }
-
     for (final String relativeDir : NORITO_OUTPUT_DIRS) {
-      final Path dir = repoRoot.resolve(relativeDir);
-      Files.createDirectories(dir);
-      for (final FixtureOutput output : outputs) {
-        Files.write(dir.resolve(output.name + ".norito"), output.payloadBytes);
-      }
+      writeNoritoFamily(repoRoot, relativeDir, outputs);
     }
 
     System.out.println(
@@ -130,108 +117,139 @@ public final class TransactionFixtureResourceExporter {
             + authority);
   }
 
-  private static void refreshSubsetHashes(
-      final Path repoRoot,
-      final String payloadRelative,
-      final String manifestRelative,
-      final List<FixtureOutput> outputs)
+  private static void writeNoritoFamily(
+      final Path repoRoot, final String relativeDir, final List<FixtureOutput> outputs)
       throws IOException {
-    final Path payloadPath = repoRoot.resolve(payloadRelative);
-    final List<Object> payloadEntries = parseFixtureEntries(payloadPath);
-    refreshHashEntries(payloadEntries, outputs, payloadRelative);
-    writeString(payloadPath, renderJson(payloadEntries) + "\n");
-
-    final Path manifestPath = repoRoot.resolve(manifestRelative);
-    final Object parsedManifest =
-        JsonParser.parse(Files.readString(manifestPath, StandardCharsets.UTF_8));
-    final Map<String, Object> manifest = requireMap(parsedManifest, manifestRelative);
-    final Object fixturesValue = manifest.get("fixtures");
-    if (!(fixturesValue instanceof List<?> fixtures)) {
-      throw new IllegalStateException(manifestRelative + " must contain a fixtures array");
+    final Path dir = repoRoot.resolve(relativeDir);
+    Files.createDirectories(dir);
+    final Set<String> expected = new HashSet<>();
+    for (final FixtureOutput output : outputs) {
+      expected.add(output.name + ".norito");
     }
-    final List<Object> manifestEntries = new ArrayList<>(fixtures);
-    refreshHashEntries(manifestEntries, outputs, manifestRelative);
-    manifest.put("fixtures", manifestEntries);
-    writeString(manifestPath, renderJson(manifest) + "\n");
+    try (var entries = Files.list(dir)) {
+      for (final Path existing : entries.toList()) {
+        final String name = existing.getFileName().toString();
+        if (!name.endsWith(".norito") || expected.contains(name)) {
+          continue;
+        }
+        if (relativeDir.equals(SWIFT_NORITO_OUTPUT_DIR) && name.startsWith("swift_")) {
+          continue;
+        }
+        Files.delete(existing);
+      }
+    }
+    for (final FixtureOutput output : outputs) {
+      Files.write(dir.resolve(output.name + ".norito"), output.payloadBytes);
+    }
   }
 
-  private static void refreshHashEntries(
-      final List<Object> entries,
-      final List<FixtureOutput> outputs,
-      final String context) {
-    assertUniqueHashEntries(entries, context);
-    final Map<String, Integer> occurrences = new HashMap<>();
-    for (final Object rawEntry : entries) {
-      final Map<String, Object> entry = requireMap(rawEntry, context + " entry");
-      final Object nameValue = entry.get("name");
-      if (!(nameValue instanceof String name)) {
-        throw new IllegalStateException(context + " entry is missing a name");
-      }
-      final int occurrence = occurrences.getOrDefault(name, 0);
-      occurrences.put(name, occurrence + 1);
-      final FixtureOutput output = findOutput(outputs, name, occurrence, context);
-      final Object signedBase64 = entry.get("signed_base64");
-      if (!(signedBase64 instanceof String) || !output.signedBase64.equals(signedBase64)) {
+  private static FixtureOutput regenerateFixture(
+      final TransactionPayloadFixtures.Fixture fixture,
+      final Object rawEntry,
+      final String authority,
+      final Ed25519PrivateKeyParameters privateKey,
+      final byte[] publicKey)
+      throws Exception {
+    final TransactionPayload sourcePayload = fixture.toPayload();
+    final TransactionPayload payload;
+    final byte[] payloadBytes;
+    if ("ivm_transfer".equals(fixture.name())) {
+      if (!sourcePayload.authority().equals(authority)) {
         throw new IllegalStateException(
-            context
-                + " signed bytes for "
-                + name
-                + " differ from the canonical fixture; run its language-specific regeneration");
+            "ivm_transfer: historical gasless payload authority cannot be rewritten");
       }
-      entry.put("signed_hash", output.signedHash);
+      payload = sourcePayload;
+      payloadBytes =
+          decodeCanonicalBase64(
+              fixture
+                  .encoded()
+                  .orElseThrow(
+                      () ->
+                          new IllegalStateException(
+                              "ivm_transfer: historical encoded payload is required")),
+              "ivm_transfer.encoded");
+      return historicalFixtureOutput(fixture.name(), payload, payloadBytes, rawEntry);
+    } else {
+      payload = sourcePayload.toBuilder().setAuthority(authority).build();
+      payloadBytes = CODEC.encodeTransaction(payload);
     }
+    return fixtureOutput(fixture.name(), payload, payloadBytes, privateKey, publicKey);
   }
 
-  private static void assertUniqueHashEntries(
-      final List<Object> entries, final String context) {
-    final Set<String> names = new HashSet<>();
-    final Set<String> encodedFiles = new HashSet<>();
-    final Set<String> payloadHashes = new HashSet<>();
-    final Set<ByteBuffer> payloadBytesValues = new HashSet<>();
-    final Set<String> signedHashes = new HashSet<>();
-    final Set<ByteBuffer> signedBytesValues = new HashSet<>();
-    for (final Object rawEntry : entries) {
-      final Map<String, Object> entry = requireMap(rawEntry, context + " entry");
-      final String name = requireEntryString(entry, "name", context);
-      if (!names.add(name)) {
-        throw new IllegalStateException(context + " contains duplicate fixture name: " + name);
-      }
-      final Object encodedFile = entry.get("encoded_file");
-      if (encodedFile instanceof String value && !encodedFiles.add(value)) {
-        throw new IllegalStateException(context + " contains duplicate encoded_file: " + value);
-      }
-      final String payloadHash = requireEntryString(entry, "payload_hash", context);
-      final String payloadBase64 = requireEntryString(entry, "payload_base64", context);
-      final String signedHash = requireEntryString(entry, "signed_hash", context);
-      final String signedBase64 = requireEntryString(entry, "signed_base64", context);
-      if (!payloadHashes.add(payloadHash)) {
-        throw new IllegalStateException(context + " contains duplicate payload_hash: " + payloadHash);
-      }
-      final ByteBuffer payloadBytes =
-          ByteBuffer.wrap(decodeCanonicalBase64(payloadBase64, context + ":" + name))
-              .asReadOnlyBuffer();
-      if (!payloadBytesValues.add(payloadBytes)) {
-        throw new IllegalStateException(context + " contains duplicate payload bytes: " + name);
-      }
-      if (!signedHashes.add(signedHash)) {
-        throw new IllegalStateException(context + " contains duplicate signed_hash: " + signedHash);
-      }
-      final ByteBuffer signedBytes =
-          ByteBuffer.wrap(decodeCanonicalBase64(signedBase64, context + ":" + name))
-              .asReadOnlyBuffer();
-      if (!signedBytesValues.add(signedBytes)) {
-        throw new IllegalStateException(context + " contains duplicate signed bytes: " + name);
-      }
+  private static FixtureOutput historicalFixtureOutput(
+      final String name,
+      final TransactionPayload payload,
+      final byte[] payloadBytes,
+      final Object rawEntry) {
+    final Map<String, Object> entry = requireMap(rawEntry, name);
+    final byte[] signedBytes =
+        decodeCanonicalBase64(requireEntryString(entry, "signed_base64", name), name + ".signed");
+    if (!containsSubsequence(signedBytes, payloadBytes)) {
+      throw new IllegalStateException(name + ": signed bytes do not contain the payload bytes");
     }
+    final String payloadBase64 = Base64.getEncoder().encodeToString(payloadBytes);
+    final String signedBase64 = Base64.getEncoder().encodeToString(signedBytes);
+    final String payloadHash = toHex(IrohaHash.prehash(payloadBytes));
+    final String signedHash = hashHistoricalCanonicalSignedBytes(signedBytes);
+    if (!payloadHash.equals(requireEntryString(entry, "payload_hash", name))
+        || !signedHash.equals(requireEntryString(entry, "signed_hash", name))) {
+      throw new IllegalStateException(name + ": historical fixture hash drift");
+    }
+    return new FixtureOutput(
+        name,
+        payload.chainId(),
+        payload.authority(),
+        payload.creationTimeMs(),
+        payload.timeToLiveMs().orElse(null),
+        payload.nonce().orElse(null),
+        payloadBytes,
+        signedBytes,
+        payloadBase64,
+        signedBase64,
+        payloadHash,
+        signedHash);
   }
 
-  private static String requireEntryString(
-      final Map<String, Object> entry, final String field, final String context) {
-    final Object value = entry.get(field);
-    if (!(value instanceof String string)) {
-      throw new IllegalStateException(context + " entry is missing " + field);
-    }
-    return string;
+  private static String hashHistoricalCanonicalSignedBytes(final byte[] signedBytes) {
+    final byte[] compactLength = SignedTransactionHasher.encodeCompactLength(signedBytes.length);
+    final byte[] external = new byte[4 + compactLength.length + signedBytes.length];
+    System.arraycopy(compactLength, 0, external, 4, compactLength.length);
+    System.arraycopy(signedBytes, 0, external, 4 + compactLength.length, signedBytes.length);
+    return toHex(IrohaHash.prehash(external));
+  }
+
+  private static FixtureOutput fixtureOutput(
+      final String name,
+      final TransactionPayload payload,
+      final byte[] payloadBytes,
+      final Ed25519PrivateKeyParameters privateKey,
+      final byte[] publicKey)
+      throws Exception {
+    final byte[] signature = signPayload(privateKey, payloadBytes);
+    final SignedTransaction signed =
+        SignedTransaction.builder()
+            .setEncodedPayload(payloadBytes)
+            .setSignature(signature)
+            .setPublicKey(publicKey)
+            .setSchemaName(CODEC.schemaName())
+            .build();
+    final byte[] signedBytes = SignedTransactionEncoder.encode(signed);
+    final String payloadBase64 = Base64.getEncoder().encodeToString(payloadBytes);
+    final String signedBase64 = Base64.getEncoder().encodeToString(signedBytes);
+
+    return new FixtureOutput(
+        name,
+        payload.chainId(),
+        payload.authority(),
+        payload.creationTimeMs(),
+        payload.timeToLiveMs().orElse(null),
+        payload.nonce().orElse(null),
+        payloadBytes,
+        signedBytes,
+        payloadBase64,
+        signedBase64,
+        toHex(IrohaHash.prehash(payloadBytes)),
+        SignedTransactionHasher.hashCanonicalHex(signedBytes));
   }
 
   private static byte[] decodeCanonicalBase64(final String value, final String context) {
@@ -246,58 +264,29 @@ public final class TransactionFixtureResourceExporter {
     }
   }
 
-  private static FixtureOutput findOutput(
-      final List<FixtureOutput> outputs,
-      final String name,
-      final int occurrence,
-      final String context) {
-    int seen = 0;
-    for (final FixtureOutput output : outputs) {
-      if (!output.name.equals(name)) {
-        continue;
-      }
-      if (seen == occurrence) {
-        return output;
-      }
-      seen++;
+  private static String requireEntryString(
+      final Map<String, Object> entry, final String field, final String context) {
+    final Object value = entry.get(field);
+    if (!(value instanceof String string) || string.isEmpty()) {
+      throw new IllegalStateException(context + " entry is missing " + field);
     }
-    throw new IllegalStateException(
-        context + " references unknown fixture occurrence " + name + "#" + occurrence);
+    return string;
   }
 
-  private static FixtureOutput regenerateFixture(
-      final TransactionPayloadFixtures.Fixture fixture,
-      final String authority,
-      final Ed25519PrivateKeyParameters privateKey,
-      final byte[] publicKey)
-      throws Exception {
-    final TransactionPayload payload = fixture.toPayload().toBuilder().setAuthority(authority).build();
-    final byte[] payloadBytes = CODEC.encodeTransaction(payload);
-    final byte[] signature = signPayload(privateKey, payloadBytes);
-    final SignedTransaction signed =
-        SignedTransaction.builder()
-            .setEncodedPayload(payloadBytes)
-            .setSignature(signature)
-            .setPublicKey(publicKey)
-            .setSchemaName(CODEC.schemaName())
-            .build();
-    final byte[] signedBytes = SignedTransactionEncoder.encode(signed);
-    final String payloadBase64 = Base64.getEncoder().encodeToString(payloadBytes);
-    final String signedBase64 = Base64.getEncoder().encodeToString(signedBytes);
-
-    return new FixtureOutput(
-        fixture.name(),
-        payload.chainId(),
-        authority,
-        payload.creationTimeMs(),
-        payload.timeToLiveMs().orElse(null),
-        payload.nonce().orElse(null),
-        payloadBytes,
-        signedBytes,
-        payloadBase64,
-        signedBase64,
-        toHex(IrohaHash.prehash(payloadBytes)),
-        SignedTransactionHasher.hashCanonicalHex(signedBytes));
+  private static boolean containsSubsequence(final byte[] haystack, final byte[] needle) {
+    if (needle.length == 0 || needle.length > haystack.length) {
+      return false;
+    }
+    for (int start = 0; start <= haystack.length - needle.length; start++) {
+      int index = 0;
+      while (index < needle.length && haystack[start + index] == needle[index]) {
+        index++;
+      }
+      if (index == needle.length) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static void rewriteRawEntry(final Object rawEntry, final FixtureOutput output) {

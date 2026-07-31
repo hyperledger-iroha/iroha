@@ -30701,6 +30701,7 @@ impl State {
         }
         self.prune_direct_lane_block_application_markers_for_lanes(lanes_to_reset);
         if publish_process_runtime {
+            #[cfg(feature = "telemetry")]
             self.telemetry
                 .prune_da_receipt_lanes(lanes_to_reset.iter().map(|lane| lane.as_u32()));
             crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);

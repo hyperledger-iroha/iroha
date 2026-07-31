@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 default-run = "export_norito_fixtures"
 
+[[bin]]
+name = "swift_parity_regen"
+path = "../../crates/connect_norito_bridge/src/bin/swift_parity_regen.rs"
+
 [features]
 default = []
 kaigi-fixtures = []

@@ -32,7 +32,7 @@ mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
-PRIVACY = "crates/iroha_data_model/src/privacy.rs"
+PRIVACY = "crates/iroha_data_model/src/privacy/protocol.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
@@ -588,24 +588,27 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "check_kagemusha_production_readiness.sh candidate",
         "check_kagemusha_production_readiness.sh candidate --self-test",
         "check_kagemusha_recursive_spend_v4_sdk_contract.sh",
+        "ci/check_kagemusha_reviewed_cargo_lock.sh --materialize",
+        "ci/check_kagemusha_reviewed_cargo_lock.sh --self-test",
+        '"fixtures/kagemusha/cargo-lock.reviewed.v1"',
         '"crates/iroha_core/src/smartcontracts/isi/offline/**"',
-        "cargo test -p iroha_core kagemusha_v4 --lib",
-        "cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
-        "cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
-        "cargo test -p iroha_core sequential_append_paths --lib",
-        "cargo test -p iroha_core recursive_state_vector_is_exact_and_zero_padded --lib",
-        "cargo test -p iroha_core output_membership --lib",
-        "cargo test -p iroha_core v4_eq_frontier_copy_constraints --lib",
-        "cargo test -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib",
-        "cargo test -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib",
-        "cargo test -p iroha_core kagemusha_terminal_registry_v4 --lib",
-        "cargo test -p iroha_kagami --bin kagami harden_private_tree",
-        "cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash",
-        "cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed",
-        "cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag",
-        "cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag",
-        "cargo test -p connect_norito_bridge recursive_spend_v4",
-        "cargo test -p connect_norito_bridge output_membership_local_carrier --lib",
+        "cargo test --locked -p iroha_core kagemusha_v4 --lib",
+        "cargo test --locked -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
+        "cargo test --locked -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
+        "cargo test --locked -p iroha_core sequential_append_paths --lib",
+        "cargo test --locked -p iroha_core recursive_state_vector_is_exact_and_zero_padded --lib",
+        "cargo test --locked -p iroha_core output_membership --lib",
+        "cargo test --locked -p iroha_core v4_eq_frontier_copy_constraints --lib",
+        "cargo test --locked -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib",
+        "cargo test --locked -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib",
+        "cargo test --locked -p iroha_core kagemusha_terminal_registry_v4 --lib",
+        "cargo test --locked -p iroha_kagami --bin kagami harden_private_tree",
+        "cargo test --locked -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash",
+        "cargo test --locked -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed",
+        "cargo test --locked -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag",
+        "cargo test --locked -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag",
+        "cargo test --locked -p connect_norito_bridge recursive_spend_v4",
+        "cargo test --locked -p connect_norito_bridge output_membership_local_carrier --lib",
     )
     return errors
 
@@ -1076,13 +1079,13 @@ if self_test:
     ):
         errors.append("self-test failed to reject an unguarded offline-change issuance path")
     missing_frontier_filter = baseline[WORKFLOW].replace(
-        "cargo test -p iroha_core output_membership --lib",
-        "cargo test -p iroha_core retired_output_membership_filter --lib",
+        "cargo test --locked -p iroha_core output_membership --lib",
+        "cargo test --locked -p iroha_core retired_output_membership_filter --lib",
         1,
     )
     missing_frontier_filter_errors = static_errors({WORKFLOW: missing_frontier_filter})
     if not any(
-        "cargo test -p iroha_core output_membership --lib" in error
+        "cargo test --locked -p iroha_core output_membership --lib" in error
         for error in missing_frontier_filter_errors
     ):
         errors.append("self-test failed to reject a missing frontier-test workflow filter")
@@ -1118,6 +1121,18 @@ if self_test:
         pass
     else:
         errors.append("self-test failed to reject an oversized artifact aggregate")
+    missing_reviewed_lock = baseline[WORKFLOW].replace(
+        "ci/check_kagemusha_reviewed_cargo_lock.sh --materialize",
+        "cargo generate-lockfile",
+    )
+    missing_reviewed_lock_errors = static_errors({WORKFLOW: missing_reviewed_lock})
+    if not any(
+        "ci/check_kagemusha_reviewed_cargo_lock.sh --materialize" in error
+        for error in missing_reviewed_lock_errors
+    ):
+        errors.append(
+            "self-test failed to reject workflow dependency re-resolution"
+        )
     verifier_override_name = "KAGEMUSHA_V4_RELEASE_" + "VERIFIER_BIN"
     readiness_source = (root / "ci/check_kagemusha_production_readiness.sh").read_text(
         encoding="utf-8"

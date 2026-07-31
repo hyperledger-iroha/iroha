@@ -1646,7 +1646,7 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
   );
 });
 
-test("NexusAppClient separates Torii canonical and signed-wire receipt hashes", async () => {
+test("NexusAppClient conflict-checks all Torii hash aliases before waiting and separates signed-wire receipt hashes", async () => {
   const canonicalHash = fixtureSignedTransactionHashHex;
   const signedWireHash = "d".repeat(64);
   const finalizer = {

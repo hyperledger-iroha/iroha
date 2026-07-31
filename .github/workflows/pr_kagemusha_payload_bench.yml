@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
       - "Cargo.lock"
+      - "fixtures/kagemusha/cargo-lock.reviewed.v1"
+      - "fixtures/kagemusha/peer_transport_measurements_v1.json"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "crates/connect_norito_bridge/**"
@@ -774,6 +776,10 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Materialize the exact reviewed Cargo dependency lock
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
+      - name: Reject missing, mutated, linked, or replaced Cargo locks
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --self-test
       - name: Install pinned Python SDK test dependencies
         run: >-
           python -m pip install
@@ -789,8 +795,10 @@ jobs:
             python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
           )
           python -m pip install --no-deps "${wheel_dir}"/iroha_python-*.whl
-      - run: ci/check_connect_norito_bridge_header.sh
-      - run: ci/check_connect_norito_bridge_header.sh --self-test
+      - name: Require exact ABI-21 production and candidate-lab bridge inventories
+        run: ci/check_connect_norito_bridge_header.sh
+      - name: Reject all 22 ABI-21 inventory, signature, and Swift-split mutations
+        run: ci/check_connect_norito_bridge_header.sh --self-test
       - run: python3 scripts/check_swift_offline_device_attestation_fixture.py
       - run: python3 -m pytest -q scripts/tests/check_swift_offline_device_attestation_fixture_test.py
       - run: ci/check_kagemusha_production_readiness.sh candidate
@@ -810,28 +818,30 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
-      - run: cargo test -p iroha_core kagemusha_v4 --lib
-      - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
-      - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
-      - run: cargo test -p iroha_core sequential_append_paths --lib
-      - run: cargo test -p iroha_core recursive_state_vector_is_exact_and_zero_padded --lib
-      - run: cargo test -p iroha_core output_membership --lib
-      - run: cargo test -p iroha_core v4_eq_frontier_copy_constraints --lib
-      - run: cargo test -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib
-      - run: cargo test -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib
-      - run: cargo test -p iroha_core kagemusha_terminal_registry_v4 --lib
-      - run: cargo test -p iroha_kagami --bin kagami harden_private_tree
-      - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
-      - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
-      - run: cargo test -p iroha_torii_shared offline_api --lib
-      - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
-      - run: cargo test -p iroha_torii generated_spec_offline
-      - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
-      - run: cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
-      - run: cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
-      - run: cargo test -p connect_norito_bridge recursive_spend_v4
-      - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
+      - name: Materialize the exact reviewed Cargo dependency lock
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
+      - run: cargo test --locked -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test --locked -p iroha_core kagemusha_v4 --lib
+      - run: cargo test --locked -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
+      - run: cargo test --locked -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
+      - run: cargo test --locked -p iroha_core sequential_append_paths --lib
+      - run: cargo test --locked -p iroha_core recursive_state_vector_is_exact_and_zero_padded --lib
+      - run: cargo test --locked -p iroha_core output_membership --lib
+      - run: cargo test --locked -p iroha_core v4_eq_frontier_copy_constraints --lib
+      - run: cargo test --locked -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib
+      - run: cargo test --locked -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib
+      - run: cargo test --locked -p iroha_core kagemusha_terminal_registry_v4 --lib
+      - run: cargo test --locked -p iroha_kagami --bin kagami harden_private_tree
+      - run: cargo test --locked -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
+      - run: cargo test --locked -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
+      - run: cargo test --locked -p iroha_torii_shared offline_api --lib
+      - run: cargo test --locked -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
+      - run: cargo test --locked -p iroha_torii generated_spec_offline
+      - run: cargo test --locked -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
+      - run: cargo test --locked -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
+      - run: cargo test --locked -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
+      - run: cargo test --locked -p connect_norito_bridge recursive_spend_v4
+      - run: cargo test --locked -p connect_norito_bridge output_membership_local_carrier --lib
 
   swift:
     name: Swift lifecycle surface
@@ -854,6 +864,8 @@ jobs:
         with:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Materialize the exact reviewed Cargo dependency lock
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
       - name: Prefetch locked Rust dependency graph
         run: cargo fetch --locked
       - run: ci/check_kagemusha_candidate_android_lab_compile.sh

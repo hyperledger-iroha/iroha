@@ -3952,6 +3952,7 @@ type NoritoRuntimeNamespaceExport =
   | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
   | "encodeCancelAssetLockV1"
+  | "encodeNumericNoritoValue"
   | "encodeQuantityNoritoValue"
   | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
@@ -4826,6 +4827,24 @@ export interface ToriiLaneSettlementCommitment {
   nexus_fee_receipts: ReadonlyArray<Readonly<ToriiNexusFeeReceipt>>;
   native_amx_receipts: ReadonlyArray<Readonly<ToriiNativeAmxReceipt>>;
 }
+
+/**
+ * Internal fixture resealing hooks used by the native-AMX parity suite.
+ *
+ * @internal
+ */
+export const __sumeragiNativeAmxTestHelpers: Readonly<{
+  computeDescriptorHash(
+    descriptor: Readonly<ToriiNativeAmxParticipantLaneBlockDescriptor>,
+  ): string;
+  computeParticipantSettlementHash(
+    settlement: Readonly<ToriiLaneSettlementCommitment>,
+  ): string;
+  computeProposalHash(
+    descriptor: Readonly<ToriiNativeAmxParticipantLaneBlockDescriptor>,
+  ): string;
+  computeValidatorSetHash(validators: ReadonlyArray<string>): string;
+}>;
 
 export interface ToriiLaneFastpqProofMaterial {
   proof_digest: string;

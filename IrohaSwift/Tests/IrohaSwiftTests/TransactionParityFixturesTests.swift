@@ -403,7 +403,7 @@ final class TransactionParityFixturesTests: XCTestCase {
         let expectedKeys: Set<String> = [
             "schema.version",
             "source.tag",
-            "source.commit",
+            "source.bundle.sha256",
             "reference",
             "versioned.bytes",
             "versioned.sha256",

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  chmodSync,
   constants,
   fchmodSync,
   fstatSync,
@@ -324,6 +325,37 @@ function inspectRunPayloadChildren(path, names, label) {
     );
   }
   return children;
+}
+
+function thawRetiredSnapshotDirectories(snapshotRoot) {
+  const canonicalRoot = resolve(snapshotRoot);
+  const pending = [canonicalRoot];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    const metadata = lstatSync(directory, { bigint: true });
+    if (
+      !metadata.isDirectory() ||
+      metadata.isSymbolicLink() ||
+      realpathSync(directory) !== directory ||
+      (directory !== canonicalRoot &&
+        !directory.startsWith(`${canonicalRoot}${sep}`))
+    ) {
+      throw new Error(
+        "Native build retired source snapshot contains an unsafe directory.",
+      );
+    }
+    // Snapshots are deliberately sealed read-only while Cargo uses them.
+    // Recovery must restore owner write access before recursively unlinking a
+    // run that died before normal snapshot cleanup could thaw the tree.
+    chmodSync(directory, 0o700);
+    for (const name of readdirSync(directory)) {
+      const childPath = join(directory, name);
+      const child = lstatSync(childPath, { bigint: true });
+      if (child.isDirectory() && !child.isSymbolicLink()) {
+        pending.push(childPath);
+      }
+    }
+  }
 }
 
 function sameRunPayloadChildren(left, right) {
@@ -948,7 +980,17 @@ function removeOwnedRunTrash(trash, parent, trashId, failpoint) {
       // payload cleanup is confined beneath this already-retired directory.
       // Same-UID peers are trusted because Node has no portable descriptor-
       // relative recursive removal API on POSIX and Windows.
-      rmSync(childPath, { recursive: true });
+      if (RUN_SNAPSHOT_PATTERN.test(name)) {
+        thawRetiredSnapshotDirectories(childPath);
+      }
+      // APFS can transiently report ENOTEMPTY while unlinking a large Cargo
+      // snapshot. Node only retries recursive removal when maxRetries is set.
+      rmSync(childPath, {
+        recursive: true,
+        force: true,
+        maxRetries: 8,
+        retryDelay: 50,
+      });
       syncDirectory(current.path);
       failpoint(`run-payload-removed:${name}`, {
         path: current.path,

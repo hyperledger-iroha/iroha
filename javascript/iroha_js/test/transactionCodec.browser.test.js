@@ -16,6 +16,7 @@ import {
   finalizeBrowserSignedTransaction,
   validateBrowserTransferSignable,
 } from "../src/transactionCodec.js";
+import { renderCompactHashVector } from "../scripts/regenerate-compact-hash-vector.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -45,7 +46,7 @@ const SOURCE_ASSET = `${ASSET_DEFINITION}#${AUTHORITY}`;
 const EXPECTED_COMPACT_FIXTURE_KEYS = new Set([
   "schema.version",
   "source.tag",
-  "source.commit",
+  "source.bundle.sha256",
   "reference",
   "versioned.bytes",
   "versioned.sha256",
@@ -186,12 +187,12 @@ function replacePayloadMetadata(payload, archive) {
 function replacePayloadField(payload, fieldIndex, archive) {
   const fields = [];
   let offset = 0;
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 9; index += 1) {
     const decoded = readField(payload, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, payload.length, "test payload must contain exactly eight fields");
+  assert.equal(offset, payload.length, "test payload must contain exactly nine fields");
   fields[fieldIndex] = archive;
   return struct(fields);
 }
@@ -444,6 +445,11 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
 });
 
 test("browser signed hash matches the shared compact Android and native Rust golden", () => {
+  assert.equal(
+    fs.readFileSync(FIXTURE_PATH, "utf8"),
+    renderCompactHashVector(),
+    "committed compact vector must be the exact deterministic browser-codec artifact",
+  );
   const fixture = properties(FIXTURE_PATH);
   const versioned = decodeCanonicalFixtureBase64(
     fixture["versioned.base64"],
@@ -467,7 +473,7 @@ test("browser signed hash matches the shared compact Android and native Rust gol
   const canonical = Buffer.concat([
     Buffer.alloc(4),
     Buffer.from(fixture["compact.length.hex"], "hex"),
-    bare,
+    payload.value,
   ]);
   assert.equal(
     canonical.subarray(0, 6).toString("hex"),

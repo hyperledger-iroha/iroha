@@ -3,9 +3,15 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
+#[cfg(feature = "test-fixtures")]
+mod peer_transport_fixtures;
 mod receiver_snapshot;
 mod status;
 
+#[cfg(feature = "test-fixtures")]
+pub use peer_transport_fixtures::{
+    KagemushaPeerTransportFixtureRecordV1, kagemusha_peer_transport_fixture_records_v1,
+};
 pub use receiver_snapshot::*;
 pub use status::*;
 

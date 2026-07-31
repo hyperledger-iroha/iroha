@@ -5515,7 +5515,7 @@ mod norito_rpc_fixture_tests {
         const EXPECTED_KEYS: [&str; 12] = [
             "schema.version",
             "source.tag",
-            "source.commit",
+            "source.bundle.sha256",
             "reference",
             "versioned.bytes",
             "versioned.sha256",

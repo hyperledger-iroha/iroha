@@ -7,7 +7,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
-    account::{AccountId, address},
+    account::{AccountAddress, AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
@@ -30,7 +30,7 @@ const DEFAULT_MANIFEST_NAME: &str = "swift_parity_manifest.json";
 const PAYLOAD_SCHEMA_NAME: &str = "iroha.android.transaction.Payload.v1";
 const SIGNED_SCHEMA_NAME: &str = "iroha.transaction.SignedTransaction.v1";
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-const DEFAULT_CHAIN_DISCRIMINANT: u16 = 0x02F1;
+const PUBLIC_TAIRA_CHAIN_DISCRIMINANT: u16 = 0x0171;
 
 #[derive(Debug, norito::json::JsonDeserialize)]
 struct PayloadFileEntry {
@@ -70,19 +70,26 @@ struct FixtureOutput {
     signed_hash: String,
 }
 
-struct ChainDiscriminantReset(u16);
-
-impl ChainDiscriminantReset {
-    fn new(discriminant: u16) -> Self {
-        let previous = address::set_chain_discriminant(discriminant);
-        Self(previous)
+fn parse_canonical_taira_account(raw: &str, label: &str) -> Result<AccountId, String> {
+    let address = AccountAddress::parse_encoded(raw, Some(PUBLIC_TAIRA_CHAIN_DISCRIMINANT))
+        .map_err(|err| {
+            format!(
+                "invalid public Taira {label} account id '{raw}' (discriminant \
+                 {PUBLIC_TAIRA_CHAIN_DISCRIMINANT}): {err}"
+            )
+        })?;
+    let canonical = address
+        .to_i105_for_discriminant(PUBLIC_TAIRA_CHAIN_DISCRIMINANT)
+        .map_err(|err| format!("failed to encode {label} as public Taira I105: {err}"))?;
+    if canonical != raw {
+        return Err(format!(
+            "{label} must be canonical public Taira I105 (discriminant \
+             {PUBLIC_TAIRA_CHAIN_DISCRIMINANT}); expected '{canonical}', got '{raw}'"
+        ));
     }
-}
-
-impl Drop for ChainDiscriminantReset {
-    fn drop(&mut self) {
-        address::set_chain_discriminant(self.0);
-    }
+    address
+        .to_account_id()
+        .map_err(|err| format!("failed to decode public Taira {label} account: {err}"))
 }
 
 fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, String> {
@@ -97,9 +104,7 @@ impl PayloadSpec {
             .chain
             .parse()
             .map_err(|_| format!("invalid chain id '{}'", self.chain))?;
-        let authority = AccountId::parse_encoded(&self.authority)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|_| format!("invalid authority id '{}'", self.authority))?;
+        let authority = parse_canonical_taira_account(&self.authority, "authority")?;
         let mut builder =
             TransactionBuilder::new(chain_id, authority.clone(), self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
@@ -177,9 +182,7 @@ impl InstructionSpec {
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
                 let asset_definition = parse_asset_definition_argument(asset_definition)?;
                 let quantity = parse_canonical_quantity(quantity)?;
-                let destination: AccountId = AccountId::parse_encoded(destination)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| format!("invalid destination account '{destination}'"))?;
+                let destination = parse_canonical_taira_account(destination, "destination")?;
                 let asset_id = AssetId::new(asset_definition, authority.clone());
                 Ok(Transfer::asset_quantity(asset_id, quantity, destination).into())
             }
@@ -204,9 +207,7 @@ impl InstructionSpec {
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
                 let asset_definition = parse_asset_definition_argument(asset_definition)?;
                 let quantity = parse_canonical_quantity(quantity)?;
-                let destination: AccountId = AccountId::parse_encoded(destination)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| format!("invalid destination account '{destination}'"))?;
+                let destination = parse_canonical_taira_account(destination, "destination")?;
                 let asset_id = AssetId::new(asset_definition, destination);
                 Ok(Mint::asset_quantity(quantity, asset_id).into())
             }
@@ -231,9 +232,7 @@ impl InstructionSpec {
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
                 let asset_definition = parse_asset_definition_argument(asset_definition)?;
                 let quantity = parse_canonical_quantity(quantity)?;
-                let destination: AccountId = AccountId::parse_encoded(destination)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| format!("invalid destination account '{destination}'"))?;
+                let destination = parse_canonical_taira_account(destination, "destination")?;
                 let asset_id = AssetId::new(asset_definition, destination);
                 Ok(Burn::asset_quantity(quantity, asset_id).into())
             }
@@ -259,11 +258,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn repository_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 fn run() -> Result<(), String> {
-    let fixtures_path = PathBuf::from(DEFAULT_FIXTURES_PATH);
-    let out_dir = PathBuf::from(DEFAULT_OUT_DIR);
+    let repository_root = repository_root();
+    let fixtures_path = repository_root.join(DEFAULT_FIXTURES_PATH);
+    let out_dir = repository_root.join(DEFAULT_OUT_DIR);
     let manifest_path = out_dir.join(DEFAULT_MANIFEST_NAME);
-    let _chain_guard = ChainDiscriminantReset::new(DEFAULT_CHAIN_DISCRIMINANT);
+    let _chain_guard = address::ChainDiscriminantGuard::enter(PUBLIC_TAIRA_CHAIN_DISCRIMINANT);
 
     let payload_bytes = fs::read(&fixtures_path)
         .map_err(|err| format!("failed to read {}: {err}", fixtures_path.display()))?;
@@ -425,7 +429,9 @@ mod tests {
     use iroha_data_model::DomainId;
 
     fn account_literal(account: &AccountId) -> String {
-        account.to_string()
+        account
+            .to_i105_for_discriminant(PUBLIC_TAIRA_CHAIN_DISCRIMINANT)
+            .expect("public Taira account literal")
     }
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
@@ -434,6 +440,30 @@ mod tests {
             name.parse().expect("name"),
         )
         .to_string()
+    }
+
+    #[test]
+    fn fixture_accounts_are_pinned_to_public_taira() {
+        assert_eq!(PUBLIC_TAIRA_CHAIN_DISCRIMINANT, 369);
+        let keypair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("seeded fixture key should derive");
+        let account = AccountId::new(keypair.public_key().clone());
+        let address = AccountAddress::from_account_id(&account).expect("account address");
+        let taira = address
+            .to_i105_for_discriminant(PUBLIC_TAIRA_CHAIN_DISCRIMINANT)
+            .expect("public Taira literal");
+        let legacy_sora = address
+            .to_i105_for_discriminant(0x02F1)
+            .expect("legacy Sora literal");
+
+        assert!(taira.starts_with("test"));
+        assert_eq!(
+            parse_canonical_taira_account(&taira, "authority").expect("Taira account"),
+            account
+        );
+        let err = parse_canonical_taira_account(&legacy_sora, "authority")
+            .expect_err("legacy Sora account must fail closed");
+        assert!(err.contains("discriminant 369"), "unexpected error: {err}");
     }
 
     #[test]

@@ -35,6 +35,12 @@ ALIGNMENT_ALLOW_DRIFT="${ANDROID_FIXTURE_ALIGNMENT_ALLOW_DRIFT:-0}"
 ALIGNMENT_SCRIPT="${ANDROID_FIXTURE_ALIGNMENT_SCRIPT:-${REPO_ROOT}/scripts/norito_fixture_alignment.py}"
 ALIGNMENT_MD_OUT="${ANDROID_FIXTURE_ALIGNMENT_MD_OUT:-${REPO_ROOT}/docs/source/sdk/android/norito_fixture_alignment.md}"
 ALIGNMENT_JSON_OUT="${ANDROID_FIXTURE_ALIGNMENT_JSON_OUT:-${REPO_ROOT}/docs/source/sdk/android/norito_fixture_alignment.json}"
+FAMILY_SYNC_ENABLED="${ANDROID_FIXTURE_FAMILY_SYNC:-1}"
+FAMILY_SYNC_SCRIPT="${ANDROID_FIXTURE_FAMILY_SYNC_SCRIPT:-${REPO_ROOT}/scripts/sync_norito_fixture_families.py}"
+FAMILY_SYNC_EXPECTED_COUNT="${ANDROID_FIXTURE_EXPECTED_COUNT:-28}"
+FAMILY_SYNC_CANONICAL_OUT="${ANDROID_FIXTURE_CANONICAL_OUT:-${REPO_ROOT}/fixtures/norito_rpc}"
+FAMILY_SYNC_PYTHON_OUT="${ANDROID_FIXTURE_PYTHON_OUT:-${REPO_ROOT}/python/iroha_python/tests/fixtures}"
+FAMILY_SYNC_SWIFT_OUT="${ANDROID_FIXTURE_SWIFT_OUT:-${REPO_ROOT}/IrohaSwift/Fixtures}"
 JDK_POLICY_ENABLED="${ANDROID_FIXTURE_JDK_POLICY:-1}"
 JDK_POLICY_SCRIPT="${ANDROID_FIXTURE_JDK_POLICY_SCRIPT:-${REPO_ROOT}/scripts/check_jdk_policy.py}"
 JDK_POLICY_EXPECTED_MAJOR="${ANDROID_FIXTURE_JDK_POLICY_EXPECTED_MAJOR:-21}"
@@ -203,6 +209,20 @@ else
   )
 fi
 echo "[android-fixtures] exporter completed"
+
+if [[ "${FAMILY_SYNC_ENABLED}" == "1" ]]; then
+  if [[ ! -f "${FAMILY_SYNC_SCRIPT}" ]]; then
+    echo "[android-fixtures] fixture family sync helper not found: ${FAMILY_SYNC_SCRIPT}" >&2
+    exit 1
+  fi
+  echo "[android-fixtures] synchronizing the reviewed ${FAMILY_SYNC_EXPECTED_COUNT}-fixture family"
+  python3 "${FAMILY_SYNC_SCRIPT}" \
+    --source "${RESOURCES_DIR}" \
+    --expected-count "${FAMILY_SYNC_EXPECTED_COUNT}" \
+    --target "canonical=${FAMILY_SYNC_CANONICAL_OUT}" \
+    --target "python=${FAMILY_SYNC_PYTHON_OUT}" \
+    --target "swift=${FAMILY_SYNC_SWIFT_OUT}"
+fi
 
 mkdir -p "$(dirname "${STATE_FILE}")"
 timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"

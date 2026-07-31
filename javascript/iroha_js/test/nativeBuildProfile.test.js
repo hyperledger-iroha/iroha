@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   linkSync,
   lstatSync,
@@ -427,6 +428,45 @@ function writeRunContainerFixture({
     runId,
   };
 }
+
+test("run janitor thaws a sealed snapshot before dead-run recovery", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-frozen-")),
+  );
+  const dead = writeRunContainerFixture({ withSnapshot: true });
+  const snapshotName = readdirSync(dead.artifactPath).find((name) =>
+    name.startsWith(".iroha-js-source-snapshot-"),
+  );
+  assert.ok(snapshotName);
+  const snapshot = path.join(dead.artifactPath, snapshotName);
+  const nested = path.join(snapshot, "nested");
+  mkdirSync(nested);
+  writeFileSync(path.join(nested, "source.rs"), "sealed source");
+  chmodSync(nested, 0o500);
+  chmodSync(snapshot, 0o500);
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot);
+    for (const name of readdirSync(dead.parent)) {
+      if (name.includes(dead.runId)) {
+        cleanupExactTestArtifacts(path.join(dead.parent, name));
+      }
+    }
+  });
+
+  assert.equal(
+    runRecoveryFixture({
+      repoRoot,
+      runContainerOwnerIsAlive(pid) {
+        return pid !== dead.pid;
+      },
+    }),
+    7,
+  );
+  assert.equal(
+    readdirSync(dead.parent).some((name) => name.includes(dead.runId)),
+    false,
+  );
+});
 
 function runRecoveryFixture({
   repoRoot,

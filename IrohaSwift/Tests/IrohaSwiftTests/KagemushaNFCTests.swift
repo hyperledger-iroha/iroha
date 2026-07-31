@@ -15,19 +15,45 @@ final class KagemushaNFCTests: XCTestCase {
         return output
     }
 
-    func testMeasuredReleaseArchivesStayWithinTheSafeNFCChunkBudget() {
-        let samples: [(String, Int, Int, Int)] = [
-            ("receive-offer", 12_363, 57, 59),
-            ("acknowledgement", 471, 3, 5),
-            ("payment-v4-peer-hop-1", 11_854, 54, 56),
+    func testMeasuredReleaseArchivesStayWithinTheSafeNFCChunkBudget() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../fixtures/kagemusha/peer_transport_measurements_v1.json")
+            .standardizedFileURL
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
+                as? [String: Any]
+        )
+        let samples = try XCTUnwrap(fixture["records"] as? [[String: Any]])
+        let expectedChunks = [
+            "request": 3,
+            "acknowledgement": 2,
+            "payment-depth-1-hop-1": 73,
+            "payment-depth-8-hop-8": 74,
+            "payment-depth-16-hop-8": 74,
+            "payment-depth-32-hop-8": 76,
+            "payment-depth-64-hop-8": 80,
         ]
-        for (label, archiveBytes, expectedChunks, expectedCommands) in samples {
-            let chunks = (archiveBytes + KagemushaNFCProtocol.safeChunkBytes - 1)
+        let expectedCommands = [
+            "request": 5,
+            "acknowledgement": 4,
+            "payment-depth-1-hop-1": 75,
+            "payment-depth-8-hop-8": 76,
+            "payment-depth-16-hop-8": 76,
+            "payment-depth-32-hop-8": 78,
+            "payment-depth-64-hop-8": 82,
+        ]
+        for sample in samples {
+            let label = try XCTUnwrap(sample["label"] as? String)
+            let archiveHex = try XCTUnwrap(sample["archive_hex"] as? String)
+            let archive = try XCTUnwrap(Data(hexString: archiveHex))
+            XCTAssertEqual(sample["archive_bytes"] as? Int, archive.count, label)
+            let chunks = (archive.count + KagemushaNFCProtocol.safeChunkBytes - 1)
                 / KagemushaNFCProtocol.safeChunkBytes
-            XCTAssertEqual(chunks, expectedChunks, label)
-            XCTAssertEqual(chunks + 2, expectedCommands, label)
+            XCTAssertEqual(chunks, try XCTUnwrap(expectedChunks[label]), label)
+            XCTAssertEqual(chunks + 2, try XCTUnwrap(expectedCommands[label]), label)
             XCTAssertLessThanOrEqual(
-                archiveBytes,
+                archive.count,
                 KagemushaNFCProtocol.maximumPayloadBytes,
                 label
             )
