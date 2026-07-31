@@ -124,7 +124,7 @@ run_tlc() {
 fixed_log="$(run_tlc repaired-count-first "$FIXED_CONFIG" 0)"
 for marker in \
   "TLC2 Version 2.19" \
-  "Computed 1 initial states..." \
+  "Finished computing initial states: 1 distinct state generated at " \
   "$FIXED_SUCCESS_MARKER"; do
   [[ "$(grep -Fc "$marker" "$fixed_log" || true)" == 1 ]] || {
     echo "repaired-count-first did not emit exactly one success marker: ${marker}" >&2

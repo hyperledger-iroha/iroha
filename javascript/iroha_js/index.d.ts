@@ -4790,6 +4790,8 @@ export interface ToriiNativeAmxLeg {
   participant_settlement_hash: string;
   prepare_qc: Readonly<ToriiNativeAmxAttestationQc>;
   commit_qc: Readonly<ToriiNativeAmxAttestationQc>;
+  /** Full block validation must establish the mixed-role coordinator anchor. */
+  readonly requires_mixed_role_anchor_validation: boolean;
 }
 
 export interface ToriiNativeAmxReceipt {

@@ -259,6 +259,18 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
     fixtureDocument.rust_owner,
     "iroha_data_model::block::consensus",
   );
+  const declarations = readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const legDeclaration = declarations.match(
+    /export interface ToriiNativeAmxLeg \{([\s\S]*?)\n\}/u,
+  );
+  assert.ok(legDeclaration, "missing ToriiNativeAmxLeg declaration");
+  assert.match(
+    legDeclaration[1],
+    /readonly requires_mixed_role_anchor_validation: boolean;/u,
+  );
 
   for (const [implementation, Client] of clientImplementations) {
     const diagnostics = await diagnosticsClient(
