@@ -28,6 +28,31 @@ pub struct LanePrivacyProof {
     pub witness: LanePrivacyWitness,
 }
 
+fn validate_merkle_path_shape_v1<T>(
+    leaf_index: u32,
+    audit_path: &[Option<T>],
+) -> Result<(), LanePrivacyProofError> {
+    if audit_path.is_empty() {
+        return Err(LanePrivacyProofError::EmptyMerklePath);
+    }
+    if audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+        return Err(LanePrivacyProofError::MerklePathTooDeep {
+            depth: audit_path.len(),
+            maximum: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
+        });
+    }
+    if let Some(index) = audit_path.iter().position(Option::is_none) {
+        return Err(LanePrivacyProofError::MissingMerkleSibling { index });
+    }
+    if audit_path.len() < u32::BITS as usize && u64::from(leaf_index) >= 1_u64 << audit_path.len() {
+        return Err(LanePrivacyProofError::LeafIndexOutOfRange {
+            leaf_index,
+            depth: audit_path.len(),
+        });
+    }
+    Ok(())
+}
+
 impl LanePrivacyProof {
     /// Access the commitment identifier referenced by this proof.
     #[must_use]
@@ -61,26 +86,7 @@ impl LanePrivacyProof {
     pub fn validate_structure_v1(&self) -> Result<(), LanePrivacyProofError> {
         let LanePrivacyWitness::Merkle(witness) = &self.witness;
         let audit_path = witness.proof.audit_path();
-        if audit_path.is_empty() {
-            return Err(LanePrivacyProofError::EmptyMerklePath);
-        }
-        if audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
-            return Err(LanePrivacyProofError::MerklePathTooDeep {
-                depth: audit_path.len(),
-                maximum: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
-            });
-        }
-        if let Some(index) = audit_path.iter().position(Option::is_none) {
-            return Err(LanePrivacyProofError::MissingMerkleSibling { index });
-        }
-        if audit_path.len() < u32::BITS as usize
-            && u64::from(witness.proof.leaf_index()) >= 1_u64 << audit_path.len()
-        {
-            return Err(LanePrivacyProofError::LeafIndexOutOfRange {
-                leaf_index: witness.proof.leaf_index(),
-                depth: audit_path.len(),
-            });
-        }
+        validate_merkle_path_shape_v1(witness.proof.leaf_index(), audit_path)?;
         if let Some(index) = audit_path.iter().position(|entry| {
             entry
                 .as_ref()
@@ -99,34 +105,15 @@ impl LanePrivacyProof {
     ///
     /// # Errors
     ///
-    /// Returns [`LanePrivacyProofError::EmptyMerklePath`] when no siblings are
-    /// provided.
+    /// Returns a typed structural error when the path is empty, sparse, deeper
+    /// than the first-release bound, or cannot represent `leaf_index`.
     pub fn merkle_from_raw_path(
         commitment_id: LaneCommitmentId,
         leaf: [u8; 32],
         leaf_index: u32,
         audit_path: Vec<Option<[u8; 32]>>,
     ) -> Result<Self, LanePrivacyProofError> {
-        if audit_path.is_empty() {
-            return Err(LanePrivacyProofError::EmptyMerklePath);
-        }
-        if audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
-            return Err(LanePrivacyProofError::MerklePathTooDeep {
-                depth: audit_path.len(),
-                maximum: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
-            });
-        }
-        if let Some(index) = audit_path.iter().position(Option::is_none) {
-            return Err(LanePrivacyProofError::MissingMerkleSibling { index });
-        }
-        if audit_path.len() < u32::BITS as usize
-            && u64::from(leaf_index) >= 1_u64 << audit_path.len()
-        {
-            return Err(LanePrivacyProofError::LeafIndexOutOfRange {
-                leaf_index,
-                depth: audit_path.len(),
-            });
-        }
+        validate_merkle_path_shape_v1(leaf_index, &audit_path)?;
 
         let audit_path = audit_path
             .into_iter()

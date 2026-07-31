@@ -55,6 +55,11 @@ tasks.test {
     inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")
+            .file("fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
             .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
     inputs.dir(

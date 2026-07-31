@@ -3534,6 +3534,10 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
     "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame": (
         "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
         "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+        "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
+        "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
+        "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
         "ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish",
         "ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge",
         "ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix",

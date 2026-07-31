@@ -157,6 +157,8 @@ const PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1 = Buffer.from(
   "iroha.privacy.transaction-intent-digest.v1",
   "ascii",
 );
+const PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1 = 8;
+const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1 = 0;
 const PRIVACY_EXACT12_ROW_FIELD_NAMES_V1 = Object.freeze([
   "protocol_id",
   "statement_norito",
@@ -2036,7 +2038,7 @@ function decodePrivacyExact12FixtureRowV1(payload, rowIndex) {
         fields.transaction_intent_projection_norito,
         `${context}.transaction_intent_projection_norito`,
       ),
-    transactionIntentDigest: decodeFixedByteArrayArchiveValue(
+    transactionIntentDigest: decodeFixedBytesValue(
       fields.transaction_intent_digest,
       32,
       `${context}.transaction_intent_digest`,
@@ -2051,7 +2053,7 @@ function decodePrivacyExact12FixtureRowV1(payload, rowIndex) {
         fields.signed_transaction_versioned_norito,
         `${context}.signed_transaction_versioned_norito`,
       ),
-    signedTransactionHash: decodeFixedByteArrayArchiveValue(
+    signedTransactionHash: decodeFixedBytesValue(
       fields.signed_transaction_hash,
       32,
       `${context}.signed_transaction_hash`,
@@ -2074,6 +2076,16 @@ function decodePrivacyExact12NonEmptyByteVectorV1(payload, context) {
 }
 
 function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
+  return withNoritoCompactLengths(() =>
+    validatePrivacyExact12FixtureRowBindingsCompactV1(row, rowIndex, context),
+  );
+}
+
+function validatePrivacyExact12FixtureRowBindingsCompactV1(
+  row,
+  rowIndex,
+  context,
+) {
   if (row.protocolId !== PRIVACY_EXACT12_PROTOCOL_IDS_V1[rowIndex]) {
     throw new TypeError(`${context}.protocolId is unknown, duplicated, or out of order`);
   }
@@ -2086,6 +2098,7 @@ function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
   const statementFrame = validatePrivacyExact12NestedFrameV1(
     row.statementNorito,
     PRIVACY_EXACT12_STATEMENT_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
     `${context}.statementNorito`,
   );
   const statement = decodePrivacyExact12TaggedPayloadV1(
@@ -2099,6 +2112,7 @@ function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
   const envelopeFrame = validatePrivacyExact12NestedFrameV1(
     row.envelopeNorito,
     PRIVACY_EXACT12_ENVELOPE_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
     `${context}.envelopeNorito`,
   );
   const envelopeFields = withNoritoCompactLengths(() =>
@@ -2136,6 +2150,7 @@ function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
   const instructionFrame = validatePrivacyExact12NestedFrameV1(
     row.submitProofInstructionNorito,
     PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
     `${context}.submitProofInstructionNorito`,
   );
   const instructionFields = withNoritoCompactLengths(() =>
@@ -2160,6 +2175,7 @@ function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
   const projectionFrame = validatePrivacyExact12NestedFrameV1(
     row.transactionIntentProjectionNorito,
     PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1,
     `${context}.transactionIntentProjectionNorito`,
   );
   const projectionFields = decodePrivacyExact12TransactionPayloadV1(
@@ -2182,7 +2198,7 @@ function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
     decodeU64Value(
       unsignedFields.creation_time_ms,
       `${context}.unsignedTransactionPayloadNorito.creation_time_ms`,
-    ) !== expectedCreationTime
+    ) !== expectedCreationTime.toString()
   ) {
     throw new TypeError(`${context} carries a substituted transaction creation time`);
   }
@@ -2252,11 +2268,16 @@ function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
   }
 }
 
-function validatePrivacyExact12NestedFrameV1(bytes, schemaHash, context) {
+function validatePrivacyExact12NestedFrameV1(
+  bytes,
+  schemaHash,
+  expectedPaddingLength,
+  context,
+) {
   const frame = validateNoritoFrame(bytes, {
     context,
     expectedSchemaHash: schemaHash,
-    expectedPaddingLength: 0,
+    expectedPaddingLength,
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
@@ -2266,7 +2287,7 @@ function validatePrivacyExact12NestedFrameV1(bytes, schemaHash, context) {
     frame.payload,
     schemaHash,
     COMPACT_LEN_FLAG,
-    0,
+    expectedPaddingLength,
   );
   if (!canonical.equals(bytes)) {
     throw new Error(`${context} is not a canonical uncompressed Norito frame`);
@@ -2533,7 +2554,7 @@ function encodePrivacyExact12FixtureRowV1(row, rowIndex) {
       ),
     ],
     [
-      encodeFixedByteArrayArchiveValue(
+      encodeFixedBytesValue(
         row.transactionIntentDigest,
         32,
         `${context}.transaction_intent_digest`,
@@ -2552,7 +2573,7 @@ function encodePrivacyExact12FixtureRowV1(row, rowIndex) {
       ),
     ],
     [
-      encodeFixedByteArrayArchiveValue(
+      encodeFixedBytesValue(
         row.signedTransactionHash,
         32,
         `${context}.signed_transaction_hash`,

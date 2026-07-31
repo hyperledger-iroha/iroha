@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from array import array
+from typing import Any
 
 import pytest
 
@@ -98,7 +99,7 @@ def test_lane_privacy_attachment_rejects_padded_verifier_selectors() -> None:
 
 
 def test_lane_privacy_attachment_normalizer_enforces_first_release_contract() -> None:
-    base = {
+    base: dict[str, Any] = {
         "commitment_id": 7,
         "leaf": b"l" * 32,
         "leaf_index": 1,
@@ -109,7 +110,7 @@ def test_lane_privacy_attachment_normalizer_enforces_first_release_contract() ->
     }
     assert crypto_module._normalize_lane_privacy_attachment(base) == base
 
-    cases = [
+    cases: list[tuple[dict[str, Any], type[Exception], str]] = [
         ({"shadow": 1}, ValueError, "unknown first-release field"),
         ({"commitment_id": True}, TypeError, "unsigned 16-bit"),
         ({"commitment_id": -1}, ValueError, "unsigned 16-bit"),
@@ -119,6 +120,7 @@ def test_lane_privacy_attachment_normalizer_enforces_first_release_contract() ->
         ({"leaf_index": 1 << 32}, ValueError, "unsigned 32-bit"),
         ({"proof_backend": "Halo2/ipa"}, ValueError, "portable"),
         ({"proof_backend": "halo2/ipa/../vk"}, ValueError, "portable"),
+        ({"proof_backend": "halo2/ipa\ud800"}, ValueError, "portable"),
         ({"verifying_key_name": "vk_transfer_"}, ValueError, "portable"),
         ({"verifying_key_name": "a" * 257}, ValueError, "portable"),
         ({"proof_bytes": b""}, ValueError, "non-empty"),

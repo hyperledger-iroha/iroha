@@ -8109,6 +8109,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         message: wire::ConsensusMessageV2,
         ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<EventTag, NetworkIngressError> {
+        let observed_physical_cut = ingress_ownership.runtime_physical_cut().ok_or_else(|| {
+            self.latch_fail_closed(
+                "network ingress omitted its checked receiver physical admission cut",
+            );
+            NetworkIngressError::FailClosed
+        })?;
+        self.ingress_physical_cut = self.ingress_physical_cut.max(observed_physical_cut);
         let ingress_ownership =
             RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, ingress_ownership)
                 .ok_or_else(|| {

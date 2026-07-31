@@ -1,3 +1,6 @@
+// Copyright 2026 Hyperledger Iroha Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package org.hyperledger.iroha.android.privacy;
 
 import java.nio.charset.StandardCharsets;

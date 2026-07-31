@@ -1726,8 +1726,16 @@ mod tests {
     fn proof_box_canonical_size_limit_accounts_for_backend_and_framing() {
         let backend = "halo2/ipa::transfer_v1";
         let proof = ProofBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
-        let canonical = norito::encode_canonical(&proof).expect("canonical ProofBox");
-        assert_eq!(proof.canonical_encoded_len_v1(), Some(canonical.len()));
+        let canonical_payload =
+            ncore::encoded_payload_len(&proof).expect("canonical nested ProofBox payload");
+        assert_eq!(proof.canonical_encoded_len_v1(), Some(canonical_payload));
+        assert!(
+            norito::encode_canonical(&proof)
+                .expect("standalone canonical ProofBox frame")
+                .len()
+                > canonical_payload,
+            "a standalone frame adds a header and alignment; the attachment cap covers the complete nested ProofBox payload"
+        );
         assert_eq!(
             proof_box_max_proof_bytes_v1(backend),
             Some(
@@ -1738,18 +1746,30 @@ mod tests {
         );
 
         let maximum = proof_box_max_proof_bytes_v1(backend).expect("bounded backend");
+        let mut maximum_sized_proof = Vec::with_capacity(maximum + 1);
+        maximum_sized_proof.resize(maximum, 0xA5);
         let mut attachment = ProofAttachment::new_ref(
             backend.into(),
-            ProofBox::new(backend.into(), vec![0xA5; maximum]),
+            ProofBox::new(backend.into(), maximum_sized_proof),
             VerifyingKeyId::new(backend, "transfer_v1"),
         );
         assert_eq!(
             attachment.proof.canonical_encoded_len_v1(),
             Some(PROOF_BOX_MAX_ENCODED_BYTES_V1)
         );
+        assert_eq!(
+            ncore::encoded_payload_len(&attachment.proof)
+                .expect("count maximum nested ProofBox payload"),
+            PROOF_BOX_MAX_ENCODED_BYTES_V1
+        );
         assert_eq!(attachment.structural_error(), None);
 
         attachment.proof.bytes.push(0x5A);
+        assert_eq!(
+            ncore::encoded_payload_len(&attachment.proof)
+                .expect("count oversized nested ProofBox payload"),
+            PROOF_BOX_MAX_ENCODED_BYTES_V1 + 1
+        );
         assert_eq!(
             attachment.structural_error(),
             Some(("proof", "canonical encoding exceeds the 64 MiB limit"))
