@@ -11695,18 +11695,21 @@ impl Queue {
     }
 
     /// Remove expired transactions if the configured sweep interval has elapsed.
+    ///
+    /// A zero interval disables throttling, not reclamation: every caller runs a
+    /// bounded sweep. This keeps the queue live for an explicit zero-duration
+    /// configuration instead of turning the TTL mechanism off.
     pub(crate) fn cull_expired_entries_if_due(&self) -> usize {
         let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
-        if interval_ms == 0 {
-            return 0;
-        }
         let now = self.time_source.get_unix_time();
-        let now_ms = Self::duration_to_millis(now);
-        let last_ms = self.last_expired_cull_ms.load(Ordering::Relaxed);
-        if now_ms.saturating_sub(last_ms) < interval_ms {
-            return 0;
+        if interval_ms != 0 {
+            let now_ms = Self::duration_to_millis(now);
+            let last_ms = self.last_expired_cull_ms.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last_ms) < interval_ms {
+                return 0;
+            }
+            self.last_expired_cull_ms.store(now_ms, Ordering::Relaxed);
         }
-        self.last_expired_cull_ms.store(now_ms, Ordering::Relaxed);
         self.cull_expired_entries(now)
     }
 
@@ -28224,6 +28227,37 @@ pub mod tests {
             0,
             "expired tx removed from active count"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
+    fn zero_expired_cull_interval_runs_on_every_call() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(1),
+                expired_cull_interval: Duration::ZERO,
+                ..config_factory()
+            },
+            &time_source,
+        );
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        time_handle.advance(Duration::from_secs(2));
+
+        assert_eq!(
+            queue.cull_expired_entries_if_due(),
+            1,
+            "a zero interval must mean unthrottled reclamation"
+        );
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
         queue.assert_pressure_counters_consistent_for_tests();
     }
 

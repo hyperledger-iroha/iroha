@@ -46,6 +46,28 @@ class ContractManifestTest {
     }
 
     @Test
+    fun triggerBoundariesRejectExactAmountSourceFormOnly() {
+        val retired = listOf(
+            fullResponse().replaceFirst("\"id\":\"settle\"", "\"id\":\"Amount\""),
+            fullResponse().replaceFirst("\"namespace\":null", "\"namespace\":\"Amount\""),
+        )
+        retired.forEach { payload ->
+            assertFailsWith<IllegalStateException>(payload) {
+                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+
+        val lowercase = fullResponse()
+            .replaceFirst("\"id\":\"settle\"", "\"id\":\"amount\"")
+            .replaceFirst("\"namespace\":null", "\"namespace\":\"amount\"")
+        val trigger = ContractJsonParser.parseManifestRecord(
+            lowercase.toByteArray(StandardCharsets.UTF_8),
+        ).manifest.entrypoints!!.single().triggers.single()
+        assertEquals("amount", trigger.id)
+        assertEquals("amount", trigger.callback.namespace)
+    }
+
+    @Test
     fun manifestRejectsUnknownEnglishAndNoncanonicalShapes() {
         val invalid = listOf(
             fullResponse().replaceFirst("\"seiyaku_name\"", "\"contract_name\""),
@@ -58,6 +80,12 @@ class ContractManifestTest {
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
+            fullResponse().replaceFirst("\"name\":\"transfer\",\"kind\"", "\"name\":\"Amount\",\"kind\""),
+            fullResponse().replaceFirst("\"name\":\"request\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
+            fullResponse().replaceFirst("\"fields\":[\"amount\",\"memo\"]", "\"fields\":[\"Amount\",\"memo\"]"),
+            fullResponse().replaceFirst("\"name\":\"Balances\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
+            fullResponse().replaceFirst("\"name\":\"InsufficientFunds\",\"code\"", "\"name\":\"Amount\",\"code\""),
+            fullResponse().replaceFirst("\"base_key\":\"state:Balances\"", "\"base_key\":\"state:Amount\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"__kotodama_link_private\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"state_map_get\""),
             fullResponse().replaceFirst(
@@ -145,6 +173,7 @@ class ContractManifestTest {
             "StateMap<AccountId, Amount: quantity>",
             "Transfer{amount: amount}",
             "Transfer{amount:: quantity}",
+            "Transfer{Amount: quantity}",
             "Amount{amount: quantity}",
             "Transfer{amount: quantity, amount: int}",
             "Transfer{}",

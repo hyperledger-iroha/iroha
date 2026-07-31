@@ -23063,6 +23063,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn apply(self) {
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
+            // Runtime-only alias context; the canonical stores below carry all
+            // persisted effects.
+            dataspace_catalog: _,
             parameters,
             peers,
             domain_committees,
@@ -23213,11 +23216,32 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
+            sorafs_pricing,
+            provider_credit_ledger,
+            provider_owners,
+            provider_ingest_completion_authorities,
+            da_pin_intents_by_ticket,
+            da_pin_intents_by_alias,
+            da_pin_intents_by_manifest,
+            da_pin_intents_by_lane_epoch,
             pin_manifests,
             manifest_aliases,
             replication_orders,
+            content_bundles,
+            content_chunks,
+            soradns_directory_records,
+            soradns_directory_pending,
+            soradns_directory_latest,
+            soradns_directory_history,
+            soradns_directory_prev_of,
+            soradns_directory_revocations,
+            soradns_release_signers,
+            soradns_rotation_policy,
+            soradns_last_publish_ms,
+            soradns_history_len,
             settlement_receipts,
             kagemusha_replay_keys,
+            direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -23248,7 +23272,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
-            ..
+            axt_lane_config: _,
+            axt_current_slot: _,
+            axt_lane_map: _,
+            current_dataspace_id: _,
         } = self;
         if !external_event_buf.is_empty() {
             external_event_sink.append(&mut external_event_buf);
@@ -23321,23 +23348,32 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();
+        sorafs_pricing.apply();
+        provider_credit_ledger.apply();
+        provider_owners.apply();
+        provider_ingest_completion_authorities.apply();
+        da_pin_intents_by_ticket.apply();
+        da_pin_intents_by_alias.apply();
+        da_pin_intents_by_manifest.apply();
+        da_pin_intents_by_lane_epoch.apply();
         pin_manifests.apply();
         manifest_aliases.apply();
         replication_orders.apply();
-        self.content_chunks.apply();
-        self.content_bundles.apply();
-        self.soradns_directory_records.apply();
-        self.soradns_directory_pending.apply();
-        self.soradns_directory_history.apply();
-        self.soradns_directory_prev_of.apply();
-        self.soradns_directory_revocations.apply();
-        self.soradns_release_signers.apply();
-        self.soradns_directory_latest.apply();
-        self.soradns_rotation_policy.apply();
-        self.soradns_last_publish_ms.apply();
-        self.soradns_history_len.apply();
+        content_chunks.apply();
+        content_bundles.apply();
+        soradns_directory_records.apply();
+        soradns_directory_pending.apply();
+        soradns_directory_history.apply();
+        soradns_directory_prev_of.apply();
+        soradns_directory_revocations.apply();
+        soradns_release_signers.apply();
+        soradns_directory_latest.apply();
+        soradns_rotation_policy.apply();
+        soradns_last_publish_ms.apply();
+        soradns_history_len.apply();
         settlement_receipts.apply();
         kagemusha_replay_keys.apply();
+        direct_lane_block_application_markers.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();

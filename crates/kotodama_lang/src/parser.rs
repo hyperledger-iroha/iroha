@@ -287,6 +287,13 @@ pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> Gramma
     if let Err(error) = parsed.as_ref() {
         errors.push(error.as_ref().clone());
     }
+    append_forbidden_source_identifier_errors(&parser, tokens, &mut errors);
+    errors.sort_by(|left, right| {
+        left.range
+            .cmp(&right.range)
+            .then_with(|| left.code.cmp(right.code))
+            .then_with(|| left.message.cmp(&right.message))
+    });
     parser.syntax.finish_open_nodes(source.text().len() as u32);
     let outline = std::mem::take(&mut parser.syntax).into_outline();
 
@@ -321,6 +328,35 @@ pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> Gramma
         diagnostics,
         outline,
         missing,
+    }
+}
+
+fn append_forbidden_source_identifier_errors(
+    parser: &CstAstLowerer<'_>,
+    tokens: &[Token],
+    errors: &mut Vec<ParseError>,
+) {
+    let retired_type_ranges = errors
+        .iter()
+        .filter(|error| error.code == "E_RETIRED_NUMERIC_TYPE")
+        .map(|error| error.range)
+        .collect::<std::collections::BTreeSet<_>>();
+    for token in tokens {
+        let TokenKind::Ident(name) = &token.kind else {
+            continue;
+        };
+        if !crate::semantic::V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&name.as_str())
+            || retired_type_ranges.contains(&token.range)
+        {
+            continue;
+        }
+        errors.push(*parser.coded_error(
+            token.clone(),
+            "E_FORBIDDEN_SOURCE_IDENTIFIER",
+            format!(
+                "source identifier `{name}` is not part of Kotodama V1; choose a different identifier (lowercase `amount` remains available)"
+            ),
+        ));
     }
 }
 
@@ -3740,14 +3776,18 @@ impl<'a> CstAstLowerer<'a> {
                         |replacement| format!("use `{replacement}`"),
                     );
                     let mut error = self.coded_error(
-                        base_token,
+                        base_token.clone(),
                         "E_RETIRED_NUMERIC_TYPE",
                         format!(
                             "numeric type `{base}` is not part of Kotodama V1; {replacement_message}"
                         ),
                     );
                     error.fix = replacement.map(str::to_owned);
-                    return Err(error);
+                    if self.recover {
+                        self.errors.push(*error);
+                    } else {
+                        return Err(error);
+                    }
                 }
                 self.record_type_use(base.clone(), base_token.range);
                 if self.peek(TokenKind::Less) {
@@ -5400,6 +5440,103 @@ mod tests {
             assert!(
                 error.contains("E_RETIRED_NUMERIC_TYPE"),
                 "unexpected diagnostic for `{legacy}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_amount_is_rejected_in_every_identifier_context() {
+        for source in [
+            "module Amount { fn f() {} }",
+            "module M { fn Amount() {} }",
+            "module M { fn f(int Amount) {} }",
+            "module M { fn f() { let int Amount = 1; } }",
+            "module M { struct Record { int Amount; } }",
+            "module M { struct Record { int value; } fn f() { let item = Record { Amount: 1 }; } }",
+            "module M { fn f() { for Amount in range(1) {} } }",
+            "module M { fn f() { let values = [1]; let copy = [item for Amount in values]; } }",
+            "module M { fn f(Option<int> value) { if let Option::some(Amount) = value {} } }",
+            "module M { fn target(int value) {} fn f() { target(Amount: 1); } }",
+            "module M { fn f(Json value) { let found = value.Amount; } }",
+            "module M { fn f() { Amount::call(); } }",
+            "module M { fn f() { let payload = json { Amount: 1 }; } }",
+        ] {
+            let error = parse(source).expect_err("exact `Amount` identifier must fail closed");
+            assert!(
+                error.contains("E_FORBIDDEN_SOURCE_IDENTIFIER"),
+                "unexpected diagnostic for `{source}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn lowercase_amount_and_non_identifier_amount_text_remain_valid() {
+        parse(
+            r#"module AmountText {
+                struct Record { int amount; }
+                fn target(int amount) {}
+                fn amount(Json value) {
+                    let int amount = 1;
+                    for amount_item in range(1) {
+                        target(amount: amount_item);
+                        let member = value.amount;
+                        let payload = json { amount: amount_item, "Amount": 1 };
+                        let text = "Amount";
+                        // Amount remains legal documentation text.
+                    }
+                }
+            }"#,
+        )
+        .expect("lowercase `amount`, strings, comments, and quoted JSON keys remain valid");
+    }
+
+    #[test]
+    fn retired_amount_type_keeps_its_quantity_fix_diagnostic_only() {
+        let error = parse("module M { fn f(Amount value) {} }")
+            .expect_err("retired `Amount` type must fail closed");
+        assert!(error.contains("E_RETIRED_NUMERIC_TYPE"), "{error}");
+        assert!(error.contains("use `quantity`"), "{error}");
+        assert!(!error.contains("E_FORBIDDEN_SOURCE_IDENTIFIER"), "{error}");
+    }
+
+    #[test]
+    fn every_retired_amount_type_keeps_its_quantity_fix_during_recovery() {
+        for (index, (source, retired_count, forbidden_count)) in [
+            ("module M { fn f(Amount a, Amount b) {} }", 2, 0),
+            ("module M { fn f(Result<Amount, Amount> value) {} }", 2, 0),
+            ("module M { fn f(Amount type_value, int Amount) {} }", 1, 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source_file = SourceFile::new(
+                SourceId(40 + index as u32),
+                "retired-amount-recovery.ko",
+                source,
+            );
+            let diagnostics = parse_source(&source_file, FrontendBudget::v1())
+                .expect_err("every exact `Amount` occurrence must fail closed");
+            let retired = diagnostics
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "E_RETIRED_NUMERIC_TYPE")
+                .collect::<Vec<_>>();
+            assert_eq!(retired.len(), retired_count, "{source}");
+            for diagnostic in retired {
+                assert_eq!(
+                    diagnostic.fix.as_ref().map(|fix| fix.replacement.as_str()),
+                    Some("quantity"),
+                    "{source}"
+                );
+            }
+            assert_eq!(
+                diagnostics
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code == "E_FORBIDDEN_SOURCE_IDENTIFIER")
+                    .count(),
+                forbidden_count,
+                "{source}"
             );
         }
     }

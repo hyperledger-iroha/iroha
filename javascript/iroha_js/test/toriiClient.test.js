@@ -24918,7 +24918,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
   );
 });
 
-test("getContractManifest rejects aliases, unknown fields, and unsupported feature bits", async () => {
+test("getContractManifest rejects retired trigger sources, aliases, unknown fields, and unsupported feature bits", async () => {
   const canonicalCodeHash =
     "hash:1111111111111111111111111111111111111111111111111111111111111111#4667";
   const signer = `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
@@ -25141,6 +25141,12 @@ test("getContractManifest rejects aliases, unknown fields, and unsupported featu
     ["unknown repeat variant", (payload) => {
       payload.manifest.entrypoints[0].triggers[0].repeats.Legacy = null;
     }],
+    ["retired trigger id", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].id = "Amount";
+    }],
+    ["retired callback namespace", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].callback.namespace = "Amount";
+    }],
     ["camelCase callback alias", (payload) => {
       payload.manifest.entrypoints[0].triggers[0].callback.entryPoint = "mutate";
     }],
@@ -25176,10 +25182,27 @@ test("getContractManifest rejects aliases, unknown fields, and unsupported featu
     });
     await assert.rejects(
       () => client.getContractManifest("11".repeat(32)),
-      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap/u,
+      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|retired Kotodama source form/u,
       label,
     );
   }
+
+  const lowercaseAmount = JSON.parse(JSON.stringify(base));
+  const lowercaseTrigger = lowercaseAmount.manifest.entrypoints[0].triggers[0];
+  lowercaseTrigger.id = "amount";
+  lowercaseTrigger.callback.namespace = "amount";
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: lowercaseAmount,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const accepted = await client.getContractManifest("11".repeat(32));
+  const parsedTrigger = accepted?.manifest.entrypoints[0].triggers[0];
+  assert.equal(parsedTrigger?.id, "amount");
+  assert.equal(parsedTrigger?.callback.namespace, "amount");
 });
 
 test("getContractManifest returns null on 404", async () => {

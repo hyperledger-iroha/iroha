@@ -8,6 +8,11 @@ use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::{Decode, Encode, NoritoDeserialize};
 
+// BEGIN GENERATED: kotodama-v1-source-identifier-policy
+/// Exact identifier spellings forbidden in every Kotodama V1 source position.
+const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
+// END GENERATED: kotodama-v1-source-identifier-policy
+
 /// Domain separator for hashes binding public argument records to exact schemas.
 pub const ENTRYPOINT_ARGUMENT_SCHEMA_HASH_DOMAIN_V1: &[u8] =
     b"KOTODAMA_ENTRYPOINT_ARGUMENT_SCHEMA_V1\0";
@@ -1107,7 +1112,7 @@ fn walk_entrypoint_value_atoms(
 }
 
 /// Return whether `value` is an ASCII Kotodama identifier that does not collide
-/// with a canonical V1 keyword.
+/// with a canonical V1 keyword or first-release forbidden source identifier.
 ///
 /// Manifest and SDK boundary-schema validators use this predicate so schema
 /// field names cannot reinterpret a language keyword as an ordinary binding.
@@ -1119,6 +1124,7 @@ pub fn is_canonical_kotodama_identifier(value: &str) -> bool {
     };
     (first.is_ascii_alphabetic() || first == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && !KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&value)
         && !matches!(
             value,
             "authorize"
@@ -1911,7 +1917,10 @@ mod tests {
     }
 
     #[test]
-    fn canonical_boundary_identifiers_reject_every_v1_keyword_spelling() {
+    fn canonical_boundary_identifiers_reject_keywords_and_forbidden_spellings() {
+        assert_eq!(KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS, &["Amount"]);
+        assert!(!is_canonical_kotodama_identifier("Amount"));
+        assert!(is_canonical_kotodama_identifier("amount"));
         for keyword in [
             "authorize",
             "break",
@@ -1989,6 +1998,7 @@ mod tests {
             "with-dash",
             "9starts_with_digit",
             "seiyaku",
+            "Amount",
         ] {
             let argument = EntrypointArgumentSchemaV1 {
                 fields: vec![EntrypointArgumentFieldV1 {
@@ -2020,6 +2030,17 @@ mod tests {
             ],
         };
         assert!(!invalid_struct_name.validate());
+
+        let retired_struct_name = EntrypointValueTypeV1 {
+            nodes: vec![
+                EntrypointValueTypeNodeV1::Struct(EntrypointStructTypeNodeV1 {
+                    name: "Amount".to_owned(),
+                    fields: vec!["amount".to_owned()],
+                }),
+                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Quantity),
+            ],
+        };
+        assert!(!retired_struct_name.validate());
 
         let duplicate_fields = EntrypointValueTypeV1 {
             nodes: vec![

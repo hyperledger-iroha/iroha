@@ -106,7 +106,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
     let first_input_commitment =
         derive_note_commitment_v1(&first_input).map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
     let first_output = note(10, bytes(0x51), bytes(0x52), bytes(0x53), bytes(0x54))?;
-    let first_recipient = ivm_private_recipient_public_key_v1(bytes(0x71))
+    let first_recipient = ivm_private_recipient_public_key_v1(&bytes(0x71))
         .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
     let first_encrypted = encrypt_ivm_private_wallet_note_v1(
         randomness,
@@ -154,7 +154,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
         let second_input_commitment = derive_note_commitment_v1(&second_input)
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
         let second_output = note(10, bytes(0x91), bytes(0x92), bytes(0x93), bytes(0x94))?;
-        let second_recipient = ivm_private_recipient_public_key_v1(bytes(0x95))
+        let second_recipient = ivm_private_recipient_public_key_v1(&bytes(0x95))
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
         let second_encrypted = encrypt_ivm_private_wallet_note_v1(
             randomness,

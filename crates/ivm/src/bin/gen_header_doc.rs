@@ -2,12 +2,13 @@
 //! Usage:
 //!   cargo run -p ivm --bin gen_header_doc -- --write
 //!   cargo run -p ivm --bin gen_header_doc -- --check
+//!   cargo run -p ivm --bin gen_header_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::path::{Path, PathBuf};
 
 mod support;
 
-use support::{GeneratedOutput, parse_generation_mode, sync_generated_outputs};
+use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
 
 const LAYOUT_BEGIN: &str = "<!-- BEGIN GENERATED HEADER LAYOUT -->";
 const LAYOUT_END: &str = "<!-- END GENERATED HEADER LAYOUT -->";
@@ -123,20 +124,23 @@ fn prepare_header_outputs(
         .collect()
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn main() {
-    let mode = match parse_generation_mode(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let source_dir = PathBuf::from(manifest_dir)
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("workspace root")
-        .join("specs");
+    let source_dir = options.root.join("specs");
     let layout = render_header_layout_markdown();
     let expected_layout = format!("{LAYOUT_BEGIN}\n{layout}{LAYOUT_END}");
     let table = render_header_policy_markdown();
@@ -146,7 +150,7 @@ fn main() {
     let outputs = prepare_header_outputs(&paths, &expected_layout, &expected_policy)
         .unwrap_or_else(|error| panic!("render IVM header documents: {error}"));
     let regenerate_command = "cargo run --locked -p ivm --bin gen_header_doc -- --write";
-    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+    let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {
         eprintln!("updated: {}", path.display());

@@ -1926,9 +1926,8 @@ mod tests {
 
     #[test]
     fn vega_random_source_rejects_unavailable_constant_and_periodic_prefixes() {
-        let mut unavailable = VegaEntropySourceV1::new(VegaEntropyModeV1::PartialError {
-            request: 1,
-        });
+        let mut unavailable =
+            VegaEntropySourceV1::new(VegaEntropyModeV1::PartialError { request: 1 });
         assert!(matches!(
             CoreVegaRandomSource::new(&mut unavailable),
             Err(VegaMdlError::RandomnessUnavailable)

@@ -23913,8 +23913,21 @@ function normalizeManifestTriggersPayload(value, context) {
     const record = ensureRecord(trigger, `${context}[${index}]`);
     const callback = ensureRecord(record.callback, `${context}[${index}].callback`);
     const metadata = ensureRecord(record.metadata ?? {}, `${context}[${index}].metadata`);
+    const id = requireCanonicalKotodamaIdentifier(
+      record.id,
+      `${context}[${index}].id`,
+      { declaration: true },
+    );
+    const namespace =
+      callback.namespace === undefined || callback.namespace === null
+        ? null
+        : requireCanonicalKotodamaIdentifier(
+            callback.namespace,
+            `${context}[${index}].callback.namespace`,
+            { typeDeclaration: true },
+          );
     return {
-      id: requireExactNonEmptyString(record.id, `${context}[${index}].id`),
+      id,
       repeats: normalizeManifestRepeatsPayload(
         record.repeats,
         `${context}[${index}].repeats`,
@@ -23929,10 +23942,7 @@ function normalizeManifestTriggersPayload(value, context) {
           : normalizeAccountId(record.authority, `${context}[${index}].authority`),
       metadata: cloneJsonValue(metadata, `${context}[${index}].metadata`),
       callback: {
-        namespace: normalizeOptionalManifestString(
-          callback.namespace,
-          `${context}[${index}].callback.namespace`,
-        ),
+        namespace,
         entrypoint: requireCanonicalKotodamaEntrypoint(
           callback.entrypoint,
           `${context}[${index}].callback.entrypoint`,

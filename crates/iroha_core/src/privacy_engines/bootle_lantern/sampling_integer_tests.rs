@@ -1,6 +1,6 @@
 use p256::elliptic_curve::bigint::Encoding as _;
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::*;
 
@@ -100,6 +100,22 @@ fn external_rng_failure_and_stuck_sentinels_fail_closed() {
             Err(SamplingErrorV1::RandomnessHealthCheckFailed)
         ));
     }
+}
+
+#[test]
+fn successful_proof_seed_is_owned_by_zeroizing_storage() {
+    fn require_zeroizing_seed(_: &Zeroizing<[u8; 32]>) {}
+
+    let mut rng = TestRng {
+        state: 1,
+        fail: false,
+        stuck: None,
+    };
+    let mut randomness = ProofRandomnessV1::from_rng(&mut rng).expect("healthy proof seed");
+    require_zeroizing_seed(&randomness.seed);
+    assert_ne!(*randomness.seed, [0; 32]);
+    randomness.seed.zeroize();
+    assert_eq!(*randomness.seed, [0; 32]);
 }
 
 #[test]
