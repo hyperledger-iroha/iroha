@@ -7620,6 +7620,207 @@ impl SumeragiV2Adapter {
                 || !self.deferred_inputs.is_empty())
     }
 
+    /// Return whether one exact runtime completion opens the active signing
+    /// fence which currently makes older adapter-owned debt unserviceable.
+    ///
+    /// Safety-WAL acknowledgement is synchronous at this boundary, so signing
+    /// is the only externally completed reducer fence. The preflight clone
+    /// proves the callback still applies to the current reducer incarnation;
+    /// the production effect executor has already verified the signature
+    /// against its exact pending [`SignRequest`] and transferred that task's
+    /// lifecycle owner. The runtime separately rejects an independently
+    /// minted `SignatureCompleted` root from the dependency bypass. Stale and
+    /// otherwise nonmatching completions remain ordinary FIFO work. A `true`
+    /// result promises that dispatch consumes this signing fence rather than
+    /// returning retryable or deferred work; the runtime fails closed if that
+    /// contract is violated.
+    pub(crate) fn completion_unblocks_deferred_fence(
+        &self,
+        tag: reducer::EventTag,
+        command: &super::v2_runtime::AdapterCommand,
+    ) -> bool {
+        use super::v2_runtime::{
+            AdapterCommand, RuntimeCommandAdmissionPreflight as AdmissionPreflight,
+        };
+
+        !self.fail_closed
+            && self.replay_complete
+            && tag == self.reducer.current_tag()
+            && self.reducer.pending_persistence_record().is_none()
+            && self.reducer.awaiting_signature().is_some()
+            && matches!(command, AdapterCommand::SignatureCompleted(_))
+            && self.preflight_runtime_command_admission(tag, command) == AdmissionPreflight::Admit
+    }
+
+    /// Return whether this exact queued command is forced to report `Busy` by
+    /// the same active signing fence opened by
+    /// [`Self::completion_unblocks_deferred_fence`].
+    ///
+    /// This is deliberately a proof, not a broad command-class hint. Internal
+    /// callbacks must survive reducer preflight, while authenticated ingress
+    /// must have a fresh semantic-admission path and convert against the
+    /// current registry. A duplicate, equivocation report, unsafe proposal,
+    /// capacity terminal, stale view, malformed conversion, or independent
+    /// signature callback therefore remains an ordinary ordered owner.
+    pub(crate) fn command_is_blocked_by_deferred_fence(
+        &self,
+        tag: reducer::EventTag,
+        command: &super::v2_runtime::AdapterCommand,
+    ) -> bool {
+        use super::v2_runtime::{
+            AdapterCommand, RuntimeCommandAdmissionPreflight as AdmissionPreflight,
+        };
+
+        if self.fail_closed
+            || !self.replay_complete
+            || tag != self.reducer.current_tag()
+            || self.reducer.pending_persistence_record().is_some()
+            || self.reducer.awaiting_signature().is_none()
+        {
+            return false;
+        }
+        match command {
+            AdapterCommand::SignatureCompleted(_) => false,
+            AdapterCommand::Authenticated(authenticated) => {
+                self.authenticated_command_reaches_fenced_reducer(authenticated)
+            }
+            AdapterCommand::LocalProposalReady { .. }
+            | AdapterCommand::BodyAvailable { .. }
+            | AdapterCommand::BodyStored { .. }
+            | AdapterCommand::ValidationSucceeded { .. }
+            | AdapterCommand::ValidationFailed { .. }
+            | AdapterCommand::ApplicationCompleted(_) => {
+                self.preflight_runtime_command_admission(tag, command) == AdmissionPreflight::Admit
+            }
+        }
+    }
+
+    /// Conservatively prove that authenticated ingress reaches `Reducer::step`
+    /// in the current adapter state. Once this returns `true`, the active
+    /// signing fence makes the non-`Signed` reducer event unconditionally
+    /// `Busy` before any phase handler can run.
+    fn authenticated_command_reaches_fenced_reducer(
+        &self,
+        authenticated: &AuthenticatedConsensusMessage,
+    ) -> bool {
+        let message = &authenticated.0;
+        if message.validate_version().is_err() {
+            return false;
+        }
+        let current_view = self.reducer.current_tag().view();
+        let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
+        let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
+        let payload = &message.payload;
+        let locked_commit_progress = match payload {
+            wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
+            _ => false,
+        };
+        let unsafe_proposal = if let wire::ConsensusMessageV2Payload::Proposal(proposal) = payload
+            && let Some(locked) = self.reducer.durable_state().locked()
+        {
+            let Ok(locked_subject) = self.registry.subject(locked.subject()) else {
+                return false;
+            };
+            !proposal_is_safe_for_lock(
+                proposal,
+                self.registry.round_to_wire(locked.round()),
+                locked_subject,
+            )
+        } else {
+            false
+        };
+        if unsafe_proposal {
+            return false;
+        }
+
+        let semantic_key = match payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                if proposal.round.view != current_view {
+                    return false;
+                }
+                Some(IngressSemanticKey::Proposal {
+                    round: proposal.round,
+                    proposer: proposal.proposer,
+                })
+            }
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                if vote.round.view > current_view
+                    || (vote.round.view < oldest_retained_view && !locked_commit_progress)
+                {
+                    return false;
+                }
+                Some(IngressSemanticKey::Vote {
+                    round: vote.round,
+                    phase: vote.phase,
+                    signer: vote.signer,
+                })
+            }
+            wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
+                if vote.round.view != current_view {
+                    return false;
+                }
+                Some(IngressSemanticKey::TimeoutVote {
+                    round: vote.round,
+                    signer: vote.signer,
+                })
+            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => None,
+            wire::ConsensusMessageV2Payload::PayloadManifest(_)
+            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => return false,
+        };
+        if let Some(key) = semantic_key {
+            // Any existing semantic record can terminate as a duplicate or an
+            // equivocation report before reaching the reducer. Be conservative
+            // even when normal pruning would make a stale record removable.
+            if self.ingress_equivocations.contains_key(&key) {
+                return false;
+            }
+            let capacity_bypass = self.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS;
+            let protected_capacity_bypass =
+                locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. });
+            if capacity_bypass && !protected_capacity_bypass {
+                return false;
+            }
+        }
+
+        // Authentication has already verified the envelope signature. Repeat
+        // the registry conversion on a clone so conflicting identities or
+        // commitments cannot be mislabeled as reducer-fenced work.
+        let mut registry = self.registry.clone();
+        match payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => registry
+                .proposal_to_core(proposal, &self.wire_context)
+                .is_ok(),
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                registry.vote_to_core(vote, &self.wire_context).is_ok()
+            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                registry.qc_to_core(certificate, &self.wire_context).is_ok()
+            }
+            wire::ConsensusMessageV2Payload::TimeoutVote(vote) => registry
+                .timeout_vote_to_core(vote, &self.wire_context)
+                .is_ok(),
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
+                registry.tc_to_core(certificate, &self.wire_context).is_ok()
+            }
+            wire::ConsensusMessageV2Payload::PayloadManifest(_)
+            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+        }
+    }
+
     /// Service at most one adapter-owned Busy-deferred reducer transition.
     ///
     /// Returning one macro-step preserves the executor's fixed retained-batch
