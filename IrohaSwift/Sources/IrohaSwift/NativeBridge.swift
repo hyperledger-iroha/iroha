@@ -89,9 +89,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "85288a0dc399af93afa2d75b380f240cb36b3377c5ce3488466252b982fb6530",
-        "ios-arm64": "7045429f0450e00a1873988eb07bbf9ad77fb9a443859baff84859b3c19ed44e",
-        "ios-arm64_x86_64-simulator": "7a3add494082bf2ce86e49da414f7901402821604b1f80221dee85d053f62ced"
+        "macos-arm64": "821413a64929315bff6ebd635c8a1d5f064beb5d9c6a0093a8924dfdf3dc636c",
+        "ios-arm64": "944981bef1ea7519de4b127004893eddc4d17a0e7e58b8d7c60afdb213b1d675",
+        "ios-arm64_x86_64-simulator": "f95191e33278dbfb9a661a09d83c540bd630e854e022bbb53e66add61bfc6023"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
