@@ -86,7 +86,12 @@ jobs:
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
       - name: Build the Rust native binding and run the complete JavaScript suite
-        run: env -u CARGO_PROFILE_DEV_DEBUG npm test --prefix javascript/iroha_js
+        # setup-rust-toolchain injects `RUSTFLAGS=-D warnings`. The JavaScript
+        # host intentionally enables iroha-core's test surface, whose
+        # feature-reduced library graph contains test-only dead code. Keep the
+        # release build profile exact, but do not turn those upstream lints
+        # into compilation errors for this SDK integration suite.
+        run: env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS npm test --prefix javascript/iroha_js
 
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.

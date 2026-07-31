@@ -815,6 +815,14 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
+        sdk_job = workflow.split("  sdk-and-codec-guards:\n", 1)[1].split(
+            "\n  representative-regression:\n", 1
+        )[0]
+        self.assertIn(
+            "run: env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS npm test ",
+            sdk_job,
+        )
+
         representative_job = workflow.split(
             "  representative-regression:\n", 1
         )[1]
