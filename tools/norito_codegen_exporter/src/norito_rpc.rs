@@ -8,9 +8,9 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     fs::File,
-    io::Read,
+    io::{Read, Write},
     num::NonZeroU32,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -40,11 +40,12 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};
-use tempfile::tempdir;
+use tempfile::{NamedTempFile, tempdir};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
 const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
+const PAYLOADS_BASENAME: &str = "transaction_payloads.json";
 const CANONICAL_MANIFEST: &str = "fixtures/norito_rpc/transaction_fixtures.manifest.json";
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
 const SCHEMA_HASH_MANIFEST_BASENAME: &str = "schema_hashes.json";
@@ -52,10 +53,36 @@ const MANIFEST_BASENAME: &str = "transaction_fixtures.manifest.json";
 const COMPACT_HASH_VECTOR_BASENAME: &str = "iroha_compact_hash_vector.properties";
 const COMPACT_HASH_VECTOR_SOURCE: &str = "transfer_asset";
 const SIGNED_TRANSACTION_V1: u8 = 1;
-const SDK_FIXTURE_DIRECTORIES: &[(&str, &str, bool)] = &[
-    ("python", "python/iroha_python/tests/fixtures", false),
-    ("java", "java/iroha_android/src/test/resources", true),
-    ("swift", "IrohaSwift/Fixtures", false),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalBlobPolicy {
+    None,
+    Canonical,
+    SwiftPrefixed,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SdkFixtureDirectory {
+    label: &'static str,
+    relative_directory: &'static str,
+    local_blobs: LocalBlobPolicy,
+}
+
+const SDK_FIXTURE_DIRECTORIES: &[SdkFixtureDirectory] = &[
+    SdkFixtureDirectory {
+        label: "python",
+        relative_directory: "python/iroha_python/tests/fixtures",
+        local_blobs: LocalBlobPolicy::None,
+    },
+    SdkFixtureDirectory {
+        label: "java",
+        relative_directory: "java/iroha_android/src/test/resources",
+        local_blobs: LocalBlobPolicy::Canonical,
+    },
+    SdkFixtureDirectory {
+        label: "swift",
+        relative_directory: "IrohaSwift/Fixtures",
+        local_blobs: LocalBlobPolicy::SwiftPrefixed,
+    },
 ];
 
 fn workspace_root() -> PathBuf {
@@ -111,20 +138,35 @@ impl FixtureOptions {
     }
 
     fn resolve_paths(&self) -> Result<ResolvedFixtureOptions> {
-        let output_root = self.output_root.clone().unwrap_or_else(workspace_root);
+        let requested_root = self.output_root.clone().unwrap_or_else(workspace_root);
+        reject_ambiguous_root(&requested_root)?;
+        let root_metadata = fs::symlink_metadata(&requested_root)
+            .with_context(|| format!("output root does not exist: {}", requested_root.display()))?;
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            bail!(
+                "output root must be an existing non-symlink directory: {}",
+                requested_root.display()
+            );
+        }
+        let output_root = requested_root
+            .canonicalize()
+            .with_context(|| format!("failed to resolve {}", requested_root.display()))?;
+        if output_root.parent().is_none() {
+            bail!("filesystem root is not a valid fixture output root");
+        }
         let fixtures = output_root.join(CANONICAL_PAYLOADS);
-        if !fixtures.is_file() {
+        ensure_safe_owned_path(&output_root, &fixtures)?;
+        let fixture_metadata = fs::symlink_metadata(&fixtures)
+            .with_context(|| format!("canonical fixtures JSON missing: {}", fixtures.display()))?;
+        if fixture_metadata.file_type().is_symlink() || !fixture_metadata.is_file() {
             return Err(eyre!(
-                "canonical fixtures JSON missing: {}",
+                "canonical fixtures JSON must be a regular non-symlink file: {}",
                 fixtures.display()
             ));
         }
-        let output = output_root.join(CANONICAL_FIXTURE_DIRECTORY);
         Ok(ResolvedFixtureOptions {
             output_root,
             fixtures_json: fixtures,
-            output_dir: output,
-            manifest_path: output_root.join(CANONICAL_MANIFEST),
         })
     }
 }
@@ -132,8 +174,55 @@ impl FixtureOptions {
 struct ResolvedFixtureOptions {
     output_root: PathBuf,
     fixtures_json: PathBuf,
-    output_dir: PathBuf,
-    manifest_path: PathBuf,
+}
+
+fn reject_ambiguous_root(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path == Path::new(".")
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        bail!("fixture output root must be an unambiguous directory path");
+    }
+    Ok(())
+}
+
+fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
+    let relative = target.strip_prefix(root).with_context(|| {
+        format!(
+            "fixture output {} escapes root {}",
+            target.display(),
+            root.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("invalid fixture output path: {}", target.display());
+    }
+
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "fixture output path contains a symlink: {}",
+                    current.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", current.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
@@ -312,7 +401,17 @@ fn write_json_output(value: &Value, target: JsonOutput) -> Result<()> {
 }
 
 fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
-    let root = workspace_root();
+    let resolved = FixtureOptions::new(None).resolve_paths()?;
+    let root = resolved.output_root.clone();
+    let rendered = tempdir().context("failed to create private fixture verification tree")?;
+    let expected = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    compare_owned_publication(
+        rendered.path(),
+        &root,
+        &owned_publication_paths(&expected.fixtures)?,
+    )?;
+    verify_all_blob_policies(&root, &expected.fixtures, true)?;
+
     let canonical_path = root.join(CANONICAL_MANIFEST);
     let canonical = Manifest::load(&canonical_path)
         .with_context(|| format!("failed to read {}", canonical_path.display()))?;
@@ -333,34 +432,36 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
     let canonical_payloads_path = root.join(CANONICAL_PAYLOADS);
     let canonical_payloads_bytes = fs::read(&canonical_payloads_path)?;
     let mut sdk_manifests = Vec::new();
-    for (label, relative_directory, has_local_blobs) in SDK_FIXTURE_DIRECTORIES {
-        let manifest_dir = root.join(relative_directory);
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let manifest_dir = root.join(sdk.relative_directory);
         let manifest_path = manifest_dir.join(MANIFEST_BASENAME);
-        let manifest = Manifest::load(&manifest_path)
-            .with_context(|| format!("{label} manifest missing at {}", manifest_path.display()))?;
+        let manifest = Manifest::load(&manifest_path).with_context(|| {
+            format!(
+                "{} manifest missing at {}",
+                sdk.label,
+                manifest_path.display()
+            )
+        })?;
         manifest
-            .validate((*has_local_blobs).then_some(manifest_dir.as_path()))
-            .with_context(|| format!("{label} manifest failed validation"))?;
+            .validate(
+                (sdk.local_blobs == LocalBlobPolicy::Canonical).then_some(manifest_dir.as_path()),
+            )
+            .with_context(|| format!("{} manifest failed validation", sdk.label))?;
         if fs::read(&manifest_path)? != canonical_manifest_bytes {
-            bail!("{label} manifest bytes differ from the canonical manifest");
+            bail!(
+                "{} manifest bytes differ from the canonical manifest",
+                sdk.label
+            );
         }
-        let payloads_path = manifest_dir.join("transaction_payloads.json");
+        let payloads_path = manifest_dir.join(PAYLOADS_BASENAME);
         if fs::read(&payloads_path)? != canonical_payloads_bytes {
-            bail!("{label} payload descriptor bytes differ from the canonical descriptor");
-        }
-        if !*has_local_blobs {
-            for fixture in &canonical.fixtures {
-                let redundant_blob = manifest_dir.join(&fixture.encoded_file);
-                if redundant_blob.exists() {
-                    bail!(
-                        "{label} contains redundant canonical fixture blob {}",
-                        redundant_blob.display()
-                    );
-                }
-            }
+            bail!(
+                "{} payload descriptor bytes differ from the canonical descriptor",
+                sdk.label
+            );
         }
         sdk_manifests.push(SdkManifestReport {
-            sdk: label.to_string(),
+            sdk: sdk.label.to_string(),
             manifest: manifest_digest(&manifest_path, &root)?,
         });
     }
@@ -390,52 +491,61 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
 /// Regenerate canonical Norito RPC fixtures from the configured source JSON.
 pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     let resolved = options.resolve_paths()?;
-    fs::create_dir_all(&resolved.output_dir)
-        .with_context(|| format!("failed to create {}", resolved.output_dir.display()))?;
-    let temp_dir = tempdir().context("failed to create temporary directory")?;
-    generate_fixture_artifacts(&resolved, temp_dir.path())?;
-    let generated_manifest_path = temp_dir.path().join(MANIFEST_BASENAME);
-    let generated = Manifest::load(&generated_manifest_path).with_context(|| {
-        format!(
-            "failed to read generated manifest {}",
-            generated_manifest_path.display()
-        )
-    })?;
-    generated
-        .validate(Some(temp_dir.path()))
-        .map_err(|err| eyre!("generated manifest failed validation: {err}"))?;
-
-    let selected = generated.fixtures;
-    let compact_hash_vector = render_compact_hash_vector(&selected)?;
-    sync_norito_files(&selected, temp_dir.path(), &resolved.output_dir)?;
-    let filtered_manifest = Manifest {
-        fixtures: selected.clone(),
-    };
-    filtered_manifest
-        .validate(Some(&resolved.output_dir))
-        .context("final manifest validation failed")?;
-    let manifest_json = json::to_json_pretty(&filtered_manifest)?;
-    fs::write(&resolved.manifest_path, format!("{manifest_json}\n"))
-        .with_context(|| format!("failed to write {}", resolved.manifest_path.display()))?;
-    let schema_path = resolved.output_dir.join(SCHEMA_HASH_MANIFEST_BASENAME);
-    write_schema_hash_manifest(&schema_path)
-        .with_context(|| format!("failed to generate {}", schema_path.display()))?;
-    let compact_hash_vector_path = resolved.output_dir.join(COMPACT_HASH_VECTOR_BASENAME);
-    fs::write(&compact_hash_vector_path, compact_hash_vector)
-        .with_context(|| format!("failed to generate {}", compact_hash_vector_path.display()))?;
-    sync_sdk_fixture_mirrors(&resolved, &filtered_manifest.fixtures, &manifest_json)?;
+    let rendered = tempdir().context("failed to create private fixture publication tree")?;
+    let generated = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    let owned_paths = owned_publication_paths(&generated.fixtures)?;
+    preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
+    publish_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
+    compare_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
+    verify_all_blob_policies(&resolved.output_root, &generated.fixtures, true)?;
 
     println!(
         "norito-rpc fixtures regenerated: {} entries written to {}",
-        filtered_manifest.fixtures.len(),
-        resolved.manifest_path.display()
+        generated.fixtures.len(),
+        resolved.output_root.join(CANONICAL_MANIFEST).display()
     );
     Ok(())
 }
 
-fn generate_fixture_artifacts(resolved: &ResolvedFixtureOptions, out_dir: &Path) -> Result<()> {
-    let fixtures_text = fs::read_to_string(&resolved.fixtures_json)
-        .with_context(|| format!("failed to read {}", resolved.fixtures_json.display()))?;
+fn render_fixture_publication(fixtures_json: &Path, publication_root: &Path) -> Result<Manifest> {
+    let canonical_dir = publication_root.join(CANONICAL_FIXTURE_DIRECTORY);
+    fs::create_dir_all(&canonical_dir)
+        .with_context(|| format!("failed to create {}", canonical_dir.display()))?;
+    generate_fixture_artifacts(fixtures_json, &canonical_dir)?;
+
+    let manifest_path = canonical_dir.join(MANIFEST_BASENAME);
+    let manifest = Manifest::load(&manifest_path).with_context(|| {
+        format!(
+            "failed to read generated manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    manifest
+        .validate(Some(&canonical_dir))
+        .map_err(|error| eyre!("generated manifest failed validation: {error}"))?;
+
+    let compact_hash_vector = render_compact_hash_vector(&manifest.fixtures)?;
+    let schema_path = canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME);
+    write_schema_hash_manifest(&schema_path)
+        .with_context(|| format!("failed to generate {}", schema_path.display()))?;
+    let compact_hash_vector_path = canonical_dir.join(COMPACT_HASH_VECTOR_BASENAME);
+    fs::write(&compact_hash_vector_path, compact_hash_vector)
+        .with_context(|| format!("failed to generate {}", compact_hash_vector_path.display()))?;
+
+    let manifest_json = json::to_json_pretty(&manifest)?;
+    sync_sdk_fixture_mirrors(
+        publication_root,
+        &canonical_dir,
+        &manifest.fixtures,
+        &manifest_json,
+    )?;
+    verify_all_blob_policies(publication_root, &manifest.fixtures, true)?;
+    Ok(manifest)
+}
+
+fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()> {
+    let fixtures_text = fs::read_to_string(fixtures_json)
+        .with_context(|| format!("failed to read {}", fixtures_json.display()))?;
     let fixtures_value: Value =
         json::from_str(&fixtures_text).context("invalid transaction_payloads fixtures JSON")?;
     let raw_fixtures = parse_payload_fixtures(&fixtures_value)?;
@@ -464,11 +574,12 @@ fn generate_fixture_artifacts(resolved: &ResolvedFixtureOptions, out_dir: &Path)
     )
     .context("failed to write generated fixture manifest")?;
 
-    // Refresh the selected source file's generated hints.
+    // Render refreshed generated hints into the private publication tree.
     let updated_payloads = build_payload_fixtures_json(&raw_fixtures, &fixtures)?;
     let payloads_json = json::to_json_pretty(&updated_payloads)?;
-    fs::write(&resolved.fixtures_json, format!("{payloads_json}\n"))
-        .with_context(|| format!("failed to write {}", resolved.fixtures_json.display()))?;
+    let rendered_payloads = out_dir.join(PAYLOADS_BASENAME);
+    fs::write(&rendered_payloads, format!("{payloads_json}\n"))
+        .with_context(|| format!("failed to write {}", rendered_payloads.display()))?;
 
     Ok(())
 }
@@ -744,6 +855,7 @@ fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
         .collect::<Result<Vec<_>>>()?;
     let mut names = HashSet::with_capacity(fixtures.len());
     for fixture in &fixtures {
+        validate_fixture_name(&fixture.name)?;
         if !names.insert(fixture.name.as_str()) {
             bail!("duplicate fixture name '{}'", fixture.name);
         }
@@ -756,6 +868,24 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         .as_object()
         .ok_or_else(|| eyre!("fixture entries must be objects"))?;
     let name = expect_string(obj, "name")?.to_owned();
+    const ALLOWED_FIELDS: &[&str] = &[
+        "name",
+        "chain",
+        "authority",
+        "creation_time_ms",
+        "time_to_live_ms",
+        "nonce",
+        "payload_base64",
+        "signed_base64",
+        "payload_hash",
+        "signed_hash",
+        "payload",
+    ];
+    for key in obj.keys() {
+        if !ALLOWED_FIELDS.contains(&key.as_str()) {
+            bail!("fixture '{name}' contains unknown top-level field '{key}'");
+        }
+    }
     let payload_value = obj
         .get("payload")
         .ok_or_else(|| eyre!("fixture '{name}' missing payload"))?;
@@ -771,7 +901,8 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let creation_time_ms_hint = obj.get("creation_time_ms").and_then(Value::as_u64);
     let ttl_ms_hint = expect_nonzero_u64(obj, "time_to_live_ms")
         .with_context(|| format!("invalid top-level lifetime for fixture '{name}'"))?;
-    let nonce_hint = obj.get("nonce").and_then(Value::as_u64).map(|n| n as u32);
+    let nonce_hint = parse_optional_u32(obj, "nonce")
+        .with_context(|| format!("invalid top-level nonce for fixture '{name}'"))?;
 
     Ok(RawPayloadFixture {
         name,
@@ -1007,10 +1138,6 @@ fn build_payload_fixtures_json(
             "signed_hash".to_owned(),
             Value::String(fixture.summary.signed_hash_hex.clone()),
         );
-        entry.insert(
-            "encoded".to_owned(),
-            Value::String(fixture.summary.payload_base64.clone()),
-        );
 
         let mut payload = raw.payload_json.clone();
         if let Some(payload_obj) = payload.as_object_mut() {
@@ -1166,6 +1293,33 @@ fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
     }
 }
 
+fn validate_fixture_name(name: &str) -> Result<()> {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        bail!("fixture name must not be empty");
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        bail!("fixture name '{name}' must start with a lowercase ASCII letter or digit");
+    }
+    if !bytes.all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+    }) {
+        bail!(
+            "fixture name '{name}' must contain only lowercase ASCII letters, digits, '_' or '-'"
+        );
+    }
+    Ok(())
+}
+
+fn validate_fixture_identity(name: &str, encoded_file: &str) -> Result<()> {
+    validate_fixture_name(name)?;
+    let expected = format!("{name}.norito");
+    if encoded_file != expected {
+        bail!("fixture '{name}' encoded_file must be exactly '{expected}', got '{encoded_file}'");
+    }
+    Ok(())
+}
+
 fn sync_norito_files(
     fixtures: &[FixtureEntry],
     source_dir: &Path,
@@ -1173,12 +1327,8 @@ fn sync_norito_files(
 ) -> Result<()> {
     fs::create_dir_all(target_dir)
         .with_context(|| format!("failed to create {}", target_dir.display()))?;
-    let desired: HashSet<String> = fixtures
-        .iter()
-        .map(|fixture| fixture.name.clone())
-        .collect();
     for fixture in fixtures {
-        let src = source_dir.join(format!("{}.norito", fixture.name));
+        let src = source_dir.join(&fixture.encoded_file);
         if !src.is_file() {
             return Err(eyre!(
                 "fixture '{}' missing generated payload at {}",
@@ -1186,68 +1336,261 @@ fn sync_norito_files(
                 src.display()
             ));
         }
-        let dst = target_dir.join(format!("{}.norito", fixture.name));
+        let dst = target_dir.join(&fixture.encoded_file);
         fs::copy(&src, &dst)
             .with_context(|| format!("failed to copy {} to {}", src.display(), dst.display()))?;
-    }
-
-    for entry in fs::read_dir(target_dir)
-        .with_context(|| format!("failed to read entries from {}", target_dir.display()))?
-    {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("norito") {
-            continue;
-        }
-        let stem = entry
-            .path()
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        if !desired.contains(stem.as_str()) {
-            fs::remove_file(entry.path())
-                .with_context(|| format!("failed to remove stale fixture {}", stem))?;
-        }
     }
     Ok(())
 }
 
 fn sync_sdk_fixture_mirrors(
-    resolved: &ResolvedFixtureOptions,
+    publication_root: &Path,
+    canonical_dir: &Path,
     fixtures: &[FixtureEntry],
     manifest_json: &str,
 ) -> Result<()> {
-    let payloads = fs::read(&resolved.fixtures_json)
-        .with_context(|| format!("failed to read {}", resolved.fixtures_json.display()))?;
+    let canonical_payloads = canonical_dir.join(PAYLOADS_BASENAME);
+    let payloads = fs::read(&canonical_payloads)
+        .with_context(|| format!("failed to read {}", canonical_payloads.display()))?;
     let manifest = format!("{manifest_json}\n");
-    for (label, relative_directory, has_local_blobs) in SDK_FIXTURE_DIRECTORIES {
-        let target_dir = resolved.output_root.join(relative_directory);
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let target_dir = publication_root.join(sdk.relative_directory);
         fs::create_dir_all(&target_dir)
-            .with_context(|| format!("failed to create {label} fixture directory"))?;
-        if *has_local_blobs {
-            sync_norito_files(fixtures, &resolved.output_dir, &target_dir)?;
-        } else {
-            for fixture in fixtures {
-                let redundant_blob = target_dir.join(&fixture.encoded_file);
-                if redundant_blob.exists() {
-                    fs::remove_file(&redundant_blob).with_context(|| {
-                        format!(
-                            "failed to remove redundant fixture {}",
-                            redundant_blob.display()
-                        )
-                    })?;
-                }
-            }
+            .with_context(|| format!("failed to create {} fixture directory", sdk.label))?;
+        if sdk.local_blobs == LocalBlobPolicy::Canonical {
+            sync_norito_files(fixtures, canonical_dir, &target_dir)?;
         }
-        fs::write(target_dir.join("transaction_payloads.json"), &payloads)
-            .with_context(|| format!("failed to write {label} payload descriptor"))?;
+        fs::write(target_dir.join(PAYLOADS_BASENAME), &payloads)
+            .with_context(|| format!("failed to write {} payload descriptor", sdk.label))?;
         fs::write(target_dir.join(MANIFEST_BASENAME), manifest.as_bytes())
-            .with_context(|| format!("failed to write {label} fixture manifest"))?;
+            .with_context(|| format!("failed to write {} fixture manifest", sdk.label))?;
     }
     Ok(())
+}
+
+fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
+    let canonical_dir = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
+    let mut paths = vec![
+        canonical_dir.join(PAYLOADS_BASENAME),
+        canonical_dir.join(MANIFEST_BASENAME),
+        canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME),
+        canonical_dir.join(COMPACT_HASH_VECTOR_BASENAME),
+    ];
+    for fixture in fixtures {
+        validate_fixture_identity(&fixture.name, &fixture.encoded_file)?;
+        paths.push(canonical_dir.join(&fixture.encoded_file));
+    }
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let sdk_dir = PathBuf::from(sdk.relative_directory);
+        paths.push(sdk_dir.join(PAYLOADS_BASENAME));
+        paths.push(sdk_dir.join(MANIFEST_BASENAME));
+        if sdk.local_blobs == LocalBlobPolicy::Canonical {
+            for fixture in fixtures {
+                paths.push(sdk_dir.join(&fixture.encoded_file));
+            }
+        }
+    }
+    paths.sort();
+    for pair in paths.windows(2) {
+        if pair[0] == pair[1] {
+            bail!("duplicate generated fixture output {}", pair[0].display());
+        }
+    }
+    Ok(paths)
+}
+
+fn preflight_publication(
+    destination_root: &Path,
+    fixtures: &[FixtureEntry],
+    owned_paths: &[PathBuf],
+) -> Result<()> {
+    for relative in owned_paths {
+        ensure_safe_owned_path(destination_root, &destination_root.join(relative))?;
+    }
+    verify_all_blob_policies(destination_root, fixtures, false)
+}
+
+fn publish_owned_publication(
+    rendered_root: &Path,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+) -> Result<()> {
+    for relative in owned_paths {
+        let source = rendered_root.join(relative);
+        let destination = destination_root.join(relative);
+        ensure_safe_owned_path(destination_root, &destination)?;
+        let bytes = fs::read(&source)
+            .with_context(|| format!("missing rendered fixture output {}", source.display()))?;
+        if destination.is_file() && fs::read(&destination)? == bytes {
+            continue;
+        }
+        let parent = destination
+            .parent()
+            .ok_or_else(|| eyre!("fixture output has no parent: {}", destination.display()))?;
+        ensure_safe_owned_path(destination_root, parent)?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+        ensure_safe_owned_path(destination_root, &destination)?;
+
+        let mut temporary = NamedTempFile::new_in(parent)
+            .with_context(|| format!("failed to stage {}", destination.display()))?;
+        temporary.write_all(&bytes)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&destination).map_err(|error| {
+            eyre!(
+                "failed to atomically publish {}: {}",
+                destination.display(),
+                error.error
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn compare_owned_publication(
+    rendered_root: &Path,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+) -> Result<()> {
+    for relative in owned_paths {
+        let expected = fs::read(rendered_root.join(relative))?;
+        let destination = destination_root.join(relative);
+        let actual = fs::read(&destination).with_context(|| {
+            format!(
+                "generated fixture output missing: {}",
+                destination.display()
+            )
+        })?;
+        if actual != expected {
+            bail!(
+                "generated fixture output is stale: {}",
+                destination.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn verify_all_blob_policies(
+    publication_root: &Path,
+    fixtures: &[FixtureEntry],
+    require_canonical_set: bool,
+) -> Result<()> {
+    verify_blob_policy(
+        &publication_root.join(CANONICAL_FIXTURE_DIRECTORY),
+        fixtures,
+        LocalBlobPolicy::Canonical,
+        require_canonical_set,
+    )?;
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let directory = publication_root.join(sdk.relative_directory);
+        if !directory.exists() && !require_canonical_set {
+            continue;
+        }
+        verify_blob_policy(&directory, fixtures, sdk.local_blobs, require_canonical_set)
+            .with_context(|| format!("{} local fixture policy failed", sdk.label))?;
+    }
+    Ok(())
+}
+
+fn verify_blob_policy(
+    directory: &Path,
+    fixtures: &[FixtureEntry],
+    policy: LocalBlobPolicy,
+    require_canonical_set: bool,
+) -> Result<()> {
+    let actual = collect_norito_paths(directory)?;
+    let expected: HashSet<PathBuf> = fixtures
+        .iter()
+        .map(|fixture| PathBuf::from(&fixture.encoded_file))
+        .collect();
+
+    match policy {
+        LocalBlobPolicy::None if !actual.is_empty() => {
+            bail!(
+                "fixture directory {} contains redundant Norito blobs: {:?}",
+                directory.display(),
+                actual
+            );
+        }
+        LocalBlobPolicy::Canonical => {
+            let unexpected: Vec<_> = actual.difference(&expected).cloned().collect();
+            if !unexpected.is_empty() {
+                bail!(
+                    "fixture directory {} contains unowned Norito blobs: {:?}",
+                    directory.display(),
+                    unexpected
+                );
+            }
+            if require_canonical_set && actual != expected {
+                let missing: Vec<_> = expected.difference(&actual).cloned().collect();
+                bail!(
+                    "fixture directory {} is missing canonical Norito blobs: {:?}",
+                    directory.display(),
+                    missing
+                );
+            }
+        }
+        LocalBlobPolicy::SwiftPrefixed => {
+            let unexpected: Vec<_> = actual
+                .iter()
+                .filter(|relative| {
+                    relative.parent() != Some(Path::new(""))
+                        || !relative
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with("swift_"))
+                })
+                .cloned()
+                .collect();
+            if !unexpected.is_empty() {
+                bail!(
+                    "Swift fixture directory {} contains unowned Norito blobs: {:?}",
+                    directory.display(),
+                    unexpected
+                );
+            }
+        }
+        LocalBlobPolicy::None => {}
+    }
+    Ok(())
+}
+
+fn collect_norito_paths(directory: &Path) -> Result<HashSet<PathBuf>> {
+    if !directory.is_dir() {
+        bail!("fixture directory missing: {}", directory.display());
+    }
+    let mut found = HashSet::new();
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current)
+            .with_context(|| format!("failed to read {}", current.display()))?
+        {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("norito")
+            {
+                continue;
+            }
+            if file_type.is_symlink() {
+                bail!(
+                    "Norito fixture must not be a symlink: {}",
+                    entry.path().display()
+                );
+            }
+            found.insert(entry.path().strip_prefix(directory)?.to_path_buf());
+        }
+    }
+    Ok(found)
 }
 
 fn manifest_digest(path: &Path, root: &Path) -> Result<ManifestDigestReport> {
@@ -1315,6 +1658,7 @@ impl Manifest {
         let mut signed_hashes = HashSet::with_capacity(self.fixtures.len());
         let mut signed_bytes_values = HashSet::with_capacity(self.fixtures.len());
         for fixture in &self.fixtures {
+            validate_fixture_identity(&fixture.name, &fixture.encoded_file)?;
             if !names.insert(fixture.name.as_str()) {
                 bail!("duplicate fixture name '{}'", fixture.name);
             }
@@ -1373,6 +1717,13 @@ struct FixtureEntry {
 
 impl FixtureEntry {
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
+        validate_fixture_identity(&self.name, &self.encoded_file)?;
+        if self.time_to_live_ms == 0 {
+            bail!(
+                "fixture '{}' time_to_live_ms must be greater than zero",
+                self.name
+            );
+        }
         let payload_bytes = BASE64
             .decode(&self.payload_base64)
             .with_context(|| format!("fixture '{}' payload base64 invalid", self.name))?;
@@ -1795,21 +2146,42 @@ mod tests {
     }
 
     #[test]
-    fn manifest_validation_rejects_duplicate_encoded_files() {
-        let first = fixture("alpha");
-        let mut second = fixture("beta");
-        second.encoded_file = first.encoded_file.clone();
+    fn manifest_validation_rejects_noncanonical_encoded_file() {
+        let mut entry = fixture("alpha");
+        entry.encoded_file = "renamed.norito".into();
         let manifest = Manifest {
-            fixtures: vec![first, second],
+            fixtures: vec![entry],
         };
         let err = manifest
             .validate(None)
-            .expect_err("duplicate encoded files must fail closed");
+            .expect_err("renamed encoded files must fail closed");
         assert!(
             err.to_string()
-                .contains("duplicate fixture encoded_file 'alpha.norito'"),
+                .contains("encoded_file must be exactly 'alpha.norito'"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn fixture_names_reject_path_and_nonportable_forms() {
+        for name in [
+            "",
+            "../escape",
+            "/absolute",
+            "nested/name",
+            "nested\\name",
+            "Upper",
+        ] {
+            let error = validate_fixture_name(name)
+                .expect_err("nonportable fixture names must fail closed");
+            assert!(
+                error.to_string().contains("fixture name"),
+                "unexpected error for {name:?}: {error}"
+            );
+        }
+        for name in ["alpha", "0-alpha", "typed_fee_payment_gas_limit"] {
+            validate_fixture_name(name).expect("portable fixture name");
+        }
     }
 
     #[test]
@@ -2057,6 +2429,19 @@ mod tests {
             json::from_value::<Manifest>(candidate)
                 .expect_err("missing and null fixture lifetimes must be rejected");
         }
+
+        let mut zero = base;
+        zero.as_object_mut()
+            .and_then(|object| object.get_mut("fixtures"))
+            .and_then(Value::as_array_mut)
+            .and_then(|fixtures| fixtures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("fixture manifest entry")
+            .insert("time_to_live_ms".to_owned(), Value::from(0_u64));
+        let zero_manifest: Manifest = json::from_value(zero).expect("zero is structurally numeric");
+        zero_manifest
+            .validate(None)
+            .expect_err("zero fixture lifetime must be rejected");
     }
 
     #[test]
@@ -2088,10 +2473,9 @@ mod tests {
             .expect("at least one fixture in canonical manifest")
             .clone();
 
-        // Happy path: point the fixture at a custom file in a temporary directory.
+        // Happy path: write the fixture at its identity-bound canonical basename.
         let temp_dir = tempdir().expect("temp dir");
-        let mut entry = template.clone();
-        entry.encoded_file = "custom_payload.norito".into();
+        let entry = template.clone();
         let payload_bytes = BASE64
             .decode(&entry.payload_base64)
             .expect("payload payload_base64 decodes");
@@ -2120,7 +2504,7 @@ mod tests {
             .validate(Some(temp_dir.path()))
             .expect_err("missing encoded payloads should be rejected");
         assert!(
-            err.to_string().contains("custom_payload.norito"),
+            err.to_string().contains(&entry.encoded_file),
             "error should mention missing encoded file name: {err}"
         );
     }

@@ -1142,14 +1142,6 @@ fn parse_verifying_key_id_py(
     Ok(Some(VerifyingKeyId::new(backend, name_text)))
 }
 
-fn parse_required_verifying_key_id_py(
-    value: Option<&Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<VerifyingKeyId> {
-    parse_verifying_key_id_py(value, context)?
-        .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
-}
-
 fn parse_optional_root_hint(
     value: Option<&Bound<'_, PyAny>>,
     context: &str,
@@ -1361,10 +1353,11 @@ fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResul
             "{context}.proof.backend must match {context}.backend"
         )));
     }
-    let proof_bytes = py_exact_bytes(
-        &py_required_dict_field(proof, "bytes", &format!("{context}.proof"))?,
-        &format!("{context}.proof.bytes"),
-    )?;
+    let proof_bytes_value = py_required_dict_field(proof, "bytes", &format!("{context}.proof"))?;
+    let proof_bytes = proof_bytes_value
+        .cast::<PyBytes>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.proof.bytes must be bytes")))?;
+    let proof_bytes = proof_bytes.as_bytes();
     if proof_bytes.is_empty() {
         return Err(PyValueError::new_err(format!(
             "{context}.proof.bytes must be non-empty"
@@ -1380,6 +1373,7 @@ fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResul
             "{context}.proof.bytes exceeds the {maximum_proof_bytes}-byte limit for this backend"
         )));
     }
+    let proof_bytes = proof_bytes.to_vec();
 
     let vk_value = py_required_dict_field(dict, "vk_ref", context)?;
     let vk = py_exact_dict(
@@ -8517,7 +8511,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_proof_instruction_classmethod_serializes_payload() {
+    fn python_proof_attachment_instruction_classmethod_serializes_payload() {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
@@ -8560,6 +8554,167 @@ mod tests {
                 verify.attachment.envelope_hash,
                 Some(expected_envelope_hash)
             );
+        });
+    }
+
+    #[test]
+    fn python_proof_attachment_parser_rejects_noncanonical_boundaries() {
+        ensure_python();
+        Python::attach(|py| {
+            let canonical = |proof_bytes: &[u8]| {
+                let attachment = PyDict::new(py);
+                attachment
+                    .set_item("backend", "halo2/ipa")
+                    .expect("backend");
+                let proof = PyDict::new(py);
+                proof
+                    .set_item("backend", "halo2/ipa")
+                    .expect("proof backend");
+                proof
+                    .set_item("bytes", PyBytes::new(py, proof_bytes))
+                    .expect("proof bytes");
+                attachment.set_item("proof", proof).expect("proof");
+                let vk_ref = PyDict::new(py);
+                vk_ref.set_item("backend", "halo2/ipa").expect("vk backend");
+                vk_ref.set_item("name", "vk_transfer").expect("vk name");
+                attachment.set_item("vk_ref", vk_ref).expect("vk ref");
+                attachment
+            };
+
+            let valid = canonical(b"proof");
+            parse_zk_proof_attachment(valid.as_any(), "proof")
+                .expect("exact first-release attachment must parse");
+
+            for alias in [
+                "proof_bytes",
+                "proof_b64",
+                "verifying_key_ref",
+                "verifying_key_commitment",
+                "envelopeHash",
+                "vk_inline",
+            ] {
+                let invalid = canonical(b"proof");
+                invalid.set_item(alias, b"retired").expect("retired alias");
+                let error = parse_zk_proof_attachment(invalid.as_any(), "proof")
+                    .expect_err("retired aliases must reject");
+                assert!(error.to_string().contains("unknown first-release field"));
+            }
+
+            let nested_alias = canonical(b"proof");
+            nested_alias
+                .get_item("proof")
+                .expect("proof lookup")
+                .expect("proof exists")
+                .cast::<PyDict>()
+                .expect("proof mapping")
+                .set_item("bytes_b64", "cHJvb2Y=")
+                .expect("retired nested alias");
+            let error = parse_zk_proof_attachment(nested_alias.as_any(), "proof")
+                .expect_err("nested aliases must reject");
+            assert!(error.to_string().contains("unknown first-release field"));
+
+            for (field, value) in [("backend", " Halo2/ipa"), ("backend", "halo2/ipa/../vk")] {
+                let invalid = canonical(b"proof");
+                invalid.set_item(field, value).expect("invalid selector");
+                let error = parse_zk_proof_attachment(invalid.as_any(), "proof")
+                    .expect_err("nonportable selectors must reject");
+                assert!(error.to_string().contains("portable"));
+            }
+
+            let invalid_name = canonical(b"proof");
+            invalid_name
+                .get_item("vk_ref")
+                .expect("vk lookup")
+                .expect("vk exists")
+                .cast::<PyDict>()
+                .expect("vk mapping")
+                .set_item("name", "vk_transfer_")
+                .expect("invalid name");
+            let error = parse_zk_proof_attachment(invalid_name.as_any(), "proof")
+                .expect_err("nonportable VK name must reject");
+            assert!(error.to_string().contains("portable"));
+
+            let empty = canonical(b"");
+            let error = parse_zk_proof_attachment(empty.as_any(), "proof")
+                .expect_err("empty proof must reject");
+            assert!(error.to_string().contains("proof.bytes must be non-empty"));
+
+            let zero_commitment = canonical(b"proof");
+            zero_commitment
+                .set_item("vk_commitment", PyBytes::new(py, &[0; 32]))
+                .expect("zero commitment");
+            let error = parse_zk_proof_attachment(zero_commitment.as_any(), "proof")
+                .expect_err("zero VK commitment must reject");
+            assert!(error.to_string().contains("vk_commitment must be non-zero"));
+
+            let forged_hash = canonical(b"proof");
+            forged_hash
+                .set_item("envelope_hash", PyBytes::new(py, &[0x55; 32]))
+                .expect("forged envelope hash");
+            let error = parse_zk_proof_attachment(forged_hash.as_any(), "proof")
+                .expect_err("forged envelope hash must reject");
+            assert!(error.to_string().contains("must match proof bytes"));
+
+            let lane_attachment = canonical(b"proof");
+            let lane = PyDict::new(py);
+            lane.set_item("commitment_id", 7_u16)
+                .expect("commitment id");
+            let witness = PyDict::new(py);
+            witness.set_item("kind", "merkle").expect("witness kind");
+            let payload = PyDict::new(py);
+            payload
+                .set_item("leaf", PyBytes::new(py, &[0xAA; 32]))
+                .expect("lane leaf");
+            let merkle = PyDict::new(py);
+            merkle.set_item("leaf_index", 1_u32).expect("leaf index");
+            let path = PyList::new(py, [PyBytes::new(py, &[0x22; 32])]).expect("lane audit path");
+            merkle.set_item("audit_path", path).expect("audit path");
+            payload.set_item("proof", merkle).expect("merkle proof");
+            witness
+                .set_item("payload", payload)
+                .expect("witness payload");
+            lane.set_item("witness", witness).expect("lane witness");
+            lane_attachment
+                .set_item("lane_privacy", lane)
+                .expect("lane privacy");
+            parse_zk_proof_attachment(lane_attachment.as_any(), "proof")
+                .expect("complete lane witness must parse");
+
+            let sparse_lane_attachment = canonical(b"proof");
+            let sparse_lane = PyDict::new(py);
+            sparse_lane
+                .set_item("commitment_id", 7_u16)
+                .expect("commitment id");
+            let sparse_witness = PyDict::new(py);
+            sparse_witness
+                .set_item("kind", "merkle")
+                .expect("witness kind");
+            let sparse_payload = PyDict::new(py);
+            sparse_payload
+                .set_item("leaf", PyBytes::new(py, &[0xAA; 32]))
+                .expect("lane leaf");
+            let sparse_merkle = PyDict::new(py);
+            sparse_merkle
+                .set_item("leaf_index", 0_u32)
+                .expect("leaf index");
+            sparse_merkle
+                .set_item("audit_path", PyList::empty(py))
+                .expect("empty audit path");
+            sparse_payload
+                .set_item("proof", sparse_merkle)
+                .expect("merkle proof");
+            sparse_witness
+                .set_item("payload", sparse_payload)
+                .expect("witness payload");
+            sparse_lane
+                .set_item("witness", sparse_witness)
+                .expect("lane witness");
+            sparse_lane_attachment
+                .set_item("lane_privacy", sparse_lane)
+                .expect("lane privacy");
+            let error = parse_zk_proof_attachment(sparse_lane_attachment.as_any(), "proof")
+                .expect_err("empty lane path must reject");
+            assert!(error.to_string().contains("between 1 and 255"));
         });
     }
 
@@ -13836,14 +13991,16 @@ impl TransactionBuilder {
     #[allow(clippy::too_many_arguments)]
     fn add_lane_privacy_merkle_attachment(
         &mut self,
-        commitment_id: u16,
+        commitment_id: &Bound<'_, PyAny>,
         leaf: &[u8],
-        leaf_index: u32,
-        audit_path: Vec<Vec<u8>>,
+        leaf_index: &Bound<'_, PyAny>,
+        audit_path: &Bound<'_, PyAny>,
         proof_backend: &str,
         proof_bytes: &[u8],
         verifying_key_name: &str,
     ) -> PyResult<()> {
+        let commitment_id = py_exact_u16(commitment_id, "commitment_id")?;
+        let leaf_index = py_exact_u32(leaf_index, "leaf_index")?;
         if leaf.len() != 32 {
             return Err(PyValueError::new_err(
                 "leaf must be a 32-byte hash (pre-hashed commitment leaf)",
@@ -13879,16 +14036,22 @@ impl TransactionBuilder {
             .try_into()
             .map_err(|_| PyValueError::new_err("leaf must be exactly 32 bytes"))?;
 
+        let audit_path = audit_path.cast::<PyList>().map_err(|_| {
+            PyTypeError::new_err("audit_path must be a list of complete 32-byte siblings")
+        })?;
         if audit_path.is_empty() || audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
             return Err(PyValueError::new_err(format!(
                 "audit_path must contain between 1 and {LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
             )));
         }
         let mut audit_bytes = Vec::with_capacity(audit_path.len());
-        for (index, bytes) in audit_path.into_iter().enumerate() {
-            let arr: [u8; 32] = bytes.try_into().map_err(|_| {
-                PyValueError::new_err(format!("audit_path[{index}] must be exactly 32 bytes"))
-            })?;
+        for (index, bytes) in audit_path.iter().enumerate() {
+            if bytes.is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "audit_path[{index}] must contain a sibling"
+                )));
+            }
+            let arr = py_exact_fixed_bytes::<32>(&bytes, &format!("audit_path[{index}]"))?;
             audit_bytes.push(Some(arr));
         }
 

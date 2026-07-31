@@ -3095,9 +3095,9 @@ AsyncControlServiceStateTypeInvariant ==
   /\ \A node \in ValidatorIds:
        AsyncRetransmitLifecycleOrdinal(node)
          < AsyncNextCandidateLifecycleOrdinal(node)
-  /\ \A node \in ValidatorIds:
-       \/ ~RetransmitDue(node)
-       \/ AsyncRetransmitLifecycleOwned(node)
+  \* A raw periodic deadline may remain unowned between clock passage and the
+  \* next serialized Runtime boundary.  Unlike a deferred tag, wall-clock due
+  \* alone is therefore not a stateful owner.
   /\ \A node \in ValidatorIds:
        \/ "RetransmitElapsed" \notin asyncOutstandingTags[node]
        \/ AsyncRetransmitLifecycleOwned(node)
@@ -18098,10 +18098,32 @@ AsyncTimeoutLifecycleResetThisStep(node) ==
      /\ AsyncNodeTimedOutIn(
           node, nodeView'[node], context', timeoutIntents')
 
+\* Clock passage and network enqueue do not mint runtime ownership.  The
+\* production runtime freezes due clocks only on a serialized `step()` cut.
+\* Exact Serve admission is named independently because the production Serve
+\* barrier first reserves its shared ordinal and only then asks the runtime to
+\* freeze clocks.  The state transformer below consequently applies the Serve
+\* increment before either clock allocation.
+AsyncFreshExactServeReservationThisStep(node) ==
+  \E admission \in asyncServeIngressAdmissions':
+    /\ admission.node = node
+    /\ ~AsyncServeIngressAdmissionOwned(node, admission.identity)
+
+AsyncExactServeClockFreezeBoundaryThisStep(node) ==
+  \/ AsyncFreshExactServeReservationThisStep(node)
+  \/ SerializedRuntimePrecedesServeIngressStep(node)
+  \/ SerializedLocalPrecedesServeIngressStep(node)
+  \/ AsyncServeIngressTargetOnlyTurn(node)
+
+AsyncClockLifecycleFreezeBoundaryThisStep(node) ==
+  \/ SerializedRuntimeStep(node)
+  \/ AsyncExactServeClockFreezeBoundaryThisStep(node)
+
 AsyncTimeoutLifecycleCanAcquireThisStep(node) ==
-  /\ \/ AsyncTimeoutClockDue(node)
-     \/ AsyncTimeoutClockDueAfter(node)
-     \/ AsyncTimeoutLifecycleTransfersThisStep(node)
+  /\ \/ AsyncTimeoutLifecycleTransfersThisStep(node)
+     \/ /\ AsyncClockLifecycleFreezeBoundaryThisStep(node)
+           /\ \/ AsyncTimeoutClockDue(node)
+              \/ AsyncTimeoutClockDueAfter(node)
   /\ \/ ~AsyncTimeoutLifecycleResetThisStep(node)
      \/ AsyncTimeoutLifecycleTransfersThisStep(node)
 
@@ -19016,12 +19038,16 @@ AsyncFreshServeIngressSchedulerReservationMatchesIn(state) ==
         state.candidateLifecycleNextOrdinal[node]
 
 (***************************************************************************
-The periodic clock owns one fresh actor-global ordinal per physical due
-episode.  Exact retries coalesce only while the frozen episode is still
-active.  Direct idle service consumes the owner atomically; a Busy direct
-step retains it behind RetransmitElapsed until DeferredRetransmitStep drains
-that exact episode.  The shared high-watermark is never rolled back, so the
-next due episode cannot resurrect the drained ordinal.
+The periodic clock consumes one fresh actor-global ordinal per physical due
+episode, but only at a serialized Runtime/Serve clock-freeze boundary.  Clock
+passage and unrelated ingress leave the deadline raw and unowned.  Exact
+retries coalesce only while the frozen episode is still active.  A direct
+idle episode may mint and drain atomically; a Busy direct step retains the
+minted owner behind RetransmitElapsed until DeferredRetransmitStep drains that
+exact episode.  Completing an already-owned episode never replenishes it in
+the same transition, even when the next wall-clock deadline is already late.
+The following Runtime boundary must take a new shared position, after any
+intervening admission.
 ***************************************************************************)
 AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) ==
   \/ /\ DirectRetransmitStep(node)
@@ -19034,17 +19060,25 @@ AsyncRetransmitLifecycleResetThisStep(node) ==
   \/ nodeView'[node] # nodeView[node]
   \/ generation'[node] # generation[node]
 
+AsyncRetransmitClockFreezeReady(node) ==
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ asyncNow >= asyncRetransmitDeadlines[node]
+  /\ RetransmitTagPresent(node)
+  /\ ~AsyncTimeoutClockDue(node)
+
 AsyncRetransmitLifecycleCanAcquireThisStep(node) ==
-  \/ RetransmitDue(node)
-  \/ AsyncRetransmitClockCanAcquireAfter(node)
+  /\ AsyncClockLifecycleFreezeBoundaryThisStep(node)
+  /\ AsyncRetransmitClockFreezeReady(node)
 
 AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node) ==
   /\ ~AsyncRetransmitLifecycleResetThisStep(node)
-  /\ \/ /\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
-          /\ state.retransmitLifecycleOrdinal[node] = 0
-          /\ AsyncRetransmitLifecycleCanAcquireThisStep(node)
-     \/ /\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
-          /\ AsyncRetransmitClockCanAcquireAfter(node)
+  /\ state.retransmitLifecycleOrdinal[node] = 0
+  /\ AsyncRetransmitLifecycleCanAcquireThisStep(node)
+
+AsyncRetransmitLifecycleFreshOrdinalForStep(state, node) ==
+  state.candidateLifecycleNextOrdinal[node]
+    + Cardinality(
+        AsyncFreshServeIngressAdmissionsForNodeThisStep(node))
 
 AsyncCandidateLifecycleStateAfterServeIngressAdmission(state) ==
   [state EXCEPT
@@ -19060,13 +19094,11 @@ AsyncCandidateLifecycleStateAfterServeIngressAdmission(state) ==
        [node \in ValidatorIds |->
           IF AsyncRetransmitLifecycleResetThisStep(node)
           THEN 0
-          ELSE IF AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
-               THEN state.candidateLifecycleNextOrdinal[node]
-                      + Cardinality(
-                          AsyncFreshServeIngressAdmissionsForNodeThisStep(
-                            node))
           ELSE IF AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
                THEN 0
+          ELSE IF AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
+               THEN AsyncRetransmitLifecycleFreshOrdinalForStep(
+                      state, node)
           ELSE IF state.retransmitLifecycleOrdinal[node] # 0
                THEN state.retransmitLifecycleOrdinal[node]
                ELSE 0]]
@@ -19080,13 +19112,19 @@ THEOREM AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal ==
             AsyncFreshServeIngressAdmissionsForNodeThisStep(node))
     IN /\ node \in ValidatorIds
        /\ AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
-         => /\ after.retransmitLifecycleOrdinal[node]
-                  = state.candidateLifecycleNextOrdinal[node] + serveCount
-            /\ after.candidateLifecycleNextOrdinal[node]
-                  = after.retransmitLifecycleOrdinal[node] + 1
+         => /\ after.candidateLifecycleNextOrdinal[node]
+                  = state.candidateLifecycleNextOrdinal[node]
+                      + serveCount + 1
+            /\ \/ /\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+                     /\ after.retransmitLifecycleOrdinal[node] = 0
+               \/ /\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+                     /\ after.retransmitLifecycleOrdinal[node]
+                          = AsyncRetransmitLifecycleFreshOrdinalForStep(
+                              state, node)
 BY SMT
    DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
-       AsyncRetransmitLifecycleConsumesFreshOrdinal
+       AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleFreshOrdinalForStep
 
 THEOREM AsyncRetransmitFreshEpisodeAdvancesSharedHighWatermark ==
   \A state, node:
@@ -19109,8 +19147,6 @@ THEOREM AsyncRetransmitCompletedEpisodeClearsActiveOwner ==
           AsyncCandidateLifecycleStateAfterServeIngressAdmission(state)
     IN /\ node \in ValidatorIds
        /\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
-       /\ \/ AsyncRetransmitLifecycleResetThisStep(node)
-          \/ ~AsyncRetransmitClockCanAcquireAfter(node)
          => after.retransmitLifecycleOrdinal[node] = 0
 BY SMT
    DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
@@ -19121,15 +19157,22 @@ THEOREM AsyncRetransmitCompletedEpisodeClearsOrReplacesDrainedOwner ==
     LET after ==
           AsyncCandidateLifecycleStateAfterServeIngressAdmission(state)
     IN /\ node \in ValidatorIds
-       /\ state.retransmitLifecycleOrdinal[node]
-            < state.candidateLifecycleNextOrdinal[node]
-       /\ IsFiniteSet(
-            AsyncFreshServeIngressAdmissionsForNodeThisStep(node))
        /\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
-         => \/ after.retransmitLifecycleOrdinal[node] = 0
-            \/ state.retransmitLifecycleOrdinal[node]
-                 < after.retransmitLifecycleOrdinal[node]
-BY FS_CardinalityType, SMT
+         => after.retransmitLifecycleOrdinal[node] = 0
+BY SMT
+   DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncRetransmitLifecycleConsumesFreshOrdinal
+
+THEOREM AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition ==
+  \A state, node:
+    LET after ==
+          AsyncCandidateLifecycleStateAfterServeIngressAdmission(state)
+    IN /\ node \in ValidatorIds
+       /\ state.retransmitLifecycleOrdinal[node] # 0
+       /\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+         => /\ ~AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
+            /\ after.retransmitLifecycleOrdinal[node] = 0
+BY SMT
    DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
        AsyncRetransmitLifecycleConsumesFreshOrdinal
 
@@ -19143,10 +19186,40 @@ THEOREM AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition ==
        /\ IsFiniteSet(
             AsyncFreshServeIngressAdmissionsForNodeThisStep(node))
        /\ AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
-         => drainedOrdinal < after.retransmitLifecycleOrdinal[node]
+         => drainedOrdinal
+              < AsyncRetransmitLifecycleFreshOrdinalForStep(state, node)
 BY FS_CardinalityType, SMT
    DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
-       AsyncRetransmitLifecycleConsumesFreshOrdinal
+       AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleFreshOrdinalForStep
+
+THEOREM AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal ==
+  \A state, node:
+    LET after ==
+          AsyncCandidateLifecycleStateAfterServeIngressAdmission(state)
+    IN /\ node \in ValidatorIds
+       /\ AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
+       /\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+         => after.retransmitLifecycleOrdinal[node]
+              = AsyncRetransmitLifecycleFreshOrdinalForStep(state, node)
+BY SMT
+   DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleFreshOrdinalForStep
+
+THEOREM AsyncFreshServeReservationPrecedesSameStepRetransmitAllocation ==
+  \A state, node,
+     admission \in AsyncFreshServeIngressAdmissionsForNodeThisStep(node):
+    /\ node \in ValidatorIds
+    /\ AsyncFreshServeIngressAdmissionsAreSingularThisStep
+    /\ AsyncFreshServeIngressSchedulerReservationMatchesIn(state)
+    /\ AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
+      => admission.schedulerOrdinal
+           < AsyncRetransmitLifecycleFreshOrdinalForStep(state, node)
+BY FS_CardinalityType, Isa
+   DEF AsyncFreshServeIngressAdmissionsAreSingularThisStep,
+       AsyncFreshServeIngressSchedulerReservationMatchesIn,
+       AsyncRetransmitLifecycleFreshOrdinalForStep
 
 AsyncCandidateLifecyclePhysicalOwnerToken(
     carrier, node, position, origin) ==
@@ -22466,29 +22539,74 @@ BY Isa
        AsyncSchedulerExceptServiceActivation, vars
 
 (***************************************************************************
-Atomic lifecycle-order safety.  The first action which makes a raw timeout
-eligible freezes its per-node position in the same global transition.  No
-separate arming action or fairness assumption is involved.  The position is
-retained until a certified rearm/Decision endpoint or transfer into the exact
-BeginTimeout causal origin.  The final capacity conjunct in the same
-transition is fail-closed: an action which would create an unrecorded root
-cannot pop its ingress/causal owner when no reviewed slot can be compacted.
+Clock lifecycle-order safety.  Wall-clock passage and ordinary network
+ingress do not mint an owner.  A serialized Runtime or exact Serve barrier is
+the positive freeze boundary.  Fresh exact Serve admission consumes its
+ordinal before the state transformer allocates either clock; every ordinary
+candidate root created by the selected Runtime macro-step follows the timeout
+owner.  Existing runner fairness therefore covers the boundary without a new
+fairness domain.
 ***************************************************************************)
-THEOREM AsyncTimeoutLifecycleDueTransitionMintsBeforeLaterAdmissions ==
+THEOREM AsyncTickDoesNotFreezeClockLifecycles ==
+  AsyncTick
+    => \A node \in ValidatorIds:
+         ~AsyncClockLifecycleFreezeBoundaryThisStep(node)
+BY Isa
+   DEF AsyncTick, AsyncNonRunnerOuterFrame,
+       AsyncClockLifecycleFreezeBoundaryThisStep,
+       AsyncExactServeClockFreezeBoundaryThisStep,
+       AsyncFreshExactServeReservationThisStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn
+
+THEOREM AsyncTickDoesNotAcquireFreshClockOwnership ==
+  \A state:
+    \A node \in ValidatorIds:
+      AsyncTick
+        => /\ ~AsyncTimeoutLifecycleConsumesFreshOrdinal(state, node)
+           /\ ~AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
+BY AsyncTickDoesNotFreezeClockLifecycles, Isa
+   DEF AsyncTimeoutLifecycleConsumesFreshOrdinal,
+       AsyncTimeoutLifecycleCanAcquireThisStep,
+       AsyncTimeoutLifecycleTransfersThisStep,
+       AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleCanAcquireThisStep
+
+THEOREM AsyncOrdinaryIngressDoesNotFreezeClockLifecycles ==
+  \A recipient \in ValidatorIds,
+     source \in AsyncIngressSources:
+    AdmitHiddenPacket(recipient, source)
+      => \A node \in ValidatorIds:
+           ~AsyncClockLifecycleFreezeBoundaryThisStep(node)
+BY IsaT(300)
+   DEF AdmitHiddenPacket,
+       AsyncClockLifecycleFreezeBoundaryThisStep,
+       AsyncExactServeClockFreezeBoundaryThisStep,
+       AsyncFreshExactServeReservationThisStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn
+
+THEOREM AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions ==
   \A node \in ValidatorIds:
     /\ AsyncControlServiceStateTypeInvariant
     /\ AsyncNext
-    /\ AsyncTick
+    /\ AsyncClockLifecycleFreezeBoundaryThisStep(node)
     /\ ~AsyncTimeoutLifecycleOwned(node)
-    /\ ~AsyncTimeoutClockDue(node)
-    /\ AsyncTimeoutClockDueAfter(node)
+    /\ \/ AsyncTimeoutClockDue(node)
+       \/ AsyncTimeoutClockDueAfter(node)
     /\ ~AsyncCandidateLifecycleRecorded(
          node, AsyncCurrentTimeoutCausalOrigin(node))
+    /\ ~AsyncTimeoutLifecycleResetThisStep(node)
+    /\ ~AsyncTimeoutLifecycleTransfersThisStep(node)
     => /\ AsyncTimeoutLifecycleOwned(node)'
-       /\ AsyncTimeoutLifecycleOrdinal(node)'
-            = AsyncNextCandidateLifecycleOrdinal(node)
        /\ AsyncTimeoutLifecycleOrigin(node)'
             = AsyncProposedTimeoutCausalOrigin(node)
+       /\ AsyncNextCandidateLifecycleOrdinal(node)
+            <= AsyncTimeoutLifecycleOrdinal(node)'
        /\ AsyncNextCandidateLifecycleOrdinal(node)'
             > AsyncTimeoutLifecycleOrdinal(node)'
 BY IsaT(600)
@@ -22499,6 +22617,7 @@ BY IsaT(600)
        AsyncTimeoutLifecycleConsumesFreshOrdinal,
        AsyncTimeoutLifecycleOrdinalForStep,
        AsyncTimeoutLifecycleCanAcquireThisStep,
+       AsyncClockLifecycleFreezeBoundaryThisStep,
        AsyncTimeoutLifecycleOwned,
        AsyncTimeoutLifecycleOrdinal,
        AsyncTimeoutLifecycleOrigin,

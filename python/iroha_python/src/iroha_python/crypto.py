@@ -683,7 +683,12 @@ _PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS = (
 def _require_portable_verifier_id_field(value: Any, context: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{context} must be a string")
-    encoded = value.encode("utf-8")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            f"{context} must use the bounded portable verifier-key registry grammar"
+        ) from exc
     if (
         not encoded
         or len(encoded) > _VERIFYING_KEY_ID_MAX_FIELD_BYTES

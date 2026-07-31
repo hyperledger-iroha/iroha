@@ -12263,16 +12263,29 @@ mod tests {
             FakeCommand::record(2),
         )
         .expect("enqueue second message");
+        let second_lifecycle_ordinal = runtime
+            .ingress
+            .commands
+            .back()
+            .and_then(|queued| queued.lifecycle_ordinal)
+            .expect("the second message owns its immutable lifecycle ordinal");
         runtime
             .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9))
-            .expect("the older frozen periodic lifecycle dispatches");
-        assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
-        assert_eq!(runtime.driver.delivered, vec![(initial, 1)]);
+            .expect("the admitted message precedes the fresh periodic episode");
+        assert_eq!(runtime.driver.retransmits, vec![initial]);
+        assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
+        assert!(
+            runtime
+                .retransmit_owner
+                .as_ref()
+                .is_some_and(|owner| owner.lifecycle_ordinal() > second_lifecycle_ordinal),
+            "the later runner freeze must mint a fresh periodic position after admitted work"
+        );
 
         runtime
             .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
-            .expect("the admitted pre-deadline message drains before timeout");
-        assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
+            .expect("the retained periodic episode drains before the later timeout owner");
+        assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
         assert!(runtime.driver.timeouts.is_empty());
 
         runtime
@@ -22484,11 +22497,20 @@ mod tests {
             FakeCommand::enter_view(next),
         )
         .unwrap();
-        // Service the retransmission tick due at t=9, then the queued TC-like
-        // progress command at the same monotonic instant.
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9));
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9));
+        // The TC-like progress command was admitted before the next runner
+        // freeze, so it precedes the newly positioned old-view retransmit
+        // episode. EnterView then resets both clocks and retires that stale
+        // periodic owner before it can dispatch.
+        assert!(matches!(
+            runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
+            Ok(RuntimeStep::Advanced(_))
+        ));
         assert_eq!(runtime.round_tag(), next);
+        assert!(runtime.driver.retransmits.is_empty());
+        assert!(matches!(
+            runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
+            Ok(RuntimeStep::Idle)
+        ));
         assert_eq!(runtime.round_timeout(), Duration::from_secs(20));
         assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(22));
 
@@ -22497,7 +22519,7 @@ mod tests {
             Ok(RuntimeStep::Idle)
         ));
         let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(11));
-        assert_eq!(runtime.driver.retransmits, vec![initial, next]);
+        assert_eq!(runtime.driver.retransmits, vec![next]);
         let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(19));
         assert!(runtime.driver.timeouts.is_empty());
         let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(29));

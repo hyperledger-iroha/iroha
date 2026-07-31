@@ -4064,7 +4064,8 @@ THEOREM ExactDecisionRequestPeriodicEpisodeCannotResurrectDrainedOrdinal ==
                             node))
                       + 1
             /\ drainedOrdinal
-                 < after.retransmitLifecycleOrdinal[node]
+                 < AsyncRetransmitLifecycleFreshOrdinalForStep(
+                     state, node)
 BY AsyncRetransmitFreshEpisodeAdvancesSharedHighWatermark,
    AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition, Isa
 

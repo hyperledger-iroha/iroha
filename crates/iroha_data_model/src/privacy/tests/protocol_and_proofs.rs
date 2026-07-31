@@ -1526,6 +1526,48 @@ fn emit_exact12_fixture_bundle_base64() {
 }
 
 #[test]
+fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
+    use base64::Engine as _;
+
+    let encoded =
+        include_str!("../../../../../fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64");
+    let payload = encoded
+        .strip_suffix('\n')
+        .expect("exact12 base64 fixture must end with exactly one LF");
+    assert!(
+        !payload.is_empty(),
+        "exact12 base64 fixture must not be empty"
+    );
+    assert!(
+        !payload.bytes().any(|byte| byte.is_ascii_whitespace()),
+        "exact12 base64 fixture must be a single unwrapped line"
+    );
+
+    let archive = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .expect("exact12 fixture must use STANDARD base64");
+    assert!(
+        archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+        "decoded exact12 fixture exceeds the native archive ceiling"
+    );
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&archive),
+        payload,
+        "exact12 fixture must use the canonical padded base64 spelling"
+    );
+
+    let expected = privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture");
+    assert_eq!(
+        archive, expected,
+        "checked-in exact12 archive must be regenerated from compiled Rust types"
+    );
+    assert_eq!(
+        validate_privacy_exact12_fixture_bundle_v1(&archive),
+        PrivacyExact12FixtureBundleValidationStatusV1::Valid
+    );
+}
+
+#[test]
 fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
     let matrix = include_str!("../../../../../fixtures/privacy/exact12_v1.tsv");
     let generated = privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix");

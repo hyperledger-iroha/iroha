@@ -19,7 +19,23 @@ const MATRIX_URL = new URL(
   "../../../fixtures/privacy/exact12_v1.tsv",
   import.meta.url,
 );
-const BUNDLE_BASE64 = fs.readFileSync(FIXTURE_URL, "utf8");
+const BUNDLE_BASE64_FILE = fs.readFileSync(FIXTURE_URL, "utf8");
+assert.equal(
+  BUNDLE_BASE64_FILE.endsWith("\n"),
+  true,
+  "checked Exact12 fixture must end in exactly one LF",
+);
+const BUNDLE_BASE64 = BUNDLE_BASE64_FILE.slice(0, -1);
+assert.equal(
+  BUNDLE_BASE64.includes("\n"),
+  false,
+  "checked Exact12 fixture must contain exactly one line",
+);
+assert.match(
+  BUNDLE_BASE64,
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u,
+  "checked Exact12 fixture must contain one canonical standard-base64 line",
+);
 const BUNDLE_BYTES = Buffer.from(BUNDLE_BASE64, "base64");
 const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const NORITO_CRC64_POLY = 0xc96c_5795_d787_0f42n;
@@ -122,7 +138,6 @@ function outerRowsLayout(archive) {
 }
 
 test("checked Exact12 base64 decodes all byte-complete rows and re-encodes identically", () => {
-  assert.equal(BUNDLE_BASE64.trim(), BUNDLE_BASE64);
   assert.match(BUNDLE_BASE64, /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u);
   assert.equal(BUNDLE_BYTES.toString("base64"), BUNDLE_BASE64);
   assert.ok(BUNDLE_BYTES.length <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
