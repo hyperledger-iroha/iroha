@@ -38,7 +38,10 @@ import {
   SM2_DEFAULT_DISTINGUISHED_ID,
   sm2FixtureFromSeed,
 } from "../src/crypto.js";
-import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
+import {
+  deriveEd25519SeedFromRecoveryPhrase as deriveBrowserEd25519SeedFromRecoveryPhrase,
+  verifyEd25519 as verifyBrowserEd25519,
+} from "../src/crypto.browser.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import { __resetNativeStateForTests } from "../src/native.js";
 import {
@@ -308,6 +311,10 @@ test("recovery phrase helpers generate and derive 12-word phrases", () => {
   assert.equal(entropy.length, 16);
   assert.equal(seed.length, 32);
   assert.notDeepEqual(seed, entropy);
+  assert.deepEqual(
+    seed,
+    deriveBrowserEd25519SeedFromRecoveryPhrase(recovery.phrase),
+  );
   assert.equal(validateRecoveryPhrase(recovery.phrase), true);
 });
 

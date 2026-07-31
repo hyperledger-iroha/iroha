@@ -152,12 +152,68 @@ function compactLength(value) {
   return Buffer.from(output);
 }
 
+function readCompactLength(bytes, offset, context) {
+  const start = offset;
+  let value = 0n;
+  for (let index = 0; index < 10; index += 1) {
+    if (offset >= bytes.length) {
+      throw new Error(`${context} has a truncated compact length`);
+    }
+    const byte = bytes[offset];
+    offset += 1;
+    const chunk = BigInt(byte & 0x7f);
+    if (index === 9 && chunk > 1n) {
+      throw new Error(`${context} compact length overflows u64`);
+    }
+    value |= chunk << BigInt(index * 7);
+    if ((byte & 0x80) === 0) {
+      if (!bytes.subarray(start, offset).equals(compactLength(value))) {
+        throw new Error(`${context} has a non-canonical compact length`);
+      }
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(`${context} compact length exceeds the safe integer range`);
+      }
+      return { offset, value: Number(value) };
+    }
+  }
+  throw new Error(`${context} compact length exceeds ten bytes`);
+}
+
+function readSizedField(bytes, offset, context) {
+  const length = readCompactLength(bytes, offset, context);
+  const end = length.offset + length.value;
+  if (end > bytes.length) {
+    throw new Error(`${context} length exceeds the signed transaction`);
+  }
+  return { bytes: bytes.subarray(length.offset, end), offset: end };
+}
+
+function signedTransactionPayload(canonicalBareSignedTransaction) {
+  const bytes = Buffer.from(canonicalBareSignedTransaction);
+  const signature = readSizedField(bytes, 0, "signed transaction signature");
+  const payload = readSizedField(
+    bytes,
+    signature.offset,
+    "signed transaction payload",
+  );
+  const multisig = readSizedField(
+    bytes,
+    payload.offset,
+    "signed transaction multisig signatures",
+  );
+  if (multisig.offset !== bytes.length) {
+    throw new Error("signed transaction has trailing bytes");
+  }
+  return payload.bytes;
+}
+
 function signedTransactionHashHex(canonicalBareSignedTransaction) {
+  const payload = signedTransactionPayload(canonicalBareSignedTransaction);
   return irohaHashHex(
     Buffer.concat([
       Buffer.alloc(4),
-      compactLength(canonicalBareSignedTransaction.length),
-      canonicalBareSignedTransaction,
+      compactLength(payload.length),
+      payload,
     ]),
   );
 }
@@ -205,6 +261,17 @@ test("fixture collections reject invalid and non-canonical base64", () => {
       () => decodeCanonicalBase64(encoded, "adversarial fixture"),
       /(?:invalid|non-canonical) base64/,
     );
+  }
+});
+
+test("signed fixture identity parser rejects malformed envelopes", () => {
+  for (const [label, bytes, pattern] of [
+    ["truncated", Buffer.alloc(0), /truncated compact length/u],
+    ["non-canonical", Buffer.from([0x80, 0x00]), /non-canonical compact length/u],
+    ["oversized", Buffer.from([0x02, 0x00]), /length exceeds/u],
+    ["trailing", Buffer.from([0x00, 0x00, 0x00, 0x00]), /trailing bytes/u],
+  ]) {
+    assert.throws(() => signedTransactionHashHex(bytes), pattern, label);
   }
 });
 

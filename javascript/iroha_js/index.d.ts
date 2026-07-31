@@ -3952,7 +3952,6 @@ type NoritoRuntimeNamespaceExport =
   | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
   | "encodeCancelAssetLockV1"
-  | "encodeNumericNoritoValue"
   | "encodeQuantityNoritoValue"
   | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
@@ -5452,13 +5451,6 @@ export function isStatusQueueStalled(
   status: ToriiStatusPayload | Record<string, unknown>,
   stallThresholdMs: number | string | bigint,
 ): boolean;
-
-export const __sumeragiNativeAmxTestHelpers: Readonly<{
-  computeDescriptorHash(value: unknown): string;
-  computeParticipantSettlementHash(value: unknown): string;
-  computeProposalHash(value: unknown): string;
-  computeValidatorSetHash(value: unknown): string;
-}>;
 
 export interface ToriiNetworkTimeNow {
   timestampMs: number;
