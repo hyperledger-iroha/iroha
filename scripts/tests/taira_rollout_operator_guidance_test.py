@@ -636,7 +636,7 @@ def _assert_portable_signed_taira_authority_contract(
     assert "os.path.realpath(sys.argv[1])" in builder
     assert "os.path.realpath(sys.argv[1])" in workflow
     assert '[[ "$canonical_path" != "$path" ]]' in builder
-    assert '[[ "$canonical_path" != "$path" ]]' in workflow
+    assert workflow.count('if [[ "$canonical_path" != "$path" ]]; then') == 2
     assert '"$canonical_path" == "$canonical_repo_root/"*' in builder
     assert '"$canonical_path" == "$canonical_workspace/"*' in workflow
     assert (

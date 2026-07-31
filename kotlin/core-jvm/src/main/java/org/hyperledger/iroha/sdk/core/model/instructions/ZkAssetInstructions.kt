@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.Arrays
 import org.bouncycastle.crypto.agreement.X25519Agreement
@@ -10,7 +11,8 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
-private const val PROOF_ATTACHMENT_MAX_BYTES: Int = 64 * 1024 * 1024
+private const val PROOF_BOX_MAX_ENCODED_BYTES: Long = 64L * 1024L * 1024L
+private const val PROOF_BOX_CANONICAL_FIELD_OVERHEAD: Long = 32L
 private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
 /** Shielded asset registration mode accepted by `zk::RegisterZkAsset`. */
@@ -162,6 +164,88 @@ class ProofVerifierKeyRef(
     }
 }
 
+/** Complete Merkle witness used by a Nexus lane privacy proof. */
+class LanePrivacyMerkleWitness(
+    leaf: ByteArray,
+    @JvmField val leafIndex: Long,
+    auditPath: List<ByteArray>,
+) {
+    private val _leaf = fixedBytes(leaf, 32, "leaf")
+    private val _auditPath: List<ByteArray>
+
+    init {
+        require(leafIndex in 0L..0xffff_ffffL) { "leafIndex must fit in u32" }
+        require(auditPath.size in 1..MAX_DEPTH) {
+            "auditPath must contain between 1 and $MAX_DEPTH siblings"
+        }
+        require(auditPath.size >= 32 || leafIndex < (1L shl auditPath.size)) {
+            "leafIndex cannot fit the supplied Merkle path depth"
+        }
+        _auditPath = auditPath.mapIndexed { index, sibling ->
+            val canonical = fixedBytes(sibling, 32, "auditPath[$index]")
+            canonical[canonical.lastIndex] = (canonical.last().toInt() or 1).toByte()
+            canonical
+        }
+    }
+
+    val leaf: ByteArray get() = _leaf.copyOf()
+
+    val auditPath: List<ByteArray> get() = _auditPath.map { it.copyOf() }
+
+    fun leafBytes(): ByteArray = leaf
+
+    fun auditPathBytes(): List<ByteArray> = auditPath
+
+    override fun equals(other: Any?): Boolean =
+        other is LanePrivacyMerkleWitness &&
+            leafIndex == other.leafIndex &&
+            _leaf.contentEquals(other._leaf) &&
+            _auditPath.size == other._auditPath.size &&
+            _auditPath.indices.all { _auditPath[it].contentEquals(other._auditPath[it]) }
+
+    override fun hashCode(): Int {
+        var result = _leaf.contentHashCode()
+        result = 31 * result + leafIndex.hashCode()
+        for (sibling in _auditPath) result = 31 * result + sibling.contentHashCode()
+        return result
+    }
+
+    companion object {
+        /** Maximum first-release Merkle audit-path depth. */
+        const val MAX_DEPTH: Int = 255
+    }
+}
+
+/** Canonical first-release lane privacy witness variants. */
+sealed class LanePrivacyWitness private constructor() {
+    /** Merkle membership witness. */
+    class Merkle(@JvmField val value: LanePrivacyMerkleWitness) : LanePrivacyWitness() {
+        override fun equals(other: Any?): Boolean = other is Merkle && value == other.value
+
+        override fun hashCode(): Int = value.hashCode()
+    }
+
+    companion object {
+        @JvmStatic
+        fun merkle(value: LanePrivacyMerkleWitness): LanePrivacyWitness = Merkle(value)
+    }
+}
+
+/** Proof payload bound to a registered Nexus lane commitment. */
+class LanePrivacyProof(
+    @JvmField val commitmentId: Int,
+    @JvmField val witness: LanePrivacyWitness,
+) {
+    init {
+        require(commitmentId in 0..0xffff) { "commitmentId must fit in u16" }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is LanePrivacyProof && commitmentId == other.commitmentId && witness == other.witness
+
+    override fun hashCode(): Int = 31 * commitmentId + witness.hashCode()
+}
+
 /** JSON-serializable proof attachment accepted by native zk transaction encoders. */
 class ProofAttachment(
     backend: String,
@@ -169,11 +253,12 @@ class ProofAttachment(
     verifyingKeyRef: ProofVerifierKeyRef,
     verifyingKeyCommitment: ByteArray? = null,
     envelopeHash: ByteArray? = null,
+    @JvmField val lanePrivacy: LanePrivacyProof? = null,
 ) {
     @JvmField
     val backend: String = requirePortableComponent(backend, "backend")
 
-    private val _proofBytes = copyNonEmpty(proofBytes, "proofBytes")
+    private val _proofBytes: ByteArray
 
     @JvmField
     val verifyingKeyRef: ProofVerifierKeyRef = verifyingKeyRef
@@ -184,9 +269,15 @@ class ProofAttachment(
     private val _envelopeHash = envelopeHash?.let { fixedBytes(it, 32, "envelopeHash") }
 
     init {
-        require(_proofBytes.size <= PROOF_ATTACHMENT_MAX_BYTES) {
-            "proofBytes must not exceed $PROOF_ATTACHMENT_MAX_BYTES bytes"
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        val proofBoxLength = canonicalProofBoxEncodedLength(
+            this.backend.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+            proofBytes.size.toLong(),
+        )
+        require(proofBoxLength <= PROOF_BOX_MAX_ENCODED_BYTES) {
+            "encoded ProofBox must not exceed $PROOF_BOX_MAX_ENCODED_BYTES bytes"
         }
+        _proofBytes = proofBytes.copyOf()
         require(verifyingKeyRef.backend == this.backend) {
             "verifyingKeyRef.backend must match backend"
         }
@@ -214,8 +305,6 @@ class ProofAttachment(
         append('{')
         append("\"backend\":")
         appendJsonString(backend)
-        append(",\"proof_backend\":")
-        appendJsonString(backend)
         append(",\"proof_b64\":")
         appendJsonString(Base64.getEncoder().encodeToString(_proofBytes))
         append(",\"vk_ref\":{\"backend\":")
@@ -229,6 +318,10 @@ class ProofAttachment(
         }
         append(",\"envelope_hash_hex\":")
         appendJsonString(hexLower(_envelopeHash ?: IrohaHash.prehash(_proofBytes)))
+        lanePrivacy?.let {
+            append(",\"lane_privacy\":")
+            appendLanePrivacyJson(it)
+        }
         append('}')
     }
 
@@ -238,7 +331,8 @@ class ProofAttachment(
             _proofBytes.contentEquals(other._proofBytes) &&
             verifyingKeyRef == other.verifyingKeyRef &&
             nullableContentEquals(_verifyingKeyCommitment, other._verifyingKeyCommitment) &&
-            nullableContentEquals(_envelopeHash, other._envelopeHash)
+            nullableContentEquals(_envelopeHash, other._envelopeHash) &&
+            lanePrivacy == other.lanePrivacy
 
     override fun hashCode(): Int {
         var result = backend.hashCode()
@@ -246,7 +340,34 @@ class ProofAttachment(
         result = 31 * result + verifyingKeyRef.hashCode()
         result = 31 * result + (_verifyingKeyCommitment?.contentHashCode() ?: 0)
         result = 31 * result + (_envelopeHash?.contentHashCode() ?: 0)
+        result = 31 * result + (lanePrivacy?.hashCode() ?: 0)
         return result
+    }
+
+    companion object {
+        /** Maximum canonical encoded size of the nested Rust `ProofBox`. */
+        const val MAXIMUM_ENCODED_PROOF_BOX_BYTES: Long = PROOF_BOX_MAX_ENCODED_BYTES
+
+        /** Calculate the complete encoded `ProofBox` length without allocating proof bytes. */
+        @JvmStatic
+        fun canonicalProofBoxEncodedLength(
+            backendUtf8ByteCount: Long,
+            proofByteCount: Long,
+        ): Long {
+            require(backendUtf8ByteCount >= 0L) { "backendUtf8ByteCount must be non-negative" }
+            require(proofByteCount >= 0L) { "proofByteCount must be non-negative" }
+            return try {
+                Math.addExact(
+                    Math.addExact(PROOF_BOX_CANONICAL_FIELD_OVERHEAD, backendUtf8ByteCount),
+                    proofByteCount,
+                )
+            } catch (error: ArithmeticException) {
+                throw IllegalArgumentException(
+                    "encoded ProofBox length overflows the supported range",
+                    error,
+                )
+            }
+        }
     }
 }
 
@@ -593,13 +714,33 @@ internal fun requireText(value: String?, name: String): String {
 
 private fun requirePortableComponent(value: String?, name: String): String {
     val text = requireText(value, name)
-    require(text.length <= 256) { "$name must not exceed 256 characters" }
-    for (ch in text) {
-        require(ch.code in 0x21..0x7e && ch != ':') {
-            "$name must use portable ASCII without ':'"
-        }
+    val bytes = text.toByteArray(StandardCharsets.UTF_8)
+    require(bytes.size <= 256) { "$name must not exceed 256 UTF-8 bytes" }
+    require(bytes.first().isPortableVerifierEndpoint() && bytes.last().isPortableVerifierEndpoint()) {
+        "$name must start and end with a lowercase ASCII letter or digit"
+    }
+    require(bytes.all { it.isPortableVerifierByte() }) {
+        "$name must use lowercase ASCII letters, digits, '-', '_', '/', ':', or '.'"
+    }
+    require(PORTABLE_VERIFIER_FORBIDDEN_SEPARATORS.none { separator -> text.contains(separator) }) {
+        "$name contains a non-canonical separator sequence"
     }
     return text
+}
+
+private val PORTABLE_VERIFIER_FORBIDDEN_SEPARATORS =
+    listOf("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")
+
+private fun Byte.isPortableVerifierEndpoint(): Boolean {
+    val value = toInt() and 0xff
+    return value in 'a'.code..'z'.code || value in '0'.code..'9'.code
+}
+
+private fun Byte.isPortableVerifierByte(): Boolean {
+    val value = toInt() and 0xff
+    return isPortableVerifierEndpoint() ||
+        value == '-'.code || value == '_'.code || value == '/'.code ||
+        value == ':'.code || value == '.'.code
 }
 
 private fun optionalVerifyingKeyId(value: String?, name: String): String? {
@@ -720,6 +861,36 @@ private fun StringBuilder.appendJsonString(value: String) {
         }
     }
     append('"')
+}
+
+private fun StringBuilder.appendLanePrivacyJson(lanePrivacy: LanePrivacyProof) {
+    append("{\"commitment_id\":")
+    append(lanePrivacy.commitmentId)
+    append(",\"witness\":{\"kind\":\"merkle\",\"payload\":")
+    when (val witness = lanePrivacy.witness) {
+        is LanePrivacyWitness.Merkle -> {
+            append("{\"leaf\":")
+            appendJsonByteArray(witness.value.leafBytes())
+            append(",\"proof\":{\"leaf_index\":")
+            append(witness.value.leafIndex)
+            append(",\"audit_path\":[")
+            witness.value.auditPathBytes().forEachIndexed { index, sibling ->
+                if (index != 0) append(',')
+                appendJsonByteArray(sibling)
+            }
+            append("]}}")
+        }
+    }
+    append("}}")
+}
+
+private fun StringBuilder.appendJsonByteArray(bytes: ByteArray) {
+    append('[')
+    bytes.forEachIndexed { index, byte ->
+        if (index != 0) append(',')
+        append(byte.toInt() and 0xff)
+    }
+    append(']')
 }
 
 private fun hexLower(bytes: ByteArray): String = buildString(bytes.size * 2) {

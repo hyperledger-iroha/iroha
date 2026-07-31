@@ -4,10 +4,11 @@
 This is a release-capture command for a dedicated disposable macOS runner.  It
 requires root because the production configs bind the content-addressed
 Kagemusha release store and qualification seal below ``/Library/SORA/Taira``.
-The command temporarily installs only the exact release catalog and candidate
-binary, starts four ordinary per-peer supervisors as the reset-bundle owner,
-proves common consensus advancement, restarts every validator child in turn,
-and then restores the fresh deploy bundle before writing the receipt.
+The command temporarily installs only the exact release catalog, candidate
+binary, and supervisor in root-controlled content-addressed paths; it starts
+four ordinary per-peer supervisors as the reset-bundle owner, proves common
+consensus advancement, restarts every validator child in turn, and then
+restores the fresh deploy bundle before writing the receipt.
 
 The original deploy bundle's storage is never used.  Each peer runs in an
 owner-private shadow work directory with empty throw-away storage, while the
@@ -40,6 +41,7 @@ try:
         canonical_json_bytes,
         exclusive_output_fd,
         stable_hash_path,
+        stable_open_relative,
     )
 except ImportError:
     import deploy_taira_v21_reset as deploy
@@ -49,10 +51,12 @@ except ImportError:
         canonical_json_bytes,
         exclusive_output_fd,
         stable_hash_path,
+        stable_open_relative,
     )
 
 
 VALIDATION_BINARY_ROOT = deploy.INSTALL_ROOT / "release-validation" / "bin"
+VALIDATION_SUPERVISOR_ROOT = deploy.INSTALL_ROOT / "release-validation" / "supervisor"
 MAX_RECEIPT_LIFETIME_SECONDS = 45 * 60
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -117,33 +121,43 @@ def _private_supervisor(path: Path, uid: int, gid: int) -> str:
     return stable_hash_path(path, max_size=4 * 1024 * 1024).sha256
 
 
-def _install_binary(source: Path, digest: str) -> tuple[Path, tuple[int, ...]]:
+def _install_validation_file(
+    source: Path,
+    digest: str,
+    *,
+    install_root: Path,
+    installed_name: str,
+    maximum_bytes: int,
+    label: str,
+) -> tuple[Path, tuple[int, ...]]:
     deploy.ensure_root_directory(deploy.INSTALL_ROOT, 0o755)
     deploy.ensure_root_directory(deploy.INSTALL_ROOT / "release-validation", 0o755)
-    deploy.ensure_root_directory(VALIDATION_BINARY_ROOT, 0o755)
-    destination_dir = VALIDATION_BINARY_ROOT / digest
+    deploy.ensure_root_directory(install_root, 0o755)
+    destination_dir = install_root / digest
     if destination_dir.exists() or destination_dir.is_symlink():
-        _fail(f"validation binary destination already exists: {destination_dir}")
+        _fail(f"validation {label} destination already exists: {destination_dir}")
     destination_dir.mkdir(mode=0o755)
     os.chown(destination_dir, 0, 0)
-    destination = destination_dir / "irohad"
-    source_info = stable_hash_path(source, max_size=deploy.MAX_BINARY_BYTES)
+    destination = destination_dir / installed_name
+    source_info = stable_hash_path(source, max_size=maximum_bytes)
     if source_info.sha256 != digest:
-        _fail("validator binary changed before protected installation")
+        _fail(f"validation {label} changed before protected installation")
     try:
-        with open(source, "rb", buffering=0) as input_stream:
+        with stable_open_relative(
+            source.parent, source.name, expected=source_info
+        ) as source_descriptor:
             descriptor = os.open(
                 destination,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
                 0o555,
             )
             try:
-                while chunk := input_stream.read(1024 * 1024):
+                while chunk := os.read(source_descriptor, 1024 * 1024):
                     view = memoryview(chunk)
                     while view:
                         written = os.write(descriptor, view)
                         if written <= 0:
-                            _fail("short write installing validation binary")
+                            _fail(f"short write installing validation {label}")
                         view = view[written:]
                 os.fchmod(descriptor, 0o555)
                 os.fchown(descriptor, 0, 0)
@@ -151,28 +165,34 @@ def _install_binary(source: Path, digest: str) -> tuple[Path, tuple[int, ...]]:
                 installed = os.fstat(descriptor)
             finally:
                 os.close(descriptor)
+        if stable_hash_path(destination).sha256 != digest:
+            _fail(f"protected validation {label} differs after installation")
+        deploy.require_root_controlled_file(destination, executable=True)
+        deploy.fsync_directory(destination_dir)
     except BaseException:
         destination.unlink(missing_ok=True)
         destination_dir.rmdir()
         raise
-    if stable_hash_path(destination).sha256 != digest:
-        _fail("protected validation binary differs after installation")
-    deploy.require_root_controlled_file(destination, executable=True)
     return destination, deploy.metadata_identity(installed)
 
 
-def _remove_binary(path: Path, expected_identity: tuple[int, ...]) -> None:
+def _remove_validation_file(
+    path: Path,
+    expected_identity: tuple[int, ...],
+    install_root: Path,
+    label: str,
+) -> None:
     try:
         current = path.lstat()
     except FileNotFoundError as exc:
         raise MacosFourPeerCaptureError(
-            "validation binary disappeared before cleanup"
+            f"validation {label} disappeared before cleanup"
         ) from exc
     if deploy.metadata_identity(current) != expected_identity:
-        _fail("validation binary changed before cleanup")
+        _fail(f"validation {label} changed before cleanup")
     path.unlink()
     path.parent.rmdir()
-    deploy.fsync_directory(VALIDATION_BINARY_ROOT)
+    deploy.fsync_directory(install_root)
 
 
 def _copy_shadow_workdir(source: Path, destination: Path, uid: int, gid: int) -> None:
@@ -469,6 +489,8 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
 
     installed_binary: Path | None = None
     installed_identity: tuple[int, ...] | None = None
+    installed_supervisor: Path | None = None
+    installed_supervisor_identity: tuple[int, ...] | None = None
     seal_path: Path | None = None
     seal_identity: tuple[int, ...] | None = None
     release_moved = False
@@ -478,8 +500,21 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
     start: deploy.FleetSample | None = None
     end: deploy.FleetSample | None = None
     try:
-        installed_binary, installed_identity = _install_binary(
-            binary_source, binary_sha
+        installed_binary, installed_identity = _install_validation_file(
+            binary_source,
+            binary_sha,
+            install_root=VALIDATION_BINARY_ROOT,
+            installed_name="irohad",
+            maximum_bytes=deploy.MAX_BINARY_BYTES,
+            label="binary",
+        )
+        installed_supervisor, installed_supervisor_identity = _install_validation_file(
+            supervisor,
+            supervisor_sha,
+            install_root=VALIDATION_SUPERVISOR_ROOT,
+            installed_name="taira_peer_supervisor.py",
+            maximum_bytes=4 * 1024 * 1024,
+            label="supervisor",
         )
         deploy.move_release_to_root_store(bundle)
         release_moved = True
@@ -500,7 +535,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
                     bundle=bundle,
                     binary=installed_binary,
                     binary_digest=binary_sha,
-                    supervisor=supervisor,
+                    supervisor=installed_supervisor,
                     runtime_root=runtime_root,
                     restart_generation=restart_generation,
                 )
@@ -572,12 +607,31 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
             except BaseException:
                 cleanup_errors.append("release-catalog")
         if (
+            installed_supervisor is not None
+            and installed_supervisor_identity is not None
+            and supervisors_stopped
+        ):
+            try:
+                _remove_validation_file(
+                    installed_supervisor,
+                    installed_supervisor_identity,
+                    VALIDATION_SUPERVISOR_ROOT,
+                    "supervisor",
+                )
+            except BaseException:
+                cleanup_errors.append("validation-supervisor")
+        if (
             installed_binary is not None
             and installed_identity is not None
             and supervisors_stopped
         ):
             try:
-                _remove_binary(installed_binary, installed_identity)
+                _remove_validation_file(
+                    installed_binary,
+                    installed_identity,
+                    VALIDATION_BINARY_ROOT,
+                    "binary",
+                )
             except BaseException:
                 cleanup_errors.append("validation-binary")
         if supervisors_stopped:

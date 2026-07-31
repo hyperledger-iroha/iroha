@@ -198,6 +198,7 @@ __all__ = [
     "inspect_signed_privacy_jindo_action_v1",
     "inspect_signed_privacy_verange_action_v1",
     "inspect_signed_privacy_vega_action_v1",
+    "inspect_signed_privacy_zk_x509_identity_presentation_action_v1",
     "inspect_signed_privacy_zk_ams_batch_admission_action_v1",
     "inspect_signed_privacy_zk_ams_provision_account_action_v1",
     "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
@@ -2362,3 +2363,37 @@ def inspect_signed_privacy_pq_masp_note_action_v1(
         entrypoint="inspect_signed_privacy_pq_masp_note_action_v1",
         protocol_label="PQ-MASP",
     )
+
+
+def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    canonical_genesis_hash: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact genesis-bound ZK-X509 presentation."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    if not isinstance(canonical_genesis_hash, (bytes, bytearray, memoryview)):
+        raise TypeError("canonical_genesis_hash must be bytes-like")
+    entrypoint = "inspect_signed_privacy_zk_x509_identity_presentation_action_v1"
+    try:
+        inspector = getattr(_crypto, entrypoint)
+    except AttributeError as exc:
+        raise RuntimeError(
+            f"iroha_python._crypto is missing {entrypoint}; rebuild the extension"
+        ) from exc
+    try:
+        result = inspector(
+            bytes(signed_transaction_versioned),
+            bytes(canonical_genesis_hash),
+        )
+    except Exception:
+        raise ValueError("invalid canonical signed ZK-X509 presentation action") from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            "native ZK-X509 presentation action inspection returned an invalid result"
+        )
+    return result

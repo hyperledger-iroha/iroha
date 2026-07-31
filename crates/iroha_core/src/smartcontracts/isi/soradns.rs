@@ -1,7 +1,5 @@
 //! Resolver attestation directory governance ISIs.
 
-use std::time::UNIX_EPOCH;
-
 use hex::encode as hex_encode;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
@@ -26,6 +24,7 @@ impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let block_timestamp_ms = current_block_time_millis(state_transaction)?;
         let iroha_data_model::isi::soradns::SubmitDirectoryDraft {
             record,
             car_cid,
@@ -59,14 +58,13 @@ impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
         ensure_previous_pointer_matches(state_transaction, &record)?;
         verify_builder_signature(&record)?;
 
-        let submitted_at_ms = current_time_millis()?;
         let draft = PendingDirectoryDraftV1 {
             record,
             car_cid: car_cid.clone(),
             directory_json_sha256,
             builder_public_key: builder_public_key.clone(),
             builder_signature: builder_signature.clone(),
-            submitted_at_ms,
+            submitted_at_ms: block_timestamp_ms,
         };
         state_transaction
             .world
@@ -92,6 +90,7 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let block_timestamp_ms = current_block_time_millis(state_transaction)?;
         let iroha_data_model::isi::soradns::PublishDirectory {
             directory_id,
             expected_prev,
@@ -119,7 +118,12 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
         }
 
         verify_builder_signature(&draft.record)?;
-        enforce_rotation_policy(state_transaction, &draft.record, directory_id)?;
+        enforce_rotation_policy(
+            state_transaction,
+            &draft.record,
+            directory_id,
+            block_timestamp_ms,
+        )?;
 
         let previous = *state_transaction.world.soradns_directory_latest.get();
         if draft.record.previous_root.is_none() && previous.is_some() {
@@ -147,7 +151,7 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
             .soradns_directory_records
             .insert(directory_id, draft.record.clone());
         *state_transaction.world.soradns_directory_latest.get_mut() = Some(directory_id);
-        *state_transaction.world.soradns_last_publish_ms.get_mut() = Some(current_time_millis()?);
+        *state_transaction.world.soradns_last_publish_ms.get_mut() = Some(block_timestamp_ms);
 
         emit_directory_event(
             state_transaction,
@@ -170,6 +174,7 @@ impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let block_timestamp_ms = current_block_time_millis(state_transaction)?;
         let iroha_data_model::isi::soradns::RevokeResolver {
             resolver_id,
             reason,
@@ -190,7 +195,7 @@ impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
         let record = ResolverRevocationRecordV1 {
             resolver_id,
             reason,
-            revoked_at_ms: current_time_millis()?,
+            revoked_at_ms: block_timestamp_ms,
         };
         state_transaction
             .world
@@ -388,9 +393,10 @@ fn ensure_previous_pointer_matches(
 }
 
 fn enforce_rotation_policy(
-    state_transaction: &mut StateTransaction<'_, '_>,
+    state_transaction: &StateTransaction<'_, '_>,
     record: &ResolverDirectoryRecordV1,
     directory_id: DirectoryId,
+    block_timestamp_ms: u64,
 ) -> Result<(), Error> {
     let policy = *state_transaction.world.soradns_rotation_policy.get();
     if policy.min_interval_ms == 0 {
@@ -409,9 +415,8 @@ fn enforce_rotation_policy(
         ));
     }
 
-    let now_ms = current_time_millis()?;
     if let Some(last_publish) = *state_transaction.world.soradns_last_publish_ms.get() {
-        let spacing = now_ms.saturating_sub(last_publish);
+        let spacing = block_timestamp_ms.saturating_sub(last_publish);
         if spacing < policy.min_interval_ms {
             return Err(invalid_parameter(format!(
                 "directory {} was published too soon ({spacing} ms since last publish, policy requires {} ms)",
@@ -421,7 +426,7 @@ fn enforce_rotation_policy(
         }
     }
 
-    let created_delta = record.created_at_ms.abs_diff(now_ms);
+    let created_delta = record.created_at_ms.abs_diff(block_timestamp_ms);
     if created_delta > policy.max_skew_ms {
         return Err(invalid_parameter(format!(
             "directory record timestamp skew ({created_delta} ms) exceeds policy limit {} ms",
@@ -559,18 +564,9 @@ fn emit_directory_event(
         .emit_events(Some(DataEvent::Soradns(soradns_event)));
 }
 
-fn current_time_millis() -> Result<u64, Error> {
-    let now = crate::time::now().now;
-    let duration = now.duration_since(UNIX_EPOCH).map_err(|err| {
-        InstructionExecutionError::InvariantViolation(
-            format!("system clock is before UNIX_EPOCH: {err}").into(),
-        )
-    })?;
-    u64::try_from(duration.as_millis()).map_err(|_| {
-        InstructionExecutionError::InvariantViolation(
-            "system clock duration exceeded u64 capacity".into(),
-        )
-    })
+fn current_block_time_millis(state_transaction: &StateTransaction<'_, '_>) -> Result<u64, Error> {
+    u64::try_from(state_transaction._curr_block.creation_time().as_millis())
+        .map_err(|_| invariant_violation("block creation time exceeds the u64 millisecond range"))
 }
 
 fn invalid_parameter(message: impl Into<String>) -> Error {
@@ -604,8 +600,17 @@ mod tests {
         state::{State, World},
     };
 
+    const BLOCK_TIMESTAMP_MS: u64 = 1_700_000_000_000;
+
     fn block_header() -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+        iroha_data_model::block::BlockHeader::new(
+            nonzero!(1_u64),
+            None,
+            None,
+            None,
+            BLOCK_TIMESTAMP_MS,
+            0,
+        )
     }
 
     fn make_state() -> State {
@@ -615,16 +620,15 @@ mod tests {
     }
 
     fn sample_record(builder_keys: &KeyPair) -> ResolverDirectoryRecordV1 {
-        let now_ms = current_time_millis().expect("time");
         ResolverDirectoryRecordV1 {
             root_hash: [1; 32],
             record_version: soradns::DIRECTORY_RECORD_VERSION_V1,
-            created_at_ms: now_ms,
+            created_at_ms: BLOCK_TIMESTAMP_MS,
             rad_count: 1,
             directory_json_sha256: [2; 32],
             previous_root: None,
             published_at_block: 0,
-            published_at_unix: now_ms / 1_000,
+            published_at_unix: BLOCK_TIMESTAMP_MS / 1_000,
             proof_manifest_cid: IpfsPath::from_str("/ipfs/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .expect("cid"),
             builder_public_key: builder_keys.public_key().clone(),
@@ -709,11 +713,14 @@ mod tests {
             builder_signature: record.builder_signature.clone(),
         };
         submit.execute(&authority, &mut stx).expect("submit");
-        assert!(
-            stx.world
-                .soradns_directory_pending
-                .get(&record.root_hash)
-                .is_some()
+        let draft = stx
+            .world
+            .soradns_directory_pending
+            .get(&record.root_hash)
+            .expect("submitted draft should be pending");
+        assert_eq!(
+            draft.submitted_at_ms, BLOCK_TIMESTAMP_MS,
+            "draft timestamp must come from the canonical block header"
         );
     }
 
@@ -755,6 +762,37 @@ mod tests {
                 .soradns_directory_pending
                 .get(&record.root_hash)
                 .is_none()
+        );
+        assert_eq!(
+            *stx.world.soradns_last_publish_ms.get(),
+            Some(BLOCK_TIMESTAMP_MS),
+            "publish timestamp must be the same canonical value used by policy checks"
+        );
+    }
+
+    #[test]
+    fn revoke_resolver_uses_block_timestamp() {
+        crate::test_alias::ensure();
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let resolver_id = [0xA5; 32];
+
+        iroha_data_model::isi::soradns::RevokeResolver {
+            resolver_id,
+            reason: iroha_data_model::soradns::RadRevokeReason::OperatorRequest,
+        }
+        .execute(&authority_account(), &mut stx)
+        .expect("revoke resolver");
+
+        let revocation = stx
+            .world
+            .soradns_directory_revocations
+            .get(&resolver_id)
+            .expect("resolver revocation should be recorded");
+        assert_eq!(
+            revocation.revoked_at_ms, BLOCK_TIMESTAMP_MS,
+            "revocation timestamp must come from the canonical block header"
         );
     }
 

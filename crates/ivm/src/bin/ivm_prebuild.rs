@@ -1,12 +1,9 @@
 //! Stage deterministic IVM sample bytecode for integration tests.
 //!
-//! Synthetic executor fixtures are built by the canonical library builder.
 //! Compiler-owned samples are copied from their checked-in canonical outputs;
 //! this tool never substitutes a placeholder for a missing contract.
 
 use std::{env, fs, path::PathBuf};
-
-use ivm::prebuilt_fixtures::{SYNTHETIC_EXECUTOR_FIXTURES, build_synthetic_executor_program};
 
 const SAMPLE_MANIFEST: &str = include_str!("../../prebuilt_samples.txt");
 
@@ -40,22 +37,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     for name in prebuilt_sample_names() {
-        let bytes = if let Some(tag) = SYNTHETIC_EXECUTOR_FIXTURES
-            .iter()
-            .position(|candidate| *candidate == name)
-        {
-            build_synthetic_executor_program(
-                u8::try_from(tag).expect("synthetic fixture inventory fits u8"),
+        let source = fixtures_dir.join(name).with_extension("to");
+        let bytes = fs::read(&source).map_err(|error| {
+            format!(
+                "canonical compiler-owned fixture {} is missing or unreadable: {error}",
+                source.display()
             )
-        } else {
-            let source = fixtures_dir.join(name).with_extension("to");
-            fs::read(&source).map_err(|error| {
-                format!(
-                    "canonical compiler-owned fixture {} is missing or unreadable: {error}",
-                    source.display()
-                )
-            })?
-        };
+        })?;
         let output = samples_dir.join(name).with_extension("to");
         fs::write(&output, &bytes)?;
         eprintln!("wrote {} ({} bytes)", output.display(), bytes.len());
@@ -66,18 +54,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sample_manifest_has_every_synthetic_fixture_once() {
-        let names = prebuilt_sample_names();
-        for fixture in SYNTHETIC_EXECUTOR_FIXTURES {
-            assert_eq!(
-                names.iter().filter(|name| **name == fixture).count(),
-                1,
-                "{fixture} must occur exactly once"
-            );
-        }
-    }
 
     #[test]
     fn sample_manifest_has_no_unknown_or_duplicate_names() {

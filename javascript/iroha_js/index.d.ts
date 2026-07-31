@@ -180,6 +180,7 @@ export type {
   PrivacyProtocolLimitsV1,
   PrivacyProtocolTagV1,
   PrivacyTaggedUnitV1,
+  PrivacyU64V1,
 } from "./privacy-capabilities.js";
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;
@@ -1249,13 +1250,14 @@ export interface ConfidentialEncryptedPayloadInput {
 export interface ProofAttachmentInput {
   backend: string;
   proof: BinaryLike;
-  verifyingKeyRef: VerifyingKeyIdLike;
+  verifyingKeyRef: { backend: string; name: string };
   verifyingKeyCommitment?: BinaryLike | null;
+  envelopeHash?: BinaryLike | null;
   lanePrivacy?: {
     commitmentId: number;
-    merkle?: {
+    merkle: {
       leaf: BinaryLike;
-      leafIndex?: number;
+      leafIndex: number;
       auditPath: BinaryLike[];
     };
   } | null;

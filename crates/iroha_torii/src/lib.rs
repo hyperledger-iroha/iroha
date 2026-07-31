@@ -53332,23 +53332,19 @@ impl Torii {
         let _ = self;
         builder.route(
             &route_catalog::soracloud_gateway::SORADNS_ROOT,
-            catalog_any(handler_soradns_public_alias_root)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            catalog_any(handler_soradns_public_alias_root).unauthenticated(),
         );
         builder.route(
             &route_catalog::soracloud_gateway::SORADNS_PATH,
-            catalog_any(handler_soradns_public_alias_path)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            catalog_any(handler_soradns_public_alias_path).unauthenticated(),
         );
         builder.route(
             &route_catalog::soracloud_gateway::LOCAL_ROOT,
-            catalog_any(handler_soracloud_public_local_read)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            catalog_any(handler_soracloud_public_local_read).unauthenticated(),
         );
         builder.route(
             &route_catalog::soracloud_gateway::LOCAL_PATH,
-            catalog_any(handler_soracloud_public_local_read)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            catalog_any(handler_soracloud_public_local_read).unauthenticated(),
         );
     }
 

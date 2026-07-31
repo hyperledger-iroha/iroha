@@ -28,10 +28,11 @@ impl VecRegistry {
     where
         T: Instruction + Decode + 'static,
     {
-        fn ctor<T>(_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
+        fn ctor<T>(flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
         where
             T: Instruction + Decode + 'static,
         {
+            let _flags = core::DecodeFlagsGuard::enter(flags);
             let instruction = T::decode(&mut &*input)?;
             Ok(Box::new(instruction).into_instruction_box())
         }
@@ -42,11 +43,16 @@ impl VecRegistry {
     }
 
     /// Decode an instruction by its type name using the stored constructor.
-    fn decode(&self, name: &str, bytes: &[u8]) -> Option<Result<InstructionBox, norito::Error>> {
+    fn decode(
+        &self,
+        name: &str,
+        flags: u8,
+        bytes: &[u8],
+    ) -> Option<Result<InstructionBox, norito::Error>> {
         self.entries
             .iter()
             .find(|(n, _)| *n == name)
-            .map(|(_, ctor)| ctor(0, bytes))
+            .map(|(_, ctor)| ctor(flags, bytes))
     }
 }
 
@@ -56,10 +62,9 @@ fn bench_decode(c: &mut Criterion) {
     let instruction = Log::new(Level::INFO, "bench".into());
     let framed_bytes =
         norito::to_bytes(&instruction).expect("serialize instruction with Norito header");
-    let payload = core::from_bytes_view(&framed_bytes)
-        .expect("validate framed bytes")
-        .as_bytes()
-        .to_vec();
+    let view = core::from_bytes_view(&framed_bytes).expect("validate framed bytes");
+    let flags = view.flags();
+    let payload = view.as_bytes().to_vec();
 
     let vec_registry = VecRegistry::new().register::<Log>();
     let hash_registry = InstructionRegistry::new().register::<Log>();
@@ -68,7 +73,7 @@ fn bench_decode(c: &mut Criterion) {
 
     c.bench_function("decode_vec", |b| {
         b.iter(|| {
-            vec_registry.decode(name, &payload).unwrap().unwrap();
+            vec_registry.decode(name, flags, &payload).unwrap().unwrap();
         })
     });
 

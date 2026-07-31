@@ -1,5 +1,12 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.tx.norito.TransactionPayloadAdapter
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -634,4 +641,328 @@ class ZkAssetInstructionsTest {
             value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
         }
     }
+}
+
+class ProofAttachmentTest {
+    @Test
+    fun `portable verifier identifiers match the Rust grammar exactly`() {
+        val ref = ProofVerifierKeyRef("halo2/ipa", "halo2/ipa::transfer_v1")
+        assertEquals("halo2/ipa:halo2/ipa::transfer_v1", ref.wireId())
+        assertEquals(ref, ProofVerifierKeyRef.fromWireId(ref.wireId()))
+
+        val invalid = listOf(
+            " leading", "trailing ", "Uppercase", ".hidden", "trailing_", "a..b",
+            "a//b", "a:::b", "a/:b", "a:/b", "a/.b", "a./b", "a:.b", "a.:b",
+            "a\\b", "a\u200bb", "a\nb", "a+b",
+        )
+        for (value in invalid) {
+            assertFailsWith<IllegalArgumentException>(value) {
+                ProofVerifierKeyRef("halo2/ipa", value)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ProofVerifierKeyRef("halo2/ipa", "a".repeat(257))
+        }
+    }
+
+    @Test
+    fun `ProofBox limit covers complete encoding without large allocations`() {
+        val maximum = ProofAttachment.MAXIMUM_ENCODED_PROOF_BOX_BYTES
+        val backendBytes = "halo2/ipa".encodeToByteArray().size.toLong()
+        assertEquals(
+            maximum,
+            ProofAttachment.canonicalProofBoxEncodedLength(
+                backendBytes,
+                maximum - 32L - backendBytes,
+            ),
+        )
+        assertEquals(
+            maximum + 1L,
+            ProofAttachment.canonicalProofBoxEncodedLength(
+                backendBytes,
+                maximum - 31L - backendBytes,
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            ProofAttachment.canonicalProofBoxEncodedLength(Long.MAX_VALUE, 1L)
+        }
+    }
+
+    @Test
+    fun `proof attachment validates commitments hashes and exact native JSON`() {
+        val proof = byteArrayOf(1, 2)
+        val lane = sampleLanePrivacy()
+        val attachment = ProofAttachment(
+            "halo2/ipa",
+            proof,
+            ProofVerifierKeyRef("halo2/ipa", "vk_transfer"),
+            ByteArray(32) { 0x55 },
+            IrohaHash.prehash(proof),
+            lane,
+        )
+        val root = Json.parseToJsonElement(attachment.toNativeJson()).jsonObject
+        assertEquals(
+            setOf(
+                "backend", "proof_b64", "vk_ref", "vk_commitment_hex",
+                "envelope_hash_hex", "lane_privacy",
+            ),
+            root.keys,
+        )
+        assertFalse("proof_backend" in root)
+        assertFalse("vk_inline" in root)
+        assertEquals(
+            setOf("commitment_id", "witness"),
+            root.getValue("lane_privacy").jsonObject.keys,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            ProofAttachment(
+                "halo2/ipa",
+                proof,
+                ProofVerifierKeyRef("halo2/ipa", "vk_transfer"),
+                ByteArray(32),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ProofAttachment(
+                "halo2/ipa",
+                proof,
+                ProofVerifierKeyRef("halo2/ipa", "vk_transfer"),
+                envelopeHash = ByteArray(32) { 0x66 },
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ProofAttachment(
+                "halo2/ipa",
+                proof,
+                ProofVerifierKeyRef("stark/fri", "vk_transfer"),
+            )
+        }
+    }
+
+    @Test
+    fun `lane privacy API canonicalizes raw siblings and is defensive`() {
+        val leaf = ByteArray(32) { 0x11 }
+        val sibling = ByteArray(32) { 0x22 }
+        val witness = LanePrivacyMerkleWitness(leaf, 1L, listOf(sibling, ByteArray(32) { 0x44 }))
+        leaf[0] = 0
+        sibling[0] = 0
+        assertEquals(0x11, witness.leafBytes()[0].toInt() and 0xff)
+        assertEquals(0x22, witness.auditPathBytes()[0][0].toInt() and 0xff)
+        assertEquals(0x23, witness.auditPathBytes()[0].last().toInt() and 0xff)
+        val exposed = witness.auditPathBytes()[0]
+        exposed[0] = 0
+        assertEquals(0x22, witness.auditPathBytes()[0][0].toInt() and 0xff)
+
+        assertFailsWith<IllegalArgumentException> {
+            LanePrivacyMerkleWitness(ByteArray(32), 0L, emptyList())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LanePrivacyMerkleWitness(ByteArray(32), 2L, listOf(ByteArray(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LanePrivacyMerkleWitness(
+                ByteArray(32),
+                0L,
+                List(LanePrivacyMerkleWitness.MAX_DEPTH + 1) { ByteArray(32) },
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LanePrivacyMerkleWitness(ByteArray(31), 0L, listOf(ByteArray(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LanePrivacyMerkleWitness(ByteArray(32), 0x1_0000_0000L, listOf(ByteArray(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LanePrivacyProof(0x1_0000, LanePrivacyWitness.merkle(witness))
+        }
+    }
+
+    @Test
+    fun `lane privacy third tail matches the canonical Norito layout`() {
+        val attachment = sampleAttachment()
+        val encoded = TransactionPayloadAdapter.encodeProofAttachmentPayload(attachment)
+        val expected = manualAttachmentPayload(
+            leafIndex = 1L,
+            auditPath = listOf(marked(0x22), marked(0x44)),
+        )
+        assertContentEquals(expected, encoded)
+        assertEquals(
+            attachment,
+            TransactionPayloadAdapter.decodeProofAttachmentPayload(encoded),
+        )
+    }
+
+    @Test
+    fun `lane privacy roundtrips under every supported Norito sequence layout`() {
+        val attachment = sampleAttachment()
+        for (flags in listOf(
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.PACKED_SEQ,
+            NoritoHeader.COMPACT_LEN or NoritoHeader.PACKED_SEQ,
+        )) {
+            val encoded = TransactionPayloadAdapter.encodeProofAttachmentPayload(attachment, flags)
+            assertEquals(
+                attachment,
+                TransactionPayloadAdapter.decodeProofAttachmentPayload(encoded, flags),
+                "flags=$flags",
+            )
+        }
+    }
+
+    @Test
+    fun `lane privacy Norito decoder fails closed on adversarial paths`() {
+        val malformed = listOf(
+            manualAttachmentPayload(0L, emptyList()),
+            manualAttachmentPayload(0L, listOf(null)),
+            manualAttachmentPayload(0L, listOf(ByteArray(32) { 0x22 })),
+            manualAttachmentPayload(2L, listOf(ByteArray(32) { 0x23 })),
+            manualAttachmentPayload(
+                0L,
+                List(LanePrivacyMerkleWitness.MAX_DEPTH + 1) { ByteArray(32) { 0x23 } },
+            ),
+            manualAttachmentPayload(0L, listOf(ByteArray(31) { 0x23 })),
+            manualAttachmentPayload(0L, listOf(ByteArray(32) { 0x23 }), witnessTag = 7L),
+        )
+        for (payload in malformed) {
+            assertFailsWith<IllegalArgumentException> {
+                TransactionPayloadAdapter.decodeProofAttachmentPayload(payload)
+            }
+        }
+
+        val trailingTail = manualAttachmentPayload(
+            0L,
+            listOf(ByteArray(32) { 0x23 }),
+        ) + field(byteArrayOf(0))
+        assertFailsWith<IllegalArgumentException> {
+            TransactionPayloadAdapter.decodeProofAttachmentPayload(trailingTail)
+        }
+
+        val oversizedProofBox = ByteArrayOutputStream().apply {
+            write(field(encodeString("halo2/ipa")))
+            write(u64(ProofAttachment.MAXIMUM_ENCODED_PROOF_BOX_BYTES + 1L))
+        }.toByteArray()
+        val oversizedAttachmentBackend = u64(8L + 256L + 1L)
+        val oversizedProofBackend = ByteArrayOutputStream().apply {
+            write(field(encodeString("halo2/ipa")))
+            write(field(u64(8L + 256L + 1L)))
+        }.toByteArray()
+        val oversizedVerifierReference = ByteArrayOutputStream().apply {
+            write(requiredAttachmentPrefix())
+            write(u64(2L * (8L + 8L + 256L) + 1L))
+        }.toByteArray()
+        val oversizedCommitment = ByteArrayOutputStream().apply {
+            write(requiredAttachmentPrefix())
+            write(u64(1L + 8L + 32L * 9L + 1L))
+        }.toByteArray()
+        for (payload in listOf(
+            oversizedProofBox,
+            oversizedAttachmentBackend,
+            oversizedProofBackend,
+            oversizedVerifierReference,
+            oversizedCommitment,
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                TransactionPayloadAdapter.decodeProofAttachmentPayload(payload)
+            }
+        }
+    }
+
+    private fun sampleAttachment(): ProofAttachment = ProofAttachment(
+        "halo2/ipa",
+        byteArrayOf(1, 2),
+        ProofVerifierKeyRef("halo2/ipa", "vk_transfer"),
+        lanePrivacy = sampleLanePrivacy(),
+    )
+
+    private fun sampleLanePrivacy(): LanePrivacyProof = LanePrivacyProof(
+        7,
+        LanePrivacyWitness.merkle(
+            LanePrivacyMerkleWitness(
+                ByteArray(32) { 0xaa.toByte() },
+                1L,
+                listOf(ByteArray(32) { 0x22 }, ByteArray(32) { 0x44 }),
+            ),
+        ),
+    )
+
+    private fun manualAttachmentPayload(
+        leafIndex: Long,
+        auditPath: List<ByteArray?>,
+        witnessTag: Long = 0L,
+    ): ByteArray {
+        val output = ByteArrayOutputStream()
+        output.write(requiredAttachmentPrefix())
+        output.write(field(byteArrayOf(0)))
+        output.write(field(byteArrayOf(0)))
+        output.write(field(option(manualLanePrivacy(leafIndex, auditPath, witnessTag))))
+        return output.toByteArray()
+    }
+
+    private fun requiredAttachmentPrefix(): ByteArray {
+        val backend = "halo2/ipa"
+        return ByteArrayOutputStream().apply {
+            write(field(encodeString(backend)))
+            write(field(manualProofBox(backend, byteArrayOf(1, 2))))
+            write(field(manualVerifyingKeyRef(backend, "vk_transfer")))
+        }.toByteArray()
+    }
+
+    private fun manualProofBox(backend: String, proof: ByteArray): ByteArray =
+        ByteArrayOutputStream().apply {
+            write(field(encodeString(backend)))
+            write(field(u64(proof.size.toLong()) + proof))
+        }.toByteArray()
+
+    private fun manualVerifyingKeyRef(backend: String, name: String): ByteArray =
+        ByteArrayOutputStream().apply {
+            write(field(encodeString(backend)))
+            write(field(encodeString(name)))
+        }.toByteArray()
+
+    private fun manualLanePrivacy(
+        leafIndex: Long,
+        auditPath: List<ByteArray?>,
+        witnessTag: Long,
+    ): ByteArray {
+        val path = ByteArrayOutputStream().apply {
+            write(u64(auditPath.size.toLong()))
+            for (sibling in auditPath) write(field(option(sibling)))
+        }.toByteArray()
+        val merkleProof = field(u32(leafIndex)) + field(path)
+        val merkleWitness = field(fixedBytes(ByteArray(32) { 0xaa.toByte() })) + field(merkleProof)
+        val witness = u32(witnessTag) + field(merkleWitness)
+        return field(u16(7)) + field(witness)
+    }
+
+    private fun fixedBytes(bytes: ByteArray): ByteArray =
+        ByteArrayOutputStream().apply {
+            for (byte in bytes) {
+                write(u64(1L))
+                write(byte.toInt())
+            }
+        }.toByteArray()
+
+    private fun option(payload: ByteArray?): ByteArray =
+        if (payload == null) byteArrayOf(0) else byteArrayOf(1) + u64(payload.size.toLong()) + payload
+
+    private fun marked(value: Int): ByteArray =
+        ByteArray(32) { value.toByte() }.also { it[it.lastIndex] = (it.last().toInt() or 1).toByte() }
+
+    private fun field(payload: ByteArray): ByteArray = u64(payload.size.toLong()) + payload
+
+    private fun encodeString(value: String): ByteArray {
+        val bytes = value.encodeToByteArray()
+        return u64(bytes.size.toLong()) + bytes
+    }
+
+    private fun u16(value: Int): ByteArray =
+        ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(value.toShort()).array()
+
+    private fun u32(value: Long): ByteArray =
+        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value.toInt()).array()
+
+    private fun u64(value: Long): ByteArray =
+        ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
+
 }

@@ -3035,16 +3035,22 @@ const transferTx = buildZkTransferTransaction({
     proof: {
       backend: "halo2/ipa",
       proof: Buffer.from("proof-bytes", "base64"),
-      verifyingKeyRef: "halo2/ipa:vk_transfer",
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
     },
   },
   privateKey,
 });
 ```
 
-`ProofAttachmentInput` requires `verifyingKeyRef`; embedded key bytes are not
-accepted by generic proof attachments. It also supports optional
-`verifyingKeyCommitment` digests. Election
+`ProofAttachmentInput` requires the exact `{ backend, name }`
+`verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
+not accepted. Both id fields use the Rust portable registry grammar. Complete
+ProofBox size is capped at 64 MiB, including its fixed overhead and UTF-8
+backend label. Optional `verifyingKeyCommitment` and `envelopeHash` digests must
+be non-zero, and `envelopeHash` must equal the typed BLAKE2b-256 hash of the
+proof bytes. Lane Merkle inputs require a complete 1–255-level path; raw
+32-byte siblings are converted to canonical prehashed `HashOf` bytes before
+Norito encoding. Election
 builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 `buildFinalizeElectionTransaction`) share the same helpers so ballot ciphertexts
 and Halo2 proofs stay canonical across SDKs. See `index.d.ts` for the

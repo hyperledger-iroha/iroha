@@ -9750,9 +9750,8 @@ fn registered_soracloud_bfv_parameters(
 fn decode_soracloud_fhe_envelope(
     payload: &[u8],
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
-    let archived = norito::from_bytes::<BfvIdentifierCiphertext>(payload)
-        .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext envelope: {err}")))?;
-    Ok(norito::core::NoritoDeserialize::deserialize(archived))
+    norito::decode_canonical::<BfvIdentifierCiphertext>(payload)
+        .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext envelope: {err}")))
 }
 
 fn encode_soracloud_fhe_output_payload(
@@ -20716,6 +20715,14 @@ mod tests {
         let ciphertext =
             encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt");
         norito::to_bytes(&ciphertext).expect("encode ciphertext")
+    }
+
+    fn structurally_truncated_fhe_payload() -> Vec<u8> {
+        let canonical = norito::encode_canonical(&BfvIdentifierCiphertext { slots: Vec::new() })
+            .expect("encode canonical FHE envelope");
+        let flags = canonical[norito::core::Header::SIZE - 1];
+        norito::core::frame_bare_with_header_flags::<BfvIdentifierCiphertext>(&[], flags)
+            .expect("frame structurally truncated FHE envelope")
     }
 
     fn sample_fhe_envelope(input: &[u8], seed: &[u8]) -> BfvIdentifierCiphertext {

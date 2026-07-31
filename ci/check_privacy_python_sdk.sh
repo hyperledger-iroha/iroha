@@ -1097,5 +1097,6 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   tests/privacy_catalog_test.py \
   tests/package_import_fallback_test.py \
   tests/privacy_native_registry_test.py \
+  tests/privacy_zk_x509_transport_test.py \
   tests/crypto_algorithms_test.py
 assert_privacy_sdk_inputs_unchanged

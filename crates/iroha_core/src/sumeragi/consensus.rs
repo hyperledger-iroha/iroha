@@ -321,7 +321,7 @@ pub fn compute_consensus_handshake_caps_from_world(
         mode_tag.clone(),
         bls_domain,
         iroha_p2p::ConsensusHandshakeCaps {
-            mode_tag,
+            mode: frozen_mode,
             proto_version: PROTO_VERSION,
             consensus_fingerprint: fingerprint,
             config: config_caps,

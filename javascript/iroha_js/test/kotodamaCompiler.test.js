@@ -1452,9 +1452,30 @@ test("compiler trigger metadata is exact, bounded, and non-recursive beyond poli
 
   await assert.doesNotReject(
     compileMutatedServiceResponse(({ manifest }) => {
-      manifest.entrypoints[0].triggers = [trigger()];
+      const value = trigger();
+      value.id = "amount";
+      value.callback.namespace = "RemoteLedger";
+      manifest.entrypoints[0].triggers = [value];
     }),
   );
+  await assert.rejects(
+    compileMutatedServiceResponse(({ manifest }) => {
+      const value = trigger();
+      value.id = "Amount";
+      manifest.entrypoints[0].triggers = [value];
+    }),
+    /id must be unique and canonical/u,
+  );
+  for (const namespace of ["Amount", "amount"]) {
+    await assert.rejects(
+      compileMutatedServiceResponse(({ manifest }) => {
+        const value = trigger();
+        value.callback.namespace = namespace;
+        manifest.entrypoints[0].triggers = [value];
+      }),
+      /callback\.namespace must be a canonical type declaration/u,
+    );
+  }
   await assert.rejects(
     compileMutatedServiceResponse(({ manifest }) => {
       const value = trigger();

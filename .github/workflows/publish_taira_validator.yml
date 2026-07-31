@@ -31,6 +31,9 @@ env:
   TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE: application/vnd.hyperledger.iroha.ed25519-public-key.v1
   TAIRA_PUBLICATION_ARTIFACT_TYPE: application/vnd.hyperledger.iroha.taira.publication-receipt.v1
   TAIRA_PUBLICATION_RECEIPT_MEDIA_TYPE: application/vnd.hyperledger.iroha.taira.publication-receipt.v1+json
+  TAIRA_OCI_MANIFEST_MEDIA_TYPE: application/vnd.oci.image.manifest.v1+json
+  TAIRA_OCI_EMPTY_CONFIG_MEDIA_TYPE: application/vnd.oci.empty.v1+json
+  TAIRA_OCI_EMPTY_CONFIG_DIGEST: sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
 
 jobs:
   linux-native-authority:
@@ -328,16 +331,22 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          target_root="$RUNNER_TEMP/taira-macos-cargo-target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 0700 "$target_root"
           test "$(python3 -I -S scripts/compute_workspace_source_manifest.py --root "$GITHUB_WORKSPACE")" = "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256"
-          CARGO_BUILD_JOBS=1 cargo build --locked --release \
+          CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 cargo build --locked --release \
             -p irohad --bin irohad \
             --features embedded-soracloud-runtime,zk-stark
-          CARGO_BUILD_JOBS=1 cargo build --locked --release \
+          CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 cargo build --locked --release \
             -p iroha_kagami --bin kagami
           test "$(python3 -I -S scripts/compute_workspace_source_manifest.py --root "$GITHUB_WORKSPACE")" = "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256"
           test "$(shasum -a 256 Cargo.lock | awk '{print $1}')" = "$TAIRA_CARGO_LOCK_SHA256"
-          test -x target/release/irohad
-          test -x target/release/kagami
+          test -x "$target_root/release/irohad"
+          test -x "$target_root/release/kagami"
+          {
+            echo "TAIRA_MACOS_IROHAD=$target_root/release/irohad"
+            echo "TAIRA_MACOS_KAGAMI=$target_root/release/kagami"
+          } >>"$GITHUB_ENV"
 
       - name: Prepare the exact fresh macOS deployment payload
         id: reset
@@ -353,14 +362,14 @@ jobs:
             --genesis-private-key-file "$TAIRA_MACOS_GENESIS_PRIVATE_KEY_PATH" \
             --genesis-public-key "$TAIRA_MACOS_GENESIS_PUBLIC_KEY" \
             --command-authority "$TAIRA_MACOS_COMMAND_AUTHORITY" \
-            --kagami "$GITHUB_WORKSPACE/target/release/kagami" \
-            --irohad "$GITHUB_WORKSPACE/target/release/irohad" \
+            --kagami "$TAIRA_MACOS_KAGAMI" \
+            --irohad "$TAIRA_MACOS_IROHAD" \
             --source-commit "$TAIRA_SOURCE_COMMIT" \
             --output-bundle "$reset_bundle"
-          binary_sha="$(shasum -a 256 target/release/irohad | awk '{print $1}')"
+          binary_sha="$(shasum -a 256 "$TAIRA_MACOS_IROHAD" | awk '{print $1}')"
           python3 scripts/prepare_taira_offline_reset_bundle.py check \
             --bundle "$reset_bundle" \
-            --irohad "$GITHUB_WORKSPACE/target/release/irohad" \
+            --irohad "$TAIRA_MACOS_IROHAD" \
             --expected-irohad-sha256 "$binary_sha"
           supervisor="${RUNNER_TEMP}/taira-peer-supervisor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.py"
           install -m 0600 scripts/taira_peer_supervisor.py "$supervisor"
@@ -387,10 +396,10 @@ jobs:
           set -Eeuo pipefail
           receipt="$RUNNER_TEMP/taira-macos-four-peer-receipt-v1.json"
           runtime_root="$RUNNER_TEMP/taira-native-four-peer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          sudo /usr/bin/python3 -S \
+          sudo -n /usr/bin/python3 -S \
             "$GITHUB_WORKSPACE/scripts/capture_taira_macos_four_peer_receipt.py" \
             --reset-bundle "$RESET_BUNDLE" \
-            --validator-binary "$GITHUB_WORKSPACE/target/release/irohad" \
+            --validator-binary "$TAIRA_MACOS_IROHAD" \
             --supervisor "$SUPERVISOR" \
             --source-commit "$TAIRA_SOURCE_COMMIT" \
             --cargo-lock-sha256 "$TAIRA_CARGO_LOCK_SHA256" \
@@ -447,7 +456,7 @@ jobs:
             --workspace-source-manifest-sha256 "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
             --source-date-epoch "$TAIRA_SOURCE_DATE_EPOCH" \
             --reset-bundle "$RESET_BUNDLE" \
-            --validator-binary "$GITHUB_WORKSPACE/target/release/irohad" \
+            --validator-binary "$TAIRA_MACOS_IROHAD" \
             --supervisor "$SUPERVISOR" \
             --macos-receipt "$MACOS_RECEIPT" \
             --output "$deploy_archive" \
@@ -574,6 +583,10 @@ jobs:
           test "$oras_version" = "$ORAS_VERSION"
           test "$ORAS_DARWIN_ARM64_URL" = "https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_darwin_arm64.tar.gz"
           test "$ORAS_DARWIN_ARM64_SHA256" = "7929f792cf272268412375ecad6f0fb3c20f164368d5b57966e67ad6d36eca53"
+          if [[ -z "$TAIRA_OCI_USERNAME" || -z "$TAIRA_OCI_PASSWORD" ]]; then
+            echo "protected OCI publication credentials are mandatory" >&2
+            exit 1
+          fi
           if [[ ! "$TAIRA_OCI_REPOSITORY" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] \
             || [[ "$TAIRA_OCI_REPOSITORY" == *".."* ]]; then
             echo "TAIRA_OCI_REPOSITORY must be one canonical lowercase registry/repository" >&2
@@ -619,6 +632,7 @@ jobs:
             cd "$REPLAY_ROOT"
             oras push \
               --registry-config "$REGISTRY_CONFIG" \
+              --image-spec v1.1 \
               --artifact-type "$TAIRA_PRIMARY_ARTIFACT_TYPE" \
               --annotation "org.opencontainers.image.revision=$TAIRA_SOURCE_COMMIT" \
               --annotation "org.opencontainers.image.source=https://github.com/hyperledger/iroha" \
@@ -643,6 +657,9 @@ jobs:
           python3 -I -S - \
             "$push_json" "$raw_manifest" "$REPLAY_ROOT" \
             "$TAIRA_PRIMARY_ARTIFACT_TYPE" \
+            "$TAIRA_OCI_MANIFEST_MEDIA_TYPE" \
+            "$TAIRA_OCI_EMPTY_CONFIG_MEDIA_TYPE" \
+            "$TAIRA_OCI_EMPTY_CONFIG_DIGEST" \
             "$TAIRA_ADMISSION_ARCHIVE_MEDIA_TYPE" \
             "$TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE" \
             "$TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE" \
@@ -653,11 +670,28 @@ jobs:
           import sys
           from pathlib import Path
 
-          push = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          manifest = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          def object_from_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+          push = json.loads(
+              Path(sys.argv[1]).read_text(encoding="utf-8"),
+              object_pairs_hook=object_from_pairs,
+          )
+          manifest = json.loads(
+              Path(sys.argv[2]).read_text(encoding="utf-8"),
+              object_pairs_hook=object_from_pairs,
+          )
           root = Path(sys.argv[3])
           artifact_type = sys.argv[4]
-          media = sys.argv[5:]
+          manifest_media_type = sys.argv[5]
+          config_media_type = sys.argv[6]
+          config_digest = sys.argv[7]
+          media = sys.argv[8:]
           files = [
               next((root / "admission").glob("*.tar.gz")),
               root / "authority/release_manifest.json",
@@ -667,6 +701,15 @@ jobs:
           ]
           if push.get("artifactType") != artifact_type or manifest.get("artifactType") != artifact_type:
               raise SystemExit("OCI artifact type differs from the fixed Taira type")
+          if push.get("mediaType") != manifest_media_type or manifest.get("mediaType") != manifest_media_type:
+              raise SystemExit("OCI manifest media type differs from the fixed Taira type")
+          if manifest.get("schemaVersion") != 2:
+              raise SystemExit("OCI manifest schema version is not exactly 2")
+          config = manifest.get("config")
+          if not isinstance(config, dict) or (
+              config.get("mediaType"), config.get("digest"), config.get("size")
+          ) != (config_media_type, config_digest, 2):
+              raise SystemExit("OCI empty config descriptor differs from the fixed Taira contract")
           layers = manifest.get("layers")
           if not isinstance(layers, list) or len(layers) != len(files):
               raise SystemExit("OCI manifest does not contain the exact five layers")
@@ -776,9 +819,20 @@ jobs:
           import time
           from pathlib import Path
 
+          def object_from_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
           root, admission_path, manifest_path, output = map(Path, sys.argv[1:5])
           immutable, digest, artifact_type, oras_version, action_commit, oras_url, oras_sha = sys.argv[5:]
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest = json.loads(
+              manifest_path.read_text(encoding="utf-8"),
+              object_pairs_hook=object_from_pairs,
+          )
           layers = []
           for row in manifest["layers"]:
               title = row["annotations"]["org.opencontainers.image.title"]
@@ -816,10 +870,6 @@ jobs:
               encoding="ascii",
           )
           PY
-          python3 -S scripts/write_release_sha256sums.py \
-            --artifacts-dir "$receipt_root/artifacts" \
-            --output "$receipt_root/artifacts/SHA256SUMS" \
-            --file taira-publication-receipt-v1.json
           manifest="$receipt_root/release_manifest.json"
           manifest_args=(
             --artifacts-dir "$receipt_root/artifacts"
@@ -861,6 +911,8 @@ jobs:
         env:
           RECEIPT_ROOT: ${{ steps.publication_receipt.outputs.root }}
           IMMUTABLE_REFERENCE: ${{ steps.push.outputs.immutable_reference }}
+          PRIMARY_MANIFEST: ${{ steps.push.outputs.raw_manifest }}
+          PRIMARY_MANIFEST_DIGEST: ${{ steps.push.outputs.manifest_digest }}
           REGISTRY_CONFIG: ${{ steps.oci.outputs.registry_config }}
         run: |
           set -Eeuo pipefail
@@ -879,6 +931,85 @@ jobs:
           ) >"$attach_json"
           receipt_digest="$(python3 -I -S -c 'import json,re,sys;d=json.load(open(sys.argv[1])).get("digest","");assert re.fullmatch(r"sha256:[0-9a-f]{64}",d);print(d)' "$attach_json")"
           receipt_reference="${TAIRA_OCI_REPOSITORY}@${receipt_digest}"
+          test "$(oras resolve --registry-config "$REGISTRY_CONFIG" "$receipt_reference")" = "$receipt_digest"
+          raw_receipt_manifest="$RUNNER_TEMP/taira-publication-receipt-oci-manifest.json"
+          oras manifest fetch \
+            --registry-config "$REGISTRY_CONFIG" \
+            --output "$raw_receipt_manifest" \
+            "$receipt_reference"
+          test "sha256:$(shasum -a 256 "$raw_receipt_manifest" | awk '{print $1}')" = "$receipt_digest"
+          python3 -I -S - \
+            "$raw_receipt_manifest" "$PRIMARY_MANIFEST" "$RECEIPT_ROOT" \
+            "$PRIMARY_MANIFEST_DIGEST" "$TAIRA_PUBLICATION_ARTIFACT_TYPE" \
+            "$TAIRA_OCI_MANIFEST_MEDIA_TYPE" \
+            "$TAIRA_OCI_EMPTY_CONFIG_MEDIA_TYPE" \
+            "$TAIRA_OCI_EMPTY_CONFIG_DIGEST" \
+            "$TAIRA_PUBLICATION_RECEIPT_MEDIA_TYPE" \
+            "$TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE" \
+            "$TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE" \
+            "$TAIRA_AUTHORITY_SIGNATURE_MEDIA_TYPE" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          def object_from_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+          receipt_manifest_path, primary_manifest_path, root = map(Path, sys.argv[1:4])
+          primary_digest, artifact_type, manifest_media, config_media, config_digest = sys.argv[4:9]
+          layer_media = sys.argv[9:]
+          manifest = json.loads(
+              receipt_manifest_path.read_text(encoding="utf-8"),
+              object_pairs_hook=object_from_pairs,
+          )
+          primary_bytes = primary_manifest_path.read_bytes()
+          if manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != manifest_media:
+              raise SystemExit("publication receipt OCI manifest uses an unexpected schema or media type")
+          if manifest.get("artifactType") != artifact_type:
+              raise SystemExit("publication receipt OCI artifact type differs")
+          config = manifest.get("config")
+          if not isinstance(config, dict) or (
+              config.get("mediaType"), config.get("digest"), config.get("size")
+          ) != (config_media, config_digest, 2):
+              raise SystemExit("publication receipt OCI config descriptor differs")
+          subject = manifest.get("subject")
+          if not isinstance(subject, dict) or (
+              subject.get("mediaType"), subject.get("digest"), subject.get("size")
+          ) != (manifest_media, primary_digest, len(primary_bytes)):
+              raise SystemExit("publication receipt is not attached to the exact primary manifest")
+          files = [
+              root / "artifacts/taira-publication-receipt-v1.json",
+              root / "release_manifest.json",
+              root / "release_manifest.json.pub",
+              root / "release_manifest.json.sig",
+          ]
+          layers = manifest.get("layers")
+          if not isinstance(layers, list) or len(layers) != len(files):
+              raise SystemExit("publication receipt OCI manifest does not contain exactly four layers")
+          expected = []
+          for path, media_type in zip(files, layer_media):
+              payload = path.read_bytes()
+              expected.append((
+                  path.relative_to(root).as_posix(),
+                  media_type,
+                  "sha256:" + hashlib.sha256(payload).hexdigest(),
+                  len(payload),
+              ))
+          actual = [(
+              row.get("annotations", {}).get("org.opencontainers.image.title"),
+              row.get("mediaType"),
+              row.get("digest"),
+              row.get("size"),
+          ) for row in layers]
+          if actual != expected:
+              raise SystemExit(f"publication receipt OCI layer contract differs: {actual}")
+          PY
           pulled="$RUNNER_TEMP/taira-publication-receipt-pull-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -m 0700 "$pulled"
           oras pull --registry-config "$REGISTRY_CONFIG" --output "$pulled" "$receipt_reference"
@@ -887,8 +1018,7 @@ jobs:
           from pathlib import Path
 
           left, right = map(Path, sys.argv[1:])
-          ignored = {Path("artifacts/SHA256SUMS")}
-          expected = sorted(path.relative_to(left) for path in left.rglob("*") if path.is_file() and path.relative_to(left) not in ignored)
+          expected = sorted(path.relative_to(left) for path in left.rglob("*") if path.is_file())
           actual = sorted(path.relative_to(right) for path in right.rglob("*") if path.is_file())
           if expected != actual:
               raise SystemExit(f"publication receipt pull inventory differs: {expected} != {actual}")
@@ -906,6 +1036,7 @@ jobs:
           {
             echo "receipt_digest=$receipt_digest"
             echo "receipt_reference=$receipt_reference"
+            echo "raw_manifest=$raw_receipt_manifest"
             echo "root=$pulled"
           } >>"$GITHUB_OUTPUT"
           {
@@ -924,12 +1055,19 @@ jobs:
           retention-days: 90
 
       - name: Remove the ephemeral ORAS login
-        if: always() && steps.oci.outputs.registry_config != ''
+        if: always()
         shell: bash
-        env:
-          REGISTRY_HOST: ${{ steps.oci.outputs.registry_host }}
-          REGISTRY_CONFIG: ${{ steps.oci.outputs.registry_config }}
         run: |
           set -Eeuo pipefail
-          oras logout --registry-config "$REGISTRY_CONFIG" "$REGISTRY_HOST" || true
-          rm -f -- "$REGISTRY_CONFIG"
+          auth_dir="$RUNNER_TEMP/taira-oras-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          registry_config="$auth_dir/config.json"
+          registry_host="${TAIRA_OCI_REPOSITORY%%/*}"
+          if [[ -f "$registry_config" && ! -L "$registry_config" ]]; then
+            if command -v oras >/dev/null 2>&1 && [[ -n "$registry_host" ]]; then
+              oras logout --registry-config "$registry_config" "$registry_host" || true
+            fi
+          fi
+          if [[ -e "$registry_config" || -L "$registry_config" ]]; then
+            rm -f -- "$registry_config"
+          fi
+          rmdir "$auth_dir" 2>/dev/null || true

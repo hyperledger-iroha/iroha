@@ -19537,10 +19537,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         let lowercase = try JSONDecoder().decode(
             ToriiContractTriggerDescriptor.self,
-            from: payload(id: "amount", namespace: "amount")
+            from: payload(id: "amount", namespace: "RemoteLedger")
         )
         XCTAssertEqual(lowercase.id, "amount")
-        XCTAssertEqual(lowercase.callback.namespace, "amount")
+        XCTAssertEqual(lowercase.callback.namespace, "RemoteLedger")
     }
 
     func testContractManifestEnforcesStrictCrossFieldInvariants() throws {

@@ -792,6 +792,11 @@ SWIFT
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "iroha_privacy_compiled_profile_catalog_v1",
+    "iroha_privacy_validate_compiled_profile_catalog_v1",
+    "iroha_privacy_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
     "connect_norito_sorafs_reference_validate_governance_dag_block_json",
@@ -847,6 +852,19 @@ SWIFT
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
+  ],
+  "forbidden_symbols": [
+    "connect_norito_get_chain_discriminant",
+    "connect_norito_set_chain_discriminant",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+    "iroha_privacy_capabilities_v1",
+    "iroha_privacy_validate_capabilities_v1",
+    "iroha_privacy_proof_request_v1",
+    "iroha_privacy_build_proof_v1",
+    "iroha_privacy_verify_proof_v1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
   ],
   "hashes": {
     "ios-arm64": "$hash_a",
@@ -1909,6 +1927,31 @@ run_expect_apple_forbidden_binary_fail \
   "connect_norito_kagemusha_request_authorization_create_v2" \
   "ios-arm64" \
   "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_capabilities_v1" \
+  "ios-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_validate_capabilities_v1" \
+  "macos-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_proof_request_v1" \
+  "ios-arm64_x86_64-simulator" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_build_proof_v1" \
+  "ios-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_verify_proof_v1" \
+  "macos-arm64" \
+  "$inspection_tools"
 
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
@@ -1917,6 +1960,16 @@ sed -i.bak \
   "$symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
 rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
+
+forbidden_symbol_inventory_mismatch="$TMP_DIR/forbidden-symbol-inventory-mismatch"
+make_fixture "$forbidden_symbol_inventory_mismatch"
+sed -i.bak \
+  's/iroha_privacy_verify_proof_v1/unexpected_forbidden_symbol/' \
+  "$forbidden_symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$forbidden_symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$forbidden_symbol_inventory_mismatch" \
+  "forbidden symbol inventory is missing or non-canonical"
 
 extra_manifest_symbol="$TMP_DIR/extra-manifest-symbol"
 make_fixture "$extra_manifest_symbol"

@@ -331,7 +331,6 @@ object ContractManifestJsonParser {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
-        "Amount",
     )
     private val retiredNumericTypeNames = setOf(
         "i8",
@@ -1063,7 +1062,9 @@ object ContractManifestJsonParser {
     private fun parseTrigger(root: Map<String, Any?>): ContractTriggerDescriptor {
         exactKeys(root, setOf("id", "repeats", "filter", "authority", "metadata", "callback"), "trigger descriptor")
         val id = exactString(required(root, "id", "trigger descriptor"), "trigger descriptor.id")
-        check(id != "Amount") { "trigger descriptor.id must not use retired Kotodama source form Amount" }
+        check(canonicalDeclarationIdentifier(id)) {
+            "trigger descriptor.id must be a canonical Kotodama declaration identifier"
+        }
         val repeats = parseRepeats(objectValue(required(root, "repeats", "trigger descriptor"), "trigger descriptor.repeats"))
         val filter = canonicalBase64(required(root, "filter", "trigger descriptor"), "trigger descriptor.filter")
         val authority = optionalExactString(root, "authority", "trigger descriptor.authority")?.let {
@@ -1096,7 +1097,9 @@ object ContractManifestJsonParser {
     private fun parseCallback(root: Map<String, Any?>): ContractTriggerCallback {
         exactKeys(root, setOf("namespace", "entrypoint"), "trigger callback")
         val namespace = optionalExactString(root, "namespace", "trigger callback.namespace")
-        check(namespace != "Amount") { "trigger callback.namespace must not use retired Kotodama source form Amount" }
+        check(namespace == null || canonicalTypeDeclarationIdentifier(namespace)) {
+            "trigger callback.namespace must be a canonical Kotodama type-declaration identifier"
+        }
         val entrypoint = exactString(required(root, "entrypoint", "trigger callback"), "trigger callback.entrypoint")
         check(canonicalEntrypointName(entrypoint)) { "trigger callback.entrypoint must be a canonical Kotodama selector" }
         return ContractTriggerCallback(namespace, entrypoint)

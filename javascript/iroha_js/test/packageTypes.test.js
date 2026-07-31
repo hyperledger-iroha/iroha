@@ -410,6 +410,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         `const validateFrame: typeof export${noritoIndex}.validateNoritoFrame = Norito.validateNoritoFrame;`,
         `const generateKeyPair: typeof export${cryptoIndex}.generateKeyPair = Crypto.generateKeyPair;`,
         "const privacySnapshot: PrivacyCapabilitySnapshotV1 = parsePrivacyCapabilitySnapshotV1({});",
+        "const privacyCommittedHeight: bigint = privacySnapshot.committed_height;",
         "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'));",
         "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'));",
         "declare const repoAgreement: ToriiRepoAgreement;",

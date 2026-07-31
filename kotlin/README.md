@@ -399,11 +399,14 @@ exposed as `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` is capability-only. `capabilitiesArchiveV1()` returns the
-canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
+`PrivacyNativeBridge` exposes local build metadata only.
+`compiledProfileCatalogV1()` returns this binary's canonical typed
+`PrivacyCompiledProfileCatalogV1` Norito archive, and
 `protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
 generic proof request/build/verify ABI and free-form algorithm selectors are
-absent; proofs must use protocol-specific typed APIs.
+absent; proofs must use protocol-specific typed APIs. The local catalog never
+establishes activation or readiness; proof submission requires a fresh
+committed `/v1/privacy/capabilities` snapshot from live Torii.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.

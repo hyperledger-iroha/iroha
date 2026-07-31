@@ -59,12 +59,12 @@ class ContractManifestTest {
 
         val lowercase = fullResponse()
             .replaceFirst("\"id\":\"settle\"", "\"id\":\"amount\"")
-            .replaceFirst("\"namespace\":null", "\"namespace\":\"amount\"")
+            .replaceFirst("\"namespace\":null", "\"namespace\":\"RemoteLedger\"")
         val trigger = ContractJsonParser.parseManifestRecord(
             lowercase.toByteArray(StandardCharsets.UTF_8),
         ).manifest.entrypoints!!.single().triggers.single()
         assertEquals("amount", trigger.id)
-        assertEquals("amount", trigger.callback.namespace)
+        assertEquals("RemoteLedger", trigger.callback.namespace)
     }
 
     @Test
@@ -80,7 +80,7 @@ class ContractManifestTest {
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
-            fullResponse().replaceFirst("\"name\":\"transfer\",\"kind\"", "\"name\":\"Amount\",\"kind\""),
+            fullResponse().replaceFirst("\"name\":\"transfer\"", "\"name\":\"Amount\""),
             fullResponse().replaceFirst("\"name\":\"request\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
             fullResponse().replaceFirst("\"fields\":[\"amount\",\"memo\"]", "\"fields\":[\"Amount\",\"memo\"]"),
             fullResponse().replaceFirst("\"name\":\"Balances\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),

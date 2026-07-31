@@ -13,18 +13,6 @@ use crate::{
     metadata::{LITERAL_SECTION_MAGIC, LiteralKindV1, encode_literal_descriptor},
 };
 
-/// Names and stable discriminator order of the synthetic executor fixtures.
-pub const SYNTHETIC_EXECUTOR_FIXTURES: [&str; 8] = [
-    "executor_with_admin",
-    "executor_with_custom_permission",
-    "executor_remove_permission",
-    "executor_custom_instructions_simple",
-    "executor_custom_instructions_complex",
-    "executor_with_migration_fail",
-    "executor_with_fuel",
-    "executor_with_custom_parameter",
-];
-
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
@@ -157,34 +145,6 @@ pub fn build_encoded_result_program(result_bytes: &[u8]) -> Vec<u8> {
     program
 }
 
-/// Build one deterministic synthetic executor fixture.
-///
-/// `tag` is stored as `vector_length = tag + 1`; integration tests use this
-/// stable discriminator to select fixture-specific behavior. Only tags in the
-/// [`SYNTHETIC_EXECUTOR_FIXTURES`] range are accepted.
-///
-/// # Panics
-///
-/// Panics when `tag` does not identify a declared synthetic fixture.
-#[must_use]
-pub fn build_synthetic_executor_program(tag: u8) -> Vec<u8> {
-    assert!(
-        usize::from(tag) < SYNTHETIC_EXECUTOR_FIXTURES.len(),
-        "synthetic executor tag is outside the declared fixture inventory"
-    );
-    let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: tag + 1,
-        max_cycles: DEFAULT_MAX_CYCLES,
-        abi_version: 1,
-    }
-    .encode();
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    program
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,20 +221,4 @@ mod tests {
         assert!(output[8 + result.len()..].iter().all(|byte| *byte == 0));
     }
 
-    #[test]
-    fn synthetic_executor_inventory_has_unique_loadable_discriminators() {
-        let mut programs = std::collections::BTreeSet::new();
-        for (tag, name) in SYNTHETIC_EXECUTOR_FIXTURES.iter().enumerate() {
-            assert!(!name.is_empty());
-            let program = build_synthetic_executor_program(
-                u8::try_from(tag).expect("fixture inventory length fits u8"),
-            );
-            let parsed = ProgramMetadata::parse(&program).expect("fixture metadata parses");
-            assert_eq!(parsed.metadata.vector_length, tag as u8 + 1);
-            IVM::new(DEFAULT_MAX_CYCLES)
-                .load_program(&program)
-                .expect("synthetic fixture passes admission");
-            assert!(programs.insert(program), "fixture programs must be unique");
-        }
-    }
 }
