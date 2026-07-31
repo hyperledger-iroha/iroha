@@ -32,7 +32,11 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeChainId(string chainId)
     {
-        return EncodeString(RequireCanonicalChainId(chainId, nameof(chainId)));
+        var bytes = Encoding.UTF8.GetBytes(RequireCanonicalChainId(chainId, nameof(chainId)));
+        var writer = new OfflineNoritoWriter();
+        writer.WriteCompactLength((ulong)bytes.Length);
+        writer.WriteBytes(bytes);
+        return writer.ToArray();
     }
 
     public byte[] EncodeAccountId(string accountId)

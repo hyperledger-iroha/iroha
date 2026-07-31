@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Deterministically regenerate the shared compact signed-transaction vector.
+ * Deterministically regenerate the JavaScript ABI-21 compact transaction vector.
  *
  * The vector deliberately uses only the browser codec and a fixed Ed25519 key,
  * so regeneration does not depend on a native build or platform-specific ABI.
+ * The repository-wide cross-SDK vector remains owned by `xtask norito-rpc-fixtures`;
+ * this separate artifact binds the complete JavaScript browser-codec source closure.
  */
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -23,13 +25,12 @@ import {
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PACKAGE_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "..");
-const REPO_ROOT = path.resolve(PACKAGE_ROOT, "..", "..");
 const SOURCE_ROOT = path.join(PACKAGE_ROOT, "src");
 const TRANSACTION_CODEC_PATH = path.join(SOURCE_ROOT, "transactionCodec.js");
 const SOURCE_BUNDLE_DOMAIN = "iroha-js-compact-vector-source-bundle-v1";
 export const COMPACT_HASH_VECTOR_PATH = path.join(
-  REPO_ROOT,
-  "fixtures/norito_rpc/iroha_compact_hash_vector.properties",
+  PACKAGE_ROOT,
+  "test/fixtures/abi21_browser_compact_hash_vector.properties",
 );
 
 const PRIVATE_KEY = Buffer.from(
@@ -82,10 +83,10 @@ function localImportPaths(source, file) {
   for (const match of source.matchAll(pattern)) {
     const resolved = path.resolve(path.dirname(file), match[1]);
     if (
-      resolved !== SOURCE_ROOT &&
-      !resolved.startsWith(`${SOURCE_ROOT}${path.sep}`)
+      resolved !== PACKAGE_ROOT &&
+      !resolved.startsWith(`${PACKAGE_ROOT}${path.sep}`)
     ) {
-      throw new Error(`local import escapes the source root: ${match[1]} in ${file}`);
+      throw new Error(`local import escapes the package root: ${match[1]} in ${file}`);
     }
     imports.push(resolved);
   }

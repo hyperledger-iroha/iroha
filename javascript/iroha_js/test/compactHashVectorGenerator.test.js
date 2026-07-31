@@ -45,6 +45,7 @@ test("compact vector source identity changes on generator codec and lockfile dri
   const baseline = compactHashVectorSourceBundleSha256();
   for (const suffix of [
     "scripts/regenerate-compact-hash-vector.mjs",
+    "scripts/native-build-provenance.mjs",
     "src/transactionCodec.js",
     "src/address.js",
     "package-lock.json",
@@ -82,6 +83,22 @@ test("compact vector source discovery rejects dynamic-import dependency escapes"
         },
       }),
     /dynamic imports are not allowed/u,
+  );
+
+  assert.throws(
+    () =>
+      compactHashVectorSourceBundleSha256({
+        readFileSync(file) {
+          const bytes = fs.readFileSync(file);
+          return file.endsWith("src/transactionCodec.js")
+            ? Buffer.concat([
+                bytes,
+                Buffer.from('\nimport "../../../outside-package.js";\n'),
+              ])
+            : bytes;
+        },
+      }),
+    /local import escapes the package root/u,
   );
 });
 

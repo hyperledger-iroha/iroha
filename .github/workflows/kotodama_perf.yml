@@ -3,6 +3,7 @@ name: Kotodama performance gate
 on:
   pull_request:
     paths:
+      - ".gitattributes"
       - ".github/workflows/kotodama_perf.yml"
       - "crates/ivm/benches/bench_kotodama.rs"
       - "crates/ivm/Cargo.toml"
@@ -36,6 +37,8 @@ on:
       - "demo/*.manifest.json"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "ci/check_kagemusha_reviewed_cargo_lock.sh"
+      - "fixtures/kagemusha/cargo-lock.reviewed.v1"
   workflow_dispatch:
 
 permissions:
@@ -60,6 +63,10 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: kotodama-js-native
+      - name: Materialize the exact reviewed Cargo dependency lock
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
+      - name: Prefetch the locked Rust dependency graph for the offline native build
+        run: cargo fetch --locked
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
@@ -68,7 +75,7 @@ jobs:
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
       - name: Build the Rust native binding and run the complete JavaScript suite
-        run: npm test --prefix javascript/iroha_js
+        run: env -u CARGO_PROFILE_DEV_DEBUG npm test --prefix javascript/iroha_js
 
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.

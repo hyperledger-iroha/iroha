@@ -384,6 +384,18 @@ public sealed class SccpExactTests
                 pair.PrivateKeySeed)),
             Convert.ToBase64String(archivedChainPayload),
             creationTimeMs: 7));
+        var legacyNestedChainPayload = CanonicalTransactionPayload(
+            7,
+            destinationProof: true,
+            legacyNestedChainId: true);
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
+            authority,
+            artifact,
+            Convert.ToBase64String(Ed25519Signer.Sign(
+                IrohaHash.Hash(legacyNestedChainPayload),
+                pair.PrivateKeySeed)),
+            Convert.ToBase64String(legacyNestedChainPayload),
+            creationTimeMs: 7));
         var legacyPayload = CanonicalTransactionPayload(
             7,
             legacyOuterBinding: true,
@@ -2581,7 +2593,8 @@ public sealed class SccpExactTests
         bool destinationProof = false,
         uint? payloadKindOverride = null,
         string chainId = "fc56984b-2be7-431d-840e-21514d1883f0",
-        FeePaymentIntent? feePayment = null)
+        FeePaymentIntent? feePayment = null,
+        bool legacyNestedChainId = false)
     {
         const string submitBridgeProof = "iroha_data_model::isi::bridge::SubmitBridgeProof";
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
@@ -2626,7 +2639,9 @@ public sealed class SccpExactTests
             authority);
         var metadata = UInt64(0);
         return Concat(
-            CompactField(CompactField(CompactString(chainId))),
+            legacyNestedChainId
+                ? CompactField(CompactField(CompactString(chainId)))
+                : CompactField(CompactString(chainId)),
             CompactField(authority),
             CompactField(creation.ToArray()),
             CompactField(executable),

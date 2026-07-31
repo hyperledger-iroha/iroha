@@ -47,6 +47,9 @@ NODE = "crates/irohad/src/main.rs"
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
 ROUTES = "crates/iroha_torii_shared/src/route_catalog.rs"
 WORKFLOW = ".github/workflows/pr_kagemusha_payload_bench.yml"
+CSHARP_WORKFLOW = ".github/workflows/pr_csharp.yml"
+ATTRIBUTES = ".gitattributes"
+LOCK_CHECKER = "ci/check_kagemusha_reviewed_cargo_lock.sh"
 IOS_EVIDENCE_CHECKER = "scripts/check_kagemusha_candidate_ios_evidence.py"
 
 ARTIFACTS = (
@@ -363,6 +366,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             KAGAMI,
             ROUTES,
             WORKFLOW,
+            CSHARP_WORKFLOW,
+            ATTRIBUTES,
+            LOCK_CHECKER,
         )
     }
     model = texts[MODEL]
@@ -582,6 +588,48 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         if route not in texts[ROUTES]:
             errors.append(f"{ROUTES}: stable route changed or disappeared: {route}")
     require(
+        texts[ATTRIBUTES],
+        ATTRIBUTES,
+        errors,
+        "Cargo.lock -text",
+        "fixtures/kagemusha/cargo-lock.reviewed.v1 -text",
+    )
+    csharp_materialize = texts[CSHARP_WORKFLOW].find(
+        "- name: Materialize the exact reviewed Cargo dependency lock"
+    )
+    csharp_rust_setup = texts[CSHARP_WORKFLOW].find(
+        "- uses: actions-rust-lang/setup-rust-toolchain@"
+    )
+    if (
+        csharp_materialize < 0
+        or csharp_rust_setup < 0
+        or csharp_materialize > csharp_rust_setup
+    ):
+        errors.append(
+            f"{CSHARP_WORKFLOW}: reviewed Cargo lock must be materialized "
+            "before Rust setup can invoke Cargo"
+        )
+    require(
+        texts[CSHARP_WORKFLOW],
+        CSHARP_WORKFLOW,
+        errors,
+        "cache: false",
+    )
+    lock_checker = texts[LOCK_CHECKER]
+    require(
+        lock_checker,
+        LOCK_CHECKER,
+        errors,
+        "locks_are_byte_identical()",
+        "if locks_are_byte_identical; then",
+        "exact CRLF canonicalization under a text-normalizing cmp",
+    )
+    if lock_checker.count('getattr(os, "O_BINARY", 0)') < 4:
+        errors.append(
+            f"{LOCK_CHECKER}: every low-level reviewed-lock read/write must "
+            "bind Windows O_BINARY"
+        )
+    require(
         texts[WORKFLOW],
         WORKFLOW,
         errors,
@@ -590,6 +638,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "check_kagemusha_recursive_spend_v4_sdk_contract.sh",
         "ci/check_kagemusha_reviewed_cargo_lock.sh --materialize",
         "ci/check_kagemusha_reviewed_cargo_lock.sh --self-test",
+        'mobile_rustup="$mobile_tool_dir/rustup"',
+        'cp "$mobile_rustup_source" "$mobile_rustup"',
+        '"$mobile_rustup" --version',
+        'echo "MOBILE_SDK_RUSTUP_BINARY=$mobile_rustup"',
         '"fixtures/kagemusha/cargo-lock.reviewed.v1"',
         '"crates/iroha_core/src/smartcontracts/isi/offline/**"',
         "cargo test --locked -p iroha_core kagemusha_v4 --lib",
@@ -1038,6 +1090,9 @@ if self_test:
         CATALOG: read(CATALOG, []),
         CORE: read(CORE, []),
         WORKFLOW: read(WORKFLOW, []),
+        CSHARP_WORKFLOW: read(CSHARP_WORKFLOW, []),
+        ATTRIBUTES: read(ATTRIBUTES, []),
+        LOCK_CHECKER: read(LOCK_CHECKER, []),
     }
     mutated = baseline[MODEL].replace(
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
@@ -1132,6 +1187,111 @@ if self_test:
     ):
         errors.append(
             "self-test failed to reject workflow dependency re-resolution"
+        )
+    missing_rustup_copy = baseline[WORKFLOW].replace(
+        'cp "$mobile_rustup_source" "$mobile_rustup"',
+        'mobile_rustup="$(realpath "$mobile_rustup_source")"',
+        1,
+    )
+    missing_rustup_copy_errors = static_errors({WORKFLOW: missing_rustup_copy})
+    if not any(
+        'cp "$mobile_rustup_source" "$mobile_rustup"' in error
+        for error in missing_rustup_copy_errors
+    ):
+        errors.append(
+            "self-test failed to reject resolving the rustup multicall binary "
+            "away from its rustup invocation name"
+        )
+    text_normalized_lock = baseline[ATTRIBUTES].replace(
+        "fixtures/kagemusha/cargo-lock.reviewed.v1 -text",
+        "fixtures/kagemusha/cargo-lock.reviewed.v1 text",
+        1,
+    )
+    text_normalized_lock_errors = static_errors({ATTRIBUTES: text_normalized_lock})
+    if not any(
+        "fixtures/kagemusha/cargo-lock.reviewed.v1 -text" in error
+        for error in text_normalized_lock_errors
+    ):
+        errors.append(
+            "self-test failed to reject platform newline conversion for the "
+            "reviewed Cargo lock"
+        )
+    text_normalized_workspace_lock = baseline[ATTRIBUTES].replace(
+        "Cargo.lock -text",
+        "Cargo.lock text",
+        1,
+    )
+    text_normalized_workspace_lock_errors = static_errors(
+        {ATTRIBUTES: text_normalized_workspace_lock}
+    )
+    if not any(
+        "Cargo.lock -text" in error
+        for error in text_normalized_workspace_lock_errors
+    ):
+        errors.append(
+            "self-test failed to reject platform newline conversion for the "
+            "workspace Cargo lock"
+        )
+    premature_csharp_cargo = baseline[CSHARP_WORKFLOW].replace(
+        "- name: Materialize the exact reviewed Cargo dependency lock",
+        "- uses: actions-rust-lang/setup-rust-toolchain@adversarial\n\n"
+        "      - name: Materialize the exact reviewed Cargo dependency lock",
+        1,
+    )
+    premature_csharp_cargo_errors = static_errors(
+        {CSHARP_WORKFLOW: premature_csharp_cargo}
+    )
+    if not any(
+        "before Rust setup can invoke Cargo" in error
+        for error in premature_csharp_cargo_errors
+    ):
+        errors.append(
+            "self-test failed to reject C# Cargo execution before reviewed-lock "
+            "materialization"
+        )
+    cached_csharp_target = baseline[CSHARP_WORKFLOW].replace(
+        "cache: false",
+        "cache: true",
+        1,
+    )
+    cached_csharp_target_errors = static_errors(
+        {CSHARP_WORKFLOW: cached_csharp_target}
+    )
+    if not any(
+        "cache: false" in error for error in cached_csharp_target_errors
+    ):
+        errors.append(
+            "self-test failed to reject a cached C# native release target"
+        )
+    missing_binary_descriptor = baseline[LOCK_CHECKER].replace(
+        'getattr(os, "O_BINARY", 0)',
+        "0",
+        1,
+    )
+    missing_binary_descriptor_errors = static_errors(
+        {LOCK_CHECKER: missing_binary_descriptor}
+    )
+    if not any(
+        "bind Windows O_BINARY" in error
+        for error in missing_binary_descriptor_errors
+    ):
+        errors.append(
+            "self-test failed to reject a text-mode reviewed-lock descriptor"
+        )
+    msys_text_classifier = baseline[LOCK_CHECKER].replace(
+        "if locks_are_byte_identical; then",
+        'if cmp -s -- "${REVIEWED_LOCK}" "${WORKSPACE_LOCK}"; then',
+        1,
+    )
+    msys_text_classifier_errors = static_errors(
+        {LOCK_CHECKER: msys_text_classifier}
+    )
+    if not any(
+        "if locks_are_byte_identical; then" in error
+        for error in msys_text_classifier_errors
+    ):
+        errors.append(
+            "self-test failed to reject MSYS text-mode lock classification"
         )
     verifier_override_name = "KAGEMUSHA_V4_RELEASE_" + "VERIFIER_BIN"
     readiness_source = (root / "ci/check_kagemusha_production_readiness.sh").read_text(

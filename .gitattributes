@@ -1,0 +1,3 @@
+# Authenticated byte fixtures must never be rewritten by platform checkout rules.
+Cargo.lock -text
+fixtures/kagemusha/cargo-lock.reviewed.v1 -text

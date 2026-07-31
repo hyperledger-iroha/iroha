@@ -6,18 +6,21 @@ DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_DOTNET_BIN:-dotnet}"
 ARTIFACTS="$(mktemp -d "${TMPDIR:-/tmp}/iroha-kagemusha-csharp.XXXXXX")"
 trap 'rm -rf "${ARTIFACTS}"' EXIT
 
-version="$(${DOTNET_BIN} --version)"
+version="$(cd "${ROOT_DIR}/csharp" && "${DOTNET_BIN}" --version)"
 if [[ ! "${version}" =~ ^8\. ]]; then
   echo "error: C# SDK checks require .NET 8; got ${version}" >&2
   exit 1
 fi
 
-"${DOTNET_BIN}" test \
-  "${ROOT_DIR}/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj" \
-  --artifacts-path "${ARTIFACTS}" \
-  --filter "FullyQualifiedName~KagemushaToriiTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~TransactionBuilderTests" \
-  -p:ProduceReferenceAssembly=false \
-  --logger "console;verbosity=minimal"
+(
+  cd "${ROOT_DIR}/csharp"
+  "${DOTNET_BIN}" test \
+    "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj" \
+    --artifacts-path "${ARTIFACTS}" \
+    --filter "FullyQualifiedName~KagemushaToriiTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~TransactionBuilderTests" \
+    -p:ProduceReferenceAssembly=false \
+    --logger "console;verbosity=minimal"
+)
 
 client="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"
 models="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaModels.cs"

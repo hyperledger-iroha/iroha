@@ -322,6 +322,7 @@ fn topup_provenance(
                 parent_commit_qc: None,
                 snapshot_bootstrap: None,
                 nexus_amx_context_hash: Hash::new([seed, 11]),
+                execution_policy_hash: Hash::new([seed, 12]),
                 da_layout: DataAvailabilityLayout {
                     encoding: crate::block::consensus_v2::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,

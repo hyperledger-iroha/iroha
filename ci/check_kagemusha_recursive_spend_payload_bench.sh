@@ -49,7 +49,7 @@ swift_qr_tests_path = root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaQRStream
 swift_nfc_tests_path = root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaNFCTests.swift"
 
 SCHEMA = "iroha.kagemusha.peer_transport_measurements.v1"
-CARGO_LOCK_SHA256 = "88398dc1838777493c314ee26c56ba0abd797f0f66ba30a879181f13306c5a11"
+CARGO_LOCK_SHA256 = "ff773ee12a07de45d0e9df9ed29620142d884f365adb5e83d372e15dbedcd409"
 ROOT_KEYS = {
     "schema",
     "generator",
@@ -92,24 +92,24 @@ EXPECTED_ARCHIVES = {
         "4ee22699384122cf7cd8d5e45aeda7d71201d7cfefa56d1742b85a719c7e9f37",
     ),
     "payment-depth-1-hop-1": (
-        15_887,
-        "74f43357d407dd3d50b867293b91b5e3caa99f668fafe1a4c1293c8ab230c31c",
+        15_920,
+        "e976c0ea36f684174d1b1adc4c88a16c3165c8546bcdb3aa48b2e33fd663cce3",
     ),
     "payment-depth-8-hop-8": (
-        16_058,
-        "e6091584da09e975c36637d485ee6504b517d8cd6f0dea053707625303a6a68c",
+        16_091,
+        "31be978f0ea4ca8122f7680ba4977774edd57007b44eca2586ad11e921a95958",
     ),
     "payment-depth-16-hop-8": (
-        16_250,
-        "c3e45cb7b95703c49ff2048d8fbfb7281d0f879d302bb294ec36df1872605473",
+        16_283,
+        "cf49098bc6b2ab7c767c9a81004c627ee08c5838e32455c2f1c54243c31c0c0d",
     ),
     "payment-depth-32-hop-8": (
-        16_634,
-        "467ab2891ccf025b6c45c2de522a189a731e063519bab7ad90f7c18428348f5e",
+        16_667,
+        "2fb5d09c84458307aa555633685cd9fdf273806e41d884f84cac411601f4dcff",
     ),
     "payment-depth-64-hop-8": (
-        17_402,
-        "3c859dcb22bb1d999a6fe783ef51346bd48ba0bc4a3c09b5af749db069a2f375",
+        17_435,
+        "c1a063495f07e66161f27dd5f484bb2914d11da9c967b49aa34a32eba56890b5",
     ),
 }
 

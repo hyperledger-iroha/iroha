@@ -1046,6 +1046,7 @@ internal static class SccpSubmitValidation
         var nonce = cursor.TakeField("nonce");
         var feePayment = cursor.TakeField("fee_payment");
         var metadata = cursor.TakeField("metadata");
+        var attachments = cursor.TakeField("attachments");
         if (!cursor.IsFinished
             || creation.Length != sizeof(ulong)
             || BinaryPrimitives.ReadUInt64LittleEndian(creation) != creationTimeMs)
@@ -1079,15 +1080,13 @@ internal static class SccpSubmitValidation
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
         RequireCanonicalMetadata(metadata);
+        RequireAbsentOption(attachments, "attachments");
     }
 
     private static void RequireCanonicalChainId(ReadOnlySpan<byte> payload)
     {
-        var cursor = new CompactTransactionCursor(payload);
-        var encodedString = cursor.TakeField("chain_id.value");
-        var chainId = DecodeCompactString(encodedString, "chain_id.value");
-        if (!cursor.IsFinished
-            || chainId != TairaChainId)
+        var chainId = DecodeCompactString(payload, "chain_id");
+        if (chainId != TairaChainId)
         {
             throw new ArgumentException("SCCP transaction must target the canonical Taira chain.");
         }

@@ -444,8 +444,8 @@ if "norito_bridge_source_seal.py" in builder:
 cargo_lock_gate = text["cargo_lock_gate"]
 for needle in (
     "fixtures/kagemusha/cargo-lock.reviewed.v1",
-    "EXPECTED_BYTES=315545",
-    'EXPECTED_SHA256="88398dc1838777493c314ee26c56ba0abd797f0f66ba30a879181f13306c5a11"',
+    "EXPECTED_BYTES=315548",
+    'EXPECTED_SHA256="ff773ee12a07de45d0e9df9ed29620142d884f365adb5e83d372e15dbedcd409"',
     "must be a singly linked regular file",
     "changed during verification",
     "os.link(temporary, destination, follow_symlinks=False)",
@@ -459,10 +459,10 @@ for needle in (
 pr_workflow = text["pr_workflow"]
 if pr_workflow.count(
     "ci/check_kagemusha_reviewed_cargo_lock.sh --materialize"
-) != 3:
+) != 4:
     errors.append(
         "Kagemusha workflow must materialize the exact reviewed Cargo.lock "
-        "in all three Cargo-using jobs"
+        "in all four Cargo-using jobs"
     )
 if (
     pr_workflow.count("cargo test --locked -p ") != 22
@@ -500,21 +500,32 @@ for needle in (
 
 compile_check = text["compile_check"]
 for needle in (
+    "KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE",
+    "warm-gradle-artifacts",
+    "final-gradle-artifacts",
+    "MOBILE_SDK_ANDROID_ARTIFACT_DIR",
+    "-Pkotlin.compiler.execution.strategy=in-process",
+    'rm -rf -- "$EVIDENCE_ROOT/gradle" "$EVIDENCE_ROOT/warm-gradle-project-cache"',
     "-PkagemushaCandidateCompileOnly=true",
     ":kagemusha-candidate-evidence-lab:compileDebugKotlin",
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
     "--max-workers=2",
+    "--project-cache-dir",
     "GRADLE_RO_DEP_CACHE",
     "compile-gradle-read-only-cache",
     "chmod -R u+w",
 ):
     if needle not in compile_check:
         errors.append(f"actual AGP/Kotlin compile-only check is missing {needle}")
+if 'KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"' not in pr_workflow:
+    errors.append(
+        "Kagemusha PR workflow must explicitly warm the disposable Gradle dependency cache"
+    )
 
 source_seal = text["source_seal"]
 for needle in (
-    "iroha.kagemusha.full-source-tree-sha256.v3",
+    "iroha.kagemusha.full-source-tree-sha256.v4",
     '"status",',
     '"--porcelain=v1",',
     '"-z",',

@@ -3,6 +3,7 @@ name: Kagemusha first-release contract
 on:
   pull_request:
     paths:
+      - ".gitattributes"
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
       - "Cargo.lock"
       - "fixtures/kagemusha/cargo-lock.reviewed.v1"
@@ -848,6 +849,54 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Bind canonical mobile build tools
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          mobile_rustup_source="$("$mobile_python" -I -S -c 'import shutil; print(shutil.which("rustup"))')"
+          mobile_tool_dir="$RUNNER_TEMP/iroha-mobile-tools"
+          mkdir -p "$mobile_tool_dir"
+          mobile_tool_dir="$("$mobile_python" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$mobile_tool_dir")"
+          mobile_rustup="$mobile_tool_dir/rustup"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          [[ "$mobile_rustup_source" == /* && -f "$mobile_rustup_source" && -x "$mobile_rustup_source" ]]
+          cp "$mobile_rustup_source" "$mobile_rustup"
+          chmod 0755 "$mobile_rustup"
+          [[ "$mobile_rustup" == /* && -f "$mobile_rustup" && ! -L "$mobile_rustup" && -x "$mobile_rustup" ]]
+          [[ "$("$mobile_python" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$mobile_rustup")" == "$mobile_rustup" ]]
+          "$mobile_rustup" --version
+          {
+            echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"
+            echo "MOBILE_SDK_RUSTUP_BINARY=$mobile_rustup"
+          } >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Materialize the exact reviewed Cargo dependency lock
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
+      - name: Install Apple Rust targets
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          cargo fetch --locked
+      - name: Prepare external Apple native artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-build"
+          mkdir -p "$artifact_dir" "$build_dir"
+          {
+            echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir"
+            echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1"
+            echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir"
+            echo "NORITO_BRIDGE_BUILD_DIR=$build_dir"
+          } >> "$GITHUB_ENV"
+      - name: Build exact ABI-21 NoritoBridge XCFramework
+        run: NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 scripts/build_norito_xcframework.sh
+      - name: Authenticate Apple native artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
 
   kotlin-java:
@@ -868,7 +917,10 @@ jobs:
         run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
       - name: Prefetch locked Rust dependency graph
         run: cargo fetch --locked
-      - run: ci/check_kagemusha_candidate_android_lab_compile.sh
+      - name: Warm dependencies, then compile the Android candidate lab offline
+        env:
+          KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Require fresh ABI-21 JNI bridge in complete Kotlin and Java suites
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
@@ -896,5 +948,7 @@ jobs:
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - run: npm ci --ignore-scripts
+        working-directory: javascript/iroha_js
+      - run: npm run build:dist
         working-directory: javascript/iroha_js
       - run: ci/check_kagemusha_recursive_spend_javascript_sdk.sh
