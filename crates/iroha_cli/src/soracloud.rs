@@ -29,7 +29,6 @@ use iroha::{
         isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
         name::Name,
-        prelude::ExposedPrivateKey,
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
             AgentApartmentManifestV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
@@ -8352,10 +8351,6 @@ struct ServiceConfigSetPayload {
 struct SignedServiceConfigSetRequest {
     payload: ServiceConfigSetPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8375,10 +8370,6 @@ struct ServiceConfigDeletePayload {
 struct SignedServiceConfigDeleteRequest {
     payload: ServiceConfigDeletePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8399,10 +8390,6 @@ struct ServiceSecretSetPayload {
 struct SignedServiceSecretSetRequest {
     payload: ServiceSecretSetPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8422,10 +8409,6 @@ struct ServiceSecretDeletePayload {
 struct SignedServiceSecretDeleteRequest {
     payload: ServiceSecretDeletePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8436,10 +8419,6 @@ struct SignedBundleRequest {
     #[norito(default)]
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8450,10 +8429,6 @@ struct SignedAppInfraRequest {
     upgrade_services: Vec<SignedBundleRequest>,
     manifest: SoraAppInfraManifestV1,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8474,10 +8449,6 @@ struct RollbackPayload {
 struct SignedRollbackRequest {
     payload: RollbackPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8501,10 +8472,6 @@ struct RolloutAdvancePayload {
 struct SignedRolloutAdvanceRequest {
     payload: RolloutAdvancePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8526,10 +8493,6 @@ struct AgentDeployPayload {
 struct SignedAgentDeployRequest {
     payload: AgentDeployPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8549,10 +8512,6 @@ struct AgentLeaseRenewPayload {
 struct SignedAgentLeaseRenewRequest {
     payload: AgentLeaseRenewPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8587,10 +8546,6 @@ struct SignedHfDeployRequest {
     generated_service_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     generated_apartment_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8620,10 +8575,6 @@ struct HfLeaseLeavePayload {
 struct SignedHfLeaseLeaveRequest {
     payload: HfLeaseLeavePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8658,10 +8609,6 @@ struct SignedHfLeaseRenewRequest {
     generated_service_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     generated_apartment_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8680,10 +8627,6 @@ struct ModelHostAdvertisePayload {
 struct SignedModelHostAdvertiseRequest {
     payload: ModelHostAdvertisePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8703,10 +8646,6 @@ struct ModelHostHeartbeatPayload {
 struct SignedModelHostHeartbeatRequest {
     payload: ModelHostHeartbeatPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8725,10 +8664,6 @@ struct ModelHostWithdrawPayload {
 struct SignedModelHostWithdrawRequest {
     payload: ModelHostWithdrawPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8748,10 +8683,6 @@ struct AgentRestartPayload {
 struct SignedAgentRestartRequest {
     payload: AgentRestartPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8774,10 +8705,6 @@ struct AgentPolicyRevokePayload {
 struct SignedAgentPolicyRevokeRequest {
     payload: AgentPolicyRevokePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8798,10 +8725,6 @@ struct AgentWalletSpendPayload {
 struct SignedAgentWalletSpendRequest {
     payload: AgentWalletSpendPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8821,10 +8744,6 @@ struct AgentWalletApprovePayload {
 struct SignedAgentWalletApproveRequest {
     payload: AgentWalletApprovePayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8846,10 +8765,6 @@ struct AgentMessageSendPayload {
 struct SignedAgentMessageSendRequest {
     payload: AgentMessageSendPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8869,10 +8784,6 @@ struct AgentMessageAckPayload {
 struct SignedAgentMessageAckRequest {
     payload: AgentMessageAckPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8895,10 +8806,6 @@ struct AgentArtifactAllowPayload {
 struct SignedAgentArtifactAllowRequest {
     payload: AgentArtifactAllowPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8926,10 +8833,6 @@ struct AgentAutonomyRunPayload {
 struct SignedAgentAutonomyRunRequest {
     payload: AgentAutonomyRunPayload,
     provenance: ManifestProvenance,
-    #[norito(default)]
-    authority: Option<AccountId>,
-    #[norito(default)]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8963,10 +8866,6 @@ struct TrainingJobStartPayload {
 struct SignedTrainingJobStartRequest {
     payload: TrainingJobStartPayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8989,10 +8888,6 @@ struct TrainingJobCheckpointPayload {
 struct SignedTrainingJobCheckpointRequest {
     payload: TrainingJobCheckpointPayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -9013,10 +8908,6 @@ struct TrainingJobRetryPayload {
 struct SignedTrainingJobRetryRequest {
     payload: TrainingJobRetryPayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -9042,10 +8933,6 @@ struct ModelArtifactRegisterPayload {
 struct SignedModelArtifactRegisterRequest {
     payload: ModelArtifactRegisterPayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -9075,10 +8962,6 @@ struct ModelWeightRegisterPayload {
 struct SignedModelWeightRegisterRequest {
     payload: ModelWeightRegisterPayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -9101,10 +8984,6 @@ struct ModelWeightPromotePayload {
 struct SignedModelWeightPromoteRequest {
     payload: ModelWeightPromotePayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -9126,10 +9005,6 @@ struct ModelWeightRollbackPayload {
 struct SignedModelWeightRollbackRequest {
     payload: ModelWeightRollbackPayload,
     provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -9178,10 +9053,6 @@ struct SignedUploadedModelRegisterRequest {
     payload: UploadedModelRegisterPayload,
     bundle_provenance: ManifestProvenance,
     finalize_provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 struct SoracloudTempDir {
@@ -10511,8 +10382,6 @@ fn signed_bundle_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10537,8 +10406,6 @@ fn signed_app_infra_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10770,8 +10637,6 @@ fn signed_service_config_set_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10801,8 +10666,6 @@ fn signed_service_config_delete_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10835,8 +10698,6 @@ fn signed_service_secret_set_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10866,8 +10727,6 @@ fn signed_service_secret_delete_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10893,8 +10752,6 @@ fn signed_rollback_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10940,8 +10797,6 @@ fn signed_rollout_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10966,8 +10821,6 @@ fn signed_agent_deploy_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -10996,8 +10849,6 @@ fn signed_agent_lease_renew_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11213,8 +11064,6 @@ fn signed_hf_deploy_request(
             key_pair,
         )?),
         generated_apartment_provenance,
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11248,8 +11097,6 @@ fn signed_hf_lease_leave_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11334,8 +11181,6 @@ fn signed_hf_lease_renew_request(
             key_pair,
         )?),
         generated_apartment_provenance,
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11406,8 +11251,6 @@ fn signed_model_host_advertise_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11432,8 +11275,6 @@ fn signed_model_host_heartbeat_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11453,8 +11294,6 @@ fn signed_model_host_withdraw_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11483,8 +11322,6 @@ fn signed_agent_restart_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11515,8 +11352,6 @@ fn signed_agent_policy_revoke_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11550,8 +11385,6 @@ fn signed_agent_wallet_spend_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11580,8 +11413,6 @@ fn signed_agent_wallet_approve_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11620,8 +11451,6 @@ fn signed_agent_message_send_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11650,8 +11479,6 @@ fn signed_agent_message_ack_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11728,8 +11555,6 @@ fn signed_agent_artifact_allow_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11777,8 +11602,6 @@ fn signed_agent_autonomy_run_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11847,8 +11670,6 @@ fn signed_training_job_start_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11889,8 +11710,6 @@ fn signed_training_job_checkpoint_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11924,8 +11743,6 @@ fn signed_training_job_retry_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -11973,8 +11790,6 @@ fn signed_model_artifact_register_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -12032,8 +11847,6 @@ fn signed_model_weight_register_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -12071,8 +11884,6 @@ fn signed_model_weight_promote_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -12111,8 +11922,6 @@ fn signed_model_weight_rollback_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -12198,8 +12007,6 @@ fn signed_uploaded_model_register_request(
             signer: key_pair.public_key().clone(),
             signature: sign_soracloud_payload(key_pair, &finalize_encoded)?,
         },
-        authority: None,
-        private_key: None,
     })
 }
 
@@ -21574,7 +21381,8 @@ iroha app sorafs toolkit pack ./frontend/dist \
 mod tests {
     use super::*;
     use iroha::data_model::soracloud::{
-        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
+        SECRET_ENVELOPE_VERSION_V1, SecretEnvelopeEncryptionV1, SoraInrouGuestImageV1,
+        SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use iroha_crypto::Algorithm;
     use norito::json::Value;
@@ -22063,6 +21871,102 @@ mod tests {
     fn soracloud_fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid Soracloud keypair")
+    }
+
+    fn assert_signed_mutation_omits_inline_signing_material<T: JsonSerialize + ?Sized>(
+        request: &T,
+    ) {
+        let value = json::to_value(request).expect("serialize signed Soracloud mutation request");
+        let object = value
+            .as_object()
+            .expect("signed Soracloud mutation request must be a JSON object");
+        assert!(
+            !object.contains_key("authority"),
+            "signed mutation request must not serialize inline authority"
+        );
+        assert!(
+            !object.contains_key("private_key"),
+            "signed mutation request must not serialize inline private key"
+        );
+    }
+
+    #[test]
+    fn signed_soracloud_mutation_requests_omit_inline_signing_material() {
+        let key_pair = soracloud_fixture_key_pair(0x12);
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        let config_set = signed_service_config_set_request(
+            "web_portal",
+            "feature_flags",
+            norito::json!({ "enabled": true }),
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service config set request");
+        assert_signed_mutation_omits_inline_signing_material(&config_set);
+
+        let config_delete = signed_service_config_delete_request(
+            "web_portal",
+            "feature_flags",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service config delete request");
+        assert_signed_mutation_omits_inline_signing_material(&config_delete);
+
+        let secret = SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: "test-kms-key".to_owned(),
+            key_version: NonZeroU32::new(1).expect("non-zero key version"),
+            nonce: vec![0x01; 12],
+            ciphertext: vec![0x02; 32],
+            commitment: Hash::new(b"test ciphertext"),
+            aad_digest: None,
+        };
+        let secret_set = signed_service_secret_set_request(
+            "web_portal",
+            "api_token",
+            secret,
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service secret set request");
+        assert_signed_mutation_omits_inline_signing_material(&secret_set);
+
+        let secret_delete = signed_service_secret_delete_request(
+            "web_portal",
+            "api_token",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service secret delete request");
+        assert_signed_mutation_omits_inline_signing_material(&secret_delete);
+
+        let app_infra = signed_app_infra_request(
+            MutationMode::Deploy,
+            SoraAppInfraManifestV1 {
+                schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+                app_name: "web_portal".parse().expect("valid app name"),
+                app_version: "1.0.0".to_owned(),
+                public_url: "https://web-portal.example".to_owned(),
+                static_site: None,
+                services: Vec::new(),
+            },
+            Vec::new(),
+            &key_pair,
+        )
+        .expect("signed app infra request");
+        assert_signed_mutation_omits_inline_signing_material(&app_infra);
+
+        let heartbeat =
+            signed_model_host_heartbeat_request(1, &authority, &key_pair)
+                .expect("signed model host heartbeat request");
+        assert_signed_mutation_omits_inline_signing_material(&heartbeat);
+
+        let withdraw = signed_model_host_withdraw_request(&authority, &key_pair)
+            .expect("signed model host withdraw request");
+        assert_signed_mutation_omits_inline_signing_material(&withdraw);
     }
 
     #[test]
@@ -24941,8 +24845,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25054,8 +24957,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25078,8 +24980,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25096,8 +24997,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25113,8 +25013,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25171,8 +25070,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             )
             .expect("generated service provenance should verify");
         assert!(request.generated_apartment_provenance.is_some());
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25197,8 +25095,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25230,8 +25127,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         assert_eq!(request.payload.model_name, "gpt-oss");
         assert!(request.generated_service_provenance.is_some());
         assert!(request.generated_apartment_provenance.is_some());
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25280,8 +25176,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             request.payload.capability.heartbeat_expires_at_ms
                 > request.payload.capability.advertised_at_ms
         );
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25298,8 +25193,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25321,8 +25215,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25345,8 +25238,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25367,8 +25259,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25391,8 +25282,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25413,8 +25303,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25436,8 +25325,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25466,8 +25354,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             request.payload.workflow_input_json.as_deref(),
             Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
         );
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25496,8 +25383,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25521,8 +25407,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25544,8 +25429,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25572,8 +25456,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25602,8 +25485,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25627,8 +25509,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -25651,8 +25532,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]
@@ -26224,8 +26104,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.finalize_provenance.signer, &finalize_payload)
             .expect("finalize signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        assert_signed_mutation_omits_inline_signing_material(&request);
     }
 
     #[test]

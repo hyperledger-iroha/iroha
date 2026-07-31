@@ -7974,7 +7974,7 @@ pub(crate) mod valid {
         fn validate_execution_context_merge_reference(
             block: &SignedBlock,
             chain_id: &ChainId,
-            state: &impl StateReadOnly,
+            _state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
             validation_profile: &ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
@@ -7990,11 +7990,6 @@ pub(crate) mod valid {
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
-                ));
-            }
-            if !state.nexus().enabled {
-                return Err(Self::execution_context_error(
-                    "certified merge entry requires Nexus multilane mode",
                 ));
             }
             if reference.version != 1 {

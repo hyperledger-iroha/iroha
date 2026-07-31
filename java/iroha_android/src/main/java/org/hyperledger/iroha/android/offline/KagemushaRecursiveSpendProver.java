@@ -116,7 +116,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = MAXIMUM_INPUTS_PER_TRANSITION;
   public static final int MAXIMUM_BRANCH_CLAIMS = 2;
   public static final int MAXIMUM_PEER_HOPS = 8;
-  public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 256 * 1024;
+  public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 384 * 1024;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
   public static final int MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4 = 4 * 1024;
   public static final int MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4 = 16 * 1024;

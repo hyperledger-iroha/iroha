@@ -10586,14 +10586,11 @@ pub(crate) async fn handle_app_deploy(
         upgrade_services,
         manifest,
         provenance,
-        authority,
-        private_key,
     } = request;
-    let signer =
-        match require_soracloud_mutation_signer(&headers, &provenance, authority, private_key) {
-            Ok(signer) => signer,
-            Err(err) => return err.into_response(),
-        };
+    let signer = match require_soracloud_mutation_signer(&headers, &provenance) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
 
     let app_signer = provenance.signer.clone();
     let app_name = manifest.app_name.to_string();
@@ -10654,14 +10651,11 @@ pub(crate) async fn handle_app_upgrade(
         upgrade_services,
         manifest,
         provenance,
-        authority,
-        private_key,
     } = request;
-    let signer =
-        match require_soracloud_mutation_signer(&headers, &provenance, authority, private_key) {
-            Ok(signer) => signer,
-            Err(err) => return err.into_response(),
-        };
+    let signer = match require_soracloud_mutation_signer(&headers, &provenance) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
 
     let app_signer = provenance.signer.clone();
     let app_name = manifest.app_name.to_string();
@@ -10823,12 +10817,7 @@ pub(crate) async fn handle_rollout(
     if let Err(err) = verify_rollout_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10888,12 +10877,7 @@ pub(crate) async fn handle_state_mutation(
     if let Err(err) = verify_state_mutation_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10977,12 +10961,7 @@ pub(crate) async fn handle_service_config_set(
     if let Err(err) = verify_service_config_set_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11040,12 +11019,7 @@ pub(crate) async fn handle_service_config_delete(
     if let Err(err) = verify_service_config_delete_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11198,12 +11172,7 @@ pub(crate) async fn handle_service_secret_set(
     if let Err(err) = verify_service_secret_set_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11261,12 +11230,7 @@ pub(crate) async fn handle_service_secret_delete(
     if let Err(err) = verify_service_secret_delete_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11353,12 +11317,7 @@ pub(crate) async fn handle_fhe_job_run(
     if let Err(err) = validate_fhe_job_run_proof_attachments(&request.payload) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11439,12 +11398,7 @@ pub(crate) async fn handle_decryption_request(
     if let Err(err) = verify_decryption_request_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11504,12 +11458,7 @@ pub(crate) async fn handle_health_access_request(
     if let Err(err) = verify_decryption_request_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11593,12 +11542,7 @@ pub(crate) async fn handle_training_job_start(
     if let Err(err) = verify_training_job_start_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11666,12 +11610,7 @@ pub(crate) async fn handle_training_job_checkpoint(
     if let Err(err) = verify_training_job_checkpoint_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11734,12 +11673,7 @@ pub(crate) async fn handle_training_job_retry(
     if let Err(err) = verify_training_job_retry_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11824,12 +11758,7 @@ pub(crate) async fn handle_model_weight_register(
     if let Err(err) = verify_model_weight_register_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11899,12 +11828,7 @@ pub(crate) async fn handle_model_weight_promote(
     if let Err(err) = verify_model_weight_promote_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11969,12 +11893,7 @@ pub(crate) async fn handle_model_weight_rollback(
     if let Err(err) = verify_model_weight_rollback_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12062,12 +11981,7 @@ pub(crate) async fn handle_model_artifact_register(
     if let Err(err) = verify_model_artifact_register_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12166,12 +12080,7 @@ pub(crate) async fn handle_uploaded_model_register(
     if let Err(err) = require_active_sorafs_uploaded_model_pin(&app, &request.payload.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.bundle_provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.bundle_provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12349,12 +12258,7 @@ pub(crate) async fn handle_hf_deploy(
     if let Err(err) = verify_hf_deploy_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12564,12 +12468,7 @@ pub(crate) async fn handle_hf_lease_leave(
     if let Err(err) = verify_hf_lease_leave_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12659,12 +12558,7 @@ pub(crate) async fn handle_hf_lease_renew(
     if let Err(err) = verify_hf_lease_renew_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12849,12 +12743,7 @@ pub(crate) async fn handle_model_host_advertise(
     if let Err(err) = verify_model_host_advertise_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12905,12 +12794,7 @@ pub(crate) async fn handle_model_host_heartbeat(
     if let Err(err) = verify_model_host_heartbeat_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12963,12 +12847,7 @@ pub(crate) async fn handle_model_host_withdraw(
     if let Err(err) = verify_model_host_withdraw_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13014,12 +12893,7 @@ pub(crate) async fn handle_agent_deploy(
     if let Err(err) = verify_agent_deploy_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13070,12 +12944,7 @@ pub(crate) async fn handle_agent_lease_renew(
     if let Err(err) = verify_agent_lease_renew_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13128,12 +12997,7 @@ pub(crate) async fn handle_agent_restart(
     if let Err(err) = verify_agent_restart_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13205,12 +13069,7 @@ pub(crate) async fn handle_agent_wallet_spend(
     if let Err(err) = verify_agent_wallet_spend_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13275,12 +13134,7 @@ pub(crate) async fn handle_agent_wallet_approve(
     if let Err(err) = verify_agent_wallet_approve_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13339,12 +13193,7 @@ pub(crate) async fn handle_agent_policy_revoke(
     if let Err(err) = verify_agent_policy_revoke_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13404,12 +13253,7 @@ pub(crate) async fn handle_agent_message_send(
     if let Err(err) = verify_agent_message_send_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13481,12 +13325,7 @@ pub(crate) async fn handle_agent_message_ack(
     if let Err(err) = verify_agent_message_ack_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13569,12 +13408,7 @@ pub(crate) async fn handle_agent_autonomy_allow(
     if let Err(err) = verify_agent_artifact_allow_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13819,12 +13653,7 @@ pub(crate) async fn handle_agent_autonomy_run(
     if let Err(err) = verify_agent_autonomy_run_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -15192,8 +15021,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -15214,8 +15041,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -15447,30 +15272,34 @@ mod tests {
     }
 
     #[test]
-    fn require_soracloud_mutation_signer_rejects_inline_signing_material() {
+    fn signed_mutation_request_rejects_inline_signing_material() {
         let key_pair = checked_test_keypair(0x60);
-        let account = AccountId::new(key_pair.public_key().clone());
-        let headers = verified_request_headers(&account, key_pair.public_key());
-        let provenance = ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature: checked_test_signature(key_pair.private_key(), b"mutation"),
-        };
+        let request = signed_rollback_request("inline-secret-test", None, &key_pair);
+        let mut payload = norito::json::Map::new();
+        payload.insert(
+            "service_name".to_owned(),
+            norito::json::Value::from(request.payload.service_name),
+        );
+        payload.insert("target_version".to_owned(), norito::json::Value::Null);
+        let mut fields = norito::json::Map::new();
+        fields.insert("payload".to_owned(), norito::json::Value::Object(payload));
+        fields.insert(
+            "provenance".to_owned(),
+            norito::json::to_value(&request.provenance)
+                .expect("serialize valid request provenance"),
+        );
+        fields.insert(
+            "authority".to_owned(),
+            norito::json::Value::from("inline-authority-is-forbidden"),
+        );
 
-        let error = match require_soracloud_mutation_signer(
-            &headers,
-            &provenance,
-            Some(account),
-            Some(ExposedPrivateKey(key_pair.private_key().clone())),
-        ) {
-            Ok(_) => panic!("inline signing material must be rejected"),
-            Err(error) => error,
-        };
+        let error =
+            norito::json::from_value::<SignedRollbackRequest>(norito::json::Value::Object(fields))
+                .expect_err("inline signing material must be rejected during decoding");
 
-        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
         assert!(
-            error
-                .message
-                .contains("authority/private_key fields are no longer accepted")
+            error.to_string().contains("unknown field `authority`"),
+            "unexpected inline-authority rejection: {error}"
         );
     }
 
@@ -15485,7 +15314,7 @@ mod tests {
             signature: checked_test_signature(provenance_keypair.private_key(), b"mutation"),
         };
 
-        let error = match require_soracloud_mutation_signer(&headers, &provenance, None, None) {
+        let error = match require_soracloud_mutation_signer(&headers, &provenance) {
             Ok(_) => panic!("provenance signer mismatch must be rejected"),
             Err(error) => error,
         };
@@ -15511,7 +15340,7 @@ mod tests {
             signature: checked_test_signature(provenance_keypair.private_key(), b"mutation"),
         };
 
-        let signer = require_soracloud_mutation_signer(&headers, &provenance, None, None)
+        let signer = require_soracloud_mutation_signer(&headers, &provenance)
             .expect("multisig member provenance must be accepted");
         assert_eq!(signer.authority, account);
         assert_eq!(signer.request_signer, provenance.signer);
@@ -17399,8 +17228,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17417,8 +17244,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17435,8 +17260,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17453,8 +17276,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17471,8 +17292,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17489,8 +17308,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17507,8 +17324,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17525,8 +17340,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17543,8 +17356,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17668,8 +17479,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature: checked_test_signature(key_pair.private_key(), &finalize_encoded),
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18054,8 +17863,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature: checked_test_signature(key_pair.private_key(), &bundle_encoded),
             },
-            authority: None,
-            private_key: None,
         };
 
         let err = verify_uploaded_model_register_signature(&request)
@@ -18112,8 +17919,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18156,8 +17961,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18208,8 +18011,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18226,8 +18027,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18244,8 +18043,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18262,8 +18059,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18280,8 +18075,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18298,8 +18091,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18316,8 +18107,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18334,8 +18123,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18352,8 +18139,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18370,8 +18155,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 

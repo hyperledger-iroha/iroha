@@ -718,14 +718,13 @@ pub(crate) enum CertifiedServePrepareError {
     Service(String),
 }
 
-fn combine_certified_serve_abort_error(
-    primary: String,
-    abort: Result<(), String>,
-) -> String {
+fn combine_certified_serve_abort_error(primary: String, abort: Result<(), String>) -> String {
     match abort {
         Ok(()) => primary,
         Err(abort_error) => {
-            format!("{primary}; additionally failed to abort the exact Serve handoff: {abort_error}")
+            format!(
+                "{primary}; additionally failed to abort the exact Serve handoff: {abort_error}"
+            )
         }
     }
 }
@@ -2911,15 +2910,15 @@ impl V2IoCommandQueue {
             }
             CertifiedServeIngressReservationState::Provisional => None,
         };
-        if prepared_lifecycle.is_some_and(|lifecycle_id| state.serve_barrier == Some(lifecycle_id)) {
+        if prepared_lifecycle.is_some_and(|lifecycle_id| state.serve_barrier == Some(lifecycle_id))
+        {
             // Rollback publishes its retry-only snapshot before changing any
             // queue state. Failure here intentionally panics out of Drop:
             // detaching after a failed durable write would expose a partial
             // transaction, while fail-stop leaves the exact handoff intact
             // for process restart.
-            self.rollback_serve_barrier(&mut state).expect(
-                "unhanded exact-ingress reservation rolls its Serve transaction back",
-            );
+            self.rollback_serve_barrier(&mut state)
+                .expect("unhanded exact-ingress reservation rolls its Serve transaction back");
         }
         if matches!(
             reservation_state,
@@ -3247,18 +3246,19 @@ impl V2IoCommandQueue {
             .serve_ingress_reservation
             .as_ref()
             .map(|reservation| (reservation.id, reservation.state));
-        let settled_ingress = selected_ingress.is_some_and(|(reservation_id, reservation_state)| {
-            if matches!(
-                reservation_state,
-                CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
-            ) {
-                let _ =
-                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
-            } else {
-                let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
-            }
-            true
-        });
+        let settled_ingress =
+            selected_ingress.is_some_and(|(reservation_id, reservation_state)| {
+                if matches!(
+                    reservation_state,
+                    CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
+                ) {
+                    let _ =
+                        Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
+                } else {
+                    let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+                }
+                true
+            });
         drop(state);
         if rolled_back || settled_ingress {
             self.ready.notify_all();
@@ -3957,12 +3957,9 @@ impl V2IoCommandQueue {
                 "Sumeragi v2 Serve commit lost its future-slot barrier identity".to_owned(),
             );
         }
-        let tracked = state
-            .serves
-            .get(&admission.lifecycle_id)
-            .ok_or_else(|| {
-                "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
-            })?;
+        let tracked = state.serves.get(&admission.lifecycle_id).ok_or_else(|| {
+            "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
+        })?;
         match admission.kind {
             CertifiedServeAdmissionKind::New if tracked.state != V2IoServeState::Reserved => {
                 return Err(
@@ -3984,33 +3981,31 @@ impl V2IoCommandQueue {
             _ => {}
         }
 
-        let (merged_reply_routes, merged_ingress_ownership) =
-            if let (Some(retained_routes), Some(retained_ownership)) = (
-                tracked.reply_routes.as_ref(),
-                tracked.ingress_ownership.as_ref(),
-            ) {
-                let mut route_candidate = retained_routes.clone();
-                let receipt = route_candidate
-                    .merge_observed_with_receipt(&reply_routes)
-                    .map_err(|error| {
-                        format!(
-                            "invalid authenticated route on exact Sumeragi v2 Serve retry: {error}"
-                        )
-                    })?;
-                let mut ownership_candidate = retained_ownership.clone();
-                let merged_routes = ownership_candidate
-                    .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
-                    .ok_or_else(|| {
-                        "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
-                    })?;
-                (merged_routes, ownership_candidate)
-            } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
-                (reply_routes, ingress_ownership)
-            } else {
-                return Err(
-                    "Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned(),
-                );
-            };
+        let (merged_reply_routes, merged_ingress_ownership) = if let (
+            Some(retained_routes),
+            Some(retained_ownership),
+        ) = (
+            tracked.reply_routes.as_ref(),
+            tracked.ingress_ownership.as_ref(),
+        ) {
+            let mut route_candidate = retained_routes.clone();
+            let receipt = route_candidate
+                .merge_observed_with_receipt(&reply_routes)
+                .map_err(|error| {
+                    format!("invalid authenticated route on exact Sumeragi v2 Serve retry: {error}")
+                })?;
+            let mut ownership_candidate = retained_ownership.clone();
+            let merged_routes = ownership_candidate
+                .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
+                .ok_or_else(|| {
+                    "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
+                })?;
+            (merged_routes, ownership_candidate)
+        } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
+            (reply_routes, ingress_ownership)
+        } else {
+            return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
+        };
 
         let committed = match tracked.state {
             V2IoServeState::AwaitingRetry => {
@@ -4559,11 +4554,9 @@ impl V2IoCommandQueue {
                 reservation_state,
                 CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
             ) {
-                let _ =
-                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
+                let _ = Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
             } else {
-                let _ =
-                    Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+                let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
             }
         }
         for reservation in state.serve_ingress_waiters.values_mut() {
@@ -12344,9 +12337,9 @@ impl ProductionV2Services {
                 }
                 Ok(disposition)
             }
-            OrphanPayloadChunkBufferResult::ProductiveRetentionConflict => Err(
-                "bounded orphan storage could not retain an exact leader-wire owner".to_owned(),
-            ),
+            OrphanPayloadChunkBufferResult::ProductiveRetentionConflict => {
+                Err("bounded orphan storage could not retain an exact leader-wire owner".to_owned())
+            }
         }
     }
 
@@ -12405,9 +12398,7 @@ impl ProductionV2Services {
             || chunk.bytes.is_empty()
             || chunk_len > u64::from(self.context.da_layout.chunk_size_bytes)
         {
-            return OrphanPayloadChunkBufferResult::Disposition(
-                PayloadChunkDisposition::Rejected,
-            );
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
         let mut replaced_proofless = None;
         if let Some(buffered) = self.orphan_chunks.get_mut(&manifest_hash) {
@@ -12419,9 +12410,7 @@ impl ProductionV2Services {
                 let incumbent_productive = existing
                     .ingress_ownership
                     .as_ref()
-                    .is_some_and(|ownership| {
-                        ownership.leader_wire_runtime_receipt().is_some()
-                    });
+                    .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some());
                 if productive_owner && !incumbent_productive {
                     let Some(candidate) = ingress_ownership else {
                         return OrphanPayloadChunkBufferResult::ProductiveRetentionConflict;
@@ -12459,18 +12448,13 @@ impl ProductionV2Services {
             // productive, manifest-bound owner replaces a proofless reordered
             // claim in the same slot. Otherwise the conflict cannot be
             // resolved until an existing productive owner retires.
-            if let Some(position) = buffered
-                .iter()
-                .position(|existing| {
-                    existing.sender == sender && existing.chunk.index == chunk.index
-                })
-            {
+            if let Some(position) = buffered.iter().position(|existing| {
+                existing.sender == sender && existing.chunk.index == chunk.index
+            }) {
                 let incumbent_productive = buffered[position]
                     .ingress_ownership
                     .as_ref()
-                    .is_some_and(|ownership| {
-                        ownership.leader_wire_runtime_receipt().is_some()
-                    });
+                    .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some());
                 if productive_owner && !incumbent_productive {
                     replaced_proofless = buffered.remove(position);
                 } else {
@@ -12485,11 +12469,9 @@ impl ProductionV2Services {
             }
         }
         if let Some(replaced) = replaced_proofless {
-            let replaced_bytes =
-                u64::try_from(replaced.chunk.bytes.len()).unwrap_or(u64::MAX);
+            let replaced_bytes = u64::try_from(replaced.chunk.bytes.len()).unwrap_or(u64::MAX);
             self.orphan_chunk_count = self.orphan_chunk_count.saturating_sub(1);
-            self.orphan_chunk_bytes =
-                self.orphan_chunk_bytes.saturating_sub(replaced_bytes);
+            self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(replaced_bytes);
             if self
                 .orphan_chunks
                 .get(&manifest_hash)
@@ -12500,8 +12482,7 @@ impl ProductionV2Services {
         }
         while productive_owner
             && (self.orphan_chunk_count >= self.max_orphan_chunks
-                || self.orphan_chunk_bytes.saturating_add(chunk_len)
-                    > self.max_orphan_chunk_bytes)
+                || self.orphan_chunk_bytes.saturating_add(chunk_len) > self.max_orphan_chunk_bytes)
         {
             if !self.evict_one_proofless_orphan_chunk() {
                 return OrphanPayloadChunkBufferResult::ProductiveRetentionConflict;
@@ -12510,9 +12491,7 @@ impl ProductionV2Services {
         if self.orphan_chunk_count >= self.max_orphan_chunks
             || self.orphan_chunk_bytes.saturating_add(chunk_len) > self.max_orphan_chunk_bytes
         {
-            return OrphanPayloadChunkBufferResult::Disposition(
-                PayloadChunkDisposition::Rejected,
-            );
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
         let buffered = self.orphan_chunks.entry(manifest_hash).or_default();
         buffered.push_back(BufferedPayloadChunk {
@@ -12526,19 +12505,19 @@ impl ProductionV2Services {
     }
 
     fn evict_one_proofless_orphan_chunk(&mut self) -> bool {
-        let selected = self.orphan_chunks.iter().find_map(|(manifest_hash, chunks)| {
-            chunks
-                .iter()
-                .position(|buffered| {
-                    buffered
-                        .ingress_ownership
-                        .as_ref()
-                        .is_none_or(|ownership| {
+        let selected = self
+            .orphan_chunks
+            .iter()
+            .find_map(|(manifest_hash, chunks)| {
+                chunks
+                    .iter()
+                    .position(|buffered| {
+                        buffered.ingress_ownership.as_ref().is_none_or(|ownership| {
                             ownership.leader_wire_runtime_receipt().is_none()
                         })
-                })
-                .map(|position| (*manifest_hash, position))
-        });
+                    })
+                    .map(|position| (*manifest_hash, position))
+            });
         let Some((manifest_hash, position)) = selected else {
             return false;
         };
@@ -12595,9 +12574,7 @@ impl ProductionV2Services {
                             .leader_wire_ingress
                             .mark_leader_wire_volatile_terminal(runtime)
                     {
-                        if let Err(tail_error) =
-                            self.retire_buffered_payload_chunk_tail(chunks)
-                        {
+                        if let Err(tail_error) = self.retire_buffered_payload_chunk_tail(chunks) {
                             return Err(format!(
                                 "{error}; additionally failed to retire buffered payload tail: {tail_error}"
                             ));
@@ -12624,9 +12601,7 @@ impl ProductionV2Services {
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        if let Err(tail_error) =
-                            self.retire_buffered_payload_chunk_tail(chunks)
-                        {
+                        if let Err(tail_error) = self.retire_buffered_payload_chunk_tail(chunks) {
                             return Err(format!(
                                 "{error}; additionally failed to retire buffered payload tail: {tail_error}"
                             ));
@@ -16563,13 +16538,7 @@ pub(super) mod tests {
             last_status: None,
             fatal_reason: None,
             output_guard: ConsensusOutputGuard::isolated(),
-            leader_wire_ingress: Arc::new(FairV2Ingress::new(
-                1,
-                1024 * 1024,
-                1024 * 1024,
-                0,
-                0,
-            )),
+            leader_wire_ingress: Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
             clean_teardown: true,
         };
         (service, keys)
@@ -27073,7 +27042,9 @@ pub(super) mod tests {
                 service.context.height,
             )
             .expect("bind the restored leader lifecycle to the shared source");
-        ingress.open().expect("open the combined production ingress");
+        ingress
+            .open()
+            .expect("open the combined production ingress");
 
         let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
         let route = route_fixture.mint_via(requester.clone(), via.clone());
@@ -27093,10 +27064,7 @@ pub(super) mod tests {
         assert_eq!(serve_barrier.carrier_ordinal(), 8);
 
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                leader_message,
-                Some(proposer),
-            )),
+            ingress.try_push(InboundBlockMessage::new(leader_message, Some(proposer),)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let leader_carrier_ordinal = {
@@ -27105,7 +27073,10 @@ pub(super) mod tests {
                 .leader_wire_lifecycles
                 .get(&leader_token.slot)
                 .expect("reactivated leader lifecycle remains indexed");
-            assert_eq!(record.status, super::super::FairV2IngressLeaderWireStatus::Ingress);
+            assert_eq!(
+                record.status,
+                super::super::FairV2IngressLeaderWireStatus::Ingress
+            );
             assert_eq!(record.token, leader_token);
             state
                 .lanes
@@ -27777,10 +27748,7 @@ pub(super) mod tests {
                     .serve_ingress_reservation
                     .as_ref()
                     .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|serve| serve.state),
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
                 state.commands.len(),
             );
             assert!(
@@ -27796,10 +27764,7 @@ pub(super) mod tests {
                     .serve_ingress_reservation
                     .as_ref()
                     .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|serve| serve.state),
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
                 state.commands.len(),
             );
             assert_eq!(
@@ -29527,9 +29492,7 @@ pub(super) mod tests {
                 .serve_barrier()
                 .expect("inspect coalesced retransmission barrier")
                 .expect("coalesced retransmission owns a fresh physical barrier");
-            assert!(
-                coalesced_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal()
-            );
+            assert!(coalesced_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal());
             let mut coalesced_admission = None;
             let inbound = ingress
                 .try_recv_if_checked(|_| {
@@ -33559,11 +33522,9 @@ pub(super) mod tests {
         );
         let message = BlockMessage::V2(envelope.clone());
         let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
         let route = route_fixture.mint_via(sender.clone(), hub.clone());
-        let (_, proofless) =
-            fair_ingress_route_owner(message, sender.clone(), hub, route);
+        let (_, proofless) = fair_ingress_route_owner(message, sender.clone(), hub, route);
         let mut productive = proofless.clone();
 
         let token = super::super::FairV2IngressLeaderWireToken {
@@ -33602,35 +33563,33 @@ pub(super) mod tests {
                 0,
                 false,
             );
-        let (gate, _) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &directory.path().join("promoted-orphan.wal"),
-                service.context.id(),
-                service.context.height,
-                owner,
-                service
-                    .context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect(),
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open promoted-orphan lifecycle gate");
+        let (gate, _) = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("promoted-orphan.wal"),
+            service.context.id(),
+            service.context.height,
+            owner,
+            service
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            capacity,
+            service.context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open promoted-orphan lifecycle gate");
         gate.reserve(token.clone())
             .expect("reserve promoted-orphan token");
         gate.mark_ingress(&token)
             .expect("mark promoted-orphan ingress");
-        let runtime_owner =
-            super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
-                token.identity_hash(),
-                token.scheduler_ordinal(),
-            )
-            .expect("construct promoted-orphan runtime owner");
+        let runtime_owner = super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
+            token.identity_hash(),
+            token.scheduler_ordinal(),
+        )
+        .expect("construct promoted-orphan runtime owner");
         let runtime = gate
             .mark_runtime(&token, runtime_owner)
             .expect("mark promoted-orphan runtime");
@@ -33649,11 +33608,7 @@ pub(super) mod tests {
             PayloadChunkDisposition::Buffered
         );
         assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(
-                sender,
-                payload_chunk.clone(),
-                productive,
-            ),
+            service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), productive,),
             PayloadChunkDisposition::Duplicate
         );
         let promoted = service
@@ -34151,10 +34106,7 @@ pub(super) mod tests {
         let first_hash = manifest_hash(b"proofless-eviction-a");
         let second_hash = manifest_hash(b"proofless-eviction-b");
         assert_eq!(
-            service.buffer_orphan_payload_chunk(
-                sender.clone(),
-                chunk(first_hash, 0, b"a", 0),
-            ),
+            service.buffer_orphan_payload_chunk(sender.clone(), chunk(first_hash, 0, b"a", 0),),
             PayloadChunkDisposition::Buffered
         );
         assert_eq!(
@@ -34166,7 +34118,11 @@ pub(super) mod tests {
         assert_eq!(service.orphan_chunk_count, 1);
         assert_eq!(service.orphan_chunk_bytes, 1);
         assert_eq!(
-            service.orphan_chunks.values().map(VecDeque::len).sum::<usize>(),
+            service
+                .orphan_chunks
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
             1
         );
         assert!(service.evict_one_proofless_orphan_chunk());

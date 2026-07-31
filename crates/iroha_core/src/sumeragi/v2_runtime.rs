@@ -1900,9 +1900,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let lifecycle_ordinal = command.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
         let causal_lifecycle_key = command.causal_origin.lifecycle_key;
         let mut coalesced = false;
-        for existing in queued.filter(|existing| {
-            existing.causal_origin.lifecycle_key == causal_lifecycle_key
-        }) {
+        for existing in
+            queued.filter(|existing| existing.causal_origin.lifecycle_key == causal_lifecycle_key)
+        {
             // The ordinal belongs to the whole restored lifecycle, while the
             // stage distinguishes causal successors within that lifecycle.
             if existing.lifecycle_ordinal != Some(lifecycle_ordinal) {
@@ -9926,7 +9926,10 @@ mod tests {
             .take_last_scheduler_ownership()
             .expect("blocked due clocks publish exact Idle evidence");
         assert!(runtime.timeout_owner.is_some());
-        assert!(runtime.retransmit_owner.is_some());
+        assert!(
+            runtime.retransmit_owner.is_none(),
+            "an absolute timeout suppresses replenishing the periodic owner until the timeout drains"
+        );
         assert!(runtime.driver.timeouts.is_empty());
         assert!(runtime.driver.retransmits.is_empty());
 

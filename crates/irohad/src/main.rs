@@ -7866,6 +7866,24 @@ fn snapshot_failure_allows_empty_state_fallback(
     !provisional_imported_prefix && snapshot_read_error_is_recoverable(error)
 }
 
+fn preflight_empty_state_snapshot_fallback(
+    kura: &Kura,
+    chain_id: &ChainId,
+    configured_lane_catalog: &iroha_data_model::nexus::LaneCatalog,
+) -> ReportResult<(), StartError> {
+    State::preflight_configured_primary_geometry_replay(
+        kura,
+        chain_id,
+        configured_lane_catalog,
+    )
+    .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+    .map_err(|report| {
+        report.attach(
+            "cannot rebuild from an empty state because retained Kura geometry no longer reaches the configured-primary replay floor",
+        )
+    })
+}
+
 fn snapshot_read_error_is_recoverable_for_bootstrap(
     error: &TryReadSnapshotError,
     hard_fork_snapshot_bootstrap: bool,
@@ -8235,6 +8253,34 @@ mod snapshot_read_error_tests {
             &TryReadSnapshotError::SignatureInvalid("ordinary corrupt snapshot".to_owned()),
             false,
         ));
+    }
+
+    #[test]
+    fn empty_state_fallback_preflight_propagates_geometry_failure_as_kura_start_error() {
+        let kura = Kura::blank_kura_for_testing();
+        let error = preflight_empty_state_snapshot_fallback(
+            kura.as_ref(),
+            &ChainId::from("fallback-preflight-test"),
+            &iroha_data_model::nexus::LaneCatalog::default(),
+        )
+        .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
+
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
+            geometry no longer reaches the configured-primary replay floor";
+        assert!(
+            error.frames().any(|frame| {
+                frame
+                    .downcast_ref::<&str>()
+                    .is_some_and(|context| *context == FALLBACK_CONTEXT)
+            }),
+            "fallback rejection must retain its startup-boundary attachment: {error:?}"
+        );
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("no authenticated Kura catalog baseline"),
+            "fallback rejection must retain the exact geometry cause: {rendered}"
+        );
     }
 
     #[test]
@@ -9114,6 +9160,11 @@ impl Iroha {
                 state
             }
             Err(TryReadSnapshotError::NotFound) if !provisional_imported_prefix => {
+                preflight_empty_state_snapshot_fallback(
+                    kura.as_ref(),
+                    &config.common.chain,
+                    &config.nexus.configured_lane_catalog,
+                )?;
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
                 let genesis_public_key = effective_genesis_public_key.clone();
                 let mut world = World::with(
@@ -9146,7 +9197,15 @@ impl Iroha {
             {
                 iroha_logger::warn!(
                     ?error,
-                    "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
+                    "Failed to load state snapshot; checking whether Kura can rebuild from an empty state"
+                );
+                preflight_empty_state_snapshot_fallback(
+                    kura.as_ref(),
+                    &config.common.chain,
+                    &config.nexus.configured_lane_catalog,
+                )?;
+                iroha_logger::warn!(
+                    "Kura retains the configured-primary replay floor; rebuilding state from blocks"
                 );
                 let genesis_public_key = effective_genesis_public_key.clone();
                 let mut world = World::with(

@@ -526,11 +526,7 @@ fn verify_roster_public_inputs(
         ));
     }
 
-    verify_hash_public_input(
-        &instance_cols[0],
-        expected_commitment,
-        "commitment",
-    )?;
+    verify_hash_public_input(&instance_cols[0], expected_commitment, "commitment")?;
     verify_hash_public_input(&instance_cols[1], expected_nullifier, "nullifier")?;
 
     let expected_limbs = roster_root_limb_values(expected_root);
@@ -591,9 +587,7 @@ fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
 #[cfg(all(test, not(feature = "kaigi_privacy_mocks")))]
 mod tests {
     use halo2_proofs::halo2curves::pasta::Fp;
-    use kaigi_zk::{
-        compute_commitment_hash, compute_nullifier_hash, empty_roster_root_hash,
-    };
+    use kaigi_zk::{compute_commitment_hash, compute_nullifier_hash, empty_roster_root_hash};
 
     use super::*;
 
@@ -609,51 +603,28 @@ mod tests {
         for limb in roster_root_limb_values(&root) {
             columns.push(vec![Fp::from(limb)]);
         }
-        assert!(
-            verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok()
-        );
+        assert!(verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok());
 
         let mut wrong_commitment = columns.clone();
         wrong_commitment[0][0] += Fp::from(1u64);
         assert!(
-            verify_roster_public_inputs(
-                &wrong_commitment,
-                &root,
-                &commitment,
-                &nullifier
-            )
-            .is_err()
+            verify_roster_public_inputs(&wrong_commitment, &root, &commitment, &nullifier).is_err()
         );
 
         let mut wrong_nullifier = columns.clone();
         wrong_nullifier[1][0] += Fp::from(1u64);
         assert!(
-            verify_roster_public_inputs(
-                &wrong_nullifier,
-                &root,
-                &commitment,
-                &nullifier
-            )
-            .is_err()
+            verify_roster_public_inputs(&wrong_nullifier, &root, &commitment, &nullifier).is_err()
         );
 
         let mut wrong_root = columns.clone();
         wrong_root[2][0] = Fp::from(999u64);
-        assert!(
-            verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier)
-                .is_err()
-        );
+        assert!(verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier).is_err());
 
         let mut extra_column = columns;
         extra_column.push(vec![Fp::from(0u64)]);
         assert!(
-            verify_roster_public_inputs(
-                &extra_column,
-                &root,
-                &commitment,
-                &nullifier
-            )
-            .is_err()
+            verify_roster_public_inputs(&extra_column, &root, &commitment, &nullifier).is_err()
         );
     }
 

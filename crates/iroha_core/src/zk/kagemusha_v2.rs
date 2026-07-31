@@ -24,7 +24,8 @@ use sha2::{Digest as _, Sha256};
 pub use super::kagemusha_recursion_adapter::{
     KagemushaGeneratedArtifactSpoolV4, KagemushaGeneratedParityArtifactsV4,
     KagemushaGeneratedParityProfileV4, KagemushaGeneratedPastaCycleArtifactsV4,
-    KagemushaGenerationSupervisorPermitV4, claim_kagemusha_generation_supervisor_permit_v4,
+    KagemushaGeneratedProofPairMeasurementV4, KagemushaGenerationSupervisorPermitV4,
+    claim_kagemusha_generation_supervisor_permit_v4,
     generate_kagemusha_pasta_cycle_artifacts_streaming_v4,
     generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4,
     generate_kagemusha_pasta_cycle_artifacts_v4, validate_kagemusha_proof_pair_measurement_v4,

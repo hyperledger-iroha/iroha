@@ -30762,8 +30762,10 @@ impl Kura {
 
     /// Return the highest valid certified lane block accepted by `accept`.
     ///
-    /// The sidecar index is scanned in reverse and stops at the first match, so
-    /// proposal planning does not materialize the lane's complete history.
+    /// The authenticated latest frontier is tried before the bounded historical
+    /// scan. `accept` runs only after the frontier reader releases its storage
+    /// locks, so the common latest-match path avoids revalidating lane history
+    /// while holding `sidecar_lock`.
     pub(crate) fn latest_certified_lane_block_artifact_matching<F>(
         &self,
         lane_id: LaneId,
@@ -30775,6 +30777,19 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
+        let rejected_frontier = match self.latest_certified_lane_block_frontier_inner(lane_id, None)
+        {
+            Some(artifact) => {
+                if accept(&artifact) {
+                    let confirmed = self.latest_certified_lane_block_frontier_inner(lane_id, None);
+                    return (confirmed.as_ref() == Some(&artifact)
+                        && !self.prune_recovery_is_required())
+                    .then_some(artifact);
+                }
+                Some(artifact)
+            }
+            None => None,
+        };
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) =
@@ -30835,7 +30850,9 @@ impl Kura {
                 }
             }
         };
-        candidates.into_iter().find(|artifact| accept(artifact))
+        candidates
+            .into_iter()
+            .find(|artifact| rejected_frontier.as_ref() != Some(artifact) && accept(artifact))
     }
 
     /// Return the first valid certified lane block at or above `minimum_height`
