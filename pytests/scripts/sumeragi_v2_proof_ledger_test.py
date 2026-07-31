@@ -23374,28 +23374,13 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "NoDecisionForNode must equal only",
         ),
         (
-            "     /\\ NoDecisionForNode(node)\n",
-            "",
-            "must have one direct, NoDecisionForNode guard",
-        ),
-        (
-            "     /\\ NoDecisionForNode(node)\n",
-            "     /\\ (NoDecisionForNode(node) \\/ TRUE)\n",
-            "must have one direct, NoDecisionForNode guard",
-        ),
-        (
             "     /\\ NodeIdle(node)\n"
             "     /\\ NoDecisionForNode(node)\n"
-            "     /\\ roundView + 1 \\in Views\n"
-            "     /\\ TCValid(tc)\n"
-            "     /\\ \\/ roundView >= nodeView[node]\n"
-            "        \\/ StrictSameRoundTcUpgrade(node, tc)\n",
+            "     /\\ pendingInstallTC' = pendingInstallTC \\cup {request}\n",
             "     /\\ NodeIdle(node)\n"
-            "     /\\ roundView + 1 \\in Views\n"
-            "     /\\ TCValid(tc)\n"
-            "     /\\ \\/ roundView >= nodeView[node]\n"
-            "        \\/ StrictSameRoundTcUpgrade(node, tc)\n",
-            "FormTC must have one direct, NoDecisionForNode guard",
+            "     /\\ (NoDecisionForNode(node) \\/ TRUE)\n"
+            "     /\\ pendingInstallTC' = pendingInstallTC \\cup {request}\n",
+            "must have one direct, NoDecisionForNode guard",
         ),
         (
             "     /\\ tc.view + 1 \\in Views\n"
@@ -23418,24 +23403,19 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "ResumeTimeout must have one direct, NoDecisionForNode guard",
         ),
         (
-            "          IF ~NoDecisionForNode(envelope.recipient)\n",
-            "          IF FALSE\n",
-            "DeliverTimeout must consume the exact authenticated envelope",
-        ),
-        (
             "     /\\ timeoutNetwork' = timeoutNetwork \\ {envelope}\n",
             "     /\\ timeoutNetwork' = timeoutNetwork\n",
-            "DeliverTimeout must consume the exact authenticated envelope",
+            "DeliverTimeout must preserve the reviewed atomic timeout",
         ),
         (
             "          IF NoDecisionForNode(envelope.recipient)\n",
             "          IF TRUE\n",
-            "DeliverTC must consume the exact authenticated envelope",
+            "DeliverTC must preserve the reviewed atomic timeout",
         ),
         (
             "     /\\ tcNetwork' = tcNetwork \\ {envelope}\n",
             "     /\\ tcNetwork' = tcNetwork\n",
-            "DeliverTC must consume the exact authenticated envelope",
+            "DeliverTC must preserve the reviewed atomic timeout",
         ),
     )
     for needle, replacement, expected_error in core_mutations:
@@ -23457,21 +23437,20 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
         ),
         (
             "StrictSameRoundTcUpgrade",
-            "  /\\ generation[node] < MaxGeneration\n",
-            "",
+            "  /\\ TcHighRank(tc) > lockRank[node]\n",
+            "  /\\ TcHighRank(tc) >= lockRank[node]\n",
             "StrictSameRoundTcUpgrade must equal only",
         ),
         (
             "ProposalJustified",
-            "          /\\ TcHighRank(installed.tc) = NoRank\n",
-            "          /\\ proposal.justifyRank = TcHighRank(installed.tc)\n",
+            "     /\\ proposal.justifyRank < proposal.view\n",
+            "     /\\ proposal.justifyRank <= proposal.view\n",
             "ProposalJustified must equal only",
         ),
         (
             "SafeToPrepare",
-            "  \\/ /\\ proposal.view = lockRank[node]\n",
-            "  \\/ lockSubject[node] = proposal.subject\n"
-            "  \\/ /\\ proposal.view = lockRank[node]\n",
+            "  \\/ proposal.subject = lockSubject[node]\n",
+            "  \\/ TRUE\n",
             "SafeToPrepare must equal only",
         ),
         (
@@ -23516,22 +23495,15 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
     network_mutations = (
         (
             '         IF NoDecisionForNode(command.node)\n'
-            '         THEN <<CausalCandidate("Progress", "FormTC", command)>>\n'
-            "         ELSE <<>>\n",
-            '         <<CausalCandidate("Progress", "FormTC", command)>>\n',
-            "post-Decision DeliverTimeout must emit no causal successor",
-        ),
-        (
-            '         IF NoDecisionForNode(command.node)\n'
             '         THEN <<CausalCandidate("Progress", "BeginInstallTC", command)>>\n'
             "         ELSE <<>>\n",
             '         <<CausalCandidate("Progress", "BeginInstallTC", command)>>\n',
             "post-Decision DeliverTC must emit no causal successor",
         ),
         (
-            "         ELSE <<>>\n    [] command.kind = \"FormTC\" ->",
-            '         ELSE <<CausalCandidate("Progress", "FormTC", command)>>\n'
-            '    [] command.kind = "FormTC" ->',
+            "         ELSE <<>>\n    [] command.kind = \"DeliverTC\" ->",
+            '         ELSE <<CausalCandidate("Completion", "PersistInstallTC", command)>>\n'
+            '    [] command.kind = "DeliverTC" ->',
             "post-Decision DeliverTimeout must emit no causal successor",
         ),
         (
@@ -23557,8 +23529,8 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "DecisionTimeoutFrontierVars must equal only",
         ),
         (
-            "      BY <1>1, <2>12, ResumeTimeoutPreservesDecisionTimeoutFrontier\n",
-            "      BY <1>1, <2>12, CrashPreservesDecisionTimeoutFrontier\n",
+            "      BY <1>1, <2>13, ResumeTimeoutPreservesDecisionTimeoutFrontier\n",
+            "      BY <1>1, <2>13, CrashPreservesDecisionTimeoutFrontier\n",
             "CoreNextPreservesDecisionTimeoutFrontier must retain the complete",
         ),
         (
@@ -23599,6 +23571,8 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
 
     path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     canonical = path.read_text(encoding="utf-8")
+    temporal_path = formal_dir / "SumeragiV2AsyncTemporalClosureProofs.tla"
+    canonical_temporal = temporal_path.read_text(encoding="utf-8")
     hash_path = formal_dir / "SumeragiV2CertifiedRequestHashAuthorityProofs.tla"
     canonical_hash = hash_path.read_text(encoding="utf-8")
     recovery_path = formal_dir / "SumeragiV2DurableDecisionRecoveryProofs.tla"
@@ -23612,13 +23586,28 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "AsyncCommitIntentProgressWitness must equal only",
         ),
         (
+            "CommitRecoveryAuthority(node) ==\n"
+            "  /\\ asyncRecoveryPhase\n"
+            '       \\in {"RestartRequired", "ReplayRequired", "Replaying"}\n'
+            "  /\\ asyncRecoveryNode = node\n"
             "  /\\ generation[node] = asyncRecoveryGeneration\n",
+            "CommitRecoveryAuthority(node) ==\n"
+            "  /\\ asyncRecoveryPhase\n"
+            '       \\in {"RestartRequired", "ReplayRequired", "Replaying"}\n'
+            "  /\\ asyncRecoveryNode = node\n"
             "  /\\ generation[node] <= asyncRecoveryGeneration\n",
             "CommitRecoveryAuthority must equal only",
         ),
         (
-            "  /\\ asyncRecoveryNode = node\n",
-            "",
+            "CommitRecoveryAuthority(node) ==\n"
+            "  /\\ asyncRecoveryPhase\n"
+            '       \\in {"RestartRequired", "ReplayRequired", "Replaying"}\n'
+            "  /\\ asyncRecoveryNode = node\n"
+            "  /\\ generation[node] = asyncRecoveryGeneration\n",
+            "CommitRecoveryAuthority(node) ==\n"
+            "  /\\ asyncRecoveryPhase\n"
+            '       \\in {"RestartRequired", "ReplayRequired", "Replaying"}\n'
+            "  /\\ generation[node] = asyncRecoveryGeneration\n",
             "CommitRecoveryAuthority must equal only",
         ),
         (
@@ -23632,10 +23621,8 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "responsive crash theorem must state only",
         ),
         (
-            "AsyncProgressWitnessAndHistoricalRecoveryProperty(\n"
-            "      AsyncSpecAt(initialContext))",
-            "AsyncProgressWitnessProperty(\n"
-            "      AsyncSpecAt(initialContext))",
+            "AsyncProgressWitnessAndHistoricalRecoveryProperty(AsyncSpecAt(initialContext))",
+            "AsyncProgressWitnessProperty(AsyncSpecAt(initialContext))",
             "ProgressWitnessObligation must use the crash-aware async plus historical",
         ),
         (
@@ -23673,12 +23660,12 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "DecisionSourceRetentionInvariant must equal only",
         ),
         (
-            "THEOREM PersistDecisionRecoveryUsesCompletionFetchBody ==\n"
-            "  \\A command:\n"
-            "    /\\ command.kind = \"PersistDecision\"\n",
-            "THEOREM PersistDecisionRecoveryUsesCompletionFetchBody ==\n"
-            "  \\A command:\n"
-            "    /\\ command.kind = \"BeginDecision\"\n",
+                "THEOREM PersistDecisionRecoveryUsesBodyStateCompletion ==\n"
+                "  \\A command:\n"
+                "    /\\ command.kind = \"PersistDecision\"\n",
+                "THEOREM PersistDecisionRecoveryUsesBodyStateCompletion ==\n"
+                "  \\A command:\n"
+                "    /\\ command.kind = \"BeginDecision\"\n",
             "PersistDecision recovery theorem must state only",
         ),
         (
@@ -23687,12 +23674,17 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "PersistDecision recovery theorem must state only",
         ),
         (
-            "BY DEF CommandSuccessors, PersistDecisionFetchSuccessor,\n"
-            "       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,\n"
-            "       CandidateConsumerCurrent, PersistDecisionRequests\n",
-            "BY DEF CommandSuccessors, PersistDecisionFetchSuccessor,\n"
-            "       AsyncCandidateAtConsumer,\n"
-            "       CandidateConsumerCurrent, PersistDecisionRequests\n",
+                "BY DEF CommandSuccessors, PersistDecisionRecoverySuccessor,\n"
+                "       PersistDecisionRecoveryKind, PersistDecisionBody,\n"
+                "       PersistDecisionValidationHeld, PersistDecisionRequest,\n"
+                "       AsyncCandidateAtConsumerWithOrigin,\n"
+                "       AsyncCandidateWithIdentityAndOrigin,\n"
+                "       CandidateConsumerCurrent, PersistDecisionRequests\n",
+                "BY DEF CommandSuccessors, PersistDecisionRecoverySuccessor,\n"
+                "       PersistDecisionRecoveryKind, PersistDecisionBody,\n"
+                "       PersistDecisionValidationHeld, PersistDecisionRequest,\n"
+                "       AsyncCandidateAtConsumerWithOrigin,\n"
+                "       CandidateConsumerCurrent, PersistDecisionRequests\n",
             "derive the singleton frontier and current-consumer identity",
         ),
         (
@@ -23799,14 +23791,21 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
         ),
     )
     for needle, replacement, expected_error in mutations:
-        assert needle in canonical, needle
-        path.write_text(canonical.replace(needle, replacement, 1), encoding="utf-8")
+        target_path, target_source = (
+            (path, canonical)
+            if needle in canonical
+            else (temporal_path, canonical_temporal)
+        )
+        assert needle in target_source, needle
+        target_path.write_text(
+            target_source.replace(needle, replacement, 1), encoding="utf-8"
+        )
         errors = module._progress_witness_source_fidelity_errors(formal_dir)
         assert any(expected_error in error for error in errors), (
             expected_error,
             errors,
         )
-        path.write_text(canonical, encoding="utf-8")
+        target_path.write_text(target_source, encoding="utf-8")
 
     async_network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     canonical_async_network = async_network_path.read_text(encoding="utf-8")
@@ -23817,9 +23816,9 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "PersistDecisionRequests must equal only",
         ),
         (
-            '       "Completion", "FetchBody", request.node, qc.context.height,\n',
-            '       "Progress", "FetchBody", request.node, qc.context.height,\n',
-            "PersistDecisionFetchSuccessor must equal only",
+            '       "Completion", PersistDecisionRecoveryKind(command),\n',
+            '       "Progress", PersistDecisionRecoveryKind(command),\n',
+            "PersistDecisionRecoverySuccessor must equal only",
         ),
     )
     for needle, replacement, expected_error in async_network_mutations:
@@ -24028,17 +24027,16 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
         ),
         (
             "DecisionRawSignedRequest(node, qc) ==\n"
-            "  [preimage |-> DecisionRawRequestPreimage(node, qc),\n"
-            "   signature |-> DecisionRawRequestSignature(node, qc)]\n",
+            "  AsyncCertifiedSignedRequest(node, qc, 0)\n",
             "DecisionRawSignedRequest(node, qc) ==\n"
-            "  [logicalIdentity |-> DecisionLogicalRequestIdentity(node, qc)]\n",
+            "  AsyncCertifiedSignedRequest(node, qc, 1)\n",
             "DecisionRawSignedRequest must equal only",
         ),
         (
             "DecisionRawRequestHash(node, qc) ==\n"
-            "  [exactSignedRequest |-> DecisionRawSignedRequest(node, qc)]\n",
+            "  AsyncCertifiedRequestHashOf(node, qc, 0)\n",
             "DecisionRawRequestHash(node, qc) ==\n"
-            "  [logicalIdentity |-> DecisionLogicalRequestIdentity(node, qc)]\n",
+            "  AsyncCertifiedRequestHashOf(node, qc, 1)\n",
             "DecisionRawRequestHash must equal only",
         ),
         (
@@ -24065,10 +24063,10 @@ def test_progress_witness_source_fidelity_requires_exact_crash_authority(
             "DecisionFetchCandidateIdentityHasExactProductionShape must retain its complete",
         ),
         (
-            "BY RestartIncrementsSelectedGeneration, SMT\n"
+            "BY RestartResetsSelectedGeneration, SMT\n"
             "   DEF PreGstResponsiveRestart,\n",
             "BY SMT\n   DEF PreGstResponsiveRestart,\n",
-            "AuthenticatedRestartRetagsSourceConsumerGeneration must retain its complete",
+            "AuthenticatedRestartStartsFreshSourceConsumerGeneration must retain its complete",
         ),
         (
             "BY RestartDecisionReplayHasCurrentGeneration, SMT\n"
@@ -25425,9 +25423,9 @@ def test_async_source_fidelity_pins_recovery_quarantine_rearm_and_fairness(
             "RearmResponsiveRecovery omits required production behavior",
         ),
         (
-            "  /\\ generation[node] < MaxGeneration\n"
+            "  /\\ node \\in Responsive \\cap up\n"
             "  /\\ Crash(node)",
-            "  /\\ Crash(node)",
+            "  /\\ node \\in Responsive \\cap up",
             "PreGstResponsiveCrash omits required production behavior",
         ),
     )
@@ -26651,8 +26649,8 @@ def test_async_source_fidelity_pins_restart_reset_and_retained_control(
         ),
         (
             "SumeragiV2Core.tla",
-            "  /\\ generation' = [generation EXCEPT ![node] = @ + 1]",
-            "  /\\ generation' = [generation EXCEPT ![node] = @ + 2]",
+            "  /\\ generation' = [generation EXCEPT ![node] = 0]",
+            "  /\\ generation' = [generation EXCEPT ![node] = 1]",
             "Restart omits authenticated generation",
         ),
     )
@@ -30164,21 +30162,20 @@ def test_async_live_spec_rejects_finite_generation_assumption(
         (
             "SumeragiV2AsyncNetwork.tla",
             "PersistInstallTCReady",
-            "generation[request.node] < MaxGeneration",
-            "generation[request.node] <= MaxGeneration",
+            "GenerationCanIncrement(generation[request.node])",
+            "TRUE",
         ),
         (
             "SumeragiV2Core.tla",
             "PersistInstallTC",
-            "generation[node] < MaxGeneration",
-            "generation[node] <= MaxGeneration",
+            "GenerationCanIncrement(generation[node])",
+            "TRUE",
         ),
         (
             "SumeragiV2Core.tla",
             "PersistInstallTC",
-            "[generation EXCEPT ![node] = @ + 1]",
-            "[generation EXCEPT ![node] = "
-            "IF @ < MaxGeneration THEN @ + 1 ELSE @]",
+            "IF sameRoundUpgrade THEN @ + 1 ELSE 0",
+            "IF sameRoundUpgrade THEN @ ELSE 0",
         ),
     ),
 )
@@ -33463,26 +33460,26 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness source count must be sealed as 738",
         ),
         (
-            "readonly expected_multilane_focus_test_count=289",
-            "readonly expected_multilane_focus_test_count=288",
-            "multilane G-UNIT source count must be sealed as 289",
+            "readonly expected_multilane_focus_test_count=299",
+            "readonly expected_multilane_focus_test_count=298",
+            "multilane G-UNIT source count must be sealed as 299",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 290 ]]; then""",
+            """'[:space:]')" != 300 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 289 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 289 focus rows",
+            """'[:space:]')" != 299 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 299 focus rows",
         ),
         (
-            "The canonical 289-row TSV is",
-            "The canonical 288-row TSV is",
-            "G-UNIT inventory comment must seal 289 rows",
+            "The canonical 299-row TSV is",
+            "The canonical 298-row TSV is",
+            "G-UNIT inventory comment must seal 299 rows",
         ),
         (
-            "including exact 289/289 G-UNIT,",
-            "including exact 288/289 G-UNIT,",
-            "terminal success text must seal exact 289/289 G-UNIT",
+            "including exact 299/299 G-UNIT,",
+            "including exact 298/299 G-UNIT,",
+            "terminal success text must seal exact 299/299 G-UNIT",
         ),
         (
             "  sumeragi::v2_core::refinement::tests::"

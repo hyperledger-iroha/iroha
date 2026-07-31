@@ -5480,16 +5480,7 @@ fn empty_response(status: StatusCode) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{HashMap, VecDeque},
-        fmt,
-        process::{Child, Command, Stdio},
-        sync::{
-            Arc, Mutex as StdMutex,
-            atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
-        },
-    };
-
+    use super::*;
     use crate::{
         FilesystemGovernancePublisher, GovernanceDagCanonicalRequestHeaderV1,
         GovernanceDagRuntimeSigner, GovernancePublisher,
@@ -5515,11 +5506,18 @@ mod tests {
         },
         governance_dag_block_cid_v1,
     };
+    use std::{
+        collections::{HashMap, VecDeque},
+        fmt,
+        process::{Child, Command, Stdio},
+        sync::{
+            Arc, Mutex as StdMutex,
+            atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+        },
+    };
     use tempfile::TempDir;
     use tokio::{sync::Mutex, task::JoinHandle};
     use tower::ServiceExt as _;
-
-    use super::*;
     #[test]
     fn service_default_request_bound_matches_canonical_governance_block_ceiling() {
         let service = SorafsGovernanceDagService::default();
@@ -5530,7 +5528,6 @@ mod tests {
         );
         assert!(CANONICAL_DECODE_MAX_TOTAL_ELEMENTS > MAX_REPUTATION_TRUST_EDGES);
     }
-
     // Keep one target-gated assertion for every ABI branch. Overlapping branches
     // fail with duplicate definitions; missing branches fail to resolve the flag.
     #[cfg(all(
@@ -5547,7 +5544,6 @@ mod tests {
     fn linux_no_follow_flag_matches_low_flag_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x8000);
     }
-
     #[cfg(all(
         target_os = "linux",
         not(any(
@@ -5562,7 +5558,6 @@ mod tests {
     fn linux_no_follow_flag_matches_generic_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x20000);
     }
-
     #[cfg(all(
         target_os = "android",
         any(target_arch = "aarch64", target_arch = "arm")
@@ -5571,7 +5566,6 @@ mod tests {
     fn android_arm_no_follow_flag_matches_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x8000);
     }
-
     #[cfg(all(
         target_os = "android",
         any(target_arch = "x86", target_arch = "x86_64")
@@ -5580,13 +5574,11 @@ mod tests {
     fn android_x86_no_follow_flag_matches_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x20000);
     }
-
     #[cfg(all(target_os = "android", target_arch = "riscv64"))]
     #[test]
     fn android_riscv64_no_follow_flag_matches_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x400000);
     }
-
     #[cfg(all(
         target_os = "linux",
         any(target_arch = "riscv32", target_arch = "riscv64")
@@ -5595,7 +5587,6 @@ mod tests {
     fn linux_riscv_no_follow_flag_remains_generic_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x20000);
     }
-
     #[cfg(any(
         target_os = "macos",
         target_os = "ios",
@@ -5608,7 +5599,6 @@ mod tests {
     fn apple_and_bsd_no_follow_flag_matches_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x100);
     }
-
     const TEST_CID_PAYLOAD: &str = "bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u";
     const TEST_CID_BLOCK: &str = "bafkreicjnlfibzgy6kp3r2gnqfwdv62i2pyqhfylhixocyambdfgomtn5y";
     const TEST_CID_HEAD: &str = "bafkreie7fzwthi3rp3ucmnj2ibf2iymndlxlnb4226jwxtuo2x2gqfesju";
@@ -8172,7 +8162,6 @@ listen_addr = "127.0.0.1:0"
     #[test]
     fn rooted_source_read_rejects_descendant_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = secure_temp_dir();
         fs::write(dir.path().join("target.to"), b"target").expect("seed target");
         symlink(dir.path().join("target.to"), dir.path().join("linked.to"))
@@ -8221,7 +8210,6 @@ listen_addr = "127.0.0.1:0"
     #[test]
     fn bounded_file_read_rejects_symlink_hardlink_and_permissive_secret() {
         use std::os::unix::fs::symlink;
-
         let dir = secure_temp_dir();
         let target = dir.path().join("target.bin");
         fs::write(&target, [0x11; 32]).expect("write target");
@@ -8245,7 +8233,6 @@ listen_addr = "127.0.0.1:0"
     #[test]
     fn legacy_secret_paths_are_rejected_without_following_symlinks_or_reading_files() {
         use std::os::unix::fs::symlink;
-
         let dir = secure_temp_dir();
         let source_dir = dir.path().join("source");
         fs::create_dir(&source_dir).expect("create source directory");

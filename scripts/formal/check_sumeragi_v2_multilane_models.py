@@ -1413,6 +1413,458 @@ FORBIDDEN_PRODUCTION_TOKENS = {
         "reconcile_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
 }
+QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
+QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournalReplay::into_verified_records",
+        (
+            "self.verify_snapshot_content()?",
+            "std::mem::take(&mut self.live_positions)",
+            "live.ownership_position",
+            "self.verify_snapshot_storage()?",
+            "record.claim_digest()",
+            "record.entrypoint_hash != entrypoint_hash",
+            "record.plan_digest() != live.plan_digest",
+            "claim_digest != live.claim_digest",
+            "verified.push(record)",
+            "Ok(verified)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournal::remove_all_live_exact_atomic_strict_durable",
+        (
+            "remove_many_exact_atomic_strict_durable_inner(removals, true)?",
+            "Ok(())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
+        (
+            "self.ensure_healthy()?",
+            "removals.len() > self.limits.max_live_records",
+            "QueuePlanJournalFrameV4::RemoveBatch(requested.clone())",
+            "prepare_replay_with_removed_entrypoints(Some(&entrypoints))",
+            "if require_all_live",
+            "live_removals.len() != requested.len()",
+            "QueuePlanJournalExactRemoveResult::Removed",
+            "atomic live-removal batch contains an already-absent target",
+            "QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone())",
+            "self.compact(true)?",
+            "if compacted != (outcomes.clone(), live_removals.clone())",
+            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
+            "self.sync_all_raw(SyncPhase::General)?",
+            "Ok(outcomes)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::ensure_plan_journal_replay_startup_shape_locked",
+        (
+            "self.txs.is_empty()",
+            "self.materialized_active_len() == 0",
+            "self.materialized_retained_bytes() == 0",
+            "self.tx_hashes.is_empty()",
+            "self.queued_count.load(Ordering::Acquire) == 0",
+            "self.routing_decisions.is_empty()",
+            "self.routing_plans.is_empty()",
+            "self.durable_plan_claims.is_empty()",
+            "self.tx_encoded_len.is_empty()",
+            "self.tx_gas_cost.is_empty()",
+            "self.tx_enqueued_at_ms.is_empty()",
+            "self.queued_tx_enqueued_at_ms.is_empty()",
+            "self.queued_age_ring.lock().is_empty()",
+            "self.removed_hashes.is_empty()",
+            "self.txs_per_user.is_empty()",
+            "fee_admission_reservations",
+            "self.expiry_ring.lock().is_empty()",
+            "self.expiry_ring_members.is_empty()",
+            "self.tx_gossip.is_empty()",
+            "self.tx_teu.is_empty()",
+            "lane_teu_pending",
+            "dataspace_teu_pending",
+            "only exact durable reservation FIFO identities may pre-exist",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::plan_journal_replay_reservation_shape_locked",
+        (
+            "store.durable_owned_hashes().collect::<HashSet<_>>()",
+            ".filter(|hash| !self.txs.contains_key(hash))",
+            "expected_missing_payload_hashes != store.missing_payload_hashes",
+            "missing_reservation_payload_count",
+            "store.missing_payload_hashes.len()",
+            "store.live_by_hash.values().chain(",
+            "completed_releases",
+            "record.validate()",
+            ".insert(hash, record.fifo_order)",
+            "multiple durable FIFO owners",
+            "durable_owned_hashes",
+            "durable_fifo_orders",
+            "missing_payload_hashes: store.missing_payload_hashes.clone()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::prepare_plan_journal_replay_locked",
+        (
+            "self.ensure_plan_journal_replay_startup_shape_locked()?",
+            "self.plan_journal_replay_reservation_shape_locked()?",
+            "journal_hashes.len() != records.len()",
+            ".is_subset(&journal_hashes)",
+            "let replay_observed_at = self.time_source.get_unix_time();",
+            "AcceptedTransaction::accept_entrypoint_at_time",
+            "accepted.hash_as_entrypoint() != entrypoint_hash",
+            "restored_reservation_fifo_order_for_identity",
+            "reservation_shape.durable_owned_hashes.contains(&hash)",
+            "restored_fifo_order.is_some()",
+            "state_view.transactions.get(&hash).is_some()",
+            "recorded_global_admission_identity",
+            "queue_plan_admission_registry_match",
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "global_registry_match.is_none()",
+            "self.is_expired_at_with_enqueue_timestamp(",
+            "replay_observed_at",
+            "!has_durable_reservation_owner",
+            "resolve_routing_plan_for_queue_admission(",
+            "durable_plan_claim_context_revalidates_in_view",
+            "QueueAdmissionPreparationMode::AtomicJournalReplay",
+            "transaction_selection_durability_faulted()",
+            "self.active_len()",
+            "self.retained_bytes()",
+            "projected_active > self.capacity.get()",
+            "projected_retained > self.max_retained_bytes.get()",
+            "projected > self.capacity_per_user.get()",
+            ".reserve(admission.hash, reservation)",
+            "orphaned FIFO identity",
+            "reservation FIFO anchors disagree with authenticated journal order",
+            "anchors.len() != reservation_shape.durable_fifo_orders.len()",
+            "final_fifo.len() > self.tx_hashes.capacity()",
+            "terminal_removals",
+            "Ok(PreparedQueuePlanReplay {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::apply_plan_journal_replay_locked",
+        (
+            "terminal_removals: _",
+            "*self.fee_admission_reservations.lock() = fee_reservations;",
+            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
+            "self.fifo_order_by_hash.insert(hash, fifo_order);",
+            "self.txs.insert(hash, Arc::clone(&tx_arc));",
+            "self.track_active_transaction();",
+            "self.routing_decisions.insert(hash, routing_decision);",
+            "self.routing_plans.insert(hash, routing_plan.clone());",
+            "self.durable_plan_claims.insert(hash, claim.clone());",
+            "self.track_expiry_hash(hash);",
+            "notifications.push(QueueAdmissionNotification {",
+            "self.apply_per_user_tx_count_increments(per_user_increments);",
+            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
+            "self.replace_fifo_locked(&final_fifo);",
+            "(summary, notifications)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replay_plan_journal",
+        (
+            "self.plan_journal_install_lock.lock()",
+            "self.lane_reservation_transition_lock.lock()",
+            "state.lock_lane_lifecycle_work_admission()",
+            "state.state_view_generation()",
+            "let state_view = state.view();",
+            "self.ensure_plan_journal_replay_startup_shape_locked()?",
+            "self.sync_nexus_routing_with_view(&state_view);",
+            "let mut journal_guard = self.plan_journal.lock();",
+            "let queue_guard = self.push_remove_lock.lock();",
+            "let records = journal.prepare_replay()?.into_verified_records()?;",
+            "let expected_record_claims = records",
+            "self.prepare_plan_journal_replay_locked(",
+            "let observed_record_claims = journal",
+            "if observed_record_claims != expected_record_claims",
+            "let terminal_removals = prepared.terminal_removals.clone();",
+            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
+            "self.mark_plan_journal_durability_fault",
+            "self.apply_plan_journal_replay_locked(prepared)",
+            "self.publish_admission_notifications(&notifications);",
+            "self.publish_backpressure_state(self.active_len(), backpressure_telemetry);",
+            "status::set_tx_queue_pressure(self.pressure_snapshot());",
+            "Ok(summary)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::finalize_plan_journal_startup_recovery",
+        (
+            "self.finalize_completed_releases(None)",
+            ".map_err(std::io::Error::other)",
+        ),
+    ),
+    (
+        "crates/irohad/src/main.rs",
+        "method",
+        "Iroha::start_with_runtime_deps",
+        (
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto(",
+        ),
+    ),
+)
+QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournalReplay::into_verified_records",
+        (
+            "self.verify_snapshot_content()?;",
+            "std::mem::take(&mut self.live_positions)",
+            "ordered.sort_unstable_by_key",
+            "for (entrypoint_hash, live) in ordered {",
+            "self.verify_snapshot_storage()?;",
+            "let claim_digest = record.claim_digest()",
+            "if record.entrypoint_hash != entrypoint_hash",
+            "verified.push(record);",
+            "self.verify_snapshot_content()?;",
+            "Ok(verified)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
+        (
+            "let (outcomes, live_removals) =",
+            "if require_all_live",
+            "atomic live-removal batch contains an already-absent target",
+            "if live_removals.is_empty()",
+            "let encoded = encode_frame(",
+            "self.ensure_append_capacity(encoded.len())",
+            "self.compact(true)?;",
+            "let compacted =",
+            "if compacted != (outcomes.clone(), live_removals.clone())",
+            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
+            "self.sync_all_raw(SyncPhase::General)?;",
+            "Ok(outcomes)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::prepare_plan_journal_replay_locked",
+        (
+            "self.ensure_plan_journal_replay_startup_shape_locked()?;",
+            "self.plan_journal_replay_reservation_shape_locked()?;",
+            "let journal_hashes = records",
+            "let replay_observed_at = self.time_source.get_unix_time();",
+            "for record in records {",
+            "AcceptedTransaction::accept_entrypoint_at_time(",
+            "restored_reservation_fifo_order_for_identity(",
+            "if state_view.transactions.get(&hash).is_some()",
+            "let global_registry_match =",
+            "self.is_expired_at_with_enqueue_timestamp(",
+            "resolve_routing_plan_for_queue_admission(",
+            "prepare_checked_for_enqueue(",
+            "if self.transaction_selection_durability_faulted()",
+            "let mut projected_active = self.active_len();",
+            "let mut fifo_orders =",
+            "let anchors = pending_admissions",
+            "Ok(PreparedQueuePlanReplay {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::apply_plan_journal_replay_locked",
+        (
+            "*self.fee_admission_reservations.lock() = fee_reservations;",
+            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
+            "for replayed in admissions {",
+            "self.fifo_order_by_hash.insert(hash, fifo_order);",
+            "self.txs.insert(hash, Arc::clone(&tx_arc));",
+            "self.durable_plan_claims.insert(hash, claim.clone());",
+            "notifications.push(QueueAdmissionNotification {",
+            "self.apply_per_user_tx_count_increments(per_user_increments);",
+            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
+            "self.replace_fifo_locked(&final_fifo);",
+            "(summary, notifications)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replay_plan_journal",
+        (
+            "self.plan_journal_install_lock.lock()",
+            "self.lane_reservation_transition_lock.lock()",
+            "state.lock_lane_lifecycle_work_admission()",
+            "let state_view = state.view();",
+            "self.ensure_plan_journal_replay_startup_shape_locked()?;",
+            "self.sync_nexus_routing_with_view(&state_view);",
+            "let mut journal_guard = self.plan_journal.lock();",
+            "let queue_guard = self.push_remove_lock.lock();",
+            "let records = journal.prepare_replay()?.into_verified_records()?;",
+            "let expected_record_claims = records",
+            "let prepared = self.prepare_plan_journal_replay_locked(",
+            "let observed_record_claims = journal",
+            ".prepare_replay()?",
+            ".into_verified_records()?",
+            "if observed_record_claims != expected_record_claims",
+            "let terminal_removals = prepared.terminal_removals.clone();",
+            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
+            "self.apply_plan_journal_replay_locked(prepared)",
+            "self.publish_admission_notifications(&notifications);",
+            "Ok(summary)",
+        ),
+    ),
+    (
+        "crates/irohad/src/main.rs",
+        "method",
+        "Iroha::start_with_runtime_deps",
+        (
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto(",
+        ),
+    ),
+)
+QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::apply_plan_journal_replay_locked",
+        (
+            "?",
+            "Result<",
+            "return Err(",
+            "expect(",
+            "unwrap(",
+            "panic!(",
+            "unreachable!(",
+        ),
+    ),
+)
+QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER = (
+    "let (summary, notifications) = self.apply_plan_journal_replay_locked(prepared);"
+)
+QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_FORBIDDEN_TOKENS = (
+    "?",
+    "return Err(",
+    ".map_err(",
+    "expect(",
+    "unwrap(",
+    "panic!(",
+    "unreachable!(",
+)
+QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "exact_atomic_live_tombstone_batch_rejects_retry_before_append",
+        (
+            "remove_all_live_exact_atomic_strict_durable(",
+            "expect_err(",
+            "io::ErrorKind::InvalidData",
+            "the startup publication form must reject a mixed absent and live batch",
+            "the all-live precondition must reject a mixed batch before append",
+            "rejecting a mixed batch must retain its still-live member",
+            "the all-live precondition must reject before another frame is appended",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "materialized_replay_rejects_later_record_corruption_before_any_callback",
+        (
+            ".get_mut(&second_key)",
+            ".for_each_record(",
+            "expect_err(",
+            "callbacks, 0",
+            "a valid earlier record must remain private when a later record is corrupt",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup",
+        (
+            "expect_err(\"a current admission failure must abort startup\")",
+            "failed current admission",
+            "assert_eq!(replay_queue.active_len(), 0);",
+            "live_record_count()",
+            "without publishing or tombstoning a prefix",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix",
+        (
+            "capacity_per_user = nonzero!(1_usize)",
+            "aggregate per-user overflow must reject the complete replay",
+            "std::io::ErrorKind::PermissionDenied",
+            "assert_eq!(replay_queue.active_len(), 0);",
+            "live_record_count()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_rejects_orphaned_startup_fifo_identity",
+        (
+            "fifo_order_by_hash.insert(orphan, fifo_order)",
+            "an unowned startup FIFO identity must fail closed",
+            "orphaned FIFO identity",
+            "Some(fifo_order)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "reservation_restart_fits_ordinary_fifo_around_middle_anchor",
+        (
+            "install_lane_reservation_journal(&reservation_path",
+            "replay_plan_journal(&state)",
+            "Some(u64::try_from(index)",
+            "release_lane_reservations_in_order(&[reserved_key])",
+            "restart replay must preserve A/B/C",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "committed_state_with_live_reservation_retains_sole_plan_payload_source",
+        (
+            "canonically committed while queue or reservation ownership remains live",
+            "assert!(queue.txs.is_empty());",
+            "missing_reservation_payload_count",
+            "live_record_count()",
+            "must not tombstone the only payload source",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "expired_live_reservation_replays_payload_without_fifo_or_tombstone",
+        (
+            "transaction_time_to_live: Duration::from_millis(1)",
+            "time_handle.advance(Duration::from_millis(2));",
+            "materialize expired payload under its durable reservation owner",
+            "tombstoned_expired: 0",
+            "assert_eq!(queue.queued_len(), 0);",
+            "must not tombstone the sole payload source",
+        ),
+    ),
+)
 
 
 def _regular_file(path: Path, label: str, errors: list[str]) -> bool:
@@ -2396,6 +2848,165 @@ def _rust_binding_item(
     return items[0]
 
 
+def _validate_queue_plan_startup_replay_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind QueuePlan startup replay to one atomic durable publication seam."""
+
+    if not isinstance(models, list):
+        return
+    queue_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == QUEUE_PLAN_STARTUP_REPLAY_MODULE
+    ]
+    if len(queue_models) != 1:
+        errors.append(
+            "QueuePlan startup replay source contract requires exactly one "
+            f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE} model"
+        )
+        return
+    production_symbols = queue_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    for relative, kind, symbol, expected_tokens in (
+        QUEUE_PLAN_STARTUP_REPLAY_BINDINGS
+    ):
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}: reviewed startup replay "
+                f"binding {relative}!{symbol} must occur exactly once, "
+                f"found {len(matches)}"
+            )
+            continue
+        actual_tokens = matches[0].get("required_tokens")
+        if not isinstance(actual_tokens, list) or tuple(actual_tokens) != expected_tokens:
+            errors.append(
+                f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}: reviewed startup replay "
+                f"tokens changed for {relative}!{symbol}"
+            )
+
+    binding_items: dict[tuple[str, str, str], str] = {}
+    for relative, kind, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "QueuePlan startup replay production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        binding_items[(relative, kind, symbol)] = item
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan startup replay item {symbol} "
+                    f"is missing source-bound token {token!r}"
+                )
+
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "ordered QueuePlan startup replay source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            position = item.find(token, cursor + 1)
+            if position < 0:
+                errors.append(
+                    f"{root / relative}: ordered QueuePlan startup replay item "
+                    f"{symbol} is missing or reorders token {token!r}"
+                )
+                break
+            cursor = position
+
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "infallible QueuePlan startup replay source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        for token in tokens:
+            if token in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan startup replay item {symbol} "
+                    f"contains forbidden fallible/panicking token {token!r}"
+                )
+
+    replay_key = (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replay_plan_journal",
+    )
+    replay_item = binding_items.get(replay_key)
+    if replay_item is not None:
+        marker_offset = replay_item.find(QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER)
+        if marker_offset < 0:
+            errors.append(
+                f"{root / replay_key[0]}: QueuePlan replay is missing its exact "
+                "atomic in-memory apply boundary"
+            )
+        else:
+            post_apply = replay_item[
+                marker_offset + len(QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER) :
+            ]
+            for token in QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_FORBIDDEN_TOKENS:
+                if token in post_apply:
+                    errors.append(
+                        f"{root / replay_key[0]}: QueuePlan replay contains "
+                        f"fallible/panicking token {token!r} after atomic apply"
+                    )
+
+    for relative, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            "fn",
+            symbol,
+            "QueuePlan startup replay static negative-control test",
+            errors,
+        )
+        if item is None:
+            continue
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan startup replay test {symbol} "
+                    f"is missing negative-control token {token!r}"
+                )
+
+
 def _validate_inflight_layout_contract(
     root: Path,
     formal_dir: Path,
@@ -2953,6 +3564,7 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         )
     for model in models:
         _validate_model(root, formal_dir, model, errors)
+    _validate_queue_plan_startup_replay_contract(root, models, errors)
     _validate_inflight_layout_contract(
         root,
         formal_dir,

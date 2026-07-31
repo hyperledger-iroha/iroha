@@ -15976,7 +15976,6 @@ mod tests {
         cryptographer: Cryptographer<ChaCha20Poly1305>,
     ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
         use tokio::io::AsyncWriteExt;
-
         let (algorithm, public_key) = key_pair
             .public_key()
             .try_to_bytes()

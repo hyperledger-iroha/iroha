@@ -1988,6 +1988,11 @@ required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::exact_strict_tombstone_removes_once_and_is_idempotent
   queue::journal::tests::exact_strict_tombstone_rejects_stale_plan_without_append
   queue::journal::tests::exact_strict_tombstone_rejects_same_plan_aba_claim_after_compaction_and_restart
+  queue::journal::tests::exact_atomic_tombstone_batch_is_one_frame_and_restart_idempotent
+  queue::journal::tests::exact_atomic_live_tombstone_batch_rejects_retry_before_append
+  queue::journal::tests::exact_atomic_tombstone_batch_rejects_every_later_mismatch_without_append
+  queue::journal::tests::exact_atomic_tombstone_batch_parent_sync_failure_replays_whole_frame
+  queue::journal::tests::materialized_replay_rejects_later_record_corruption_before_any_callback
   queue::journal::tests::exact_global_binding_tombstone_reconstructs_live_claim_after_restart_and_is_idempotent
   queue::journal::tests::exact_global_binding_tombstone_rejects_wrong_hash_without_append
   queue::journal::tests::exact_global_binding_tombstone_rejects_route_mismatch_and_ordinary_claim
@@ -2050,6 +2055,8 @@ required_multilane_queue_journal_focus_tests=(
   queue::tests::strict_queue_plan_journal_full_write_ambiguity_replays_exact_put
   queue::tests::strict_queue_plan_journal_parent_sync_failure_is_indeterminate_and_faults_queue
   queue::tests::queue_plan_journal_replay_tombstones_only_committed_and_expired_records
+  queue::tests::queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix
+  queue::tests::queue_plan_journal_replay_rejects_orphaned_startup_fifo_identity
   queue::tests::exact_queue_plan_rejection_leaves_same_plan_aba_successor_untouched
   queue::tests::strict_global_admission_rejects_self_consistent_noncanonical_request_identity
   queue::tests::globally_bound_guard_drop_restores_exact_fifo_with_absent_registry
@@ -2073,6 +2080,9 @@ required_multilane_queue_journal_focus_tests=(
   queue::tests::stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan
   queue::tests::stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan
   queue::tests::installed_plan_journal_reconciles_high_volume_commit_barriers_and_restarts_cleanly
+  queue::tests::reservation_restart_fits_ordinary_fifo_around_middle_anchor
+  queue::tests::committed_state_with_live_reservation_retains_sole_plan_payload_source
+  queue::tests::expired_live_reservation_replays_payload_without_fifo_or_tombstone
   queue::tests::restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_forget
   queue::tests::restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_forget
   queue::tests::restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_forget
@@ -2181,7 +2191,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=289
+readonly expected_multilane_focus_test_count=299
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2352,7 +2362,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 289-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 299-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2460,8 +2470,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 290 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 289 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 300 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 299 focused tests" >&2
     exit 1
   fi
 fi
@@ -3647,4 +3657,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 289/289 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 299/299 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

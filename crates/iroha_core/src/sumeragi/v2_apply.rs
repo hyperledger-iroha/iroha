@@ -1847,14 +1847,40 @@ fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        borrow::Cow,
-        collections::BTreeMap,
-        num::{NonZeroU64, NonZeroUsize},
-        sync::{Arc, Mutex},
-    };
-
+    use super::*;
     use crate::sumeragi::v2_core::{EventTag, Generation};
+    use crate::{
+        block::BlockBuilder,
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
+        lane_consensus::LaneExecutablePayloadV1,
+        query::{
+            provider_ingest_finalized::{
+                ProviderIngestFinalizedArchiveBoundsV1,
+                ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveV1,
+            },
+            reputation_finalized::{
+                ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
+                ReputationFinalizedArchiveError, ReputationFinalizedArchiveInsertOutcome,
+                ReputationFinalizedArchiveRetentionApprovalRecordV1,
+                ReputationFinalizedArchiveRetentionAuthorityBindingV1,
+                ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
+                ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
+                ReputationFinalizedArchiveRetentionAuthorityV1,
+            },
+            store::LiveQueryStore,
+        },
+        queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
+        state::{World, WorldReadOnly},
+        sumeragi::{
+            v2_body_store::{
+                BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
+            },
+            v2_effects::ApplyTask,
+        },
+        tx::AcceptedTransaction,
+    };
     use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
@@ -1908,41 +1934,12 @@ mod tests {
     use mv::storage::StorageReadOnly;
     use norito::codec::Encode as _;
     use sorafs_manifest::XorQuantity;
-
-    use super::*;
-    use crate::{
-        block::BlockBuilder,
-        governance::manifest::{
-            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-        },
-        lane_consensus::LaneExecutablePayloadV1,
-        query::{
-            provider_ingest_finalized::{
-                ProviderIngestFinalizedArchiveBoundsV1,
-                ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveV1,
-            },
-            reputation_finalized::{
-                ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
-                ReputationFinalizedArchiveError, ReputationFinalizedArchiveInsertOutcome,
-                ReputationFinalizedArchiveRetentionApprovalRecordV1,
-                ReputationFinalizedArchiveRetentionAuthorityBindingV1,
-                ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
-                ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
-                ReputationFinalizedArchiveRetentionAuthorityV1,
-            },
-            store::LiveQueryStore,
-        },
-        queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
-        state::{World, WorldReadOnly},
-        sumeragi::{
-            v2_body_store::{
-                BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
-            },
-            v2_effects::ApplyTask,
-        },
-        tx::AcceptedTransaction,
+    use std::{
+        borrow::Cow,
+        collections::BTreeMap,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::{Arc, Mutex},
     };
-
     #[derive(Debug)]
     struct ReputationRetentionAuthorityForTest {
         qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1,

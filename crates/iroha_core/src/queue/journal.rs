@@ -4914,6 +4914,7 @@ mod tests {
         let records = [
             record("exact-atomic-live-remove-first"),
             record("exact-atomic-live-remove-second"),
+            record("exact-atomic-live-remove-third"),
         ];
         let removals = records
             .iter()
@@ -4926,18 +4927,35 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut journal = open(&path).expect("open");
-        for record in records {
+        for record in &records {
             journal
-                .replace_strict_durable(record)
+                .replace_strict_durable(record.clone())
                 .expect("install live atomic removal owner");
         }
 
         journal
-            .remove_all_live_exact_atomic_strict_durable(&removals)
+            .remove_all_live_exact_atomic_strict_durable(&removals[..2])
             .expect("atomically remove the wholly live batch");
         let removed = fs::read(&path).expect("read wholly live removal journal");
+
         let error = journal
-            .remove_all_live_exact_atomic_strict_durable(&removals)
+            .remove_all_live_exact_atomic_strict_durable(&[removals[0], removals[2]])
+            .expect_err("the startup publication form must reject a mixed absent and live batch");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("already-absent target"));
+        assert_eq!(
+            fs::read(&path).expect("read rejected mixed live-removal batch"),
+            removed,
+            "the all-live precondition must reject a mixed batch before append",
+        );
+        assert_eq!(
+            journal.replay().expect("replay after rejected mixed batch"),
+            vec![records[2].clone()],
+            "rejecting a mixed batch must retain its still-live member",
+        );
+
+        let error = journal
+            .remove_all_live_exact_atomic_strict_durable(&removals[..2])
             .expect_err("the startup publication form must reject an already-absent retry");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("already-absent target"));

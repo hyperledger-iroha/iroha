@@ -45,7 +45,7 @@ private func nativeAmxGroupedFixtureURL() throws -> URL {
     )
 }
 
-private func loadNativeAmxGroupedFixture() throws -> [String: Any] {
+func loadNativeAmxGroupedFixture() throws -> [String: Any] {
     let data = try Data(contentsOf: nativeAmxGroupedFixtureURL())
     guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         throw NativeAmxGroupedFixtureError.malformed("fixture root must be an object")

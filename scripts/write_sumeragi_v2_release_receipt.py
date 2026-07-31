@@ -354,7 +354,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 738
-_G_UNIT_TEST_COUNT = 289
+_G_UNIT_TEST_COUNT = 299
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
@@ -367,7 +367,7 @@ _G_UNIT_GROUPS = (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        127,
+        137,
         "lib",
     ),
     (

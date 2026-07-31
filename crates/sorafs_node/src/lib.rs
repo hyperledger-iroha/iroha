@@ -27074,7 +27074,6 @@ mod tests {
     #[test]
     fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
         use std::collections::HashMap;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
 

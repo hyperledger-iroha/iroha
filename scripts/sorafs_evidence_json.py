@@ -76,6 +76,7 @@ JSON_DUPLICATE_KEY_EXTRA_SENSITIVE_KEYS = frozenset(
         "response_bodies",
         "segment_merkle_path",
         "signature_key",
+        "signed_auditor_request",
         "signed_transaction",
         "signed_url",
         "signed_urls",

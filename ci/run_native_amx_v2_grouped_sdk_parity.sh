@@ -300,6 +300,7 @@ case "$surface" in
     readonly javascript_sdk_root="${repo_root}/javascript/iroha_js"
     readonly javascript_source_root="${javascript_sdk_root}/src"
     readonly javascript_package_root="${temporary_root}/javascript-package"
+    readonly javascript_staged_source_root="${javascript_package_root}/src"
     readonly javascript_dist_root="${javascript_package_root}/dist"
     readonly javascript_dist_diff="${temporary_root}/javascript-dist.diff"
     if [[ -n "$(find "$javascript_source_root" -type l -print -quit)" ]]; then
@@ -311,10 +312,13 @@ case "$surface" in
       echo "grouped Native AMX V2 JavaScript parity requires a regular installed node_modules directory" >&2
       exit 1
     fi
-    mkdir -p -- "$javascript_dist_root"
+    mkdir -p -- "$javascript_staged_source_root"
     cp "${javascript_sdk_root}/package.json" "${javascript_package_root}/package.json"
     ln -s "${javascript_sdk_root}/node_modules" "${javascript_package_root}/node_modules"
-    cp -R "${javascript_source_root}/." "$javascript_dist_root/"
+    cp -R "${javascript_source_root}/." "$javascript_staged_source_root/"
+    env \
+      IROHA_JS_BUILD_DIST_ROOT="$javascript_package_root" \
+      node "${javascript_sdk_root}/scripts/build-dist.mjs"
     if [[ -n "$(find "$javascript_dist_root" -type l -print -quit)" ]]; then
       echo "grouped Native AMX V2 staged JavaScript distribution must not contain symlinks" >&2
       exit 1

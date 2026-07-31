@@ -3659,16 +3659,213 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/queue.rs",
-          "kind": "fn",
-          "symbol": "prepare_plan_journal_replay_locked",
+          "path": "crates/iroha_core/src/queue/journal.rs",
+          "kind": "method",
+          "symbol": "QueuePlanJournalReplay::into_verified_records",
           "required_tokens": [
+            "self.verify_snapshot_content()?",
+            "std::mem::take(&mut self.live_positions)",
+            "live.ownership_position",
+            "self.verify_snapshot_storage()?",
+            "record.claim_digest()",
+            "record.entrypoint_hash != entrypoint_hash",
+            "record.plan_digest() != live.plan_digest",
+            "claim_digest != live.claim_digest",
+            "verified.push(record)",
+            "Ok(verified)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue/journal.rs",
+          "kind": "method",
+          "symbol": "QueuePlanJournal::remove_all_live_exact_atomic_strict_durable",
+          "required_tokens": [
+            "remove_many_exact_atomic_strict_durable_inner(removals, true)?",
+            "Ok(())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue/journal.rs",
+          "kind": "method",
+          "symbol": "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
+          "required_tokens": [
+            "self.ensure_healthy()?",
+            "removals.len() > self.limits.max_live_records",
+            "QueuePlanJournalFrameV4::RemoveBatch(requested.clone())",
+            "prepare_replay_with_removed_entrypoints(Some(&entrypoints))",
+            "if require_all_live",
+            "live_removals.len() != requested.len()",
+            "QueuePlanJournalExactRemoveResult::Removed",
+            "atomic live-removal batch contains an already-absent target",
+            "QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone())",
+            "self.compact(true)?",
+            "if compacted != (outcomes.clone(), live_removals.clone())",
+            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
+            "self.sync_all_raw(SyncPhase::General)?",
+            "Ok(outcomes)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::ensure_plan_journal_replay_startup_shape_locked",
+          "required_tokens": [
+            "self.txs.is_empty()",
+            "self.materialized_active_len() == 0",
+            "self.materialized_retained_bytes() == 0",
+            "self.tx_hashes.is_empty()",
+            "self.queued_count.load(Ordering::Acquire) == 0",
+            "self.routing_decisions.is_empty()",
+            "self.routing_plans.is_empty()",
+            "self.durable_plan_claims.is_empty()",
+            "self.tx_encoded_len.is_empty()",
+            "self.tx_gas_cost.is_empty()",
+            "self.tx_enqueued_at_ms.is_empty()",
+            "self.queued_tx_enqueued_at_ms.is_empty()",
+            "self.queued_age_ring.lock().is_empty()",
+            "self.removed_hashes.is_empty()",
+            "self.txs_per_user.is_empty()",
+            "fee_admission_reservations",
+            "self.expiry_ring.lock().is_empty()",
+            "self.expiry_ring_members.is_empty()",
+            "self.tx_gossip.is_empty()",
+            "self.tx_teu.is_empty()",
+            "lane_teu_pending",
+            "dataspace_teu_pending",
+            "only exact durable reservation FIFO identities may pre-exist"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::plan_journal_replay_reservation_shape_locked",
+          "required_tokens": [
+            "store.durable_owned_hashes().collect::<HashSet<_>>()",
+            ".filter(|hash| !self.txs.contains_key(hash))",
+            "expected_missing_payload_hashes != store.missing_payload_hashes",
+            "missing_reservation_payload_count",
+            "store.missing_payload_hashes.len()",
+            "store.live_by_hash.values().chain(",
+            "completed_releases",
+            "record.validate()",
+            ".insert(hash, record.fifo_order)",
+            "multiple durable FIFO owners",
+            "durable_owned_hashes",
+            "durable_fifo_orders",
+            "missing_payload_hashes: store.missing_payload_hashes.clone()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::prepare_plan_journal_replay_locked",
+          "required_tokens": [
+            "self.ensure_plan_journal_replay_startup_shape_locked()?",
+            "self.plan_journal_replay_reservation_shape_locked()?",
+            "journal_hashes.len() != records.len()",
+            ".is_subset(&journal_hashes)",
+            "let replay_observed_at = self.time_source.get_unix_time();",
+            "AcceptedTransaction::accept_entrypoint_at_time",
+            "accepted.hash_as_entrypoint() != entrypoint_hash",
+            "restored_reservation_fifo_order_for_identity",
+            "reservation_shape.durable_owned_hashes.contains(&hash)",
+            "restored_fifo_order.is_some()",
+            "state_view.transactions.get(&hash).is_some()",
             "recorded_global_admission_identity",
             "queue_plan_admission_registry_match",
             "QueuePlanAdmissionRegistryMatch::Conflict",
             "global_registry_match.is_none()",
+            "self.is_expired_at_with_enqueue_timestamp(",
+            "replay_observed_at",
+            "!has_durable_reservation_owner",
+            "resolve_routing_plan_for_queue_admission(",
             "durable_plan_claim_context_revalidates_in_view",
-            "terminal_removals"
+            "QueueAdmissionPreparationMode::AtomicJournalReplay",
+            "transaction_selection_durability_faulted()",
+            "self.active_len()",
+            "self.retained_bytes()",
+            "projected_active > self.capacity.get()",
+            "projected_retained > self.max_retained_bytes.get()",
+            "projected > self.capacity_per_user.get()",
+            ".reserve(admission.hash, reservation)",
+            "orphaned FIFO identity",
+            "reservation FIFO anchors disagree with authenticated journal order",
+            "anchors.len() != reservation_shape.durable_fifo_orders.len()",
+            "final_fifo.len() > self.tx_hashes.capacity()",
+            "terminal_removals",
+            "Ok(PreparedQueuePlanReplay {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::apply_plan_journal_replay_locked",
+          "required_tokens": [
+            "terminal_removals: _",
+            "*self.fee_admission_reservations.lock() = fee_reservations;",
+            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
+            "self.fifo_order_by_hash.insert(hash, fifo_order);",
+            "self.txs.insert(hash, Arc::clone(&tx_arc));",
+            "self.track_active_transaction();",
+            "self.routing_decisions.insert(hash, routing_decision);",
+            "self.routing_plans.insert(hash, routing_plan.clone());",
+            "self.durable_plan_claims.insert(hash, claim.clone());",
+            "self.track_expiry_hash(hash);",
+            "notifications.push(QueueAdmissionNotification {",
+            "self.apply_per_user_tx_count_increments(per_user_increments);",
+            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
+            "self.replace_fifo_locked(&final_fifo);",
+            "(summary, notifications)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::replay_plan_journal",
+          "required_tokens": [
+            "self.plan_journal_install_lock.lock()",
+            "self.lane_reservation_transition_lock.lock()",
+            "state.lock_lane_lifecycle_work_admission()",
+            "state.state_view_generation()",
+            "let state_view = state.view();",
+            "self.ensure_plan_journal_replay_startup_shape_locked()?",
+            "self.sync_nexus_routing_with_view(&state_view);",
+            "let mut journal_guard = self.plan_journal.lock();",
+            "let queue_guard = self.push_remove_lock.lock();",
+            "let records = journal.prepare_replay()?.into_verified_records()?;",
+            "let expected_record_claims = records",
+            "self.prepare_plan_journal_replay_locked(",
+            "let observed_record_claims = journal",
+            "if observed_record_claims != expected_record_claims",
+            "let terminal_removals = prepared.terminal_removals.clone();",
+            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
+            "self.mark_plan_journal_durability_fault",
+            "self.apply_plan_journal_replay_locked(prepared)",
+            "self.publish_admission_notifications(&notifications);",
+            "self.publish_backpressure_state(self.active_len(), backpressure_telemetry);",
+            "status::set_tx_queue_pressure(self.pressure_snapshot());",
+            "Ok(summary)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::finalize_plan_journal_startup_recovery",
+          "required_tokens": [
+            "self.finalize_completed_releases(None)",
+            ".map_err(std::io::Error::other)"
+          ]
+        },
+        {
+          "path": "crates/irohad/src/main.rs",
+          "kind": "method",
+          "symbol": "Iroha::start_with_runtime_deps",
+          "required_tokens": [
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto("
           ]
         },
         {

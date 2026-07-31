@@ -17409,10 +17409,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 289
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 290
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 299
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 300
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733"
+    "d3a3ee129d21220c04b147f31b3c99d91d750af19ffda9c71253e88f37754104"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -32926,6 +32926,12 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "FetchBody must carry the exact current tag, round, subject, "
                 "canonical frozen-roster archive sources, and locked certificate",
                 errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path, reducer_items["on_resume_after_replay"],
+                "self.replay_resumed = true; "
+                "if let Some(decision) = self.durable.decision().cloned()",
+                "ResumeAfterReplay must not invent a special crash-time historical-lock owner", errors
             )
             _require_rust_token_sequence(
                 reducer_path,
@@ -52018,8 +52024,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PersistInstallTCReady",
         (
             "request \\in pendingInstallTC",
-            "StrictSameRoundTcUpgrade(request.node, request.tc)",
-            "GenerationCanIncrement(generation[request.node])",
+            "\\/ request.tc.view >= nodeView[request.node] \\/ StrictSameRoundTcUpgrade(request.node, request.tc)",
+            "(StrictSameRoundTcUpgrade(request.node, request.tc) => GenerationCanIncrement(generation[request.node]))",
         ),
     )
     require_generation_operator_fragments(
@@ -53845,7 +53851,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "\\/ nodeView'[candidate.node] > nodeView[candidate.node] "
             "\\/ candidate.consumerGeneration # generation'[candidate.node] "
             "\\/ AsyncNodeHasDecisionAfter(candidate.node) "
-            "\\/ /\\ PreGstResponsiveReplay "
+            "\\/ /\\ (PreGstResponsiveRestart \\/ PreGstResponsiveReplay) "
             "/\\ candidate.node = asyncRecoveryNode"
         ),
         "AsyncCandidateTerminalTombstoneExitThisStep": (
@@ -53917,7 +53923,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "\\cup state.candidateTerminalTombstones"
         ),
         "AsyncControlServiceResetNodesThisStep": (
-            "IF PreGstResponsiveReplay THEN {asyncRecoveryNode} ELSE {}"
+            "IF PreGstResponsiveRestart \\/ PreGstResponsiveReplay "
+            "THEN {asyncRecoveryNode} ELSE {}"
         ),
         "AsyncControlServiceStateAfterReset": (
             "[nextOrdinal |-> state.nextOrdinal, slots |-> "
@@ -56153,6 +56160,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncCandidateTransientMarkerExitThisStep": (
             "candidate.consumerGeneration # generation'[candidate.node]",
+            "PreGstResponsiveRestart",
             "PreGstResponsiveReplay",
             "candidate.node = asyncRecoveryNode",
         ),
@@ -56626,7 +56634,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncHistoricalRecoveryTargets' = asyncHistoricalRecoveryTargets \\ {node}",
         ),
         "AsyncControlServiceResetNodesThisStep": (
-            "IF PreGstResponsiveReplay THEN {asyncRecoveryNode} ELSE {}",
+            "IF PreGstResponsiveRestart \\/ PreGstResponsiveReplay "
+            "THEN {asyncRecoveryNode} ELSE {}",
         ),
         "AsyncControlServiceStateAfterReset": (
             "nextOrdinal |-> state.nextOrdinal",
@@ -56903,10 +56912,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "separate executor turn"
             )
 
-    runner_path = (
-        _formal_repo_root(formal_dir)
-        / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    )
+    runner_path = _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2_runner.rs"
     if not runner_path.is_file():
         errors.append(
             f"{runner_path}: production runner is required to refine discovery "
@@ -56968,9 +56974,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "Runtime-before-Ingress alternation"
             )
 
-    adapter_path = (
-        _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2.rs"
-    )
+    adapter_path = _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2.rs"
     if not adapter_path.is_file():
         errors.append(
             f"{adapter_path}: production adapter is required to refine "
@@ -57018,10 +57022,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
 
     errors.extend(_production_causal_fifo_source_fidelity_errors(formal_dir))
 
-    effects_path = (
-        _formal_repo_root(formal_dir)
-        / "crates/iroha_core/src/sumeragi/v2_effects.rs"
-    )
+    effects_path = _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2_effects.rs"
     if not effects_path.is_file():
         errors.append(
             f"{effects_path}: production effect executor is required to "
