@@ -1530,6 +1530,7 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         "始まり_",
         "fn",
         "account_id",
+        "Amount",
         "__kotodama_link_private",
     ] {
         let artifact = contract_artifact(1, vec![entrypoint(name, EntryPointKind::Kotoage, 0)]);
@@ -1552,6 +1553,9 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
     }
 
     for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+        if !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name) {
+            continue;
+        }
         let artifact = contract_artifact(1, vec![entrypoint(name, EntryPointKind::Kotoage, 0)]);
         ivm::verify_contract_artifact(&artifact).unwrap_or_else(|error| {
             panic!("retired numeric entrypoint name `{name}` was rejected: {error}")
@@ -1608,6 +1612,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
         "状態",
         "state",
         "Option",
+        "Amount",
     ] {
         let artifact = contract_artifact_with_states(vec![ivm::EmbeddedStateDescriptor {
             name: name.to_owned(),
@@ -1640,6 +1645,17 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
             name: "Record".to_owned(),
             fields: vec![ivm::EmbeddedStateFieldDescriptor {
                 name: "field-name".to_owned(),
+                ty: ivm::EmbeddedStateType::Int,
+            }],
+        },
+        ivm::EmbeddedStateType::Struct {
+            name: "Amount".to_owned(),
+            fields: vec![],
+        },
+        ivm::EmbeddedStateType::Struct {
+            name: "Record".to_owned(),
+            fields: vec![ivm::EmbeddedStateFieldDescriptor {
+                name: "Amount".to_owned(),
                 ty: ivm::EmbeddedStateType::Int,
             }],
         },
@@ -1766,6 +1782,29 @@ fn verify_rejects_invalid_trigger_callback_target() {
 }
 
 #[test]
+fn verify_rejects_forbidden_trigger_identifier_positions() {
+    for (trigger, expected) in [
+        (
+            time_trigger("Amount", None, "main"),
+            "trigger ID `Amount` must be a canonical Kotodama V1 declaration identifier",
+        ),
+        (
+            time_trigger("wake", Some("Amount"), "main"),
+            "callback namespace `Amount` must be a canonical Kotodama V1 seiyaku identifier",
+        ),
+    ] {
+        let mut main = entrypoint("main", EntryPointKind::Kotoage, 0);
+        main.triggers.push(trigger);
+        let error = ivm::verify_contract_artifact(&contract_artifact(1, vec![main]))
+            .expect_err("exact `Amount` must not be accepted in trigger source positions");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected admission error: {error}"
+        );
+    }
+}
+
+#[test]
 fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
     use ivm::instruction::wide;
 
@@ -1879,11 +1918,11 @@ fn verify_rejects_non_kotoage_local_trigger_callbacks() {
 fn verify_accepts_namespaced_trigger_callback_target() {
     let mut main = entrypoint("main", EntryPointKind::Kotoage, 0);
     main.triggers
-        .push(time_trigger("wake", Some("callee"), "run"));
+        .push(time_trigger("amount", Some("callee"), "run"));
     let bytes = contract_artifact(1, vec![main]);
 
     ivm::verify_contract_artifact(&bytes)
-        .expect("namespaced trigger callback target is resolved at activation");
+        .expect("lowercase business identifiers remain valid trigger IDs");
 }
 
 #[test]

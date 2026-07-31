@@ -29,6 +29,9 @@ POLICY_FORMAT = "iroha.kotodama.v1.policy"
 POLICY_SCHEMA = 1
 
 SEMANTIC_PATH = Path("crates/kotodama_lang/src/semantic.rs")
+DATA_MODEL_ENTRYPOINT_PATH = Path(
+    "crates/iroha_data_model/src/smart_contract/entrypoint.rs"
+)
 IVM_ABI_ACCESS_HINTS_PATH = Path("crates/ivm_abi/src/access_hints.rs")
 GRAMMAR_DOC_PATH = Path("specs/kotodama_grammar.md")
 TEXTMATE_PATH = Path(
@@ -61,6 +64,7 @@ CSHARP_MANIFEST_PATH = Path(
 )
 
 GENERATED_TARGETS = (
+    DATA_MODEL_ENTRYPOINT_PATH,
     SEMANTIC_PATH,
     IVM_ABI_ACCESS_HINTS_PATH,
     GRAMMAR_DOC_PATH,
@@ -85,6 +89,10 @@ VALIDATOR_MARKER_NAME = "kotodama-v1-validator-policy"
 SEMANTIC_MARKERS = (
     "// BEGIN GENERATED: kotodama-v1-semantic-policy",
     "// END GENERATED: kotodama-v1-semantic-policy",
+)
+DATA_MODEL_IDENTIFIER_MARKERS = (
+    "// BEGIN GENERATED: kotodama-v1-source-identifier-policy",
+    "// END GENERATED: kotodama-v1-source-identifier-policy",
 )
 IVM_ABI_ACCESS_HINT_MARKERS = (
     "// BEGIN GENERATED: kotodama-v1-dynamic-access-policy",
@@ -182,6 +190,7 @@ class Policy:
     active_source_types: tuple[str, ...]
     dynamic_access_hints: DynamicAccessHintPolicy
     retired_numeric_type_spellings: tuple[str, ...]
+    forbidden_source_identifiers: tuple[str, ...]
     ordinary_value_identifiers: tuple[str, ...]
     declaration_reserved_extras: tuple[str, ...]
     numeric_suffix_fixits: tuple[str, ...]
@@ -274,6 +283,7 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
             "active_source_types",
             "dynamic_access_hints",
             "retired_numeric_type_spellings",
+            "forbidden_source_identifiers",
             "ordinary_value_identifiers",
             "declaration_reserved_extras",
             "numeric_suffix_fixits",
@@ -340,6 +350,9 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
     retired_types = _string_list(
         raw["retired_numeric_type_spellings"], "retired_numeric_type_spellings"
     )
+    forbidden_source_identifiers = _string_list(
+        raw["forbidden_source_identifiers"], "forbidden_source_identifiers"
+    )
     ordinary_identifiers = _string_list(
         raw["ordinary_value_identifiers"], "ordinary_value_identifiers"
     )
@@ -352,6 +365,7 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
             dynamic_access_reserved_prefixes,
         ),
         ("retired_numeric_type_spellings", retired_types),
+        ("forbidden_source_identifiers", forbidden_source_identifiers),
         ("ordinary_value_identifiers", ordinary_identifiers),
         (
             "declaration_reserved_extras",
@@ -448,6 +462,7 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
             ],
         ),
         retired_numeric_type_spellings=retired_types,
+        forbidden_source_identifiers=forbidden_source_identifiers,
         ordinary_value_identifiers=ordinary_identifiers,
         declaration_reserved_extras=_string_list(
             raw["declaration_reserved_extras"], "declaration_reserved_extras"
@@ -556,6 +571,22 @@ def _validate_final_v1_policy(policy: Policy) -> None:
         raise GenerationError(
             "Amount must remain rejected as retired source type syntax"
         )
+    if policy.forbidden_source_identifiers != ("Amount",):
+        raise GenerationError(
+            "forbidden_source_identifiers must contain only exact uppercase Amount"
+        )
+    if not set(policy.forbidden_source_identifiers).issubset(
+        policy.retired_numeric_type_spellings
+    ):
+        raise GenerationError(
+            "forbidden_source_identifiers must also be rejected numeric type spellings"
+        )
+    if set(policy.forbidden_source_identifiers) & set(
+        policy.ordinary_value_identifiers
+    ):
+        raise GenerationError(
+            "forbidden_source_identifiers must not be ordinary value identifiers"
+        )
     if "amount" not in policy.ordinary_value_identifiers:
         raise GenerationError("amount must remain an ordinary value identifier")
     if policy.first_known_pointer != 0x0001 or policy.last_assigned_pointer != 0x0012:
@@ -648,19 +679,35 @@ def _replace_generated(
     return f"{prefix}{start}\n{body.rstrip()}\n{end}{suffix}"
 
 
-def _rust_array(name: str, values: Sequence[str], doc: str) -> str:
-    if name in {
+def _rust_array(
+    name: str,
+    values: Sequence[str],
+    doc: str,
+    *,
+    visibility: str = "pub",
+) -> str:
+    prefix = f"{visibility} " if visibility else ""
+    if len(values) == 1 or name in {
         "V1_SUM_PATHS",
         "V1_DYNAMIC_ACCESS_BOUND_KINDS",
         "DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1",
         "DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1",
     }:
         quoted = ", ".join(json.dumps(value, ensure_ascii=False) for value in values)
-        return f"/// {doc}\npub const {name}: &[&str] = &[{quoted}];"
+        return f"/// {doc}\n{prefix}const {name}: &[&str] = &[{quoted}];"
     rows = "\n".join(
         f"    {json.dumps(value, ensure_ascii=False)}," for value in values
     )
-    return f"/// {doc}\npub const {name}: &[&str] = &[\n{rows}\n];"
+    return f"/// {doc}\n{prefix}const {name}: &[&str] = &[\n{rows}\n];"
+
+
+def render_data_model_identifier_policy(policy: Policy) -> str:
+    return _rust_array(
+        "KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS",
+        policy.forbidden_source_identifiers,
+        "Exact identifier spellings forbidden in every Kotodama V1 source position.",
+        visibility="",
+    )
 
 
 def render_semantic_policy(policy: Policy) -> str:
@@ -675,6 +722,12 @@ def render_semantic_policy(policy: Policy) -> str:
             "V1_DECLARATION_RESERVED_EXTRA_NAMES",
             policy.declaration_reserved_extras,
             "Compiler-owned non-keyword names forbidden for source declarations.",
+        ),
+        _rust_array(
+            "V1_FORBIDDEN_SOURCE_IDENTIFIERS",
+            policy.forbidden_source_identifiers,
+            "Exact identifier spellings forbidden in every source position.",
+            visibility="pub(crate)",
         ),
         _rust_array(
             "V1_STATE_MAP_KEY_TYPE_NAMES",
@@ -715,8 +768,9 @@ def render_semantic_policy(policy: Policy) -> str:
             "///\n"
             "/// Keeping these names unavailable to source-unit identities and declared\n"
             "/// types prevents authenticated metadata from reinterpreting a known retired\n"
-            "/// type spelling. They remain ordinary names in value and function namespaces,\n"
-            "/// including entrypoints.\n"
+            "/// type spelling. Except for exact spellings in\n"
+            "/// `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and\n"
+            "/// function namespaces, including entrypoints.\n"
             + _rust_array(
                 "V1_RETIRED_NUMERIC_TYPE_NAMES",
                 policy.retired_numeric_type_spellings,
@@ -811,6 +865,9 @@ def render_source_policy_docs(policy: Policy) -> str:
     retired = ", ".join(
         _markdown_code(value) for value in policy.retired_numeric_type_spellings
     )
+    forbidden_identifiers = ", ".join(
+        _markdown_code(value) for value in policy.forbidden_source_identifiers
+    )
     ordinary = ", ".join(
         _markdown_code(value) for value in policy.ordinary_value_identifiers
     )
@@ -828,6 +885,7 @@ def render_source_policy_docs(policy: Policy) -> str:
         "| Source policy | Canonical V1 values |",
         "| --- | --- |",
         f"| Active type spellings | {active} |",
+        f"| Forbidden in every source identifier position | {forbidden_identifiers} |",
         f"| Reserved retired numeric type spellings | {retired} |",
         f"| Ordinary value/function identifier examples | {ordinary} |",
         f"| Retired literal suffixes with safe fix-its | {suffixes} |",
@@ -1240,6 +1298,11 @@ def _javascript_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str
             _quoted_rows(keywords, "  "),
             "]);",
             "",
+            "// Exact spellings forbidden in every Kotodama V1 identifier position.",
+            "const FORBIDDEN_SOURCE_IDENTIFIER_SET = new Set([",
+            _quoted_rows(policy.forbidden_source_identifiers, "  "),
+            "]);",
+            "",
             "/** Names reserved for non-type source declarations. */",
             "export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([",
             _quoted_rows(_declaration_names(policy), "  "),
@@ -1264,7 +1327,10 @@ def _javascript_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str
             "export const KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS = "
             f"{dynamic_access.max_keys};",
             "",
-            "const KEYWORD_SET = new Set(KOTODAMA_V1_KEYWORDS);",
+            "const KEYWORD_SET = new Set([",
+            "  ...KOTODAMA_V1_KEYWORDS,",
+            "  ...FORBIDDEN_SOURCE_IDENTIFIER_SET,",
+            "]);",
             "const DECLARATION_RESERVED_SET = new Set(KOTODAMA_V1_DECLARATION_RESERVED);",
             "const RETIRED_TYPE_SET = new Set(KOTODAMA_V1_RETIRED_TYPE_NAMES);",
             "const KOTODAMA_V1_STATE_MAP_KEY_TYPE_SET = new Set(",
@@ -1284,10 +1350,11 @@ def _python_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    reserved_identifiers = (*keywords, *policy.forbidden_source_identifiers)
     dynamic_access = policy.dynamic_access_hints
     return "\n\n".join(
         [
-            frozen("_KOTODAMA_RESERVED_IDENTIFIERS", keywords),
+            frozen("_KOTODAMA_RESERVED_IDENTIFIERS", reserved_identifiers),
             frozen(
                 "_KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS",
                 _declaration_names(policy),
@@ -1323,10 +1390,11 @@ def _kotlin_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    reserved_identifiers = (*keywords, *policy.forbidden_source_identifiers)
     dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
-            kotlin_set("reservedIdentifiers", keywords),
+            kotlin_set("reservedIdentifiers", reserved_identifiers),
             kotlin_set("reservedDeclarationNames", _declaration_names(policy)),
             kotlin_set("retiredNumericTypeNames", policy.retired_numeric_type_spellings),
             kotlin_set("stateMapKeyTypeNames", dynamic_access.state_map_key_types),
@@ -1346,10 +1414,11 @@ def _java_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         return f"  private static final Set<String> {name} =\n      set(\n{rows});"
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    reserved_identifiers = (*keywords, *policy.forbidden_source_identifiers)
     dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
-            java_set("RESERVED_IDENTIFIERS", keywords),
+            java_set("RESERVED_IDENTIFIERS", reserved_identifiers),
             java_set("RESERVED_DECLARATION_NAMES", _declaration_names(policy)),
             java_set("RETIRED_NUMERIC_TYPE_NAMES", policy.retired_numeric_type_spellings),
             java_set("STATE_MAP_KEY_TYPE_NAMES", dynamic_access.state_map_key_types),
@@ -1367,10 +1436,11 @@ def _swift_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    reserved_identifiers = (*keywords, *policy.forbidden_source_identifiers)
     dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
-            swift_set("reservedIdentifiers", keywords),
+            swift_set("reservedIdentifiers", reserved_identifiers),
             swift_set("reservedDeclarationIdentifiers", _declaration_names(policy)),
             swift_set("retiredNumericTypeNames", policy.retired_numeric_type_spellings),
             swift_set("stateMapKeyTypeNames", dynamic_access.state_map_key_types),
@@ -1393,10 +1463,11 @@ def _csharp_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    reserved_identifiers = (*keywords, *policy.forbidden_source_identifiers)
     dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
-            csharp_set("Keywords", keywords),
+            csharp_set("Keywords", reserved_identifiers),
             csharp_set("ReservedDeclarationNames", _declaration_names(policy)),
             csharp_set("RetiredNumericTypeNames", policy.retired_numeric_type_spellings),
             csharp_set("StateMapKeyTypeNames", dynamic_access.state_map_key_types),
@@ -1462,6 +1533,14 @@ def render_outputs(root: Path, policy: Policy) -> dict[Path, str]:
     grammar = load_lexical_grammar(root, policy)
     _validate_rust_abi_sources(root, policy)
     outputs: dict[Path, str] = {}
+
+    path = DATA_MODEL_ENTRYPOINT_PATH
+    outputs[path] = _replace_generated(
+        _read_text(root / path),
+        *DATA_MODEL_IDENTIFIER_MARKERS,
+        render_data_model_identifier_policy(policy),
+        path=path,
+    )
 
     path = SEMANTIC_PATH
     outputs[path] = _replace_generated(

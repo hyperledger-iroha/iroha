@@ -385,7 +385,7 @@ fn assign_poseidon_permutation(
     region.assign_fixed(config.domain, start_row, Scalar::from(domain));
 
     let mut state_values = [left, right, Value::known(Scalar::from(domain))];
-    let mut state_cells = array::from_fn::<_, POSEIDON_WIDTH, _>(|column| {
+    let mut state_cells: [_; POSEIDON_WIDTH] = array::from_fn(|column| {
         region.assign_advice(config.state[column], start_row, state_values[column])
     });
     let left_cell = state_cells[0].cell();

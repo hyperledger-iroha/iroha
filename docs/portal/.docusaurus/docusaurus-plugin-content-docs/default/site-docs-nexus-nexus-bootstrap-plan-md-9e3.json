@@ -1,0 +1,28 @@
+{
+  "id": "nexus/nexus-bootstrap-plan",
+  "title": "Sora Nexus bootstrap & observability",
+  "description": "Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services.",
+  "source": "@site/docs/nexus/nexus-bootstrap-plan.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-bootstrap-plan",
+  "permalink": "/next/nexus/nexus-bootstrap-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/nexus-bootstrap-plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-bootstrap-plan",
+    "title": "Sora Nexus bootstrap & observability",
+    "description": "Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Nexus transition notes",
+    "permalink": "/next/nexus/nexus-transition-notes"
+  },
+  "next": {
+    "title": "Nexus telemetry remediation plan (B2)",
+    "permalink": "/next/nexus/nexus-telemetry-remediation"
+  }
+}

@@ -8316,44 +8316,18 @@ where
             })
         }
         "norito-rpc-fixtures" => {
-            let mut fixtures_json: Option<PathBuf> = None;
-            let mut exporter_manifest: Option<PathBuf> = None;
-            let mut output_dir: Option<PathBuf> = None;
-            let mut selection_manifest: Option<PathBuf> = None;
-            let mut include_all = false;
-            let mut check_encoded = true;
+            let mut output_root: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
-                    "--fixtures" => {
+                    "--output-root" if output_root.is_none() => {
                         let Some(path) = pending.next() else {
-                            return Err("expected path after --fixtures".into());
+                            return Err("expected path after --output-root".into());
                         };
-                        fixtures_json = Some(normalize_path(Path::new(&path))?);
+                        output_root = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--exporter" | "--exporter-manifest" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --exporter".into());
-                        };
-                        exporter_manifest = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "-o" | "--out" | "--output" | "--out-dir" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --out-dir".into());
-                        };
-                        output_dir = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--selection" | "--selection-manifest" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --selection".into());
-                        };
-                        selection_manifest = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--all" => {
-                        include_all = true;
-                    }
-                    "--skip-encoded-check" => {
-                        check_encoded = false;
+                    "--output-root" => {
+                        return Err("--output-root was supplied more than once".into());
                     }
                     flag => {
                         return Err(format!("unknown flag for norito-rpc-fixtures: {flag}").into());
@@ -8361,14 +8335,7 @@ where
                 }
             }
             Ok(CommandKind::NoritoRpcFixtures {
-                options: NoritoRpcFixtureOptions::new(
-                    fixtures_json,
-                    exporter_manifest,
-                    output_dir,
-                    selection_manifest,
-                    include_all,
-                    check_encoded,
-                ),
+                options: NoritoRpcFixtureOptions::new(output_root),
             })
         }
         "norito-rpc-verify" => {
@@ -15319,9 +15286,7 @@ fn print_usage() {
     eprintln!(
         "    Print the SNNet-17B constant-rate presets (core/home) and optional tick→bandwidth tables so relay operators and SDK tooling can apply consistent lane budgets."
     );
-    eprintln!(
-        "  cargo xtask norito-rpc-fixtures [--fixtures <path>] [--exporter <Cargo.toml>] [--out-dir <dir>] [--selection <path>] [--all] [--skip-encoded-check]"
-    );
+    eprintln!("  cargo xtask norito-rpc-fixtures [--output-root <dir>]");
     eprintln!(
         "    Regenerate the canonical Norito-RPC fixtures/manifest under fixtures/norito_rpc/"
     );

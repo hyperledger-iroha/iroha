@@ -3414,6 +3414,8 @@ pub enum PrivacyActivationValidationError {
 
 /// Exact public capability-snapshot wire version.
 pub const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1: u32 = 1;
+/// Exact local compiled-profile catalog wire version.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1: u32 = 1;
 
 /// Exact locally compiled bindings exposed by the public privacy snapshot.
 ///
@@ -3620,6 +3622,172 @@ pub enum PrivacyCompiledProfileResultV1 {
     /// The protocol remains explicitly unavailable and fail-closed.
     #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
     Unavailable(PrivacyCompiledProfileUnavailableReasonV1),
+}
+
+/// One local build result in the canonical compiled-profile catalog.
+///
+/// This row deliberately has no activation, lifecycle, committed height, or
+/// consensus-policy field. It describes only what the current binary was
+/// compiled to execute. Authoritative readiness comes exclusively from a
+/// committed [`PrivacyCapabilitySnapshotV1`] returned by Torii.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyCompiledProfileCatalogRowV1 {
+    /// Closed protocol identity for this row.
+    pub protocol_id: PrivacyProtocolIdV1,
+    /// Exact local compiled-profile result.
+    pub compiled_profile: PrivacyCompiledProfileResultV1,
+}
+
+impl PrivacyCompiledProfileCatalogRowV1 {
+    /// Validate the row's closed identity and compiled profile.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed available profile or a profile tagged for a
+    /// different protocol.
+    pub fn validate(&self) -> Result<(), PrivacyCompiledProfileCatalogRowValidationErrorV1> {
+        let PrivacyCompiledProfileResultV1::Available(profile) = self.compiled_profile else {
+            return Ok(());
+        };
+        profile
+            .validate()
+            .map_err(PrivacyCompiledProfileCatalogRowValidationErrorV1::CompiledProfile)?;
+        if profile.protocol_id != self.protocol_id {
+            return Err(
+                PrivacyCompiledProfileCatalogRowValidationErrorV1::CompiledProfileProtocolMismatch {
+                    row_protocol: self.protocol_id,
+                    profile_protocol: profile.protocol_id,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Validation failure for one [`PrivacyCompiledProfileCatalogRowV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
+    /// Locally compiled profile is malformed.
+    #[error("compiled privacy catalog profile is invalid: {0}")]
+    CompiledProfile(PrivacyCompiledProfileSnapshotValidationErrorV1),
+    /// Row and compiled-profile identities differ.
+    #[error(
+        "compiled privacy catalog row {row_protocol:?} differs from profile {profile_protocol:?}"
+    )]
+    CompiledProfileProtocolMismatch {
+        /// Row identity.
+        row_protocol: PrivacyProtocolIdV1,
+        /// Embedded profile identity.
+        profile_protocol: PrivacyProtocolIdV1,
+    },
+}
+
+/// Canonical local compiled-profile catalog for the closed first-release registry.
+///
+/// `protocols` contains exactly [`PrivacyProtocolIdV1::ALL`] in Norito
+/// discriminant order. This catalog is local build metadata, not committed
+/// governance state and not evidence that a protocol is live on any network.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyCompiledProfileCatalogV1 {
+    /// Exact catalog schema version.
+    pub version: u32,
+    /// Exactly twelve local results in canonical discriminant order.
+    pub protocols: Vec<PrivacyCompiledProfileCatalogRowV1>,
+}
+
+impl PrivacyCompiledProfileCatalogV1 {
+    /// Validate the complete closed local catalog.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown version, any row-count or ordering drift, or an
+    /// invalid compiled-profile row.
+    pub fn validate(&self) -> Result<(), PrivacyCompiledProfileCatalogValidationErrorV1> {
+        if self.version != PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1 {
+            return Err(PrivacyCompiledProfileCatalogValidationErrorV1::Version {
+                expected: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
+                actual: self.version,
+            });
+        }
+        if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
+            return Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolCount {
+                expected: PrivacyProtocolIdV1::COUNT,
+                actual: self.protocols.len(),
+            });
+        }
+        for (index, (row, expected)) in self
+            .protocols
+            .iter()
+            .zip(PrivacyProtocolIdV1::ALL)
+            .enumerate()
+        {
+            if row.protocol_id != expected {
+                return Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolOrder {
+                    index,
+                    expected,
+                    actual: row.protocol_id,
+                });
+            }
+            row.validate().map_err(|source| {
+                PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolRow {
+                    protocol_id: expected,
+                    source,
+                }
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Validation failure for [`PrivacyCompiledProfileCatalogV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
+    /// Catalog wire version is not the exact first-release version.
+    #[error("compiled privacy catalog version {actual} differs from required {expected}")]
+    Version {
+        /// Required version.
+        expected: u32,
+        /// Rejected version.
+        actual: u32,
+    },
+    /// Protocol row count differs from the closed registry.
+    #[error("compiled privacy catalog has {actual} rows; expected {expected}")]
+    ProtocolCount {
+        /// Closed first-release row count.
+        expected: usize,
+        /// Rejected row count.
+        actual: usize,
+    },
+    /// A row is missing, duplicated, or reordered.
+    #[error(
+        "compiled privacy catalog row {index} is {actual:?}; expected canonical protocol {expected:?}"
+    )]
+    ProtocolOrder {
+        /// Zero-based row index.
+        index: usize,
+        /// Required protocol at this index.
+        expected: PrivacyProtocolIdV1,
+        /// Rejected protocol at this index.
+        actual: PrivacyProtocolIdV1,
+    },
+    /// One canonical row is invalid.
+    #[error("compiled privacy catalog row {protocol_id:?} is invalid: {source}")]
+    ProtocolRow {
+        /// Protocol selected by row order.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Exact row validation failure.
+        source: PrivacyCompiledProfileCatalogRowValidationErrorV1,
+    },
 }
 
 /// One protocol row in the canonical public capability snapshot.
@@ -4031,6 +4199,109 @@ impl PrivacyCapabilitySnapshotV1 {
 
 /// Exact native bridge ABI required by the first-release privacy SDK surface.
 pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;
+/// Maximum accepted size of one canonical local compiled-profile catalog archive.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
+/// Maximum elements accepted in one catalog sequence.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize =
+    PrivacyProtocolIdV1::COUNT;
+/// Maximum cumulative elements accepted while decoding one catalog.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize =
+    PrivacyProtocolIdV1::COUNT;
+/// Maximum bytes accepted in one length-delimited catalog field.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
+/// Maximum cumulative allocation permitted while decoding one catalog.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
+    256 * 1024;
+/// Maximum data-dependent nesting depth permitted in one catalog.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1: usize = 32;
+
+/// Stable result codes returned by the native compiled-profile catalog validator.
+///
+/// These codes validate local build metadata only. A valid catalog does not
+/// imply that any protocol is activated, permitted, or ready on a network.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
+    /// The archive is a canonical, structurally valid local catalog.
+    Valid = 0,
+    /// A native ABI caller supplied a null archive pointer.
+    NullPointer = 1,
+    /// The archive contains no bytes.
+    Empty = 2,
+    /// The archive exceeds the fixed byte ceiling.
+    ArchiveTooLarge = 3,
+    /// Norito rejected a declared sequence, field, allocation, or nesting budget.
+    DecodeResourceLimit = 4,
+    /// The archive schema is not exactly [`PrivacyCompiledProfileCatalogV1`].
+    SchemaMismatch = 5,
+    /// The bytes are not the one canonical uncompressed V1 encoding.
+    NonCanonical = 6,
+    /// The archive is malformed, truncated, has trailing bytes, or fails its checksum.
+    MalformedArchive = 7,
+    /// The typed catalog violates its closed first-release semantic invariants.
+    InvalidCatalog = 8,
+}
+
+impl PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
+    /// Return the stable ABI-21 integer representation.
+    #[must_use]
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
+
+    /// Return whether the archive was accepted.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        matches!(self, Self::Valid)
+    }
+}
+
+/// Validate one untrusted canonical typed local compiled-profile catalog.
+///
+/// This validator enforces fixed byte, sequence, cumulative-element,
+/// allocation, field, and nesting ceilings before validating the exact twelve
+/// rows in [`PrivacyProtocolIdV1::ALL`] order. It establishes only that the
+/// bytes are a well-formed catalog; callers comparing against the current
+/// binary must additionally require exact equality with that binary's catalog.
+#[must_use]
+pub fn validate_privacy_compiled_profile_catalog_archive_v1(
+    archive: &[u8],
+) -> PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
+    use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
+
+    if archive.is_empty() {
+        return Status::Empty;
+    }
+    if archive.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
+        return Status::ArchiveTooLarge;
+    }
+
+    let limits = norito::DecodeLimits::new(
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1,
+    );
+    let catalog = match norito::decode_canonical_with_limits::<PrivacyCompiledProfileCatalogV1>(
+        archive, limits,
+    ) {
+        Ok(catalog) => catalog,
+        Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
+        Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
+        Err(
+            norito::Error::NonCanonicalEncoding
+            | norito::Error::DecodeFlagsMismatch { .. }
+            | norito::Error::UnsupportedCompression { .. },
+        ) => return Status::NonCanonical,
+        Err(_) => return Status::MalformedArchive,
+    };
+    if catalog.validate().is_err() {
+        return Status::InvalidCatalog;
+    }
+    Status::Valid
+}
+
 /// Maximum accepted size of one canonical privacy capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Maximum elements accepted in any sequence while decoding a capability archive.

@@ -3,6 +3,7 @@
 //! Usage:
 //! `cargo run --locked -p ivm --bin ivm_fixture_export -- --check`
 //! `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
+//! `cargo run --locked -p ivm --bin ivm_fixture_export -- --write --output-root /tmp/ivm-fixtures`
 
 use std::{
     env, fs,
@@ -22,9 +23,7 @@ use iroha_data_model::{
     },
     trigger::action::Repeats,
 };
-use ivm::prebuilt_fixtures::{
-    SYNTHETIC_EXECUTOR_FIXTURES, build_default_executor_program, build_synthetic_executor_program,
-};
+use ivm::prebuilt_fixtures::build_default_executor_program;
 use norito::json::{FastJsonWrite, JsonSerialize};
 
 // Public deterministic fixture material; this key must never authorize a real account.
@@ -36,17 +35,56 @@ enum Mode {
     Write,
 }
 
-fn parse_mode_from(arguments: &[String]) -> Result<Mode, String> {
-    match arguments {
-        [argument] if argument == "--check" => Ok(Mode::Check),
-        [argument] if argument == "--write" => Ok(Mode::Write),
-        _ => Err("expected exactly one of --check or --write".to_owned()),
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Options {
+    mode: Mode,
+    output_root: PathBuf,
 }
 
-fn parse_mode() -> Result<Mode, String> {
+fn parse_options_from(arguments: &[String], default_output_root: &Path) -> Result<Options, String> {
+    let mut mode = None;
+    let mut output_root = None;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--check" | "--write" => {
+                let requested = if argument == "--check" {
+                    Mode::Check
+                } else {
+                    Mode::Write
+                };
+                if mode.replace(requested).is_some() {
+                    return Err("expected exactly one of --check or --write".to_owned());
+                }
+            }
+            "--output-root" => {
+                if output_root.is_some() {
+                    return Err("--output-root was supplied more than once".to_owned());
+                }
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| "--output-root requires a directory path".to_owned())?;
+                if value.is_empty() || value.starts_with("--") {
+                    return Err("--output-root requires a non-empty directory path".to_owned());
+                }
+                output_root = Some(PathBuf::from(value));
+            }
+            _ => {
+                return Err(format!(
+                    "unknown argument `{argument}`; usage: --write|--check [--output-root <path>]"
+                ));
+            }
+        }
+    }
+    Ok(Options {
+        mode: mode.ok_or_else(|| "expected exactly one of --check or --write".to_owned())?,
+        output_root: output_root.unwrap_or_else(|| default_output_root.to_path_buf()),
+    })
+}
+
+fn parse_options() -> Result<Options, String> {
     let arguments: Vec<_> = env::args().skip(1).collect();
-    parse_mode_from(&arguments)
+    parse_options_from(&arguments, &repository_root())
 }
 
 fn repository_root() -> PathBuf {
@@ -280,8 +318,10 @@ fn publish(path: &Path, expected: &[u8], mode: Mode) -> Result<(), String> {
 }
 
 fn main() -> Result<(), String> {
-    let mode = parse_mode()?;
-    let root = repository_root();
+    let Options {
+        mode,
+        output_root: root,
+    } = parse_options()?;
 
     let contract_manifest_fixture = render_contract_manifest_v1_fixture()?;
     let default_executor = build_default_executor_program();
@@ -298,18 +338,6 @@ fn main() -> Result<(), String> {
         smart_contract_code_hashes_fixture.as_bytes(),
         mode,
     )?;
-    for (tag, name) in SYNTHETIC_EXECUTOR_FIXTURES.iter().enumerate() {
-        let tag = u8::try_from(tag).expect("synthetic fixture inventory fits u8");
-        publish(
-            &root
-                .join("integration_tests/fixtures/ivm")
-                .join(name)
-                .with_extension("to"),
-            &build_synthetic_executor_program(tag),
-            mode,
-        )?;
-    }
-
     let stage = root
         .join("target/ivm-fixture-export")
         .join(process::id().to_string());
@@ -341,11 +369,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_requires_an_explicit_non_mutating_or_mutating_mode() {
-        assert_eq!(parse_mode_from(&["--check".to_owned()]), Ok(Mode::Check));
-        assert_eq!(parse_mode_from(&["--write".to_owned()]), Ok(Mode::Write));
-        assert!(parse_mode_from(&[]).is_err());
-        assert!(parse_mode_from(&["--write".to_owned(), "extra".to_owned()]).is_err());
+    fn command_requires_an_explicit_mode_and_accepts_a_staged_output_root() {
+        let default_root = Path::new("/workspace");
+        assert_eq!(
+            parse_options_from(&["--check".to_owned()], default_root),
+            Ok(Options {
+                mode: Mode::Check,
+                output_root: default_root.to_path_buf(),
+            })
+        );
+        assert_eq!(
+            parse_options_from(
+                &[
+                    "--output-root".to_owned(),
+                    "/staged/fixtures".to_owned(),
+                    "--write".to_owned(),
+                ],
+                default_root,
+            ),
+            Ok(Options {
+                mode: Mode::Write,
+                output_root: PathBuf::from("/staged/fixtures"),
+            })
+        );
+        assert!(parse_options_from(&[], default_root).is_err());
+        assert!(
+            parse_options_from(&["--write".to_owned(), "--check".to_owned()], default_root,)
+                .is_err()
+        );
+        assert!(
+            parse_options_from(&["--write".to_owned(), "extra".to_owned()], default_root).is_err()
+        );
+    }
+
+    #[test]
+    fn command_rejects_malformed_output_root_options() {
+        let default_root = Path::new("/workspace");
+        for arguments in [
+            vec!["--write".to_owned(), "--output-root".to_owned()],
+            vec![
+                "--write".to_owned(),
+                "--output-root".to_owned(),
+                String::new(),
+            ],
+            vec![
+                "--write".to_owned(),
+                "--output-root".to_owned(),
+                "--check".to_owned(),
+            ],
+            vec![
+                "--write".to_owned(),
+                "--output-root".to_owned(),
+                "/first".to_owned(),
+                "--output-root".to_owned(),
+                "/second".to_owned(),
+            ],
+        ] {
+            assert!(parse_options_from(&arguments, default_root).is_err());
+        }
     }
 
     #[test]

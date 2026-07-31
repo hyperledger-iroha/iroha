@@ -1,0 +1,15 @@
+{
+  "id": "norito/examples/transfer-asset",
+  "title": "transfer-asset",
+  "description": "---",
+  "source": "@site/docs/norito/examples/transfer-asset.md",
+  "sourceDirName": "norito/examples",
+  "slug": "/norito/examples/transfer-asset",
+  "permalink": "/next/norito/examples/transfer-asset",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/examples/transfer-asset.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

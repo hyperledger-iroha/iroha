@@ -25,6 +25,9 @@ import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.model.instructions.LanePrivacyMerkleWitness;
+import org.hyperledger.iroha.android.model.instructions.LanePrivacyProof;
+import org.hyperledger.iroha.android.model.instructions.LanePrivacyWitness;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
 import org.hyperledger.iroha.android.numeric.NumericV1;
@@ -47,6 +50,19 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   // display prefix, so this private synthetic context permits canonical decode/re-encode checks
   // without acquiring a public or network default.
   private static final int CANONICAL_VALIDATION_DISCRIMINANT = 0;
+  private static final long PROOF_BOX_MAX_ENCODED_BYTES = 64L * 1024L * 1024L;
+  private static final long PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES = 8L + 256L;
+  private static final long VERIFYING_KEY_REF_MAX_ENCODED_BYTES =
+      2L * (8L + PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES);
+  private static final long OPTIONAL_FIXED_ARRAY_HASH_MAX_ENCODED_BYTES = 1L + 8L + 32L * 9L;
+  private static final long LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES = 1L + 8L + 32L;
+  private static final long LANE_PRIVACY_MAX_AUDIT_PATH_ENCODED_BYTES =
+      8L
+          + (LanePrivacyMerkleWitness.MAX_DEPTH + 1L) * 8L
+          + LanePrivacyMerkleWitness.MAX_DEPTH
+              * LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES;
+  private static final long LANE_PRIVACY_MAX_OPTION_ENCODED_BYTES = 16L * 1024L;
+  private static final long LANE_PRIVACY_MERKLE_TAG = 0L;
   private static final ThreadLocal<Integer> CHAIN_DISCRIMINANT = new ThreadLocal<>();
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<String> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
@@ -63,6 +79,20 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<byte[]> HASH_ARRAY_ADAPTER = new FixedHashArrayAdapter();
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_HASH_ADAPTER =
       NoritoAdapters.option(HASH_ARRAY_ADAPTER);
+  private static final TypeAdapter<Optional<byte[]>> OPTIONAL_LANE_PRIVACY_HASH_ADAPTER =
+      NoritoAdapters.option(FIXED_HASH_ADAPTER);
+  private static final TypeAdapter<List<byte[]>> LANE_PRIVACY_AUDIT_PATH_ADAPTER =
+      new LanePrivacyAuditPathAdapter();
+  private static final TypeAdapter<LanePrivacyMerkleProofValue>
+      LANE_PRIVACY_MERKLE_PROOF_ADAPTER = new LanePrivacyMerkleProofAdapter();
+  private static final TypeAdapter<LanePrivacyMerkleWitness>
+      LANE_PRIVACY_MERKLE_WITNESS_ADAPTER = new LanePrivacyMerkleWitnessAdapter();
+  private static final TypeAdapter<LanePrivacyWitness> LANE_PRIVACY_WITNESS_ADAPTER =
+      new LanePrivacyWitnessAdapter();
+  private static final TypeAdapter<LanePrivacyProof> LANE_PRIVACY_PROOF_ADAPTER =
+      new LanePrivacyProofAdapter();
+  private static final TypeAdapter<Optional<LanePrivacyProof>> OPTIONAL_LANE_PRIVACY_ADAPTER =
+      NoritoAdapters.option(LANE_PRIVACY_PROOF_ADAPTER);
   private static final TypeAdapter<byte[]> CONTRACT_ARGUMENT_RECORD_ADAPTER =
       new ContractArgumentRecordAdapter();
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER =
@@ -245,7 +275,11 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public ProofBoxValue decode(final NoritoDecoder decoder) {
       return new ProofBoxValue(
-          decodeSizedField(decoder, STRING_ADAPTER),
+          decodeBoundedSizedField(
+              decoder,
+              STRING_ADAPTER,
+              PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+              "ProofBox backend"),
           decodeSizedField(decoder, RAW_BYTE_VEC_ADAPTER));
     }
   }
@@ -261,8 +295,211 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public ProofVerifierKeyRef decode(final NoritoDecoder decoder) {
       return new ProofVerifierKeyRef(
-          decodeSizedField(decoder, STRING_ADAPTER),
-          decodeSizedField(decoder, STRING_ADAPTER));
+          decodeBoundedSizedField(
+              decoder,
+              STRING_ADAPTER,
+              PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+              "verifier-key backend"),
+          decodeBoundedSizedField(
+              decoder,
+              STRING_ADAPTER,
+              PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+              "verifier-key name"));
+    }
+  }
+
+  private static final class LanePrivacyAuditPathAdapter
+      implements TypeAdapter<List<byte[]>> {
+    private final TypeAdapter<List<Optional<byte[]>>> delegate =
+        NoritoAdapters.sequence(OPTIONAL_LANE_PRIVACY_HASH_ADAPTER);
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final List<byte[]> value) {
+      if (value.size() < 1 || value.size() > LanePrivacyMerkleWitness.MAX_DEPTH) {
+        throw new IllegalArgumentException(
+            "lane privacy audit path depth must be between 1 and "
+                + LanePrivacyMerkleWitness.MAX_DEPTH);
+      }
+      final List<Optional<byte[]>> optional = new ArrayList<>(value.size());
+      for (final byte[] sibling : value) {
+        optional.add(Optional.of(sibling.clone()));
+      }
+      delegate.encode(encoder, optional);
+    }
+
+    @Override
+    public List<byte[]> decode(final NoritoDecoder decoder) {
+      final long countValue = decoder.readLength(false);
+      if (countValue < 1L || countValue > LanePrivacyMerkleWitness.MAX_DEPTH) {
+        throw new IllegalArgumentException(
+            "lane privacy audit path depth must be between 1 and "
+                + LanePrivacyMerkleWitness.MAX_DEPTH);
+      }
+      final int count = (int) countValue;
+      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        return decodePacked(decoder, count);
+      }
+      return decodeDelimited(decoder, count);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+
+    private static List<byte[]> decodeDelimited(
+        final NoritoDecoder decoder, final int count) {
+      final List<byte[]> siblings = new ArrayList<>(count);
+      for (int index = 0; index < count; index++) {
+        final long length = decoder.readLength(decoder.compactLenActive());
+        if (length < 1L || length > LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES) {
+          throw new IllegalArgumentException(
+              "lane privacy sibling " + index + " payload is oversized");
+        }
+        siblings.add(decodeSibling(decoder.readBytes((int) length), decoder, index));
+      }
+      return siblings;
+    }
+
+    private static List<byte[]> decodePacked(final NoritoDecoder decoder, final int count) {
+      long previous = decoder.readUInt(64);
+      if (previous != 0L) {
+        throw new IllegalArgumentException("packed lane privacy offsets must start at zero");
+      }
+      final List<Integer> sizes = new ArrayList<>(count);
+      for (int index = 0; index < count; index++) {
+        final long current = decoder.readUInt(64);
+        if (current < previous) {
+          throw new IllegalArgumentException("packed lane privacy offsets must be monotonic");
+        }
+        final long size = current - previous;
+        if (size < 1L || size > LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES) {
+          throw new IllegalArgumentException(
+              "lane privacy sibling " + index + " payload is oversized");
+        }
+        sizes.add((int) size);
+        previous = current;
+      }
+      if (previous != decoder.remaining()) {
+        throw new IllegalArgumentException(
+            "packed lane privacy offsets must cover the complete path payload");
+      }
+      final List<byte[]> siblings = new ArrayList<>(count);
+      for (int index = 0; index < count; index++) {
+        siblings.add(decodeSibling(decoder.readBytes(sizes.get(index)), decoder, index));
+      }
+      return siblings;
+    }
+
+    private static byte[] decodeSibling(
+        final byte[] payload, final NoritoDecoder parent, final int index) {
+      final NoritoDecoder child =
+          new NoritoDecoder(payload, parent.flags(), parent.flagsHint());
+      final Optional<byte[]> sibling = OPTIONAL_LANE_PRIVACY_HASH_ADAPTER.decode(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException(
+            "lane privacy sibling " + index + " has trailing bytes");
+      }
+      if (!sibling.isPresent()) {
+        throw new IllegalArgumentException(
+            "lane privacy sibling " + index + " must be present");
+      }
+      final byte[] bytes = sibling.get();
+      if ((bytes[bytes.length - 1] & 1) != 1) {
+        throw new IllegalArgumentException(
+            "lane privacy sibling "
+                + index
+                + " is missing the Iroha prehashed marker");
+      }
+      return bytes;
+    }
+  }
+
+  private static final class LanePrivacyMerkleProofValue {
+    private final long leafIndex;
+    private final List<byte[]> auditPath;
+
+    private LanePrivacyMerkleProofValue(final long leafIndex, final List<byte[]> auditPath) {
+      this.leafIndex = leafIndex;
+      this.auditPath = auditPath;
+    }
+  }
+
+  private static final class LanePrivacyMerkleProofAdapter
+      implements TypeAdapter<LanePrivacyMerkleProofValue> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final LanePrivacyMerkleProofValue value) {
+      encodeSizedField(encoder, UINT32_ADAPTER, value.leafIndex);
+      encodeSizedField(encoder, LANE_PRIVACY_AUDIT_PATH_ADAPTER, value.auditPath);
+    }
+
+    @Override
+    public LanePrivacyMerkleProofValue decode(final NoritoDecoder decoder) {
+      final long leafIndex = decodeSizedField(decoder, UINT32_ADAPTER);
+      final List<byte[]> auditPath =
+          decodeBoundedSizedField(
+              decoder,
+              LANE_PRIVACY_AUDIT_PATH_ADAPTER,
+              LANE_PRIVACY_MAX_AUDIT_PATH_ENCODED_BYTES,
+              "lane privacy audit path");
+      return new LanePrivacyMerkleProofValue(leafIndex, auditPath);
+    }
+  }
+
+  private static final class LanePrivacyMerkleWitnessAdapter
+      implements TypeAdapter<LanePrivacyMerkleWitness> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final LanePrivacyMerkleWitness value) {
+      encodeSizedField(encoder, HASH_ARRAY_ADAPTER, value.leaf());
+      encodeSizedField(
+          encoder,
+          LANE_PRIVACY_MERKLE_PROOF_ADAPTER,
+          new LanePrivacyMerkleProofValue(value.leafIndex(), value.auditPath()));
+    }
+
+    @Override
+    public LanePrivacyMerkleWitness decode(final NoritoDecoder decoder) {
+      final byte[] leaf = decodeSizedField(decoder, HASH_ARRAY_ADAPTER);
+      final LanePrivacyMerkleProofValue proof =
+          decodeSizedField(decoder, LANE_PRIVACY_MERKLE_PROOF_ADAPTER);
+      return new LanePrivacyMerkleWitness(leaf, proof.leafIndex, proof.auditPath);
+    }
+  }
+
+  private static final class LanePrivacyWitnessAdapter
+      implements TypeAdapter<LanePrivacyWitness> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final LanePrivacyWitness value) {
+      if (!(value instanceof LanePrivacyWitness.Merkle merkle)) {
+        throw new IllegalArgumentException("unknown lane privacy witness subtype");
+      }
+      ENUM_TAG_ADAPTER.encode(encoder, LANE_PRIVACY_MERKLE_TAG);
+      encodeSizedField(encoder, LANE_PRIVACY_MERKLE_WITNESS_ADAPTER, merkle.value());
+    }
+
+    @Override
+    public LanePrivacyWitness decode(final NoritoDecoder decoder) {
+      final long tag = ENUM_TAG_ADAPTER.decode(decoder);
+      if (tag != LANE_PRIVACY_MERKLE_TAG) {
+        throw new IllegalArgumentException("unknown lane privacy witness tag: " + tag);
+      }
+      return new LanePrivacyWitness.Merkle(
+          decodeSizedField(decoder, LANE_PRIVACY_MERKLE_WITNESS_ADAPTER));
+    }
+  }
+
+  private static final class LanePrivacyProofAdapter implements TypeAdapter<LanePrivacyProof> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final LanePrivacyProof value) {
+      encodeSizedField(encoder, UINT16_ADAPTER, (long) value.commitmentId());
+      encodeSizedField(encoder, LANE_PRIVACY_WITNESS_ADAPTER, value.witness());
+    }
+
+    @Override
+    public LanePrivacyProof decode(final NoritoDecoder decoder) {
+      return new LanePrivacyProof(
+          decodeSizedField(decoder, UINT16_ADAPTER).intValue(),
+          decodeSizedField(decoder, LANE_PRIVACY_WITNESS_ADAPTER));
     }
   }
 
@@ -278,25 +515,41 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
       final byte[] commitment = value.verifyingKeyCommitment();
       final byte[] envelopeHash = value.envelopeHash();
-      if (commitment != null || envelopeHash != null) {
+      final LanePrivacyProof lanePrivacy = value.lanePrivacy();
+      if (commitment != null || envelopeHash != null || lanePrivacy != null) {
         encodeSizedField(
             encoder, OPTIONAL_HASH_ADAPTER, Optional.ofNullable(commitment));
       }
-      if (envelopeHash != null) {
-        encodeSizedField(encoder, OPTIONAL_HASH_ADAPTER, Optional.of(envelopeHash));
+      if (envelopeHash != null || lanePrivacy != null) {
+        encodeSizedField(encoder, OPTIONAL_HASH_ADAPTER, Optional.ofNullable(envelopeHash));
+      }
+      if (lanePrivacy != null) {
+        encodeSizedField(
+            encoder, OPTIONAL_LANE_PRIVACY_ADAPTER, Optional.of(lanePrivacy));
       }
     }
 
     @Override
     public ProofAttachment decode(final NoritoDecoder decoder) {
-      final String backend = decodeSizedField(decoder, STRING_ADAPTER);
-      final ProofBoxValue proof = decodeSizedField(decoder, PROOF_BOX_ADAPTER);
+      final String backend =
+          decodeBoundedSizedField(
+              decoder,
+              STRING_ADAPTER,
+              PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+              "ProofAttachment backend");
+      final ProofBoxValue proof =
+          decodeBoundedSizedField(
+              decoder, PROOF_BOX_ADAPTER, PROOF_BOX_MAX_ENCODED_BYTES, "ProofBox");
       if (!proof.backend().equals(backend)) {
         throw new IllegalArgumentException(
             "proof.backend must match attachment backend");
       }
       final ProofVerifierKeyRef verifyingKeyRef =
-          decodeSizedField(decoder, PROOF_VERIFIER_KEY_REF_ADAPTER);
+          decodeBoundedSizedField(
+              decoder,
+              PROOF_VERIFIER_KEY_REF_ADAPTER,
+              VERIFYING_KEY_REF_MAX_ENCODED_BYTES,
+              "verifier-key reference");
       if (!verifyingKeyRef.backend().equals(backend)) {
         throw new IllegalArgumentException(
             "vk_ref.backend must match attachment backend");
@@ -305,18 +558,36 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       final byte[] commitment =
           decoder.remaining() == 0
               ? null
-              : decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null);
+              : decodeBoundedSizedField(
+                      decoder,
+                      OPTIONAL_HASH_ADAPTER,
+                      OPTIONAL_FIXED_ARRAY_HASH_MAX_ENCODED_BYTES,
+                      "verifier-key commitment")
+                  .orElse(null);
       final byte[] envelopeHash =
           decoder.remaining() == 0
               ? null
-              : decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null);
+              : decodeBoundedSizedField(
+                      decoder,
+                      OPTIONAL_HASH_ADAPTER,
+                      OPTIONAL_FIXED_ARRAY_HASH_MAX_ENCODED_BYTES,
+                      "envelope hash")
+                  .orElse(null);
+      final LanePrivacyProof lanePrivacy =
+          decoder.remaining() == 0
+              ? null
+              : decodeBoundedSizedField(
+                      decoder,
+                      OPTIONAL_LANE_PRIVACY_ADAPTER,
+                      LANE_PRIVACY_MAX_OPTION_ENCODED_BYTES,
+                      "lane privacy proof")
+                  .orElse(null);
       if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException(
-            "lane privacy proof attachments are not supported by this SDK");
+        throw new IllegalArgumentException("trailing ProofAttachment fields");
       }
 
       return new ProofAttachment(
-          backend, proof.bytes(), verifyingKeyRef, commitment, envelopeHash);
+          backend, proof.bytes(), verifyingKeyRef, commitment, envelopeHash, lanePrivacy);
     }
   }
 
@@ -350,6 +621,30 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   static byte[] encodeInstructionBox(final InstructionBox instruction) {
     return NoritoCodec.encode(instruction, INSTRUCTION_BOX_SCHEMA, new InstructionAdapter());
+  }
+
+  static byte[] encodeProofAttachmentPayload(final ProofAttachment value) {
+    return encodeProofAttachmentPayload(value, 0);
+  }
+
+  static byte[] encodeProofAttachmentPayload(final ProofAttachment value, final int flags) {
+    final NoritoEncoder encoder = new NoritoEncoder(flags);
+    PROOF_ATTACHMENT_ADAPTER.encode(encoder, value);
+    return encoder.toByteArray();
+  }
+
+  static ProofAttachment decodeProofAttachmentPayload(final byte[] encoded) {
+    return decodeProofAttachmentPayload(encoded, 0);
+  }
+
+  static ProofAttachment decodeProofAttachmentPayload(final byte[] encoded, final int flags) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, flags, NoritoHeader.MINOR_VERSION);
+    final ProofAttachment value = PROOF_ATTACHMENT_ADAPTER.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("trailing ProofAttachment payload bytes");
+    }
+    return value;
   }
 
   static byte[] encodeMultisigProposeRequest(

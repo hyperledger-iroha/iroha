@@ -1,0 +1,27 @@
+{
+  "id": "sorafs/reference-sdk/errors",
+  "title": "SoraFS Reference SDK Error Codes",
+  "description": "sorafs-validate emits ValidationOutcomeV1 records with stable code,",
+  "source": "@site/docs/sorafs/reference-sdk/errors.md",
+  "sourceDirName": "sorafs/reference-sdk",
+  "slug": "/sorafs/reference-sdk/errors",
+  "permalink": "/next/sorafs/reference-sdk/errors",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "SoraFS Reference SDK Error Codes",
+    "summary": "Stable ValidationOutcomeV1 codes emitted by sorafs-validate and the reference validator APIs."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Rust snippets",
+    "permalink": "/next/sorafs/developer-sdk-rust"
+  },
+  "next": {
+    "title": "Orchestrator Ops Runbook",
+    "permalink": "/next/sorafs/orchestrator-ops"
+  }
+}

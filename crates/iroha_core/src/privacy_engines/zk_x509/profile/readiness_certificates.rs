@@ -42,10 +42,13 @@ const SHA_BASE_FOLD_EQUALITIES_V1: u8 = 1;
 
 /// Independent SHA-256 pin for the typed soundness-certificate payload.
 ///
-/// It is not part of the payload it authenticates.
+/// It is not part of the payload it authenticates. Operators can reproduce
+/// and print the independently framed 61-field, 718-byte derivation with
+/// `installed_soundness_pin_matches_the_current_compiled_profile`; native
+/// capture tooling cannot derive or rewrite this reviewed pin.
 pub(crate) const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [
-    0x2b, 0xc8, 0x9c, 0xc7, 0x30, 0xf8, 0x65, 0x44, 0x7b, 0xc5, 0x05, 0xd7, 0xda, 0xab, 0x39, 0x1d,
-    0x87, 0xeb, 0x03, 0xbd, 0x50, 0xe4, 0x26, 0xd4, 0x4a, 0xbb, 0xbb, 0xa5, 0x61, 0x88, 0x69, 0x4f,
+    0xd2, 0x73, 0xa1, 0xbd, 0x01, 0x3f, 0x48, 0x08, 0x8d, 0x75, 0xa6, 0x21, 0xad, 0x89, 0x38, 0x64,
+    0xce, 0x4a, 0xa5, 0xce, 0x73, 0x11, 0x27, 0xaa, 0x04, 0x38, 0xac, 0xd8, 0xb9, 0x59, 0x2d, 0xaf,
 ];
 
 pub(crate) const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
@@ -1094,7 +1097,14 @@ mod tests {
             .expect("canonical soundness certificate validates");
         let (independent, payload_bytes) =
             independently_digest_soundness_certificate_v1(certificate);
+        assert_eq!(SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1, 61);
         assert_eq!(payload_bytes, 718);
+        eprintln!(
+            "zk-X509 soundness certificate v1 operator derivation: fields={} payload_bytes={} sha256={}",
+            SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1,
+            payload_bytes,
+            hex::encode(independent),
+        );
         assert_eq!(validated, independent);
         assert_eq!(independent, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1);
         assert!(soundness_certificate_is_pinned_v1(compiled_profile_digest));

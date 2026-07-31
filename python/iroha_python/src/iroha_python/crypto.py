@@ -198,6 +198,7 @@ __all__ = [
     "inspect_signed_privacy_jindo_action_v1",
     "inspect_signed_privacy_verange_action_v1",
     "inspect_signed_privacy_vega_action_v1",
+    "inspect_signed_privacy_zk_x509_identity_presentation_action_v1",
     "inspect_signed_privacy_zk_ams_batch_admission_action_v1",
     "inspect_signed_privacy_zk_ams_provision_account_action_v1",
     "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
@@ -662,34 +663,124 @@ def _normalize_bytes(value: Any, name: str, *, expected_len: Optional[int] = Non
     return data
 
 
+_PROOF_BOX_MAX_ENCODED_BYTES_V1 = 64 * 1024 * 1024
+_PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1 = 32
+_VERIFYING_KEY_ID_MAX_FIELD_BYTES = 256
+_LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 = 255
+_PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS = (
+    "..",
+    "//",
+    ":::",
+    "/:",
+    ":/",
+    "/.",
+    "./",
+    ":.",
+    ".:",
+)
+
+
+def _require_portable_verifier_id_field(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    encoded = value.encode("utf-8")
+    if (
+        not encoded
+        or len(encoded) > _VERIFYING_KEY_ID_MAX_FIELD_BYTES
+        or not (
+            (encoded[0:1].islower() or encoded[0:1].isdigit())
+            and (encoded[-1:].islower() or encoded[-1:].isdigit())
+        )
+        or any(
+            byte
+            not in b"abcdefghijklmnopqrstuvwxyz0123456789-_/.:"
+            for byte in encoded
+        )
+        or any(
+            separator in value
+            for separator in _PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS
+        )
+    ):
+        raise ValueError(
+            f"{context} must use the bounded portable verifier-key registry grammar"
+        )
+    return value
+
+
 def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(entry, Mapping):
         raise TypeError("lane_privacy_attachments entries must be mappings")
 
+    expected_fields = {
+        "commitment_id",
+        "leaf",
+        "leaf_index",
+        "audit_path",
+        "proof_backend",
+        "proof_bytes",
+        "verifying_key_name",
+    }
+    unknown_fields = set(entry) - expected_fields
+    if unknown_fields:
+        unknown = sorted(str(field) for field in unknown_fields)[0]
+        raise ValueError(
+            f"lane privacy attachment contains unknown first-release field {unknown!r}"
+        )
+
     try:
-        commitment_id = int(entry["commitment_id"])
-        leaf_index = int(entry.get("leaf_index", 0))
-        proof_backend = _require_exact_non_empty_string(
-            entry.get("proof_backend", "halo2/ipa"),
+        commitment_id = entry["commitment_id"]
+        leaf_index = entry["leaf_index"]
+        proof_backend = _require_portable_verifier_id_field(
+            entry["proof_backend"],
             "proof_backend",
         )
         proof_bytes = _normalize_bytes(entry["proof_bytes"], "proof_bytes")
-        verifying_key_name = _require_exact_non_empty_string(
+        verifying_key_name = _require_portable_verifier_id_field(
             entry["verifying_key_name"],
             "verifying_key_name",
         )
         leaf = _normalize_bytes(entry["leaf"], "leaf", expected_len=32)
-        raw_audit = entry.get("audit_path", [])
+        raw_audit = entry["audit_path"]
     except KeyError as exc:  # pragma: no cover - defensive path
         raise KeyError(f"lane privacy attachment missing required key: {exc}") from exc
 
-    if not isinstance(raw_audit, Iterable):
-        raise TypeError("audit_path must be an iterable of optional bytes")
-    audit_path: list[Optional[bytes]] = []
+    if isinstance(commitment_id, bool) or not isinstance(commitment_id, int):
+        raise TypeError("commitment_id must be an unsigned 16-bit integer")
+    if commitment_id < 0 or commitment_id > 0xFFFF:
+        raise ValueError("commitment_id must be an unsigned 16-bit integer")
+    if isinstance(leaf_index, bool) or not isinstance(leaf_index, int):
+        raise TypeError("leaf_index must be an unsigned 32-bit integer")
+    if leaf_index < 0 or leaf_index > 0xFFFF_FFFF:
+        raise ValueError("leaf_index must be an unsigned 32-bit integer")
+    if not proof_bytes:
+        raise ValueError("proof_bytes must be non-empty")
+    maximum_proof_bytes = (
+        _PROOF_BOX_MAX_ENCODED_BYTES_V1
+        - _PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1
+        - len(proof_backend.encode("utf-8"))
+    )
+    if len(proof_bytes) > maximum_proof_bytes:
+        raise ValueError(
+            "proof_bytes exceeds the "
+            f"{maximum_proof_bytes}-byte limit for this backend"
+        )
+
+    if not isinstance(raw_audit, (list, tuple)):
+        raise TypeError("audit_path must be a list or tuple of 32-byte siblings")
+    if not 1 <= len(raw_audit) <= _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1:
+        raise ValueError(
+            "audit_path must contain between 1 and "
+            f"{_LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+        )
+    if len(raw_audit) < 32 and leaf_index >= 1 << len(raw_audit):
+        raise ValueError(
+            f"leaf_index {leaf_index} is not representable by merkle depth "
+            f"{len(raw_audit)}"
+        )
+    audit_path: list[bytes] = []
     for idx, sibling in enumerate(raw_audit):
         if sibling is None:
-            audit_path.append(None)
-            continue
+            raise ValueError(f"audit_path[{idx}] must contain a sibling")
         audit_path.append(_normalize_bytes(sibling, f"audit_path[{idx}]", expected_len=32))
 
     return {
@@ -1270,7 +1361,7 @@ def build_signed_transaction(
     lane_privacy_attachments:
         Optional iterable of mappings describing Merkle lane privacy proofs. Each mapping
         must include ``commitment_id``, ``leaf`` (32-byte hash), ``leaf_index``,
-        ``audit_path`` (iterable of optional 32-byte hashes), ``proof_backend``,
+        ``audit_path`` (list or tuple of 1..255 complete 32-byte siblings), ``proof_backend``,
         ``proof_bytes``, and ``verifying_key_name``.
     """
 
@@ -2362,3 +2453,37 @@ def inspect_signed_privacy_pq_masp_note_action_v1(
         entrypoint="inspect_signed_privacy_pq_masp_note_action_v1",
         protocol_label="PQ-MASP",
     )
+
+
+def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    canonical_genesis_hash: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact genesis-bound ZK-X509 presentation."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    if not isinstance(canonical_genesis_hash, (bytes, bytearray, memoryview)):
+        raise TypeError("canonical_genesis_hash must be bytes-like")
+    entrypoint = "inspect_signed_privacy_zk_x509_identity_presentation_action_v1"
+    try:
+        inspector = getattr(_crypto, entrypoint)
+    except AttributeError as exc:
+        raise RuntimeError(
+            f"iroha_python._crypto is missing {entrypoint}; rebuild the extension"
+        ) from exc
+    try:
+        result = inspector(
+            bytes(signed_transaction_versioned),
+            bytes(canonical_genesis_hash),
+        )
+    except Exception:
+        raise ValueError("invalid canonical signed ZK-X509 presentation action") from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            "native ZK-X509 presentation action inspection returned an invalid result"
+        )
+    return result

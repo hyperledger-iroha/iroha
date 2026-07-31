@@ -28,7 +28,8 @@ pub mod zk_ams;
 pub(crate) mod zk_x509;
 
 use iroha_data_model::privacy::{
-    PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolIdV1, PrivacyRootV1,
+    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyProofManagedPoolBootstrapV1,
+    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementV1,
 };
 use thiserror::Error;
 
@@ -36,6 +37,77 @@ use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
 use self::proof_managed_accumulator::{
     ProofManagedAccumulatorErrorV1, build_proof_managed_frontier_v1,
 };
+use self::zk_x509::credential_stark::{
+    ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
+    decode_zk_x509_credential_envelope_v1,
+};
+
+/// Exact maximum byte length of one canonical first-release `X5S1` proof.
+pub const ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1: usize =
+    self::zk_x509::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
+
+/// Structural or public-binding failure for one externally produced `X5S1` proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum ZkX509CredentialProofContainerErrorV1 {
+    /// The typed public statement or committed genesis hash is invalid.
+    #[error("zk-X509 credential statement or genesis binding is invalid")]
+    InvalidStatement,
+    /// The proof exceeds the exact first-release `X5S1` ceiling.
+    #[error("zk-X509 credential proof exceeds its exact byte ceiling")]
+    ProofTooLarge,
+    /// The proof is not the sole canonical two-record `X5S1` container.
+    #[error("zk-X509 credential proof container is malformed")]
+    MalformedContainer,
+    /// The `X5S1` header does not bind the exact statement and genesis hash.
+    #[error("zk-X509 credential proof public binding does not match")]
+    PublicBindingMismatch,
+}
+
+/// Validate the fixed-capacity `X5S1` container and its verifier-owned header.
+///
+/// This boundary is intended for resource-isolated prover workers. It performs
+/// no ledger-state lookup and does not replace full proof verification; it
+/// proves that the returned bytes are the sole first-release container and
+/// that they bind the exact typed statement and committed genesis hash before
+/// an SDK signs a submission transaction.
+pub fn validate_zk_x509_credential_proof_container_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    canonical_genesis_hash: [u8; 32],
+    encoded_proof: &[u8],
+) -> Result<(), ZkX509CredentialProofContainerErrorV1> {
+    PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+        .validate(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| ZkX509CredentialProofContainerErrorV1::InvalidStatement)?;
+    let expected = ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
+        statement,
+        canonical_genesis_hash,
+    )
+    .map_err(|_| ZkX509CredentialProofContainerErrorV1::InvalidStatement)?;
+    let decoded =
+        decode_zk_x509_credential_envelope_v1(encoded_proof).map_err(|error| match error {
+            ZkX509CredentialProofErrorV1::ProofTooLarge => {
+                ZkX509CredentialProofContainerErrorV1::ProofTooLarge
+            }
+            ZkX509CredentialProofErrorV1::MalformedEnvelope => {
+                ZkX509CredentialProofContainerErrorV1::MalformedContainer
+            }
+            ZkX509CredentialProofErrorV1::InvalidStatement => {
+                ZkX509CredentialProofContainerErrorV1::InvalidStatement
+            }
+            ZkX509CredentialProofErrorV1::PublicBindingMismatch => {
+                ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch
+            }
+            ZkX509CredentialProofErrorV1::MainProof
+            | ZkX509CredentialProofErrorV1::CaProof
+            | ZkX509CredentialProofErrorV1::CrossSubproofMismatch => {
+                ZkX509CredentialProofContainerErrorV1::MalformedContainer
+            }
+        })?;
+    if decoded.public != expected {
+        return Err(ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch);
+    }
+    Ok(())
+}
 
 /// Failure to derive a canonical root for one proof-managed pool bootstrap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -110,5 +182,112 @@ pub(crate) fn proof_managed_pool_initial_root_v1(
             }
             .history_commitment())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::privacy_engines::zk_x509::credential_stark::{
+        ZkX509CredentialPublicBindingV1, encode_zk_x509_credential_envelope_v1,
+    };
+
+    fn fixture() -> (IrohaZkX509StarkP256StatementV1, [u8; 32], Vec<u8>) {
+        let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
+        let genesis = [0xA5; 32];
+        let public =
+            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis)
+                .expect("fixture public binding");
+        let proof = encode_zk_x509_credential_envelope_v1(public, b"X5M1", b"X5C1")
+            .expect("minimum canonical X5S1");
+        (statement, genesis, proof)
+    }
+
+    #[test]
+    fn x509_worker_container_boundary_accepts_only_exact_bound_x5s1() {
+        let (statement, genesis, proof) = fixture();
+        validate_zk_x509_credential_proof_container_v1(&statement, genesis, &proof)
+            .expect("canonical fixed-capacity container");
+
+        assert_eq!(
+            validate_zk_x509_credential_proof_container_v1(&statement, [0; 32], &proof),
+            Err(ZkX509CredentialProofContainerErrorV1::InvalidStatement)
+        );
+        let mut invalid_statement = statement.clone();
+        invalid_statement.context.transaction_intent_digest =
+            iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0; 32]);
+        assert_eq!(
+            validate_zk_x509_credential_proof_container_v1(&invalid_statement, genesis, &proof,),
+            Err(ZkX509CredentialProofContainerErrorV1::InvalidStatement)
+        );
+        assert_eq!(
+            validate_zk_x509_credential_proof_container_v1(&statement, [0xA6; 32], &proof),
+            Err(ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch)
+        );
+        for length in 0..proof.len() {
+            assert_eq!(
+                validate_zk_x509_credential_proof_container_v1(
+                    &statement,
+                    genesis,
+                    &proof[..length],
+                ),
+                Err(ZkX509CredentialProofContainerErrorV1::MalformedContainer),
+                "truncation at byte {length} was accepted"
+            );
+        }
+        let mut trailing = proof.clone();
+        trailing.push(0);
+        assert_eq!(
+            validate_zk_x509_credential_proof_container_v1(&statement, genesis, &trailing),
+            Err(ZkX509CredentialProofContainerErrorV1::MalformedContainer)
+        );
+        for offset in [8, 40, 75] {
+            let mut substituted_public_binding = proof.clone();
+            substituted_public_binding[offset] ^= 1;
+            assert_eq!(
+                validate_zk_x509_credential_proof_container_v1(
+                    &statement,
+                    genesis,
+                    &substituted_public_binding,
+                ),
+                Err(ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch),
+                "public header substitution at byte {offset} was accepted"
+            );
+        }
+        for (offset, value) in [
+            (5, 2),  // version
+            (7, 0),  // record count
+            (77, 2), // MAIN kind
+            (79, 1), // MAIN instance
+            (83, 0), // MAIN length
+            (87, 2), // MAIN magic
+            (89, 1), // CA kind
+            (91, 1), // CA instance
+            (95, 0), // CA length
+            (99, 2), // CA magic
+        ] {
+            let mut malformed_field = proof.clone();
+            malformed_field[offset] = value;
+            assert_eq!(
+                validate_zk_x509_credential_proof_container_v1(
+                    &statement,
+                    genesis,
+                    &malformed_field,
+                ),
+                Err(ZkX509CredentialProofContainerErrorV1::MalformedContainer),
+                "framing substitution at byte {offset} was accepted"
+            );
+        }
+        for hostile in [Vec::new(), vec![0; 4]] {
+            assert_eq!(
+                validate_zk_x509_credential_proof_container_v1(&statement, genesis, &hostile,),
+                Err(ZkX509CredentialProofContainerErrorV1::MalformedContainer)
+            );
+        }
+        let oversized = vec![0xA5; ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1 + 1];
+        assert_eq!(
+            validate_zk_x509_credential_proof_container_v1(&statement, genesis, &oversized,),
+            Err(ZkX509CredentialProofContainerErrorV1::ProofTooLarge)
+        );
     }
 }

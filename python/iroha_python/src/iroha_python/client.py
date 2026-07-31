@@ -4551,6 +4551,7 @@ _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
         "true",
         "var",
         "view",
+        "Amount",
     }
 )
 
@@ -5497,6 +5498,8 @@ def _contract_trigger_descriptor(
         path,
     )
     trigger_id = _contract_required_string(value.get("id"), f"{path}.id")
+    if not _canonical_kotodama_identifier(trigger_id, declaration=True):
+        raise TypeError(f"{path}.id must be a canonical Kotodama declaration identifier")
     repeats = _contract_object(value.get("repeats"), f"{path}.repeats")
     _contract_exact_fields(
         repeats,
@@ -5538,7 +5541,11 @@ def _contract_trigger_descriptor(
     )
     namespace = callback.get("namespace")
     if namespace is not None:
-        _contract_required_string(namespace, f"{path}.callback.namespace")
+        namespace = _contract_required_string(namespace, f"{path}.callback.namespace")
+        if not _canonical_kotodama_identifier(namespace, type_declaration=True):
+            raise TypeError(
+                f"{path}.callback.namespace must be a canonical Kotodama type-declaration identifier"
+            )
     callback_entrypoint = _contract_required_string(
         callback.get("entrypoint"), f"{path}.callback.entrypoint"
     )
@@ -12291,6 +12298,63 @@ def _require_crypto() -> ModuleType:
     return _crypto
 
 
+def _require_active_privacy_capability_v1(
+    snapshot: PrivacyCapabilitySnapshotV1,
+    protocol_id: str,
+) -> Mapping[str, Any]:
+    """Return the unique live row only when its exact native profile is active."""
+
+    protocols = snapshot.get("protocols")
+    if not isinstance(protocols, list):
+        raise RuntimeError("privacy capability snapshot is missing canonical protocol rows")
+    matches: list[Mapping[str, Any]] = []
+    for row in protocols:
+        if not isinstance(row, Mapping):
+            continue
+        protocol_tag = row.get("protocol_id")
+        if isinstance(protocol_tag, Mapping) and protocol_tag.get("protocol") == protocol_id:
+            matches.append(row)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"privacy capability snapshot must contain exactly one {protocol_id} row"
+        )
+
+    matched_row = matches[0]
+    compiled = matched_row.get("compiled_profile")
+    if not isinstance(compiled, Mapping) or compiled.get("status") != "available":
+        raise RuntimeError(f"privacy protocol {protocol_id} has no available compiled profile")
+    compiled_value = compiled.get("value")
+    compiled_protocol = (
+        compiled_value.get("protocol_id")
+        if isinstance(compiled_value, Mapping)
+        else None
+    )
+    if not isinstance(compiled_protocol, Mapping) or compiled_protocol.get(
+        "protocol"
+    ) != protocol_id:
+        raise RuntimeError(
+            f"privacy protocol {protocol_id} compiled profile has a mismatched binding"
+        )
+
+    activation = matched_row.get("activation")
+    if not isinstance(activation, Mapping):
+        raise RuntimeError(f"privacy protocol {protocol_id} has no governed activation")
+    activation_protocol = activation.get("protocol_id")
+    if not isinstance(activation_protocol, Mapping) or activation_protocol.get(
+        "protocol"
+    ) != protocol_id:
+        raise RuntimeError(
+            f"privacy protocol {protocol_id} activation has a mismatched binding"
+        )
+    lifecycle = activation.get("lifecycle")
+    if not isinstance(lifecycle, Mapping) or lifecycle.get("state") != "active":
+        state = lifecycle.get("state") if isinstance(lifecycle, Mapping) else None
+        raise RuntimeError(
+            f"privacy protocol {protocol_id} is not active (state={state!r})"
+        )
+    return matched_row
+
+
 def signed_transaction_envelope_from_json(envelope_json: str) -> "SignedTransactionEnvelope":
     """Parse a signed transaction envelope from a JSON payload."""
 
@@ -12547,6 +12611,7 @@ _DEFAULT_FAILURE_STATUSES = frozenset({"Rejected", "Expired"})
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _TRANSACTION_STATUS_SCOPES = frozenset({"local", "global"})
+_ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v0"
 _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
 _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
 _CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1 = (
@@ -12766,6 +12831,72 @@ class ToriiClient(_BaseToriiClient):
                 "privacy capabilities response must use application/json media type"
             )
         return parse_privacy_capability_snapshot_json_v1(response.content)
+
+    def submit_signed_privacy_zk_x509_identity_presentation_action_v1(
+        self,
+        signed_transaction_versioned: bytes | bytearray | memoryview,
+        *,
+        canonical_genesis_hash: bytes | bytearray | memoryview,
+        wait: bool = True,
+        interval: float = 1.0,
+        timeout: Optional[float] = 30.0,
+        max_attempts: Optional[int] = None,
+        scope: str = "global",
+        success_statuses: Optional[Iterable[str]] = None,
+        failure_statuses: Optional[Iterable[str]] = None,
+        on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
+    ) -> tuple["SignedTransactionEnvelope", Any]:
+        """Authenticate, live-gate, and submit one exact ZK-X509 action.
+
+        The signed wire is inspected locally against ``canonical_genesis_hash``
+        before any network operation.  A fresh authoritative capability
+        snapshot must then expose the unique ZK-X509 row with an available
+        compiled profile and an active governed lifecycle.  No submission is
+        attempted when either check fails.
+        """
+
+        crypto = _require_crypto()
+        inspection = (
+            crypto.inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
+                signed_transaction_versioned,
+                canonical_genesis_hash,
+            )
+        )
+        if not isinstance(inspection, Mapping) or inspection.get(
+            "protocol_id"
+        ) != _ZK_X509_PRIVACY_PROTOCOL_ID_V1:
+            raise RuntimeError(
+                "native ZK-X509 inspector returned a mismatched privacy protocol"
+            )
+        wire = bytes(signed_transaction_versioned)
+        snapshot = self.privacy_capabilities_v1()
+        _require_active_privacy_capability_v1(
+            snapshot,
+            _ZK_X509_PRIVACY_PROTOCOL_ID_V1,
+        )
+        envelope = crypto.signed_transaction_envelope_from_versioned_v1(wire)
+        authenticated_wire = getattr(envelope, "signed_transaction_versioned", None)
+        if not isinstance(authenticated_wire, (bytes, bytearray, memoryview)) or bytes(
+            authenticated_wire
+        ) != wire:
+            raise RuntimeError(
+                "authenticated ZK-X509 transaction envelope changed the submitted wire"
+            )
+
+        if wait:
+            result = self.submit_transaction_envelope_and_wait(
+                envelope,
+                interval=interval,
+                timeout=timeout,
+                max_attempts=max_attempts,
+                scope=scope,
+                success_statuses=success_statuses,
+                failure_statuses=failure_statuses,
+                on_status=on_status,
+            )
+        else:
+            result = self.submit_transaction_envelope(envelope)
+        return envelope, result
 
     @property
     def sorafs_alias_policy(self) -> SorafsAliasPolicy:

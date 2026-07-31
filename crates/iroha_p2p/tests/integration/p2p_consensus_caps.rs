@@ -17,7 +17,10 @@ use iroha_config::parameters::{
 };
 use iroha_config_base::WithOrigin;
 use iroha_crypto::KeyPair;
-use iroha_data_model::prelude::{ChainId, PeerId};
+use iroha_data_model::{
+    block::consensus_v2::ConsensusMode,
+    prelude::{ChainId, PeerId},
+};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,
@@ -246,7 +249,7 @@ async fn consensus_caps_match_connects() {
     let config_caps = sample_consensus_config_caps();
 
     let caps = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        mode: ConsensusMode::Permissioned,
         proto_version: 2,
         consensus_fingerprint: [1u8; 32],
         config: config_caps.clone(),
@@ -296,13 +299,13 @@ async fn consensus_caps_mismatch_rejected() {
     let config_caps = sample_consensus_config_caps();
 
     let caps_ok = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        mode: ConsensusMode::Permissioned,
         proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps.clone(),
     };
     let caps_bad = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::npos-sumeragi@v2".to_string(), // mismatch
+        mode: ConsensusMode::Npos, // mismatch
         proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps,
@@ -355,13 +358,13 @@ async fn consensus_config_caps_mismatch_rejected() {
     mismatched.v2_config_fingerprint = [0xD4; 32];
 
     let caps_ok = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        mode: ConsensusMode::Permissioned,
         proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: config_caps,
     };
     let caps_bad = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        mode: ConsensusMode::Permissioned,
         proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: mismatched,

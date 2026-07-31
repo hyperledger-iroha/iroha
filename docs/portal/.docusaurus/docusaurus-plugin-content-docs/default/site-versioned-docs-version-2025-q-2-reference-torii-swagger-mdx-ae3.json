@@ -1,0 +1,24 @@
+{
+  "id": "reference/torii-swagger",
+  "title": "Torii API (Swagger UI)",
+  "description": "This page embeds the Torii OpenAPI document using swagger-ui-react. Use it when",
+  "source": "@site/versioned_docs/version-2025-q2/reference/torii-swagger.mdx",
+  "sourceDirName": "reference",
+  "slug": "/reference/torii-swagger",
+  "permalink": "/reference/torii-swagger",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/versioned_docs/version-2025-q2/reference/torii-swagger.mdx",
+  "tags": [],
+  "version": "2025-q2",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Publishing Checklist",
+    "permalink": "/reference/publishing-checklist"
+  },
+  "next": {
+    "title": "Torii API (RapiDoc)",
+    "permalink": "/reference/torii-rapidoc"
+  }
+}

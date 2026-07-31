@@ -1,0 +1,27 @@
+{
+  "id": "ministry/ai-moderation-runner",
+  "title": "AI Moderation Runner Specification",
+  "description": "This specification fulfils the documentation portion of MINFO-1 — Establish AI",
+  "source": "@site/docs/ministry/ai-moderation-runner.md",
+  "sourceDirName": "ministry",
+  "slug": "/ministry/ai-moderation-runner",
+  "permalink": "/next/ministry/ai-moderation-runner",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/ministry/ai-moderation-runner.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "AI Moderation Runner Specification",
+    "summary": "Deterministic moderation committee design for the Ministry of Information (MINFO-1) deliverable."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Settlement ↔ ISO 20022",
+    "permalink": "/next/finance/settlement-iso-mapping"
+  },
+  "next": {
+    "title": "Agenda Council Workflow",
+    "permalink": "/next/ministry/agenda-workflow"
+  }
+}

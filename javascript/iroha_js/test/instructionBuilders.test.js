@@ -68,6 +68,11 @@ import {
 import { blake2b256 } from "../src/blake2b.js";
 import { analyzeEntrypointValueTypeV1 } from "../src/entrypointSchema.js";
 import {
+  PROOF_BOX_MAX_ENCODED_BYTES,
+  proofBoxEncodedLength,
+  proofBoxMaxProofBytes,
+} from "../src/proofAttachment.js";
+import {
   noritoDecodeInstruction,
   noritoEncodeInstruction,
   validateNoritoFrame,
@@ -320,6 +325,28 @@ function withPureJsInstructionCodec(body) {
   }
 }
 
+function withNativeInstructionDecoder(decoded, body) {
+  const hadBinding = Object.prototype.hasOwnProperty.call(
+    globalThis,
+    "__IROHA_NORITO_BINDING__",
+  );
+  const previous = globalThis.__IROHA_NORITO_BINDING__;
+  globalThis.__IROHA_NORITO_BINDING__ = {
+    noritoDecodeInstruction() {
+      return JSON.stringify(decoded);
+    },
+  };
+  try {
+    return body();
+  } finally {
+    if (hadBinding) {
+      globalThis.__IROHA_NORITO_BINDING__ = previous;
+    } else {
+      delete globalThis.__IROHA_NORITO_BINDING__;
+    }
+  }
+}
+
 function assertNativeAndPureInstructionParity(instruction, context) {
   const pureEncoded = Buffer.from(
     withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
@@ -373,6 +400,101 @@ function normalizedHashHex(bytes) {
   const body = buffer.toString("hex").toUpperCase();
   const checksum = crc16("hash", body).toString(16).toUpperCase().padStart(4, "0");
   return `hash:${body}#${checksum}`;
+}
+
+const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const NORITO_CRC64_POLY = 0xc96c_5795_d787_0f42n;
+
+function noritoCrc64(payload) {
+  let crc = NORITO_CRC64_MASK;
+  for (const byte of payload) {
+    let tableEntry = (crc ^ BigInt(byte)) & 0xffn;
+    for (let bit = 0; bit < 8; bit += 1) {
+      tableEntry =
+        (tableEntry & 1n) === 0n
+          ? tableEntry >> 1n
+          : (tableEntry >> 1n) ^ NORITO_CRC64_POLY;
+    }
+    crc = tableEntry ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ NORITO_CRC64_MASK);
+}
+
+function rewriteNoritoFrameCrc(buffer, frameStart, frameEnd) {
+  const payloadLength = Number(buffer.readBigUInt64LE(frameStart + 23));
+  const payloadStart = frameEnd - payloadLength;
+  assert.ok(payloadStart >= frameStart + 40, "Norito payload must follow its header");
+  buffer.writeBigUInt64LE(
+    noritoCrc64(buffer.subarray(payloadStart, frameEnd)),
+    frameStart + 31,
+  );
+}
+
+function rewriteNestedInstructionCrcs(buffer) {
+  const innerStart = buffer.indexOf(Buffer.from("NRT0", "ascii"), 4);
+  assert.ok(innerStart > 0, "nested Norito instruction frame must be present");
+  rewriteNoritoFrameCrc(buffer, innerStart, buffer.length);
+  rewriteNoritoFrameCrc(buffer, 0, buffer.length);
+}
+
+function encodeCompactTestLength(length) {
+  let remaining = length;
+  const bytes = [];
+  do {
+    const chunk = remaining & 0x7f;
+    remaining = Math.floor(remaining / 128);
+    bytes.push(remaining === 0 ? chunk : chunk | 0x80);
+  } while (remaining !== 0);
+  return Buffer.from(bytes);
+}
+
+function rebuildNoritoTestFrame(frame, payload) {
+  const oldPayloadLength = Number(frame.readBigUInt64LE(23));
+  const payloadStart = frame.length - oldPayloadLength;
+  const prefix = Buffer.from(frame.subarray(0, payloadStart));
+  prefix.writeBigUInt64LE(BigInt(payload.length), 23);
+  prefix.writeBigUInt64LE(noritoCrc64(payload), 31);
+  return Buffer.concat([prefix, payload]);
+}
+
+function appendFinalizeProofAttachmentTail(encoded, tailPayload) {
+  const outer = validateNoritoFrame(encoded);
+  const wire = readCompactFieldPayload(outer.payload, 0, "outer.wire");
+  const innerField = readCompactFieldPayload(outer.payload, wire.next, "outer.inner");
+  assert.equal(innerField.next, outer.payload.length);
+  const innerFrameLength = Number(innerField.payload.readBigUInt64LE(0));
+  const innerFrame = innerField.payload.subarray(8);
+  assert.equal(innerFrame.length, innerFrameLength);
+  const inner = validateNoritoFrame(innerFrame);
+  const election = readCompactFieldPayload(inner.payload, 0, "finalize.election");
+  const tally = readCompactFieldPayload(inner.payload, election.next, "finalize.tally");
+  const attachment = readCompactFieldPayload(
+    inner.payload,
+    tally.next,
+    "finalize.attachment",
+  );
+  assert.equal(attachment.next, inner.payload.length);
+
+  const expandedAttachment = Buffer.concat([
+    attachment.payload,
+    encodeCompactTestLength(tailPayload.length),
+    tailPayload,
+  ]);
+  const rebuiltInnerPayload = Buffer.concat([
+    inner.payload.subarray(0, tally.next),
+    encodeCompactTestLength(expandedAttachment.length),
+    expandedAttachment,
+  ]);
+  const rebuiltInnerFrame = rebuildNoritoTestFrame(innerFrame, rebuiltInnerPayload);
+  const rebuiltInnerFieldPayload = Buffer.allocUnsafe(8 + rebuiltInnerFrame.length);
+  rebuiltInnerFieldPayload.writeBigUInt64LE(BigInt(rebuiltInnerFrame.length), 0);
+  rebuiltInnerFrame.copy(rebuiltInnerFieldPayload, 8);
+  const rebuiltOuterPayload = Buffer.concat([
+    outer.payload.subarray(0, wire.next),
+    encodeCompactTestLength(rebuiltInnerFieldPayload.length),
+    rebuiltInnerFieldPayload,
+  ]);
+  return rebuildNoritoTestFrame(Buffer.from(encoded), rebuiltOuterPayload);
 }
 
 test("normalizeAccountId exported accepts encoded account IDs", () => {
@@ -3164,6 +3286,15 @@ descriptorTest("buildShieldInstruction enforces strict canonical Quantity inputs
   }
 });
 
+function canonicalProofAttachmentInput(overrides = {}) {
+  return {
+    backend: "halo2/ipa",
+    proof: Buffer.from("proof"),
+    verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
+    ...overrides,
+  };
+}
+
 test("buildZkTransferInstruction normalizes proof attachments", () => {
   const instruction = buildZkTransferInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -3172,13 +3303,153 @@ test("buildZkTransferInstruction normalizes proof attachments", () => {
     proof: {
       backend: "halo2/ipa",
       proof: Buffer.from("proof"),
-      verifyingKeyRef: "halo2/ipa:vk_transfer",
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
     },
   });
   const payload = encodeAndDecode(instruction).zk.ZkTransfer;
   assert.equal(payload.proof.backend, "halo2/ipa");
   assert.equal(payload.proof.vk_ref.name, "vk_transfer");
   assert.equal(payload.inputs.length, 1);
+});
+
+baseTest("proof attachment verifier ids use the exact Rust portable grammar", () => {
+  const validName = "halo2/ipa::transfer_v1";
+  const instruction = buildZkTransferInstruction({
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    inputs: [Buffer.alloc(32, 0x11)],
+    outputs: [Buffer.alloc(32, 0x22)],
+    proof: canonicalProofAttachmentInput({
+      verifyingKeyRef: { backend: "halo2/ipa", name: validName },
+    }),
+  });
+  assert.equal(instruction.zk.ZkTransfer.proof.vk_ref.name, validName);
+
+  for (const name of [
+    "",
+    "Uppercase",
+    " leading",
+    "trailing ",
+    "_leading",
+    "trailing_",
+    "a..b",
+    "a//b",
+    "a:::b",
+    "a/:b",
+    "a:/b",
+    "a/.b",
+    "a./b",
+    "a:.b",
+    "a.:b",
+    "é",
+    "a".repeat(257),
+  ]) {
+    assert.throws(
+      () =>
+        buildZkTransferInstruction({
+          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          inputs: [Buffer.alloc(32, 0x11)],
+          outputs: [Buffer.alloc(32, 0x22)],
+          proof: canonicalProofAttachmentInput({
+            verifyingKeyRef: { backend: "halo2/ipa", name },
+          }),
+        }),
+      /portable verifier-key registry grammar/,
+      name,
+    );
+  }
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: canonicalProofAttachmentInput({
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+        }),
+      }),
+    /must be a plain object/,
+  );
+});
+
+baseTest("proof attachment enforces the complete ProofBox budget by arithmetic", () => {
+  const backend = "halo2/ipa";
+  const maxProofBytes = proofBoxMaxProofBytes(backend);
+  assert.equal(
+    proofBoxEncodedLength(backend, maxProofBytes),
+    PROOF_BOX_MAX_ENCODED_BYTES,
+  );
+  assert.equal(
+    proofBoxEncodedLength(backend, maxProofBytes + 1),
+    PROOF_BOX_MAX_ENCODED_BYTES + 1,
+  );
+
+  const oversizedSparseProof = new Array(maxProofBytes + 1);
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: canonicalProofAttachmentInput({ proof: oversizedSparseProof }),
+      }),
+    /complete 67108864-byte ProofBox limit/,
+  );
+});
+
+baseTest("proof attachment accepts only exact canonical base64 proof text", () => {
+  const valid = buildZkTransferInstruction({
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    inputs: [Buffer.alloc(32, 0x11)],
+    outputs: [Buffer.alloc(32, 0x22)],
+    proof: canonicalProofAttachmentInput({ proof: "cHJvb2Y=" }),
+  });
+  assert.deepEqual(valid.zk.ZkTransfer.proof.proof.bytes, Array.from(Buffer.from("proof")));
+  for (const proof of ["", "cHJvb2Y=\n", "AB==", "cHJvb2Y"] ) {
+    assert.throws(
+      () =>
+        buildZkTransferInstruction({
+          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          inputs: [Buffer.alloc(32, 0x11)],
+          outputs: [Buffer.alloc(32, 0x22)],
+          proof: canonicalProofAttachmentInput({ proof }),
+        }),
+      /canonical standard base64/,
+    );
+  }
+});
+
+baseTest("proof attachment commitments and envelope hashes fail closed", () => {
+  const proofBytes = Buffer.from([1, 2, 3]);
+  const envelopeHash = Array.from(blake2b256(proofBytes));
+  envelopeHash[31] |= 1;
+  const valid = buildZkTransferInstruction({
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    inputs: [Buffer.alloc(32, 0x11)],
+    outputs: [Buffer.alloc(32, 0x22)],
+    proof: canonicalProofAttachmentInput({
+      proof: proofBytes,
+      verifyingKeyCommitment: Buffer.alloc(32, 0x11),
+      envelopeHash,
+    }),
+  });
+  assert.deepEqual(valid.zk.ZkTransfer.proof.envelope_hash, envelopeHash);
+
+  for (const overrides of [
+    { verifyingKeyCommitment: Buffer.alloc(32) },
+    { envelopeHash: Buffer.alloc(32) },
+    { envelopeHash: Buffer.alloc(32, 0x77) },
+  ]) {
+    assert.throws(
+      () =>
+        buildZkTransferInstruction({
+          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          inputs: [Buffer.alloc(32, 0x11)],
+          outputs: [Buffer.alloc(32, 0x22)],
+          proof: canonicalProofAttachmentInput({ proof: proofBytes, ...overrides }),
+        }),
+      /must be non-zero|must match the proof bytes/,
+    );
+  }
 });
 
 test("buildZkTransferInstruction rejects legacy inline verifying key fields", () => {
@@ -3197,13 +3468,13 @@ test("buildZkTransferInstruction rejects legacy inline verifying key fields", ()
           proof: {
             backend: "halo2/ipa",
             proof: Buffer.from("proof"),
-            verifyingKeyRef: "halo2/ipa:vk_transfer",
+            verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
             [field]: { backend: "halo2/ipa", bytes: Buffer.from("legacy-vk") },
           },
         }),
       (error) => {
         assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-        assert.match(String(error?.message), /not supported; use verifyingKeyRef/i);
+        assert.match(String(error?.message), /not supported by the canonical ProofAttachment/i);
         return true;
       },
     );
@@ -3223,12 +3494,12 @@ test("buildZkTransferInstruction rejects proof backend mismatch", () => {
             backend: "stark/fri",
             bytes: Buffer.from("proof"),
           },
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /proof\.backend must match/i);
+      assert.match(String(error?.message), /proofBytes.*not supported/i);
       return true;
     },
   );
@@ -3244,7 +3515,7 @@ test("buildZkTransferInstruction rejects verifying key backend mismatch", () => 
         proof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "stark/fri:vk_transfer",
+          verifyingKeyRef: { backend: "stark/fri", name: "vk_transfer" },
         },
       }),
     (error) => {
@@ -3286,7 +3557,7 @@ test("buildZkTransferInstruction rejects vk_reference shadow field", () => {
         proof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
           vk_reference: "halo2/ipa:shadow",
         },
       }),
@@ -3317,7 +3588,7 @@ test("buildZkTransferInstruction rejects nested verifyingKeyRef shadow fields", 
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /verifyingKeyRef\.vk_reference is not supported/i);
+      assert.match(String(error?.message), /verifyingKeyRef must contain exactly backend, name/i);
       return true;
     },
   );
@@ -3337,12 +3608,12 @@ test("buildZkTransferInstruction rejects structured proof shadow fields", () => 
             bytes: Buffer.from("proof"),
             vk_inline: { backend: "halo2/ipa", bytes: Buffer.from("legacy") },
           },
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /proof\.vk_inline is not supported/i);
+      assert.match(String(error?.message), /proofBytes.*not supported/i);
       return true;
     },
   );
@@ -3358,13 +3629,13 @@ test("buildZkTransferInstruction rejects verifying key reference alias collision
         proof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
           vk_ref: { backend: "halo2/ipa", name: "shadow" },
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /multiple verifying key reference aliases/i);
+      assert.match(String(error?.message), /vk_ref.*not supported/i);
       return true;
     },
   );
@@ -3389,7 +3660,7 @@ test("buildZkTransferInstruction rejects nested verifying key id alias collision
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /multiple backend aliases/i);
+      assert.match(String(error?.message), /must contain exactly backend, name/i);
       return true;
     },
   );
@@ -3397,7 +3668,6 @@ test("buildZkTransferInstruction rejects nested verifying key id alias collision
 
 test("buildZkTransferInstruction rejects blank verifying key id fields", () => {
   for (const verifyingKeyRef of [
-    "halo2/ipa:   ",
     { backend: "halo2/ipa", name: "   " },
     { backend: "   ", name: "vk_transfer" },
   ]) {
@@ -3415,7 +3685,7 @@ test("buildZkTransferInstruction rejects blank verifying key id fields", () => {
         }),
       (error) => {
         assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
-        assert.match(String(error?.message), /non-empty|backend:name/i);
+        assert.match(String(error?.message), /portable verifier-key registry grammar/i);
         return true;
       },
     );
@@ -3433,12 +3703,12 @@ test("buildZkTransferInstruction rejects proof byte alias collisions", () => {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
           proof_b64: Buffer.from("shadow").toString("base64"),
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /multiple proof byte aliases/i);
+      assert.match(String(error?.message), /proof_b64.*not supported/i);
       return true;
     },
   );
@@ -3454,14 +3724,14 @@ test("buildZkTransferInstruction rejects commitment alias collisions", () => {
         proof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
           verifyingKeyCommitment: Buffer.alloc(32, 0xaa),
           vk_commitment: Buffer.alloc(32, 0xbb),
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /multiple verifying key commitment aliases/i);
+      assert.match(String(error?.message), /vk_commitment.*not supported/i);
       return true;
     },
   );
@@ -3477,14 +3747,14 @@ test("buildZkTransferInstruction rejects envelope hash alias collisions", () => 
         proof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
           envelopeHash: Buffer.alloc(32, 0xaa),
           proofEnvelopeHash: Buffer.alloc(32, 0xbb),
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /multiple envelope hash aliases/i);
+      assert.match(String(error?.message), /proofEnvelopeHash.*not supported/i);
       return true;
     },
   );
@@ -3631,7 +3901,7 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
     ballotProof: {
       backend: "halo2/ipa",
       proof: Buffer.from("proof"),
-      verifyingKeyRef: "halo2/ipa:vk_ballot",
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
     },
     nullifier: Buffer.alloc(32, 0x33),
   });
@@ -3651,7 +3921,7 @@ test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
         ballotProof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "halo2/ipa:vk_ballot",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
         },
         nullifier: invalidNullifier,
       }),
@@ -3673,7 +3943,7 @@ test("buildSubmitBallotInstruction rejects coercible non-byte ciphertext entries
           ballotProof: {
             backend: "halo2/ipa",
             proof: Buffer.from("proof"),
-            verifyingKeyRef: "halo2/ipa:vk_ballot",
+            verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
           },
           nullifier: Buffer.alloc(32, 0x33),
         }),
@@ -3695,7 +3965,7 @@ test("buildSubmitBallotInstruction rejects empty ciphertext", () => {
         ballotProof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "halo2/ipa:vk_ballot",
+          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
         },
         nullifier: Buffer.alloc(32, 0x33),
       }),
@@ -3714,14 +3984,14 @@ test("buildFinalizeElectionInstruction serializes tally entries", () => {
     tallyProof: {
       backend: "halo2/ipa",
       proof: Buffer.from("proof"),
-      verifyingKeyRef: "halo2/ipa:vk_tally",
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_tally" },
     },
   });
   const payload = encodeAndDecode(instruction).zk.FinalizeElection;
   assert.deepEqual(payload.tally, [1, 2]);
 });
 
-test("proof attachments support lane privacy merkle witnesses", () => {
+baseTest("proof attachments support lane privacy merkle witnesses", () => {
   const leaf = Buffer.alloc(32, 1);
   const sibling = Buffer.alloc(32, 2);
   const result = buildFinalizeElectionInstruction({
@@ -3730,7 +4000,7 @@ test("proof attachments support lane privacy merkle witnesses", () => {
     proof: {
       backend: "lane/privacy",
       proof: new Uint8Array([1, 2, 3]),
-      verifyingKeyRef: "lane/privacy:vk_lane_privacy",
+      verifyingKeyRef: { backend: "lane/privacy", name: "vk_lane_privacy" },
       lanePrivacy: {
         commitmentId: 9,
         merkle: {
@@ -3746,10 +4016,16 @@ test("proof attachments support lane privacy merkle witnesses", () => {
   assert.equal(proof.lane_privacy.commitment_id, 9);
   assert.equal(proof.lane_privacy.witness.kind, "merkle");
   assert.deepEqual(proof.lane_privacy.witness.payload.leaf, Array.from(leaf));
-  assert.deepEqual(proof.lane_privacy.witness.payload.proof.audit_path[0], Array.from(sibling));
+  const canonicalSibling = Array.from(sibling);
+  canonicalSibling[31] |= 1;
+  assert.deepEqual(
+    proof.lane_privacy.witness.payload.proof.audit_path[0],
+    canonicalSibling,
+  );
+  assert.equal(sibling[31], 2, "builder must not mutate caller-owned sibling bytes");
 });
 
-test("proof attachments reject empty lane privacy merkle paths", () => {
+baseTest("proof attachments reject empty lane privacy merkle paths", () => {
   assert.throws(
     () =>
       buildFinalizeElectionInstruction({
@@ -3758,16 +4034,221 @@ test("proof attachments reject empty lane privacy merkle paths", () => {
         proof: {
           backend: "lane/privacy",
           proof: new Uint8Array([1, 2, 3]),
-          verifyingKeyRef: "lane/privacy:vk_lane_privacy",
+          verifyingKeyRef: { backend: "lane/privacy", name: "vk_lane_privacy" },
           lanePrivacy: {
             commitmentId: 9,
             merkle: {
               leaf: Buffer.alloc(32, 1),
+              leafIndex: 0,
               auditPath: [],
             },
           },
         },
       }),
-    /must contain at least one sibling/,
+    /must contain 1\.\.=255 siblings/,
   );
+});
+
+baseTest("proof attachments reject malformed and impossible lane Merkle witnesses", () => {
+  const baseMerkle = {
+    leaf: Buffer.alloc(32, 1),
+    leafIndex: 0,
+    auditPath: [Buffer.alloc(32, 2)],
+  };
+  const attacks = [
+    [{ ...baseMerkle, auditPath: [null] }, /must contain a sibling/],
+    [{ ...baseMerkle, auditPath: [undefined] }, /must contain a sibling/],
+    [{ ...baseMerkle, auditPath: [Buffer.alloc(31)] }, /must be 32 bytes/],
+    [{ ...baseMerkle, auditPath: [Buffer.alloc(33)] }, /must be 32 bytes/],
+    [
+      { ...baseMerkle, auditPath: Array.from({ length: 256 }, () => Buffer.alloc(32)) },
+      /1\.\.=255 siblings/,
+    ],
+    [{ ...baseMerkle, leafIndex: 2 }, /impossible for the Merkle path depth/],
+    [{ ...baseMerkle, leafIndex: 0x1_0000_0000 }, /must fit within a u32/],
+  ];
+  for (const [merkle, expected] of attacks) {
+    assert.throws(
+      () =>
+        buildFinalizeElectionInstruction({
+          electionId: "elec-1",
+          tally: [1],
+          proof: {
+            backend: "lane/privacy",
+            proof: new Uint8Array([1, 2, 3]),
+            verifyingKeyRef: {
+              backend: "lane/privacy",
+              name: "vk_lane_privacy",
+            },
+            lanePrivacy: { commitmentId: 0, merkle },
+          },
+        }),
+      expected,
+    );
+  }
+});
+
+baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
+  const instruction = buildFinalizeElectionInstruction({
+    electionId: "elec-1",
+    tally: [1],
+    proof: {
+      backend: "lane/privacy",
+      proof: new Uint8Array([1, 2, 3]),
+      verifyingKeyRef: {
+        backend: "lane/privacy",
+        name: "vk_lane_privacy",
+      },
+      lanePrivacy: {
+        commitmentId: 9,
+        merkle: {
+          leaf: Buffer.alloc(32, 1),
+          leafIndex: 0,
+          auditPath: [Buffer.alloc(32, 2)],
+        },
+      },
+    },
+  });
+  const encoded = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+  );
+  const decoded = withPureJsInstructionCodec(() =>
+    noritoDecodeInstruction(encoded),
+  );
+  const decodedSibling =
+    decoded.zk.FinalizeElection.tally_proof.lane_privacy.witness.payload.proof
+      .audit_path[0];
+  assert.match(decodedSibling, /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/);
+  assert.equal(Number.parseInt(decodedSibling.slice(67, 69), 16) & 1, 1);
+  instruction.zk.FinalizeElection.tally_proof.lane_privacy.witness.payload.proof
+    .audit_path[0][31] &= 0xfe;
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+    /native hash with its marker bit set|canonical prehashed HashOf/,
+  );
+
+  const canonicalSibling = Buffer.alloc(32, 2);
+  canonicalSibling[31] |= 1;
+  const siblingOffset = encoded.indexOf(canonicalSibling);
+  assert.ok(siblingOffset > 0, "encoded lane sibling must be present");
+  const countOffset = siblingOffset - 11;
+  const leafIndexOffset = countOffset - 5;
+  assert.equal(encoded.readBigUInt64LE(countOffset), 1n);
+  assert.equal(encoded.readUInt32LE(leafIndexOffset), 0);
+
+  const missingSibling = Buffer.from(encoded);
+  assert.equal(missingSibling[siblingOffset - 2], 1, "sibling option must be Some");
+  missingSibling[siblingOffset - 2] = 0;
+  rewriteNestedInstructionCrcs(missingSibling);
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(missingSibling)),
+    /None option contained trailing bytes/,
+  );
+
+  const emptyPath = Buffer.from(encoded);
+  emptyPath.writeBigUInt64LE(0n, countOffset);
+  rewriteNestedInstructionCrcs(emptyPath);
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(emptyPath)),
+    /trailing bytes/,
+  );
+
+  const deepPath = Buffer.from(encoded);
+  deepPath.writeBigUInt64LE(256n, countOffset);
+  rewriteNestedInstructionCrcs(deepPath);
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(deepPath)),
+    /exceeds the 255-item limit/,
+  );
+
+  const impossibleIndex = Buffer.from(encoded);
+  impossibleIndex.writeUInt32LE(2, leafIndexOffset);
+  rewriteNestedInstructionCrcs(impossibleIndex);
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(impossibleIndex)),
+    /impossible for the Merkle path depth/,
+  );
+
+  encoded[siblingOffset + 31] &= 0xfe;
+  rewriteNestedInstructionCrcs(encoded);
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(encoded)),
+    /native hash with its marker bit set|canonical prehashed HashOf/,
+  );
+});
+
+baseTest("pure JS ProofAttachment decoder rejects invalid ids and extra tails", () => {
+  const proofBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]);
+  const instruction = buildFinalizeElectionInstruction({
+    electionId: "elec-1",
+    tally: [1],
+    proof: {
+      backend: "lane/privacy",
+      proof: proofBytes,
+      verifyingKeyRef: {
+        backend: "lane/privacy",
+        name: "unique_vk_name",
+      },
+      lanePrivacy: {
+        commitmentId: 7,
+        merkle: {
+          leaf: Buffer.alloc(32, 1),
+          leafIndex: 0,
+          auditPath: [Buffer.alloc(32, 2)],
+        },
+      },
+    },
+  });
+  const encoded = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+  );
+  const invalidId = Buffer.from(encoded);
+  const nameOffset = invalidId.indexOf(Buffer.from("unique_vk_name", "utf8"));
+  assert.ok(nameOffset > 0, "encoded verifying-key name must be present");
+  invalidId[nameOffset] = "U".charCodeAt(0);
+  rewriteNestedInstructionCrcs(invalidId);
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(invalidId)),
+    /portable verifier-key registry syntax/,
+  );
+
+  const oversizedProof = Buffer.from(encoded);
+  const proofOffset = oversizedProof.indexOf(proofBytes);
+  assert.ok(proofOffset > 8, "encoded proof bytes must be present");
+  const proofLengthOffset = proofOffset - 8;
+  assert.equal(
+    oversizedProof.readBigUInt64LE(proofLengthOffset),
+    BigInt(proofBytes.length),
+  );
+  oversizedProof.writeBigUInt64LE(
+    BigInt(proofBoxMaxProofBytes("lane/privacy") + 1),
+    proofLengthOffset,
+  );
+  rewriteNestedInstructionCrcs(oversizedProof);
+  assert.throws(
+    () =>
+      withPureJsInstructionCodec(() =>
+        noritoDecodeInstruction(oversizedProof),
+      ),
+    /exceeds its \d+-byte decoding limit/,
+  );
+
+  const extraTail = appendFinalizeProofAttachmentTail(encoded, Buffer.of(0));
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoDecodeInstruction(extraTail)),
+    /trailing bytes/,
+  );
+
+  const invalidNativeResult = JSON.parse(JSON.stringify(instruction));
+  invalidNativeResult.zk.FinalizeElection.tally_proof.lane_privacy.witness.payload
+    .proof.audit_path = [];
+  for (const options of [undefined, { parseJson: false }]) {
+    assert.throws(
+      () =>
+        withNativeInstructionDecoder(invalidNativeResult, () =>
+          noritoDecodeInstruction(Buffer.of(1), options),
+        ),
+      /must contain 1\.\.=255 siblings/,
+    );
+  }
 });

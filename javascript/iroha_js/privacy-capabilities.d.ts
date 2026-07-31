@@ -21,6 +21,8 @@ export type PrivacyProtocolTagV1 = PrivacyTaggedUnitV1<
   PrivacyProtocolIdV1
 >;
 export type PrivacyFixed32BytesV1 = readonly number[];
+/** Exact unsigned 64-bit protocol integer decoded without IEEE-754 rounding. */
+export type PrivacyU64V1 = bigint;
 export interface PrivacyConsensusLimitsV1 {
   readonly max_actions_per_transaction: number;
   readonly max_actions_per_block: number;
@@ -34,8 +36,8 @@ export interface PrivacyConsensusLimitsV1 {
   readonly retained_root_count: number;
 }
 export interface PrivacyConsensusPolicyTighteningV1 {
-  readonly scheduled_at_height: number;
-  readonly effective_at_height: number;
+  readonly scheduled_at_height: PrivacyU64V1;
+  readonly effective_at_height: PrivacyU64V1;
   readonly next_limits: PrivacyConsensusLimitsV1;
 }
 export interface PrivacyConsensusPolicyV1 {
@@ -79,17 +81,37 @@ export type PrivacyCompiledProfileResultV1 =
             }>;
           }>;
     }>;
-export type PrivacyProtocolLifecycleV1 = Readonly<{
-  state: "proposed" | "active" | "suspended" | "retired";
-  record: Readonly<Record<string, number | null>>;
-}>;
+export type PrivacyProtocolLifecycleV1 =
+  | Readonly<{
+      state: "proposed";
+      record: Readonly<{
+        proposed_at_height: PrivacyU64V1;
+        activate_at_height: PrivacyU64V1;
+      }>;
+    }>
+  | Readonly<{
+      state: "active" | "suspended";
+      record: Readonly<{
+        proposed_at_height: PrivacyU64V1;
+        activated_at_height: PrivacyU64V1;
+        state_since_height: PrivacyU64V1;
+      }>;
+    }>
+  | Readonly<{
+      state: "retired";
+      record: Readonly<{
+        proposed_at_height: PrivacyU64V1;
+        activated_at_height: PrivacyU64V1 | null;
+        state_since_height: PrivacyU64V1;
+      }>;
+    }>;
 export interface PrivacyProtocolActivationRecordV1
   extends PrivacyCompiledProfileBindingsV1 {
   readonly lifecycle: PrivacyProtocolLifecycleV1;
   readonly protocol_limits: PrivacyProtocolLimitsV1;
   readonly pending_protocol_limits_tightening: Readonly<{
-    scheduled_at_height: number;
-    effective_at_height: number;
+    scheduled_at_height: PrivacyU64V1;
+    effective_at_height: PrivacyU64V1;
     next_limits: PrivacyProtocolLimitsV1;
   }> | null;
   readonly assurance: Readonly<{ assurance: "experimental"; value: null }>;
@@ -101,7 +123,7 @@ export interface PrivacyCapabilityRowV1 {
 }
 export interface PrivacyCapabilitySnapshotV1 {
   readonly version: 1;
-  readonly committed_height: number;
+  readonly committed_height: PrivacyU64V1;
   readonly consensus_policy: PrivacyConsensusPolicyV1;
   readonly protocols: readonly PrivacyCapabilityRowV1[];
 }

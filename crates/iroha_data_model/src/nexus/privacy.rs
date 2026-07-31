@@ -11,6 +11,9 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
+/// Maximum supported Merkle depth for a first-release lane privacy witness.
+pub const LANE_PRIVACY_MAX_MERKLE_DEPTH_V1: usize = u8::MAX as usize;
+
 /// Proof payload bound to a specific lane commitment identifier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -46,6 +49,48 @@ impl LanePrivacyProof {
             .unwrap_or(usize::MAX)
     }
 
+    /// Validate the complete first-release lane privacy witness shape.
+    ///
+    /// This is applied after untrusted JSON/Norito decoding as well as by the
+    /// raw-path constructor so no transport can admit a sparse, impossible,
+    /// oversized, or non-canonical Merkle path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed structural error for the first invalid path property.
+    pub fn validate_structure_v1(&self) -> Result<(), LanePrivacyProofError> {
+        let LanePrivacyWitness::Merkle(witness) = &self.witness;
+        let audit_path = witness.proof.audit_path();
+        if audit_path.is_empty() {
+            return Err(LanePrivacyProofError::EmptyMerklePath);
+        }
+        if audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+            return Err(LanePrivacyProofError::MerklePathTooDeep {
+                depth: audit_path.len(),
+                maximum: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
+            });
+        }
+        if let Some(index) = audit_path.iter().position(Option::is_none) {
+            return Err(LanePrivacyProofError::MissingMerkleSibling { index });
+        }
+        if audit_path.len() < u32::BITS as usize
+            && u64::from(witness.proof.leaf_index()) >= 1_u64 << audit_path.len()
+        {
+            return Err(LanePrivacyProofError::LeafIndexOutOfRange {
+                leaf_index: witness.proof.leaf_index(),
+                depth: audit_path.len(),
+            });
+        }
+        if let Some(index) = audit_path.iter().position(|entry| {
+            entry
+                .as_ref()
+                .is_some_and(|hash| hash.as_ref()[Hash::LENGTH - 1] & 1 == 0)
+        }) {
+            return Err(LanePrivacyProofError::NonCanonicalMerkleSibling { index });
+        }
+        Ok(())
+    }
+
     /// Construct a Merkle-based lane privacy proof from raw sibling hashes.
     ///
     /// `leaf` is the raw 32-byte lane leaf. Each `audit_path` entry is an
@@ -65,8 +110,22 @@ impl LanePrivacyProof {
         if audit_path.is_empty() {
             return Err(LanePrivacyProofError::EmptyMerklePath);
         }
+        if audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+            return Err(LanePrivacyProofError::MerklePathTooDeep {
+                depth: audit_path.len(),
+                maximum: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
+            });
+        }
         if let Some(index) = audit_path.iter().position(Option::is_none) {
             return Err(LanePrivacyProofError::MissingMerkleSibling { index });
+        }
+        if audit_path.len() < u32::BITS as usize
+            && u64::from(leaf_index) >= 1_u64 << audit_path.len()
+        {
+            return Err(LanePrivacyProofError::LeafIndexOutOfRange {
+                leaf_index,
+                depth: audit_path.len(),
+            });
         }
 
         let audit_path = audit_path
@@ -77,13 +136,15 @@ impl LanePrivacyProof {
             })
             .collect();
 
-        Ok(Self {
+        let proof = Self {
             commitment_id,
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
                 leaf,
                 proof: MerkleProof::from_audit_path(leaf_index, audit_path),
             }),
-        })
+        };
+        proof.validate_structure_v1()?;
+        Ok(proof)
     }
 }
 
@@ -139,6 +200,28 @@ pub enum LanePrivacyProofError {
     #[error("merkle path is missing sibling at index {index}")]
     MissingMerkleSibling {
         /// Zero-based path entry containing `None`.
+        index: usize,
+    },
+    /// Merkle paths are bounded so adversarial inputs cannot grow without limit.
+    #[error("merkle path depth {depth} exceeds the maximum {maximum}")]
+    MerklePathTooDeep {
+        /// Submitted path depth.
+        depth: usize,
+        /// Closed first-release maximum depth.
+        maximum: usize,
+    },
+    /// The leaf index cannot be represented by the submitted path depth.
+    #[error("leaf index {leaf_index} is not representable by merkle depth {depth}")]
+    LeafIndexOutOfRange {
+        /// Submitted leaf index.
+        leaf_index: u32,
+        /// Submitted path depth.
+        depth: usize,
+    },
+    /// A decoded sibling does not carry Iroha's canonical pre-hashed marker.
+    #[error("merkle sibling at index {index} is not canonically pre-hashed")]
+    NonCanonicalMerkleSibling {
+        /// Zero-based path entry with an invalid marker.
         index: usize,
     },
 }
@@ -228,6 +311,37 @@ mod tests {
         assert_eq!(
             err,
             LanePrivacyProofError::MissingMerkleSibling { index: 0 }
+        );
+    }
+
+    #[test]
+    fn merkle_from_raw_path_rejects_oversized_and_impossible_paths() {
+        let too_deep = vec![Some([0x22; 32]); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
+        assert_eq!(
+            LanePrivacyProof::merkle_from_raw_path(
+                LaneCommitmentId::new(1),
+                [0xAA; 32],
+                0,
+                too_deep,
+            )
+            .expect_err("oversized path must be rejected"),
+            LanePrivacyProofError::MerklePathTooDeep {
+                depth: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1,
+                maximum: LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
+            }
+        );
+        assert_eq!(
+            LanePrivacyProof::merkle_from_raw_path(
+                LaneCommitmentId::new(1),
+                [0xAA; 32],
+                2,
+                vec![Some([0x22; 32])],
+            )
+            .expect_err("impossible leaf index must be rejected"),
+            LanePrivacyProofError::LeafIndexOutOfRange {
+                leaf_index: 2,
+                depth: 1,
+            }
         );
     }
 

@@ -1,0 +1,27 @@
+{
+  "id": "ministry/agenda-workflow",
+  "title": "Agenda Council Workflow",
+  "description": "Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).",
+  "source": "@site/docs/ministry/agenda-workflow.mdx",
+  "sourceDirName": "ministry",
+  "slug": "/ministry/agenda-workflow",
+  "permalink": "/next/ministry/agenda-workflow",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/ministry/agenda-workflow.mdx",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Agenda Council Workflow",
+    "description": "Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2)."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "AI Moderation Runner Specification",
+    "permalink": "/next/ministry/ai-moderation-runner"
+  },
+  "next": {
+    "title": "Volunteer Briefs",
+    "permalink": "/next/ministry/volunteer-briefs"
+  }
+}

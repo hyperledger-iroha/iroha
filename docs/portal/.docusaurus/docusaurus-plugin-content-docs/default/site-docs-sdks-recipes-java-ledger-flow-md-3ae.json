@@ -1,0 +1,28 @@
+{
+  "id": "sdks/recipes/java-ledger-flow",
+  "title": "Java ledger flow recipe",
+  "description": "Drive the register → mint → transfer demo using the IrohaAndroid JVM library.",
+  "source": "@site/docs/sdks/recipes/java-ledger-flow.md",
+  "sourceDirName": "sdks/recipes",
+  "slug": "/sdks/recipes/java-ledger-flow",
+  "permalink": "/next/sdks/recipes/java-ledger-flow",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/recipes/java-ledger-flow.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Java ledger flow recipe",
+    "description": "Drive the register → mint → transfer demo using the IrohaAndroid JVM library.",
+    "slug": "/sdks/recipes/java-ledger-flow"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Swift ledger flow recipe",
+    "permalink": "/next/sdks/recipes/swift-ledger-flow"
+  },
+  "next": {
+    "title": "Try It sandbox",
+    "permalink": "/next/devportal/try-it"
+  }
+}

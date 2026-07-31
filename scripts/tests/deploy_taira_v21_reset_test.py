@@ -295,18 +295,12 @@ file = "{bundle / 'genesis.signed.nrt'}"
 
 
 def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.BundlePlan:
-    manifest = json.loads((bundle / "reset-manifest.json").read_text())
+    manifest_raw = (bundle / "reset-manifest.json").read_bytes()
     return MODULE.validate_bundle(
         bundle,
+        expected_reset_manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
         expected_binary_sha256=binary_sha,
         expected_source_commit=source_commit,
-        expected_kagemusha_manifest_sha256=manifest["kagemusha_manifest_sha256"],
-        expected_kagemusha_release_policy_sha256=manifest[
-            "kagemusha_release_policy_sha256"
-        ],
-        expected_kagemusha_release_attestation_sha256=manifest[
-            "kagemusha_release_attestation_sha256"
-        ],
         minimum_free_bytes=0,
         maximum_fsync_latency_ms=10_000,
     )
@@ -413,29 +407,19 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
 
 
-@pytest.mark.parametrize("pin", ["manifest", "policy", "attestation"])
-def test_bundle_preflight_requires_operator_pinned_release_digests(
-    tmp_path: Path, pin: str
+def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
+    tmp_path: Path,
 ) -> None:
     binary_sha = "8" * 64
     source_commit = "9" * 40
     bundle = _build_bundle(tmp_path, binary_sha, source_commit)
-    manifest = json.loads((bundle / "reset-manifest.json").read_text())
-    pins = {
-        "manifest": manifest["kagemusha_manifest_sha256"],
-        "policy": manifest["kagemusha_release_policy_sha256"],
-        "attestation": manifest["kagemusha_release_attestation_sha256"],
-    }
-    pins[pin] = "0" * 64
 
-    with pytest.raises(MODULE.DeploymentError):
+    with pytest.raises(MODULE.DeploymentError, match="verified admission receipt"):
         MODULE.validate_bundle(
             bundle,
+            expected_reset_manifest_sha256="0" * 64,
             expected_binary_sha256=binary_sha,
             expected_source_commit=source_commit,
-            expected_kagemusha_manifest_sha256=pins["manifest"],
-            expected_kagemusha_release_policy_sha256=pins["policy"],
-            expected_kagemusha_release_attestation_sha256=pins["attestation"],
             minimum_free_bytes=0,
             maximum_fsync_latency_ms=10_000,
         )
@@ -1103,6 +1087,7 @@ def test_apply_binary_gate_failure_restores_release_before_any_bootout(
             harness.bundle,
             harness.sources,
             harness.old_cohort,
+            rollout_starter=lambda: pytest.fail("rollout started"),
             ops=harness.ops,
             config_checker=reject_configs,
             seal_preparer=harness.seal_preparer,
@@ -1144,6 +1129,7 @@ def test_apply_preserves_unattributed_seal_and_installed_release_when_writer_rai
             harness.bundle,
             harness.sources,
             harness.old_cohort,
+            rollout_starter=lambda: pytest.fail("rollout started"),
             ops=harness.ops,
             config_checker=lambda *_args: pytest.fail("config checker ran"),
             seal_preparer=harness.seal_preparer,
@@ -1183,6 +1169,7 @@ def test_apply_restores_release_when_failed_writer_left_seal_absent(
             harness.bundle,
             harness.sources,
             harness.old_cohort,
+            rollout_starter=lambda: pytest.fail("rollout started"),
             ops=harness.ops,
             config_checker=lambda *_args: pytest.fail("config checker ran"),
             seal_preparer=harness.seal_preparer,
@@ -1227,6 +1214,7 @@ def test_apply_rechecks_config_identity_after_qualification_before_any_bootout(
             harness.bundle,
             harness.sources,
             harness.old_cohort,
+            rollout_starter=lambda: pytest.fail("rollout started"),
             ops=harness.ops,
             config_checker=mutate_config,
             seal_preparer=harness.seal_preparer,
@@ -1245,6 +1233,47 @@ def test_apply_rechecks_config_identity_after_qualification_before_any_bootout(
         "release-restore",
     ]
     assert not harness.seal_path.exists()
+    assert harness.bundle.release.source_root.is_dir()
+    assert not harness.bundle.release.installed_root.exists()
+
+
+def test_apply_marks_admitted_rollout_immediately_before_first_bootout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _apply_gate_harness(tmp_path, monkeypatch)
+
+    def write_seal(_binary: Path, _bundle: object, path: Path) -> tuple[int, ...]:
+        harness.events.append("seal-write")
+        path.write_bytes(b"created seal")
+        return MODULE.metadata_identity(path.lstat())
+
+    def start_rollout() -> None:
+        harness.events.append("rollout-start")
+        raise MODULE.DeploymentError("injected refusal at rollout boundary")
+
+    with pytest.raises(MODULE.DeploymentError, match="rollout boundary"):
+        MODULE.apply_reset(
+            harness.args,
+            harness.bundle,
+            harness.sources,
+            harness.old_cohort,
+            rollout_starter=start_rollout,
+            ops=harness.ops,
+            config_checker=lambda *_args: harness.events.append("binary-config-gate"),
+            cutover_identity_checker=lambda _bundle: harness.events.append(
+                "cutover-recheck"
+            ),
+            seal_preparer=harness.seal_preparer,
+            seal_writer=write_seal,
+            seal_authenticator=harness.seal_authenticator,
+            seal_remover=harness.seal_remover,
+        )
+
+    assert "rollout-start" in harness.events
+    assert "bootout" not in harness.events
+    assert harness.events.index("cutover-recheck") + 1 == harness.events.index(
+        "rollout-start"
+    )
     assert harness.bundle.release.source_root.is_dir()
     assert not harness.bundle.release.installed_root.exists()
 
@@ -1384,10 +1413,12 @@ def test_validate_sources_uses_system_launcher_not_controller_python(
     bundle = SimpleNamespace(owner_uid=os.getuid(), owner_gid=os.getgid())
     args = SimpleNamespace(
         binary=binary,
-        expected_binary_sha256=binary_sha,
         supervisor=supervisor,
-        expected_supervisor_sha256=supervisor_sha,
         supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
+    )
+    admission = SimpleNamespace(
+        binary_sha256=binary_sha,
+        supervisor_sha256=supervisor_sha,
     )
     monkeypatch.setattr(
         MODULE.sys,
@@ -1403,7 +1434,7 @@ def test_validate_sources_uses_system_launcher_not_controller_python(
         lambda path: MODULE.DEFAULT_SUPERVISOR_PYTHON,
     )
 
-    sources = MODULE.validate_sources(args, bundle)
+    sources = MODULE.validate_sources(args, bundle, admission)
 
     assert sources.python == Path("/usr/bin/python3")
     assert str(sources.python) != MODULE.sys.executable
@@ -1977,6 +2008,16 @@ def test_degraded_rollback_accepts_absence_or_exact_recovery_only(
 
 
 def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    admission = SimpleNamespace(
+        archive_sha256="0" * 64,
+        receipt_id="f" * 64,
+        reset_manifest_sha256="1" * 64,
+        binary_sha256="a" * 64,
+        supervisor_sha256="b" * 64,
+        source_commit="c" * 40,
+        restart_generation="9" * 64,
+    )
     bundle = SimpleNamespace(
         root=Path("/bundle"),
         bundle_bytes=1,
@@ -2004,8 +2045,24 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(MODULE, "validate_sources", lambda *args, **kwargs: sources)
     monkeypatch.setattr(
         MODULE,
+        "verify_deployment_admission",
+        lambda _args: (events.append("admission-verify") or admission),
+    )
+    monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "require_admission_archive_unchanged",
+        lambda _admission: events.append("archive-recheck"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "consume_admission_receipt",
+        lambda *_args: pytest.fail("dry run consumed an admission receipt"),
+    )
+    monkeypatch.setattr(
+        MODULE,
         "capture_old_cohort",
-        lambda _ops, *, allow_absent_child: cohort,
+        lambda _ops, *, allow_absent_child: (events.append("capture") or cohort),
     )
     monkeypatch.setattr(
         MODULE,
@@ -2020,15 +2077,17 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     args = argparse.Namespace(
         bundle=Path("/bundle"),
         binary=Path("/binary"),
-        expected_binary_sha256="a" * 64,
         supervisor=Path("/supervisor"),
+        admission_archive=Path("/candidate.tar.gz"),
+        admission_authority_dir=Path("/authority"),
         supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
-        expected_supervisor_sha256="b" * 64,
-        restart_generation="9" * 64,
         expected_source_commit="c" * 40,
-        expected_kagemusha_manifest_sha256="d" * 64,
-        expected_kagemusha_release_policy_sha256="e" * 64,
-        expected_kagemusha_release_attestation_sha256="f" * 64,
+        expected_cargo_lock_sha256="d" * 64,
+        expected_workspace_source_manifest_sha256="e" * 64,
+        expected_receipt_id="f" * 64,
+        trusted_signing_fingerprint="1" * 64,
+        release_manifest_verifier=Path("/sorafs-validate"),
+        trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
@@ -2037,15 +2096,71 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     report = MODULE.execute(args, ops=MODULE.SystemOps())
-    assert report["mode"] == "read-only-dry-run"
+    assert report["mode"] == "verified-read-only-dry-run"
     assert report["applied"] is False
+    assert report["admission_receipt_consumed"] is False
+    assert events == ["admission-verify", "capture", "archive-recheck"]
     assert report["qualification_seal"] == str(MODULE.qualification_seal_path("1" * 64))
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
+def test_admission_failure_precedes_every_deployment_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    apply: bool,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+
+    def reject_admission(_args):
+        events.append("admission-verify")
+        raise MODULE.DeploymentError("injected admission refusal")
+
+    monkeypatch.setattr(MODULE, "verify_deployment_admission", reject_admission)
+    monkeypatch.setattr(
+        MODULE,
+        "validate_bundle",
+        lambda *_args, **_kwargs: pytest.fail("bundle preflight preceded admission"),
+    )
+    args = argparse.Namespace(
+        bundle=Path("/bundle"),
+        binary=Path("/binary"),
+        supervisor=Path("/supervisor"),
+        admission_archive=Path("/candidate.tar.gz"),
+        admission_authority_dir=Path("/authority"),
+        supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
+        expected_source_commit="c" * 40,
+        expected_cargo_lock_sha256="d" * 64,
+        expected_workspace_source_manifest_sha256="e" * 64,
+        expected_receipt_id="f" * 64,
+        trusted_signing_fingerprint="1" * 64,
+        release_manifest_verifier=Path("/sorafs-validate"),
+        trusted_release_manifest_verifier_sha256="2" * 64,
+        health_timeout_seconds=240,
+        minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
+        maximum_fsync_latency_ms=250,
+        allow_absent_old_child=False,
+        apply=apply,
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
+        MODULE.execute(args, ops=MODULE.SystemOps())
+
+    assert events == ["admission-verify"]
 
 
 def test_apply_lock_spans_old_cohort_capture_and_rollout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    admission = SimpleNamespace(
+        archive_sha256="0" * 64,
+        receipt_id="f" * 64,
+        reset_manifest_sha256="1" * 64,
+        binary_sha256="a" * 64,
+        supervisor_sha256="b" * 64,
+        source_commit="c" * 40,
+        restart_generation="9" * 64,
+    )
     bundle = SimpleNamespace()
     sources = SimpleNamespace()
     cohort = tuple(object() for _ in range(MODULE.PEER_COUNT))
@@ -2054,16 +2169,43 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
     monkeypatch.setattr(MODULE, "validate_sources", lambda *args, **kwargs: sources)
     monkeypatch.setattr(
         MODULE,
+        "verify_deployment_admission",
+        lambda _args: (events.append("admission-verify") or admission),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_inputs_match_admission",
+        lambda *args: events.append("bind-inputs"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_admission_bound_inputs_unchanged",
+        lambda *args: events.append("recheck-inputs"),
+    )
+    monkeypatch.setattr(
+        MODULE,
         "capture_old_cohort",
         lambda _ops, *, allow_absent_child: (
             events.append(f"capture:{allow_absent_child}") or cohort
         ),
     )
-    monkeypatch.setattr(
-        MODULE,
-        "apply_reset",
-        lambda *args, **kwargs: (events.append("apply") or {"applied": True}),
-    )
+    def apply(*_args, **kwargs):
+        events.append("apply")
+        kwargs["rollout_starter"]()
+        return {"applied": True}
+
+    monkeypatch.setattr(MODULE, "apply_reset", apply)
+
+    @contextlib.contextmanager
+    def consume(_admission):
+        events.append("consume-enter")
+        transaction = SimpleNamespace(
+            mark_rollout_started=lambda: events.append("rollout-start")
+        )
+        try:
+            yield transaction
+        finally:
+            events.append("consume-exit")
 
     @contextlib.contextmanager
     def lock():
@@ -2074,18 +2216,21 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
             events.append("lock-exit")
 
     monkeypatch.setattr(MODULE, "exclusive_deployment_lock", lock)
+    monkeypatch.setattr(MODULE, "consume_admission_receipt", consume)
     args = argparse.Namespace(
         bundle=Path("/bundle"),
         binary=Path("/binary"),
-        expected_binary_sha256="a" * 64,
         supervisor=Path("/supervisor"),
+        admission_archive=Path("/candidate.tar.gz"),
+        admission_authority_dir=Path("/authority"),
         supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
-        expected_supervisor_sha256="b" * 64,
-        restart_generation="9" * 64,
         expected_source_commit="c" * 40,
-        expected_kagemusha_manifest_sha256="d" * 64,
-        expected_kagemusha_release_policy_sha256="e" * 64,
-        expected_kagemusha_release_attestation_sha256="f" * 64,
+        expected_cargo_lock_sha256="d" * 64,
+        expected_workspace_source_manifest_sha256="e" * 64,
+        expected_receipt_id="f" * 64,
+        trusted_signing_fingerprint="1" * 64,
+        release_manifest_verifier=Path("/sorafs-validate"),
+        trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
@@ -2093,8 +2238,240 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         apply=True,
     )
 
-    assert MODULE.execute(args, ops=MODULE.SystemOps()) == {"applied": True}
-    assert events == ["lock-enter", "capture:True", "apply", "lock-exit"]
+    assert MODULE.execute(args, ops=MODULE.SystemOps()) == {
+        "admission_archive_sha256": "0" * 64,
+        "admission_receipt_consumed": True,
+        "admission_receipt_id": "f" * 64,
+        "applied": True,
+    }
+    assert events == [
+        "admission-verify",
+        "bind-inputs",
+        "lock-enter",
+        "admission-verify",
+        "recheck-inputs",
+        "capture:True",
+        "recheck-inputs",
+        "consume-enter",
+        "apply",
+        "rollout-start",
+        "consume-exit",
+        "lock-exit",
+    ]
+
+
+def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
+    archive = tmp_path / "candidate.tar.gz"
+    _write(archive, b"signed candidate archive")
+    ledger = tmp_path / "rollout-admission-replay-v1.json"
+    ledger.write_bytes(MODULE.rollout_admission.canonical_replay_ledger_bytes([]))
+    return MODULE.AdmissionPlan(
+        archive=archive,
+        archive_state=MODULE._stable_admission_file(archive, "test archive"),
+        authority_dir=tmp_path,
+        replay_ledger=ledger,
+        receipt_id="a" * 64,
+        archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        source_commit="b" * 40,
+        cargo_lock_sha256="c" * 64,
+        workspace_source_manifest_sha256="d" * 64,
+        reset_manifest_sha256="e" * 64,
+        binary_sha256="f" * 64,
+        supervisor_sha256="1" * 64,
+        validator_config_sha256=tuple(
+            (slug, f"{index}" * 64)
+            for index, slug in enumerate(MODULE.SLUGS, start=2)
+        ),
+        restart_generation="6" * 64,
+        signer_fingerprint_sha256="7" * 64,
+        release_manifest_verifier_sha256="8" * 64,
+    )
+
+
+def _use_unprivileged_transaction_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "require_protected_replay_ledger",
+        MODULE.rollout_admission.load_replay_ledger,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "atomic_replace_owned",
+        lambda path, body, **_kwargs: path.write_bytes(body),
+    )
+
+
+def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+    prior = admission.replay_ledger.read_bytes()
+
+    with pytest.raises(MODULE.DeploymentError, match="injected pre-cutover failure"):
+        with MODULE.consume_admission_receipt(admission):
+            assert admission.receipt_id in MODULE.rollout_admission.load_replay_ledger(
+                admission.replay_ledger
+            ).consumed_receipt_ids
+            raise MODULE.DeploymentError("injected pre-cutover failure")
+
+    assert admission.replay_ledger.read_bytes() == prior
+
+
+def test_receipt_consumption_remains_committed_after_rollout_begins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+
+    with pytest.raises(MODULE.DeploymentError, match="injected post-cutover failure"):
+        with MODULE.consume_admission_receipt(admission) as transaction:
+            transaction.mark_rollout_started()
+            raise MODULE.DeploymentError("injected post-cutover failure")
+
+    consumed = MODULE.rollout_admission.load_replay_ledger(
+        admission.replay_ledger
+    ).consumed_receipt_ids
+    assert consumed == (admission.receipt_id,)
+
+
+def test_successful_receipt_transaction_rechecks_committed_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+
+    with MODULE.consume_admission_receipt(admission) as transaction:
+        transaction.mark_rollout_started()
+
+    assert MODULE.rollout_admission.load_replay_ledger(
+        admission.replay_ledger
+    ).consumed_receipt_ids == (admission.receipt_id,)
+
+
+def test_receipt_consumption_cannot_succeed_without_rollout_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+    prior = admission.replay_ledger.read_bytes()
+
+    with pytest.raises(MODULE.DeploymentError, match="without beginning"):
+        with MODULE.consume_admission_receipt(admission):
+            pass
+
+    assert admission.replay_ledger.read_bytes() == prior
+
+
+def test_rollout_start_rejects_removed_receipt_and_preserves_prior_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+    prior = admission.replay_ledger.read_bytes()
+
+    with pytest.raises(MODULE.DeploymentError, match="changed before rollout"):
+        with MODULE.consume_admission_receipt(admission) as transaction:
+            admission.replay_ledger.write_bytes(prior)
+            transaction.mark_rollout_started()
+
+    assert admission.replay_ledger.read_bytes() == prior
+
+
+def test_unstarted_receipt_rollback_refuses_foreign_ledger_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+    foreign_receipt = "b" * 64
+
+    with pytest.raises(MODULE.DeploymentError, match="receipt rollback failed"):
+        with MODULE.consume_admission_receipt(admission):
+            admission.replay_ledger.write_bytes(
+                MODULE.rollout_admission.canonical_replay_ledger_bytes(
+                    [admission.receipt_id, foreign_receipt]
+                )
+            )
+            raise MODULE.DeploymentError("injected failure after foreign mutation")
+
+    assert MODULE.rollout_admission.load_replay_ledger(
+        admission.replay_ledger
+    ).consumed_receipt_ids == (admission.receipt_id, foreign_receipt)
+
+
+def test_receipt_consumption_rejects_replay_under_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    admission.replay_ledger.write_bytes(
+        MODULE.rollout_admission.canonical_replay_ledger_bytes(
+            [admission.receipt_id]
+        )
+    )
+    _use_unprivileged_transaction_ledger(monkeypatch)
+
+    with pytest.raises(MODULE.DeploymentError, match="already consumed"):
+        with MODULE.consume_admission_receipt(admission):
+            pytest.fail("replayed receipt entered deployment transaction")
+
+
+def test_receipt_consumption_rejects_ledger_capacity_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    _use_unprivileged_transaction_ledger(monkeypatch)
+    prior = admission.replay_ledger.read_bytes()
+    consumed = MODULE.rollout_admission.canonical_replay_ledger_bytes(
+        [admission.receipt_id]
+    )
+    assert len(prior) < len(consumed)
+    monkeypatch.setattr(
+        MODULE.rollout_admission,
+        "MAX_JSON_BYTES",
+        len(consumed) - 1,
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="no capacity"):
+        with MODULE.consume_admission_receipt(admission):
+            pytest.fail("oversized replay ledger was published")
+
+    assert admission.replay_ledger.read_bytes() == prior
+
+
+def test_archive_substitution_is_rejected_before_rollout(tmp_path: Path) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    replacement = tmp_path / "replacement.tar.gz"
+    _write(replacement, b"signed candidate archive")
+    os.replace(replacement, admission.archive)
+
+    with pytest.raises(MODULE.DeploymentError, match="substituted"):
+        MODULE.require_admission_archive_unchanged(admission)
+
+
+def test_receipt_config_binding_rejects_one_peer_substitution(tmp_path: Path) -> None:
+    admission = _receipt_transaction_plan(tmp_path)
+    peers = tuple(
+        SimpleNamespace(slug=slug, config_sha256=digest)
+        for slug, digest in admission.validator_config_sha256
+    )
+    peers = (
+        SimpleNamespace(slug=peers[0].slug, config_sha256="9" * 64),
+        *peers[1:],
+    )
+    bundle = SimpleNamespace(
+        manifest_sha256=admission.reset_manifest_sha256,
+        manifest={"source_commit": admission.source_commit},
+        peers=peers,
+    )
+    sources = SimpleNamespace(
+        binary_sha256=admission.binary_sha256,
+        supervisor_sha256=admission.supervisor_sha256,
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="do not match"):
+        MODULE.require_inputs_match_admission(bundle, sources, admission)
 
 
 def test_exclusive_deployment_lock_refuses_contention(
@@ -2299,28 +2676,34 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
             "/bundle",
             "--binary",
             "/binary",
-            "--expected-binary-sha256",
-            "a" * 64,
             "--supervisor",
             "/supervisor",
-            "--expected-supervisor-sha256",
-            "b" * 64,
-            "--restart-generation",
-            "9" * 64,
+            "--admission-archive",
+            "/candidate.tar.gz",
+            "--admission-authority-dir",
+            "/authority",
             "--expected-source-commit",
             "c" * 40,
-            "--expected-kagemusha-manifest-sha256",
+            "--expected-cargo-lock-sha256",
             "d" * 64,
-            "--expected-kagemusha-release-policy-sha256",
+            "--expected-workspace-source-manifest-sha256",
             "e" * 64,
-            "--expected-kagemusha-release-attestation-sha256",
+            "--expected-receipt-id",
             "f" * 64,
+            "--trusted-signing-fingerprint",
+            "1" * 64,
+            "--release-manifest-verifier",
+            "/sorafs-validate",
+            "--trusted-release-manifest-verifier-sha256",
+            "2" * 64,
         ]
     )
     assert args.health_timeout_seconds == 240
     assert args.minimum_free_bytes == 17_179_869_184
     assert args.maximum_fsync_latency_ms == 250
     assert args.supervisor_python == MODULE.DEFAULT_SUPERVISOR_PYTHON
-    assert args.restart_generation == "9" * 64
+    assert not hasattr(args, "restart_generation")
+    assert not hasattr(args, "expected_binary_sha256")
+    assert not hasattr(args, "expected_supervisor_sha256")
     assert args.allow_absent_old_child is False
     assert args.apply is False

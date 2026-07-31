@@ -230,7 +230,8 @@ def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
     expected = {
         line.split("\t")[1] for line in grammar.splitlines() if line.startswith("keyword\t")
     }
-    assert client_module._KOTODAMA_RESERVED_IDENTIFIERS == expected
+    assert client_module._KOTODAMA_RESERVED_IDENTIFIERS == expected | {"Amount"}
+    assert client_module._KOTODAMA_RESERVED_IDENTIFIERS - expected == {"Amount"}
     assert expected.isdisjoint({"contract", "entry", "init", "upgrade"})
 
     semantic = (root / "crates" / "kotodama_lang" / "src" / "semantic.rs").read_text(
@@ -327,6 +328,26 @@ def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
     payload["provenance"]["signer"] = "mutated"
     assert trigger.metadata["round"] == 7
     assert manifest.provenance["signer"] == "ed25519:fixture"
+
+
+def test_contract_manifest_trigger_boundaries_reject_exact_amount_source_form() -> None:
+    for field in ("id", "namespace"):
+        payload = _full_manifest_payload()
+        trigger = payload["entrypoints"][0]["triggers"][0]
+        if field == "id":
+            trigger["id"] = "Amount"
+        else:
+            trigger["callback"]["namespace"] = "Amount"
+        with pytest.raises(TypeError, match="canonical Kotodama"):
+            ContractManifest.from_payload(payload)
+
+    payload = _full_manifest_payload()
+    trigger = payload["entrypoints"][0]["triggers"][0]
+    trigger["id"] = "amount"
+    trigger["callback"]["namespace"] = "RemoteLedger"
+    parsed = ContractManifest.from_payload(payload).declared_triggers[0]
+    assert parsed.id == "amount"
+    assert parsed.callback.namespace == "RemoteLedger"
 
 
 @pytest.mark.parametrize("view_name", tuple(_QUERY_VIEW_LAYOUTS))
@@ -479,6 +500,7 @@ def test_manifest_does_not_exempt_retired_types_outside_struct_field_positions(
         "Transfer{amount: : quantity}",
         "Transfer{amount:quantity}",
         "Transfer{amount: quantity, amount: quantity}",
+        "Transfer{Amount: quantity}",
         "Transfer{}",
         "List<quantity, 0>",
         "List<quantity, 65>",
@@ -564,6 +586,7 @@ def test_manifest_rejects_noncanonical_dynamic_key_types(forged: str) -> None:
         ("base_key", "state:Balances/", "state declaration identifier"),
         ("base_key", "state:Balances/suffix", "state declaration identifier"),
         ("base_key", "state:Balances:suffix", "state declaration identifier"),
+        ("base_key", "state:Amount", "state declaration identifier"),
         ("base_key", "state:int", "state declaration identifier"),
         ("base_key", "account:alice", "state declaration identifier"),
         ("base_key", " state:Balances", "exact non-empty string"),
@@ -737,6 +760,43 @@ def test_manifest_allows_amount_as_error_variant_name() -> None:
     manifest = ContractManifest.from_payload(payload)
 
     assert manifest.error_codes[0].name == "amount"
+
+
+def test_manifest_rejects_exact_amount_in_every_identifier_position() -> None:
+    cases = (
+        ("entrypoint", ("entrypoints", 0, "name"), "Amount"),
+        ("parameter", ("entrypoints", 0, "params", 0, "name"), "Amount"),
+        ("state", ("states", 0, "name"), "Amount"),
+        ("struct field", ("states", 0, "type_name"), "Transfer{Amount: quantity}"),
+        ("error variant", ("error_codes", 0, "name"), "Amount"),
+        (
+            "dynamic state base",
+            ("access_set_hints", "dynamic_reads", 0, "base_key"),
+            "state:Amount",
+        ),
+    )
+    for label, path, replacement in cases:
+        payload = _full_manifest_payload()
+        parent = payload
+        for component in path[:-1]:
+            parent = parent[component]
+        parent[path[-1]] = replacement
+        with pytest.raises(TypeError, match="canonical|identifier|state type"):
+            ContractManifest.from_payload(payload)
+
+
+def test_manifest_accepts_lowercase_amount_entrypoint_and_parameter() -> None:
+    payload = _full_manifest_payload()
+    entrypoint = payload["entrypoints"][0]
+    entrypoint["name"] = "amount"
+    entrypoint["params"][0]["name"] = "amount"
+    entrypoint["argument_schema"]["fields"][0]["name"] = "amount"
+    entrypoint["triggers"][0]["callback"]["entrypoint"] = "amount"
+
+    manifest = ContractManifest.from_payload(payload)
+
+    assert manifest.entrypoints[0].name == "amount"
+    assert manifest.entrypoints[0].params[0].name == "amount"
 
 
 def test_entrypoint_flat_list_schema_enforces_the_exact_depth_boundary() -> None:

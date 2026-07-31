@@ -68,7 +68,13 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
-  --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachmentTest
+
+cd "${ROOT_DIR}/java/iroha_android"
+./gradlew --no-daemon -q :core:test \
+  --tests org.hyperledger.iroha.android.model.instructions.ProofAttachmentModelTests \
+  --tests org.hyperledger.iroha.android.norito.ProofAttachmentNoritoTests
 
 cd "${ROOT_DIR}"
 javac \

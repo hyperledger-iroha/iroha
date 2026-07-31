@@ -1,0 +1,29 @@
+{
+  "id": "devportal/observability",
+  "title": "Portal Observability & Analytics",
+  "description": "Telemetry, release tagging, and verification automation for the developer portal.",
+  "source": "@site/docs/devportal/observability.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/observability",
+  "permalink": "/next/devportal/observability",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/observability.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "observability",
+    "title": "Portal Observability & Analytics",
+    "sidebar_label": "Observability",
+    "description": "Telemetry, release tagging, and verification automation for the developer portal."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Security hardening",
+    "permalink": "/next/devportal/security-hardening"
+  },
+  "next": {
+    "title": "Publishing & Monitoring",
+    "permalink": "/next/devportal/publishing-monitoring"
+  }
+}

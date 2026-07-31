@@ -1,0 +1,29 @@
+{
+  "id": "devportal/preview-invite-flow",
+  "title": "Preview invite flow",
+  "description": "Sequencing, evidence, and communications plan for the docs portal public preview waves.",
+  "source": "@site/docs/devportal/preview-invite-flow.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/preview-invite-flow",
+  "permalink": "/next/devportal/preview-invite-flow",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/preview-invite-flow.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "preview-invite-flow",
+    "title": "Preview invite flow",
+    "sidebar_label": "Preview invite flow",
+    "description": "Sequencing, evidence, and communications plan for the docs portal public preview waves."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Preview host exposure",
+    "permalink": "/next/devportal/preview-host-exposure"
+  },
+  "next": {
+    "title": "Preview tracker",
+    "permalink": "/next/devportal/preview-invite-tracker"
+  }
+}

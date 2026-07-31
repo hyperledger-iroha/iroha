@@ -406,7 +406,7 @@ fn prepare_zk_x509_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<PreparedZkX509StageV1, PrivacyReleaseEvidenceErrorClassV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
-    let profile = compiled_zk_x509_profile_material_v1()
+    let profile = zk_x509_release_candidate_profile_material_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)?;
     let context =
         PrivacyStatementContextV1 {

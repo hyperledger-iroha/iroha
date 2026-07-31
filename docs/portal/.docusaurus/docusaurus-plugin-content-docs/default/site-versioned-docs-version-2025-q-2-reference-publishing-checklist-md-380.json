@@ -1,0 +1,24 @@
+{
+  "id": "reference/publishing-checklist",
+  "title": "Publishing Checklist",
+  "description": "Use this checklist whenever you update the developer portal. It ensures that the",
+  "source": "@site/versioned_docs/version-2025-q2/reference/publishing-checklist.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/publishing-checklist",
+  "permalink": "/reference/publishing-checklist",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/versioned_docs/version-2025-q2/reference/publishing-checklist.md",
+  "tags": [],
+  "version": "2025-q2",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Norito Codec Reference",
+    "permalink": "/reference/norito-codec"
+  },
+  "next": {
+    "title": "Torii API (Swagger UI)",
+    "permalink": "/reference/torii-swagger"
+  }
+}

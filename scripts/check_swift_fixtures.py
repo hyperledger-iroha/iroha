@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import hashlib
 import json
 import sys
@@ -13,43 +12,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-DEFAULT_SOURCE = Path("java/iroha_android/src/test/resources")
+DEFAULT_SOURCE = Path("fixtures/norito_rpc")
 DEFAULT_TARGET = Path("IrohaSwift/Fixtures")
 DEFAULT_STATE = Path("artifacts/swift_fixture_regen_state.json")
 DEFAULT_ODD_OWNER = "android-foundations"
 DEFAULT_EVEN_OWNER = "swift-lead"
 DEFAULT_CADENCE_LABEL = "weekly-wed-1700utc"
-MANAGED_FIXTURE_PATTERNS = (
-    "*.norito",
-    "*transaction_payload*.json",
-    "*transaction_fixtures*.manifest.json",
-    "*trigger_instructions*.json",
+MANAGED_FIXTURES = (
+    Path("transaction_payloads.json"),
+    Path("transaction_fixtures.manifest.json"),
 )
-
-
-def is_managed_fixture(relative_path: Path) -> bool:
-    """Match the fixture subset mirrored by ``swift_fixture_regen.sh``."""
-    if relative_path.parent == Path("."):
-        if fnmatch.fnmatchcase(relative_path.name, "swift_*.norito"):
-            return False
-        if relative_path.name == "transaction_payload.json":
-            return False
-    return any(
-        fnmatch.fnmatchcase(relative_path.name, pattern)
-        for pattern in MANAGED_FIXTURE_PATTERNS
-    )
-
-
-def collect_files(root: Path) -> List[Path]:
-    if not root.exists():
-        raise FileNotFoundError(f"missing directory: {root}")
-    files = [
-        path
-        for path in root.rglob("*")
-        if path.is_file() and is_managed_fixture(path.relative_to(root))
-    ]
-    files.sort()
-    return files
 
 
 def fingerprint(path: Path) -> str:
@@ -59,11 +31,29 @@ def fingerprint(path: Path) -> str:
 
 
 def compare(source: Path, target: Path) -> Tuple[List[Path], List[Path], List[Tuple[Path, Path]]]:
-    source_map = {p.relative_to(source): p for p in collect_files(source)}
-    target_map = {p.relative_to(target): p for p in collect_files(target)}
+    for root in (source, target):
+        if not root.is_dir():
+            raise FileNotFoundError(f"missing directory: {root}")
+
+    source_map = {}
+    target_map = {}
+    for relative in MANAGED_FIXTURES:
+        source_path = source / relative
+        if not source_path.is_file():
+            raise FileNotFoundError(f"missing canonical fixture: {source_path}")
+        source_map[relative] = source_path
+        target_path = target / relative
+        if target_path.is_file():
+            target_map[relative] = target_path
 
     missing = sorted(rel for rel in source_map if rel not in target_map)
-    extra = sorted(rel for rel in target_map if rel not in source_map)
+    extra = sorted(
+        relative
+        for path in target.rglob("*.norito")
+        if path.is_file()
+        for relative in (path.relative_to(target),)
+        if relative.parent != Path(".") or not relative.name.startswith("swift_")
+    )
 
     diffs: List[Tuple[Path, Path]] = []
     for rel, src_path in source_map.items():

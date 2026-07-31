@@ -350,6 +350,7 @@ The V1 type vocabulary is:
 | Source policy | Canonical V1 values |
 | --- | --- |
 | Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `StateMap`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage` |
+| Forbidden in every source identifier position | `Amount` |
 | Reserved retired numeric type spellings | `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `num`, `Int`, `Integer`, `float`, `f32`, `f64`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `amount`, `money`, `Quantity`, `number` |
 | Ordinary value/function identifier examples | `amount` |
 | Retired literal suffixes with safe fix-its | `amt` (remove the suffix), `qty` (remove the suffix) |
@@ -389,8 +390,10 @@ The V1 type vocabulary is:
 `Quantity`, `float`, `num`, `number`, `money`, `Opaque`, `fixed_u128`, `String`,
 `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
 Retired type spellings are reserved only in the type namespace and in declared
-type names. They remain available for ordinary function, parameter, and local
-value names; for example, `fn amount(quantity amount) -> quantity` is valid.
+type names. Except for exact `Amount`, which is forbidden in every identifier
+position, the other retired type spellings remain available for ordinary
+function, parameter, and local value names; for example,
+`fn amount(quantity amount) -> quantity` is valid.
 Unit is an internal function-return state, not a source type: `()` and `(T)` are
 errors in type position. Omit the return type for a Unit-returning function;
 source tuple types always contain at least two elements.
@@ -645,6 +648,11 @@ strings, canonical IDs, `Json`, `Option`, and `List`; bytes become lowercase
 getters return `Option<T>` and use `.get_int(key)`, `.get_decimal(key)`, and
 `.get_quantity(key)` for the three numeric domains. Retired numeric getter
 spellings are errors.
+
+`Json::parse` accepts exactly one direct string literal and validates that
+literal at compile time. Parameters, locals, and constants are not accepted as
+parser input and produce `E_JSON_LITERAL_REQUIRED`; construct dynamic typed JSON
+with native `json { ... }` and `json [ ... ]` expressions instead.
 
 ## Typed core ledger queries
 

@@ -1,0 +1,27 @@
+{
+  "id": "norito/try-it-console",
+  "title": "Norito Try-It Console",
+  "description": "Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.",
+  "source": "@site/docs/norito/try-it-console.md",
+  "sourceDirName": "norito",
+  "slug": "/norito/try-it-console",
+  "permalink": "/next/norito/try-it-console",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/try-it-console.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Norito Try-It Console",
+    "description": "Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Norito Streaming",
+    "permalink": "/next/norito/streaming"
+  },
+  "next": {
+    "title": "index",
+    "permalink": "/next/norito/examples/"
+  }
+}

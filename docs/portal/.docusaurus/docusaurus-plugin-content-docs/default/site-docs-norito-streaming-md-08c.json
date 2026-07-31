@@ -1,0 +1,24 @@
+{
+  "id": "norito/streaming",
+  "title": "Norito Streaming",
+  "description": "Norito Streaming defines the wire format, control frames, and reference codec",
+  "source": "@site/docs/norito/streaming.md",
+  "sourceDirName": "norito",
+  "slug": "/norito/streaming",
+  "permalink": "/next/norito/streaming",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/streaming.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Norito Getting Started",
+    "permalink": "/next/norito/getting-started"
+  },
+  "next": {
+    "title": "Norito Try-It Console",
+    "permalink": "/next/norito/try-it-console"
+  }
+}

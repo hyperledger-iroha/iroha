@@ -53,7 +53,8 @@ public final class ContractManifestJsonParser {
           "trigger",
           "true",
           "var",
-          "view");
+          "view",
+          "Amount");
   private static final Set<String> RESERVED_DECLARATION_NAMES =
       set(
           "int",
@@ -1134,6 +1135,9 @@ public final class ContractManifestJsonParser {
         "trigger descriptor");
     final String id =
         exactString(required(root, "id", "trigger descriptor"), "trigger descriptor.id");
+    check(
+        canonicalDeclarationIdentifier(id),
+        "trigger descriptor.id must be a canonical Kotodama declaration identifier");
     final ContractManifest.TriggerRepeats repeats =
         parseRepeats(
             object(
@@ -1181,6 +1185,9 @@ public final class ContractManifestJsonParser {
   private static ContractManifest.TriggerCallback parseCallback(final Map<String, Object> root) {
     exactKeys(root, set("namespace", "entrypoint"), "trigger callback");
     final String namespace = optionalExactString(root, "namespace", "trigger callback.namespace");
+    check(
+        namespace == null || canonicalTypeDeclarationIdentifier(namespace),
+        "trigger callback.namespace must be a canonical Kotodama type-declaration identifier");
     final String entrypoint =
         exactString(
             required(root, "entrypoint", "trigger callback"), "trigger callback.entrypoint");

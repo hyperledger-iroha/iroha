@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/pin-registry-plan",
+  "title": "SoraFS Pin Registry Implementation Plan",
+  "description": "SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability.",
+  "source": "@site/docs/sorafs/pin-registry-plan.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/pin-registry-plan",
+  "permalink": "/next/sorafs/pin-registry-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/pin-registry-plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "pin-registry-plan",
+    "title": "SoraFS Pin Registry Implementation Plan",
+    "sidebar_label": "Pin Registry Plan",
+    "description": "SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Node Storage Design",
+    "permalink": "/next/sorafs/node-storage"
+  },
+  "next": {
+    "title": "Pin Registry Validation",
+    "permalink": "/next/sorafs/pin-registry-validation-plan"
+  }
+}

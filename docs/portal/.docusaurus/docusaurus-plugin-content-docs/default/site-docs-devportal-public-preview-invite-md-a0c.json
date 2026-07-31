@@ -1,0 +1,29 @@
+{
+  "id": "devportal/public-preview-invite",
+  "title": "Public preview invite playbook",
+  "description": "Checklist for announcing the docs portal preview to external reviewers.",
+  "source": "@site/docs/devportal/public-preview-invite.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/public-preview-invite",
+  "permalink": "/next/devportal/public-preview-invite",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/public-preview-invite.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "public-preview-invite",
+    "title": "Public preview invite playbook",
+    "sidebar_label": "Preview invite playbook",
+    "description": "Checklist for announcing the docs portal preview to external reviewers."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Reviewer onboarding",
+    "permalink": "/next/devportal/reviewer-onboarding"
+  },
+  "next": {
+    "title": "Reference Index",
+    "permalink": "/next/reference"
+  }
+}

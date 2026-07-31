@@ -1,0 +1,27 @@
+{
+  "id": "ministry/volunteer-briefs",
+  "title": "Volunteer Briefs",
+  "description": "Submit, lint, and publish citizen briefs for Ministry blacklist reviews.",
+  "source": "@site/docs/ministry/volunteer-briefs.mdx",
+  "sourceDirName": "ministry",
+  "slug": "/ministry/volunteer-briefs",
+  "permalink": "/next/ministry/volunteer-briefs",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/ministry/volunteer-briefs.mdx",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Volunteer Briefs",
+    "description": "Submit, lint, and publish citizen briefs for Ministry blacklist reviews."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Agenda Council Workflow",
+    "permalink": "/next/ministry/agenda-workflow"
+  },
+  "next": {
+    "title": "Registry schema",
+    "permalink": "/next/sns/registry-schema"
+  }
+}

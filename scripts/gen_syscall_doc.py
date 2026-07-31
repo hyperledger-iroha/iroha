@@ -10,7 +10,7 @@ import stat
 import sys
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +23,15 @@ ASSIGNMENT = re.compile(
     r'^(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>"(?:[^"\\]|\\.)*")$'
 )
 EXPECTED_FIELDS = frozenset({"number", "args", "ret", "gas"})
-USAGE = "usage: gen_syscall_doc.py --write|--check"
+DEFAULT_OUTPUT = ROOT / "specs/ivm_syscalls_generated.md"
+USAGE = "usage: gen_syscall_doc.py (--write|--check) [--output <path>]"
+
+
+class GeneratorOptions(NamedTuple):
+    """One explicit publication mode and generated-document destination."""
+
+    check: bool
+    output: Path
 
 
 def _parse_syscall_number(value: str, *, line_number: int) -> int:
@@ -409,27 +417,46 @@ def render(rows: Sequence[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def parse_mode(argv: Sequence[str]) -> bool:
-    """Return whether check mode was selected; require one exact mode."""
+def parse_args(argv: Sequence[str]) -> GeneratorOptions:
+    """Parse one exact mode plus an optional explicit output path."""
 
     arguments = list(argv)
-    if arguments == ["--write"]:
-        return False
-    if arguments == ["--check"]:
-        return True
-    raise ValueError(USAGE)
+    check: bool | None = None
+    output: Path | None = None
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in {"--write", "--check"}:
+            if check is not None:
+                raise ValueError(USAGE)
+            check = argument == "--check"
+            index += 1
+            continue
+        if argument == "--output":
+            if output is not None or index + 1 >= len(arguments):
+                raise ValueError(USAGE)
+            value = arguments[index + 1]
+            if not value or value.startswith("--"):
+                raise ValueError(USAGE)
+            output = Path(value)
+            index += 2
+            continue
+        raise ValueError(USAGE)
+    if check is None:
+        raise ValueError(USAGE)
+    return GeneratorOptions(check=check, output=output or DEFAULT_OUTPUT)
 
 
 def main(argv: Sequence[str]) -> int:
     """Run the generator command-line interface."""
     try:
-        check = parse_mode(argv)
+        options = parse_args(argv)
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
     try:
         rows = build_rows()
-        sync_canonical_table(rows, check=check)
+        sync_canonical_table(rows, check=options.check, path=options.output)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

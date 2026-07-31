@@ -1427,13 +1427,14 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 errors,
             )
         for marker in (
-            "capabilities",
+            "compiled",
+            "catalog",
             "ProtocolIdV1",
             "unknown",
         ):
             require(
                 marker.lower() in source.lower(),
-                f"{relative} lost closed capability marker {marker}",
+                f"{relative} lost closed local catalog marker {marker}",
                 errors,
             )
 
@@ -1448,19 +1449,19 @@ def check(overrides: dict[str, str] | None = None) -> None:
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "nativeValidateCapabilities",
+            "nativeValidateCompiledProfileCatalog",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "nativeValidateCapabilities",
+            "nativeValidateCompiledProfileCatalog",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
-            "iroha_privacy_validate_capabilities_v1",
+            "iroha_privacy_validate_compiled_profile_catalog_v1",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-            "iroha_privacy_validate_capabilities_v1",
+            "iroha_privacy_validate_compiled_profile_catalog_v1",
         ),
     )
     for relative, marker in validator_markers:
@@ -1492,7 +1493,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
     for relative in (
         "crates/iroha_js_host/src/lib.rs",
         "python/iroha_python/iroha_python_rs/src/lib.rs",
-        "crates/connect_norito_bridge/src/lib.rs",
     ):
         source = read(relative, overrides)
         require(
@@ -1507,6 +1507,22 @@ def check(overrides: dict[str, str] | None = None) -> None:
             f"{relative} must not rewrite the canonical Norito schema hash",
             errors,
         )
+
+    connect_bridge = read("crates/connect_norito_bridge/src/lib.rs", overrides)
+    require(
+        "compiled_privacy_profile_catalog_v1" in connect_bridge
+        and "validate_local_privacy_compiled_profile_catalog_archive_v1" in connect_bridge
+        and "PrivacyCompiledProfileCatalogV1" in connect_bridge
+        and "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1" in connect_bridge,
+        "connect bridge must expose only the bounded exact local compiled-profile catalog",
+        errors,
+    )
+    require(
+        "iroha_privacy_capabilities_v1" not in connect_bridge
+        and "iroha_privacy_validate_capabilities_v1" not in connect_bridge,
+        "connect bridge must not expose a local archive as authoritative capabilities",
+        errors,
+    )
 
     capability_only_native_files = (
         "crates/connect_norito_bridge/src/lib.rs",
@@ -1532,13 +1548,13 @@ def check(overrides: dict[str, str] | None = None) -> None:
     require(
         set(re.findall(r"\b(iroha_privacy_[a-z0-9_]+)\s*\(", c_header))
         == {
-            "iroha_privacy_capabilities_v1",
-            "iroha_privacy_validate_capabilities_v1",
+            "iroha_privacy_compiled_profile_catalog_v1",
+            "iroha_privacy_validate_compiled_profile_catalog_v1",
             "iroha_privacy_exact12_fixture_bundle_v1",
             "iroha_privacy_validate_exact12_fixture_bundle_v1",
             "iroha_privacy_free_buffer",
         },
-        "C privacy ABI must contain only capability snapshot, exact-12 conformance, typed validators, and zeroizing free",
+        "C privacy ABI must contain only local compiled-profile catalog, exact-12 conformance, typed validators, and zeroizing free",
         errors,
     )
     cli_root = root / "crates/iroha_cli"
@@ -1567,7 +1583,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
             )
 
     for relative in (
-        "crates/connect_norito_bridge/src/lib.rs",
         "crates/iroha_js_host/src/lib.rs",
         "python/iroha_python/iroha_python_rs/src/lib.rs",
     ):
@@ -1580,6 +1595,13 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "PRIVACY_ALGORITHM_ENTRIES",
         ):
             require(marker not in source, f"{relative} retains legacy catalog {marker}", errors)
+
+    for marker in ("PrivacyCompiledProfileCatalogV1", "PrivacyProtocolIdV1::ALL"):
+        require(
+            marker in connect_bridge,
+            f"crates/connect_norito_bridge/src/lib.rs lost local catalog marker {marker}",
+            errors,
+        )
 
     require(
         "mod privacy_production;" not in read(

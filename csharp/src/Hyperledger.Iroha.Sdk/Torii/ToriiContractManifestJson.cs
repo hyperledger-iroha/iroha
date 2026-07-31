@@ -47,6 +47,7 @@ internal static class ToriiContractManifestJson
         "true",
         "var",
         "view",
+        "Amount",
     };
     private static readonly HashSet<string> ReservedDeclarationNames = new(StringComparer.Ordinal)
     {
@@ -957,6 +958,11 @@ internal static class ToriiContractManifestJson
     private static ToriiContractTriggerDescriptor ParseTrigger(JsonObject root, string context)
     {
         EnsureOnly(root, context, "id", "repeats", "filter", "authority", "metadata", "callback");
+        var id = RequiredExactString(root, "id", $"{context}.id");
+        if (!IsCanonicalDeclarationIdentifier(id))
+        {
+            throw new JsonException($"{context}.id must be a canonical Kotodama declaration identifier.");
+        }
         var filter = RequiredExactString(root, "filter", $"{context}.filter");
         ValidateCanonicalBase64(filter, $"{context}.filter");
         var authority = OptionalExactString(root, "authority", $"{context}.authority");
@@ -973,7 +979,7 @@ internal static class ToriiContractManifestJson
         }
         return new ToriiContractTriggerDescriptor
         {
-            Id = RequiredExactString(root, "id", $"{context}.id"),
+            Id = id,
             Repeats = ParseRepeats(RequiredObject(root, "repeats", $"{context}.repeats"), $"{context}.repeats"),
             FilterBase64 = filter,
             Authority = authority,
@@ -1013,6 +1019,11 @@ internal static class ToriiContractManifestJson
     private static ToriiContractTriggerCallback ParseCallback(JsonObject root, string context)
     {
         EnsureOnly(root, context, "namespace", "entrypoint");
+        var callbackNamespace = OptionalExactString(root, "namespace", $"{context}.namespace");
+        if (callbackNamespace is not null && !IsCanonicalTypeDeclarationIdentifier(callbackNamespace))
+        {
+            throw new JsonException($"{context}.namespace must be a canonical Kotodama type-declaration identifier.");
+        }
         var entrypoint = RequiredExactString(root, "entrypoint", $"{context}.entrypoint");
         if (!IsCanonicalEntrypointName(entrypoint))
         {
@@ -1020,7 +1031,7 @@ internal static class ToriiContractManifestJson
         }
         return new ToriiContractTriggerCallback
         {
-            Namespace = OptionalExactString(root, "namespace", $"{context}.namespace"),
+            Namespace = callbackNamespace,
             Entrypoint = entrypoint,
         };
     }
@@ -1508,6 +1519,11 @@ internal static class ToriiContractManifestJson
 
     private static JsonObject BuildTrigger(ToriiContractTriggerDescriptor value, string context)
     {
+        var id = RequireExact(value.Id, $"{context}.id");
+        if (!IsCanonicalDeclarationIdentifier(id))
+        {
+            throw new JsonException($"{context}.id must be a canonical Kotodama declaration identifier.");
+        }
         ValidateCanonicalBase64(value.FilterBase64, $"{context}.filter");
         if (value.Authority is not null)
         {
@@ -1522,7 +1538,7 @@ internal static class ToriiContractManifestJson
         }
         return new JsonObject
         {
-            ["id"] = RequireExact(value.Id, $"{context}.id"),
+            ["id"] = id,
             ["repeats"] = value.Repeats.Kind switch
             {
                 ToriiContractTriggerRepeatsKind.Indefinitely when value.Repeats.Exactly is null =>
@@ -1545,6 +1561,10 @@ internal static class ToriiContractManifestJson
             throw new JsonException($"{context}.entrypoint must be a canonical Kotodama selector.");
         }
         ValidateExactStringOptional(value.Namespace, $"{context}.namespace");
+        if (value.Namespace is not null && !IsCanonicalTypeDeclarationIdentifier(value.Namespace))
+        {
+            throw new JsonException($"{context}.namespace must be a canonical Kotodama type-declaration identifier.");
+        }
         return new JsonObject { ["namespace"] = value.Namespace, ["entrypoint"] = value.Entrypoint };
     }
 

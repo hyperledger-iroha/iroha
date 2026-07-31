@@ -210,7 +210,8 @@ use crate::privacy_engines::{
 };
 use crate::{
     privacy_profiles::{
-        CompiledPrivacyProfileV1, compiled_privacy_profile_v1, compiled_zk_x509_profile_material_v1,
+        CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
+        zk_x509_release_candidate_profile_material_v1,
     },
     privacy_state::{PrivacyZkX509AuthoritativeStateV1, compute_privacy_pgc_account_state_root_v1},
     privacy_verifier::{

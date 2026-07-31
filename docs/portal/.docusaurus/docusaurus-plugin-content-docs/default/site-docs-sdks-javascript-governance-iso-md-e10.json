@@ -1,0 +1,28 @@
+{
+  "id": "sdks/javascript-governance-iso",
+  "title": "Governance & ISO bridge examples",
+  "description": "Drive advanced Torii workflows with `@iroha/iroha-js`.",
+  "source": "@site/docs/sdks/javascript-governance-iso.md",
+  "sourceDirName": "sdks",
+  "slug": "/sdks/javascript/governance-iso-examples",
+  "permalink": "/next/sdks/javascript/governance-iso-examples",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/javascript-governance-iso.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Governance & ISO bridge examples",
+    "description": "Drive advanced Torii workflows with `@iroha/iroha-js`.",
+    "slug": "/sdks/javascript/governance-iso-examples"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "JavaScript SDK quickstart",
+    "permalink": "/next/sdks/javascript"
+  },
+  "next": {
+    "title": "Rust ledger flow recipe",
+    "permalink": "/next/sdks/recipes/rust-ledger-flow"
+  }
+}

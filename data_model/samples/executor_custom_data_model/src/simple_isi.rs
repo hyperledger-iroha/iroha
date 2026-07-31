@@ -1,5 +1,4 @@
-//! Example of one custom instruction.
-//! See `ivm/samples/executor_custom_instructions_simple` for the IVM equivalent.
+//! Example wire model for one custom instruction.
 
 use std::{borrow::ToOwned, format, string::String, vec::Vec};
 

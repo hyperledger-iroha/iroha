@@ -1,0 +1,24 @@
+{
+  "id": "da/ingest-plan",
+  "title": "ingest-plan",
+  "description": "title: Data Availability Ingest Plan",
+  "source": "@site/docs/da/ingest-plan.md",
+  "sourceDirName": "da",
+  "slug": "/da/ingest-plan",
+  "permalink": "/next/da/ingest-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/da/ingest-plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "SF-6 Security Review",
+    "permalink": "/next/sorafs/reports/sf6-security-review"
+  },
+  "next": {
+    "title": "replication-policy",
+    "permalink": "/next/da/replication-policy"
+  }
+}

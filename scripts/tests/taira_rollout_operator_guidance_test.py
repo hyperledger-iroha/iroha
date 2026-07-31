@@ -120,7 +120,9 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert "privacy_runner_build_args+=(-- -C target-feature=+crt-static)" in source
     assert 'if [[ "$(uname -s)" != "Linux" ]]' in source
     assert 'case "$(uname -m)" in' in source
-    assert "x86_64|aarch64)" in source
+    assert "aarch64)" in source
+    assert "x86_64|aarch64)" not in source
+    assert "Taira first-release authority requires native Linux aarch64" in source
     assert "readelf --program-headers --wide" in source
     assert "must not contain a PT_INTERP segment" in source
     assert "readelf --dynamic --wide" in source
@@ -142,14 +144,12 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert "PRIVACY_PREBUNDLE_REPORT" not in source
     assert '"privacy_release":' not in source
 
-    assert workflow.count('"FEATURES=embedded-soracloud-runtime,zk-stark"') == 1
+    assert "build_taira_rollout_bundle.sh" in workflow
     assert (
-        workflow.count(
-            '"WORKSPACE_SOURCE_MANIFEST_SHA256='
-            '${{ env.IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256 }}"'
-        )
-        == 1
+        "--features embedded-soracloud-runtime,zk-stark" in workflow
     )
+    assert "capture_taira_macos_four_peer_receipt.py" in workflow
+    assert "docker/build-push-action@" not in workflow
     assert 'test "${FEATURES}" = "embedded-soracloud-runtime,zk-stark"' in dockerfile
     assert "Taira irohad must not contain privacy-release-evidence" in dockerfile
     assert (
@@ -278,188 +278,34 @@ def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries(
     assert pre_archive < archive < post_archive
 
     assert 'workspace_source_manifest_before="$(python3 -I -S' in dockerfile
-    assert "IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256" in workflow
+    assert "TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" in workflow
+    assert workflow.count("prepare_taira_release_source.sh") == 2
+    assert (
+        'cmp "$MACOS_SOURCE_IDENTITY" '
+        '"$linux_root/taira-source-identity-v1.json"' in workflow
+    )
     assert "python3 -I -S scripts/compute_workspace_source_manifest.py" in workflow
-    assert "--write-path-list" in workflow
-    assert "--create-sealed-archive" in workflow
     assert "--extract-sealed-archive" in dockerfile
     assert dockerfile.count("--require-exact-closure") == 3
 
 
-def _assert_single_sealed_taira_image_contract(workflow: str) -> None:
-    build_action = (
-        "uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8"
-    )
-    assert workflow.count(build_action) == 1
-    assert "context: ${{ env.TAIRA_SEALED_CONTEXT }}" in workflow
-    assert "context: ." not in workflow
-    assert "load: true" in workflow
-    assert "push: false" in workflow
-    assert workflow.count('"BINARIES=irohad kagami"') == 1
-    assert '"BINARIES=irohad"' not in workflow
-    assert workflow.count('"CARGO_BUILD_JOBS=1"') == 1
-    assert "--create-sealed-archive" in workflow
-    assert "--validate-sealed-context" in workflow
-    assert "taira-workspace-source-v1.seal" in workflow
-    assert "taira-workspace-source-paths-v1.bin" in workflow
-    assert "context-control.sha256" in workflow
-    assert (
-        "install -m 0555 scripts/taira_image_smoke.sh \\\n"
-        '            "$sealed_context/scripts/taira_image_smoke.sh"' in workflow
-    )
-    assert workflow.count('"IROHA_RELEASE_PREPROVISIONED_BASES=1"') == 1
-    assert "TAIRA_SEALED_SOURCE_ARCHIVE_SHA256" in workflow
-    assert "TAIRA_SEALED_SOURCE_PATH_LIST_SHA256" in workflow
-    assert "TAIRA_SEALED_CONTEXT_CONTROL_SHA256" in workflow
-    assert 'find "$sealed_context" -type f -exec chmod 0444 {} +' in workflow
-    assert 'chmod 0555 "$sealed_context/scripts" "$sealed_context"' in workflow
-
-    precheck = workflow.index("Recheck the immutable source immediately before Buildx")
-    build = workflow.index(build_action)
-    smoke = workflow.index("Smoke the exact locally loaded publish image")
-    authority = workflow.index(
-        "Create and verify the portable signed exact-12 release authority"
-    )
-    upload_authority = workflow.index(
-        "Upload the authenticated portable Taira release authority"
-    )
-    download_authority = workflow.index(
-        "Download the uploaded authority into a fresh replay root"
-    )
-    reverify_authority = workflow.index(
-        "Reverify the uploaded authority before registry mutation"
-    )
-    push = workflow.index(
-        "Push the same smoke-tested local image and verify registry digests"
-    )
-    assert (
-        precheck
-        < build
-        < smoke
-        < authority
-        < upload_authority
-        < download_authority
-        < reverify_authority
-        < push
-    )
-    assert (
-        'sha256sum "$TAIRA_SEALED_CONTEXT/taira-workspace-source-v1.seal"'
-        in workflow[precheck:build]
-    )
-    assert (
-        'test "$git_digest" = "$IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256"'
-        in workflow[precheck:build]
-    )
-    assert (
-        "docker image inspect --format '{{.Id}}' \"$LOCAL_TAG\"" in workflow[smoke:push]
-    )
-    assert (
-        'bash "$TAIRA_SEALED_CONTEXT/scripts/taira_image_smoke.sh"'
-        in workflow[smoke:push]
-    )
-    assert 'docker push "$publish_tag"' in workflow[push:]
-    assert 'docker manifest inspect --verbose "$publish_tag"' in workflow[push:]
-    assert 'test "$pushed_digest" = "$TAIRA_BUILD_MANIFEST_DIGEST"' in workflow[push:]
-    assert 'test "$registry_digest" = "$pushed_digest"' in workflow[push:]
-    assert (
-        "uses: actions/download-artifact@"
-        "d3f86a106a0bac45b974a628896c90dbdf5c8093"
-        in workflow[download_authority:reverify_authority]
-    )
-    replay_block = workflow[reverify_authority:push]
-    assert "scan_inventory_paths(root)" in replay_block
-    assert (
-        'cmp \\\n              "$LOCAL_AUTHORITY_DIR/$relative" \\\n'
-        '              "$downloaded/$relative"' in replay_block
-    )
-    assert "scripts/release_manifest_signing.py verify" in replay_block
-    assert '"$downloaded/artifacts/taira_release_authority.py"' in replay_block
-
-
-def test_taira_image_is_built_once_from_exact_minimal_sealed_context() -> None:
+def test_taira_publish_workflow_has_no_competing_image_authority() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
-    _assert_single_sealed_taira_image_contract(workflow)
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    (
-        lambda source: source.replace(
-            "context: ${{ env.TAIRA_SEALED_CONTEXT }}",
-            "context: .",
-            1,
-        ),
-        lambda source: source.replace("load: true", "load: false", 1),
-        lambda source: source.replace(
-            'sha256sum "$TAIRA_SEALED_CONTEXT/taira-workspace-source-v1.seal"',
-            'printf "%s" "$TAIRA_SEALED_SOURCE_ARCHIVE_SHA256"',
-            1,
-        ),
-        lambda source: source.replace(
-            "uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
-            "uses: docker/build-push-action@"
-            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8\n"
-            "      # injected second build\n"
-            "      - uses: docker/build-push-action@"
-            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
-            1,
-        ),
-        lambda source: source.replace(
-            'docker push "$publish_tag"',
-            'docker build "$publish_tag"',
-            1,
-        ),
-        lambda source: source.replace(
-            '"IROHA_RELEASE_PREPROVISIONED_BASES=1"',
-            '"IROHA_RELEASE_PREPROVISIONED_BASES=0"',
-            1,
-        ),
-        lambda source: source.replace(
-            '"BINARIES=irohad kagami"',
-            '"BINARIES=irohad"',
-            1,
-        ),
-        lambda source: source.replace(
-            'bash "$TAIRA_SEALED_CONTEXT/scripts/taira_image_smoke.sh"',
-            "bash scripts/taira_image_smoke.sh",
-            1,
-        ),
-        lambda source: source.replace(
-            "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
-            "# uploaded authority download deleted",
-            1,
-        ),
-        lambda source: source.replace(
-            'cmp \\\n              "$LOCAL_AUTHORITY_DIR/$relative" \\\n'
-            '              "$downloaded/$relative"',
-            "true # uploaded tuple comparison deleted",
-            1,
-        ),
-    ),
-    ids=(
-        "full-workspace-context",
-        "not-loaded",
-        "archive-not-rehashed",
-        "second-build",
-        "push-rebuild",
-        "mutable-package-install",
-        "smoke-generator-omitted",
-        "live-workspace-smoke",
-        "uploaded-authority-not-downloaded",
-        "uploaded-authority-not-compared",
-    ),
-)
-def test_taira_single_sealed_image_contract_rejects_adversarial_mutations(
-    mutation,
-) -> None:
-    workflow = (
-        ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
-    ).read_text(encoding="utf-8")
-    _assert_single_sealed_taira_image_contract(workflow)
-    with pytest.raises(AssertionError):
-        _assert_single_sealed_taira_image_contract(mutation(workflow))
+    for retired in (
+        "docker/build-push-action@",
+        "docker/login-action@",
+        "docker push",
+        "docker manifest",
+        "setup-buildx-action@",
+        "push_latest",
+        "taira-latest",
+    ):
+        assert retired not in workflow.lower()
+    assert "Publish the exact generic OCI artifact" in workflow
+    assert "Pull by immutable digest, compare every byte" in workflow
+    assert "Create and verify the signed publication receipt" in workflow
 
 
 def _assert_docker_sealed_source_and_final_verify_contract(
@@ -608,30 +454,17 @@ def test_docker_release_contract_rejects_deleted_overridden_or_builder_path_muta
         _assert_docker_sealed_source_and_final_verify_contract(mutation(dockerfile))
 
 
-def test_taira_publish_image_binary_and_job_contract_is_documented() -> None:
+def test_taira_archive_publication_contract_is_documented() -> None:
     readme = (TAIRA_DIR / "README.md").read_text(encoding="utf-8")
-    smoke = (ROOT / "scripts" / "taira_image_smoke.sh").read_text(encoding="utf-8")
 
-    assert "`BINARIES=irohad kagami`" in readme
-    assert "`CARGO_BUILD_JOBS=1` unchanged" in readme
-    assert "--binaries 'irohad kagami'" in readme
-    assert "`irohad` and `kagami`" in smoke
-    assert "--entrypoint kagami" in smoke
-    assert 'invocation_root="$(pwd -P)"' in smoke
-    assert (
-        'renderer_relative="scripts/render_taira_localnet_container_bundle.py"' in smoke
-    )
-    assert "--extract-sealed-archive" in smoke
-    assert "--expected-path-list-sha256" in smoke
-    assert "--validate-sealed-context" in smoke
-    assert "TAIRA_SEALED_CONTEXT_CONTROL_SHA256" in smoke
-    assert "TAIRA_RUNTIME_PROFILE=localnet" in smoke
-    assert (
-        'smoke_id="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-'
-        '${GITHUB_JOB:-job}-$$"'
-    ) in smoke
-    assert ".taira-image-smoke-workdir" in smoke
-    assert 'rm -rf "$abs_work_dir"' not in smoke
+    assert "## Dual-target archive publication" in readme
+    assert "Linux/aarch64" in readme
+    assert "macOS/arm64" in readme
+    assert "ORAS `1.3.2`" in readme
+    assert "7929f792cf272268412375ecad6f0fb3c20f164368d5b57966e67ad6d36eca53" in readme
+    assert "OCI image" in readme
+    assert "pull by digest" in readme
+    assert "signed publication receipt" in readme
 
 
 def _assert_native_evidence_fail_closed_static_contract(source: str) -> None:
@@ -803,39 +636,52 @@ def _assert_portable_signed_taira_authority_contract(
     assert "os.path.realpath(sys.argv[1])" in builder
     assert "os.path.realpath(sys.argv[1])" in workflow
     assert '[[ "$canonical_path" != "$path" ]]' in builder
-    assert '[[ "$canonical_path" != "$path" ]]' in workflow
+    assert workflow.count('if [[ "$canonical_path" != "$path" ]]; then') == 2
     assert '"$canonical_path" == "$canonical_repo_root/"*' in builder
     assert '"$canonical_path" == "$canonical_workspace/"*' in workflow
     assert (
         'cmp "$release_authority_manifest" "$release_authority_manifest_replay"'
         in builder
     )
-    assert 'cmp "$authority_manifest" "$authority_manifest_replay"' in workflow
+    assert 'cmp "$manifest" "$authority_manifest_replay"' in workflow
 
-    image_build = workflow.index("Build the final Taira publish image once")
-    image_smoke = workflow.index("Smoke the exact locally loaded publish image")
-    sign = workflow.index(
-        "Create and verify the portable signed exact-12 release authority"
+    linux_build = workflow.index(
+        "Build and sign the Linux aarch64 native privacy authority"
     )
-    upload = workflow.index("Upload the authenticated portable Taira release authority")
+    linux_upload = workflow.index(
+        "Upload the signed Linux aarch64 archive authority"
+    )
+    linux_download = workflow.index(
+        "Download and authenticate the Linux aarch64 authority transfer"
+    )
+    sign = workflow.index(
+        "Construct, sign, and admission-verify the final macOS archive"
+    )
+    upload = workflow.index("Upload the authenticated pre-publication bytes")
     download = workflow.index(
-        "Download the uploaded authority into a fresh replay root"
+        "Download the pre-publication bytes into a fresh replay root"
     )
     reverify = workflow.index(
-        "Reverify the uploaded authority before registry mutation"
+        "Byte-compare and re-admit the uploaded archive before registry mutation"
     )
-    push = workflow.index(
-        "Push the same smoke-tested local image and verify registry digests"
+    push = workflow.index("Publish the exact generic OCI artifact")
+    assert (
+        linux_build
+        < linux_upload
+        < linux_download
+        < sign
+        < upload
+        < download
+        < reverify
+        < push
     )
-    assert image_build < image_smoke < sign < upload < download < reverify < push
     assert (
         "uses: actions/download-artifact@"
         "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow[download:reverify]
     )
     replay_block = workflow[reverify:push]
-    assert "scan_inventory_paths(root)" in replay_block
-    assert "scripts/release_manifest_signing.py verify" in replay_block
-    assert '"$downloaded/artifacts/taira_release_authority.py"' in replay_block
+    assert "upload replay bytes differ" in replay_block
+    assert "scripts/taira_rollout_admission.py verify" in replay_block
 
 
 def test_taira_release_requires_portable_signed_exact12_authority() -> None:
@@ -955,19 +801,17 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
         "TAIRA_INPUT_VALIDATOR_RELEASE_REF: "
         "${{ inputs.validator_release_ref }}" in workflow
     )
-    assert "TAIRA_INPUT_TAG_SUFFIX: ${{ inputs.tag_suffix }}" in workflow
-    assert "TAIRA_INPUT_PUSH_LATEST: ${{ inputs.push_latest }}" in workflow
+    assert "TAIRA_INPUT_ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix }}" in workflow
+    assert "push_latest" not in workflow
     assert "release_ref='${{ inputs.validator_release_ref }}'" not in workflow
-    assert 'raw_suffix="${{ inputs.tag_suffix }}"' not in workflow
-    assert '"${{ inputs.push_latest }}" == "true"' not in workflow
-    assert 'release_ref="$TAIRA_INPUT_VALIDATOR_RELEASE_REF"' in workflow
-    assert 'raw_suffix="$TAIRA_INPUT_TAG_SUFFIX"' in workflow
+    assert 'raw_suffix="${{ inputs.artifact_suffix }}"' not in workflow
+    assert 'raw_suffix="$TAIRA_INPUT_ARTIFACT_SUFFIX"' in workflow
     assert (
         '[[ -n "$raw_suffix" && ! "$raw_suffix" =~ '
         "^[a-z0-9][a-z0-9._-]{0,47}$ ]]" in workflow
     )
-    assert 'suffix="source-${IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256}"' in workflow
-    assert "source-${IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:12}" not in workflow
+    assert 'tag="source-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256}"' in workflow
+    assert "source-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:12}" not in workflow
 
 
 def test_mcp_rollout_has_no_default_offline_asset_escape_hatch() -> None:

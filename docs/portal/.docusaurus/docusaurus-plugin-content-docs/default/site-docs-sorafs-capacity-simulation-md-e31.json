@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/capacity-simulation",
+  "title": "SoraFS Capacity Simulation Runbook",
+  "description": "Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.",
+  "source": "@site/docs/sorafs/capacity-simulation.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/capacity-simulation",
+  "permalink": "/next/sorafs/capacity-simulation",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/capacity-simulation.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "capacity-simulation",
+    "title": "SoraFS Capacity Simulation Runbook",
+    "sidebar_label": "Capacity Simulation Runbook",
+    "description": "Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Capacity Marketplace",
+    "permalink": "/next/sorafs/storage-capacity-marketplace"
+  },
+  "next": {
+    "title": "Deal Engine",
+    "permalink": "/next/sorafs/deal-engine"
+  }
+}

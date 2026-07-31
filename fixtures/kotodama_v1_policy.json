@@ -86,6 +86,9 @@
     "Quantity",
     "number"
   ],
+  "forbidden_source_identifiers": [
+    "Amount"
+  ],
   "ordinary_value_identifiers": [
     "amount"
   ],

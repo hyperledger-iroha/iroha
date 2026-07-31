@@ -19019,6 +19019,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
+            #"{"states":[{"name":"Amount","type_name":"quantity"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Transfer{Amount: quantity}"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, amount>"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"Amount: quantity"}]}"#,
@@ -19033,11 +19035,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
             #"{"provenance":"not-an-object"}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":null,\"return_schema\":null,\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
             #"{"error_codes":[{"namespace":"Failure","name":"Denied","code":0}]}"#,
+            #"{"error_codes":[{"namespace":"Failure","name":"Amount","code":1}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
@@ -19108,6 +19113,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "amount",
             "Transfer{amount: amount}",
             "Transfer{amount:: quantity}",
+            "Transfer{Amount: quantity}",
             "Transfer{amount:quantity}",
             "Transfer{amount:  quantity}",
             "Transfer {amount: quantity}",
@@ -19291,6 +19297,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "state:*",
             "state:Balances.more",
             "state:Balances:Other",
+            "state:Amount",
             "state:state:Balances",
             "state:match",
             "state:StateMap",
@@ -19505,6 +19512,35 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "encoded retired error namespace \(retired)"
             )
         }
+    }
+
+    func testContractManifestTriggerBoundariesRejectExactAmountSourceFormOnly() throws {
+        let filter = "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
+
+        func payload(id: String, namespace: String?) -> Data {
+            let encodedNamespace = namespace.map { "\"\($0)\"" } ?? "null"
+            return Data(
+                """
+                {"id":"\(id)","repeats":{"Indefinitely":null},"filter":"\(filter)","authority":null,"metadata":{},"callback":{"namespace":\(encodedNamespace),"entrypoint":"transfer"}}
+                """.utf8
+            )
+        }
+
+        for (id, namespace) in [("Amount", nil), ("tick", "Amount")] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractTriggerDescriptor.self,
+                    from: payload(id: id, namespace: namespace)
+                )
+            )
+        }
+
+        let lowercase = try JSONDecoder().decode(
+            ToriiContractTriggerDescriptor.self,
+            from: payload(id: "amount", namespace: "RemoteLedger")
+        )
+        XCTAssertEqual(lowercase.id, "amount")
+        XCTAssertEqual(lowercase.callback.namespace, "RemoteLedger")
     }
 
     func testContractManifestEnforcesStrictCrossFieldInvariants() throws {

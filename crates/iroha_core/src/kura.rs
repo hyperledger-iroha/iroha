@@ -4734,8 +4734,9 @@ impl Kura {
             && manifest_bytes
                 .checked_add(receipt_bytes)
                 .is_some_and(|bytes| {
-                    u64::try_from(bytes)
-                        .is_ok_and(|bytes| bytes <= self.native_amx_participant_evidence_file_bytes())
+                    u64::try_from(bytes).is_ok_and(|bytes| {
+                        bytes <= self.native_amx_participant_evidence_file_bytes()
+                    })
                 })
     }
 
@@ -4750,12 +4751,10 @@ impl Kura {
     fn native_amx_evidence_total_payload_bytes(
         inventory: &NativeAmxEvidenceInventory,
     ) -> Option<u64> {
-        inventory
-            .temporaries
-            .values()
-            .try_fold(Self::native_amx_evidence_stable_payload_bytes(inventory)?, |total, file| {
-                total.checked_add(file.metadata.file.len())
-            })
+        inventory.temporaries.values().try_fold(
+            Self::native_amx_evidence_stable_payload_bytes(inventory)?,
+            |total, file| total.checked_add(file.metadata.file.len()),
+        )
     }
 
     /// Validate the retained per-route evidence window independently of its
@@ -4783,7 +4782,9 @@ impl Kura {
                 .checked_add(1)
                 .is_none_or(|successor| successor != pair[1])
         }) {
-            return Err("retained Native AMX evidence is not a contiguous participant-height suffix");
+            return Err(
+                "retained Native AMX evidence is not a contiguous participant-height suffix",
+            );
         }
 
         let manifest_only = manifest_heights
@@ -4827,9 +4828,9 @@ impl Kura {
         for pair in retained_heights.windows(2) {
             let predecessor_height = pair[0];
             let successor_height = pair[1];
-            let predecessor = manifests.get(&predecessor_height).ok_or(
-                "retained Native AMX successor has no preceding manifest descriptor",
-            )?;
+            let predecessor = manifests
+                .get(&predecessor_height)
+                .ok_or("retained Native AMX successor has no preceding manifest descriptor")?;
             let (lane_id, dataspace_id, lane_incarnation, previous_height, previous_hash) =
                 if let Some(successor) = manifests.get(&successor_height) {
                     (
@@ -4840,9 +4841,9 @@ impl Kura {
                         successor.leaf.predecessor_descriptor_hash,
                     )
                 } else {
-                    let successor = receipts.get(&successor_height).ok_or(
-                        "retained Native AMX successor has neither manifest nor receipt",
-                    )?;
+                    let successor = receipts
+                        .get(&successor_height)
+                        .ok_or("retained Native AMX successor has neither manifest nor receipt")?;
                     let descriptor = &successor.participant_proposal.descriptor;
                     (
                         descriptor.lane_id,
@@ -20225,7 +20226,7 @@ impl Kura {
                         path.clone(),
                         "Native AMX evidence disappeared during bounded inventory",
                     )
-            })?;
+                })?;
             let len = metadata.file.len();
             if len == 0
                 || len > STRICT_INIT_MAX_BLOCK_BYTES
@@ -21148,11 +21149,17 @@ impl Kura {
             .copied()
             .chain(removal_heights.iter().copied())
             .collect::<BTreeSet<_>>();
-        if original_heights.iter().copied().collect::<Vec<_>>().windows(2).any(|pair| {
-            pair[0]
-                .checked_add(1)
-                .is_none_or(|successor| successor != pair[1])
-        }) {
+        if original_heights
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| {
+                pair[0]
+                    .checked_add(1)
+                    .is_none_or(|successor| successor != pair[1])
+            })
+        {
             return Err(Error::PruneIntentConflict(
                 "Native AMX evidence prune intent was derived from a punctured retained history"
                     .to_owned(),
@@ -29627,8 +29634,10 @@ impl Kura {
 
     /// Return the highest valid certified lane block accepted by `accept`.
     ///
-    /// The sidecar index is scanned in reverse and stops at the first match, so
-    /// proposal planning does not materialize the lane's complete history.
+    /// The authenticated latest frontier is tried before the bounded historical
+    /// scan. `accept` runs only after the frontier reader releases its storage
+    /// locks, so the common latest-match path avoids revalidating lane history
+    /// while holding `sidecar_lock`.
     pub(crate) fn latest_certified_lane_block_artifact_matching<F>(
         &self,
         lane_id: LaneId,
@@ -29640,6 +29649,19 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
+        let rejected_frontier = match self.latest_certified_lane_block_frontier_inner(lane_id, None)
+        {
+            Some(artifact) => {
+                if accept(&artifact) {
+                    let confirmed = self.latest_certified_lane_block_frontier_inner(lane_id, None);
+                    return (confirmed.as_ref() == Some(&artifact)
+                        && !self.prune_recovery_is_required())
+                    .then_some(artifact);
+                }
+                Some(artifact)
+            }
+            None => None,
+        };
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) =
@@ -29700,7 +29722,9 @@ impl Kura {
                 }
             }
         };
-        candidates.into_iter().find(|artifact| accept(artifact))
+        candidates
+            .into_iter()
+            .find(|artifact| rejected_frontier.as_ref() != Some(artifact) && accept(artifact))
     }
 
     /// Return the first valid certified lane block at or above `minimum_height`

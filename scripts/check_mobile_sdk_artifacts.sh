@@ -449,6 +449,11 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  iroha_privacy_compiled_profile_catalog_v1
+  iroha_privacy_validate_compiled_profile_catalog_v1
+  iroha_privacy_exact12_fixture_bundle_v1
+  iroha_privacy_validate_exact12_fixture_bundle_v1
+  iroha_privacy_free_buffer
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
   connect_norito_sorafs_reference_validate_governance_dag_block_json
@@ -466,6 +471,11 @@ FORBIDDEN_MOBILE_BRIDGE_SYMBOLS=(
   connect_norito_set_chain_discriminant
   connect_norito_kagemusha_recipient_registration_lineage_verify_v1
   connect_norito_kagemusha_request_authorization_create_v2
+  iroha_privacy_capabilities_v1
+  iroha_privacy_validate_capabilities_v1
+  iroha_privacy_proof_request_v1
+  iroha_privacy_build_proof_v1
+  iroha_privacy_verify_proof_v1
   Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
   Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
 )
@@ -1903,6 +1913,19 @@ raise SystemExit(0 if actual == expected else 1)
 PY
     then
       fail "NoritoBridge artifact required symbol inventory is missing or non-canonical"
+    fi
+    if ! run_isolated_checker_python - "$manifest" "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+expected = sys.argv[2:]
+actual = payload.get("forbidden_symbols")
+raise SystemExit(0 if actual == expected else 1)
+PY
+    then
+      fail "NoritoBridge artifact forbidden symbol inventory is missing or non-canonical"
     fi
     if [[ -f "$swift_loader" ]] \
       && ! run_isolated_checker_python - "$swift_loader" "${REQUIRED_BRIDGE_SYMBOLS[@]}" <<'PY'

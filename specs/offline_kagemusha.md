@@ -59,7 +59,7 @@ Norito layouts from the fixed header before reconstruction. Each route applies
 its exact framed-body ceiling. Public request extractors start with a fourfold
 frame-derived allocation base. Lineage selectors add 64 KiB; top-up adds six
 maximum 192 KiB shield proofs plus 64 KiB; and redeem budgets its bounded
-256 KiB recursive proof pairs plus three fixed copies of the 192 KiB unshield
+384 KiB recursive proof pairs plus three fixed copies of the 192 KiB unshield
 proof. Before owned reconstruction, a schema-aware canonical wire preflight
 walks the redemption field path without allocating and rejects an unshield
 proof whose encoded `Vec<u8>` count exceeds that limit. Native fixed-depth

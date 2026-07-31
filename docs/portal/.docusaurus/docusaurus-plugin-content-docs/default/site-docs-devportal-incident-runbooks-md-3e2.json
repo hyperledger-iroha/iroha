@@ -1,0 +1,20 @@
+{
+  "id": "devportal/incident-runbooks",
+  "title": "Incident Runbooks & Rollback Drills",
+  "description": "Response guides for failed portal deployments, SoraFS replication degradation, analytics outages, and the quarterly rehearsal cadence required by DOCS-9.",
+  "source": "@site/docs/devportal/incident-runbooks.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/incident-runbooks",
+  "permalink": "/next/devportal/incident-runbooks",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/incident-runbooks.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "incident-runbooks",
+    "title": "Incident Runbooks & Rollback Drills",
+    "sidebar_label": "Incident Runbooks",
+    "description": "Response guides for failed portal deployments, SoraFS replication degradation, analytics outages, and the quarterly rehearsal cadence required by DOCS-9."
+  }
+}

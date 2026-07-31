@@ -6,6 +6,8 @@
 //! strictly smaller than `2^255 - 19`, then rejects the complete low-order set
 //! through the mandatory all-zero shared-secret check.
 
+use core::borrow::Borrow;
+
 use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -66,11 +68,15 @@ pub(crate) fn validate_x25519_public_key_v1(
 }
 
 /// Derive and validate an X25519 public key from a non-zero wallet secret.
-pub(crate) fn x25519_public_key_v1(secret_key: [u8; 32]) -> Result<[u8; 32], X25519WalletErrorV1> {
+pub(crate) fn x25519_public_key_v1(
+    secret_key: impl Borrow<[u8; 32]>,
+) -> Result<[u8; 32], X25519WalletErrorV1> {
+    let secret_key = secret_key.borrow();
     if secret_key.iter().all(|byte| *byte == 0) {
         return Err(X25519WalletErrorV1::ZeroSecret);
     }
-    let public_key = X25519_BASEPOINT.mul_clamped(secret_key).to_bytes();
+    let clamped_input = Zeroizing::new(*secret_key);
+    let public_key = X25519_BASEPOINT.mul_clamped(*clamped_input).to_bytes();
     validate_x25519_public_key_v1(public_key)?;
     Ok(public_key)
 }
@@ -78,16 +84,18 @@ pub(crate) fn x25519_public_key_v1(secret_key: [u8; 32]) -> Result<[u8; 32], X25
 /// Perform strict X25519 key agreement and retain the secret in zeroizing
 /// storage.
 pub(crate) fn x25519_shared_secret_v1(
-    secret_key: [u8; 32],
+    secret_key: impl Borrow<[u8; 32]>,
     peer_public_key: [u8; 32],
 ) -> Result<Zeroizing<[u8; 32]>, X25519WalletErrorV1> {
+    let secret_key = secret_key.borrow();
     if secret_key.iter().all(|byte| *byte == 0) {
         return Err(X25519WalletErrorV1::ZeroSecret);
     }
     validate_x25519_public_key_v1(peer_public_key)?;
+    let clamped_input = Zeroizing::new(*secret_key);
     let shared = Zeroizing::new(
         MontgomeryPoint(peer_public_key)
-            .mul_clamped(secret_key)
+            .mul_clamped(*clamped_input)
             .to_bytes(),
     );
     if shared.iter().all(|byte| *byte == 0) {
@@ -141,10 +149,10 @@ mod tests {
     fn strict_key_agreement_is_symmetric() {
         let alice_secret = [0x11; 32];
         let bob_secret = [0x22; 32];
-        let alice_public = x25519_public_key_v1(alice_secret).unwrap();
-        let bob_public = x25519_public_key_v1(bob_secret).unwrap();
-        let alice_shared = x25519_shared_secret_v1(alice_secret, bob_public).unwrap();
-        let bob_shared = x25519_shared_secret_v1(bob_secret, alice_public).unwrap();
+        let alice_public = x25519_public_key_v1(&alice_secret).unwrap();
+        let bob_public = x25519_public_key_v1(&bob_secret).unwrap();
+        let alice_shared = x25519_shared_secret_v1(&alice_secret, bob_public).unwrap();
+        let bob_shared = x25519_shared_secret_v1(&bob_secret, alice_public).unwrap();
         assert_eq!(*alice_shared, *bob_shared);
     }
 
@@ -176,14 +184,14 @@ mod tests {
                 .try_into()
                 .unwrap();
 
-        assert_eq!(x25519_public_key_v1(alice_secret).unwrap(), alice_public);
-        assert_eq!(x25519_public_key_v1(bob_secret).unwrap(), bob_public);
+        assert_eq!(x25519_public_key_v1(&alice_secret).unwrap(), alice_public);
+        assert_eq!(x25519_public_key_v1(&bob_secret).unwrap(), bob_public);
         assert_eq!(
-            *x25519_shared_secret_v1(alice_secret, bob_public).unwrap(),
+            *x25519_shared_secret_v1(&alice_secret, bob_public).unwrap(),
             expected_shared
         );
         assert_eq!(
-            *x25519_shared_secret_v1(bob_secret, alice_public).unwrap(),
+            *x25519_shared_secret_v1(&bob_secret, alice_public).unwrap(),
             expected_shared
         );
     }

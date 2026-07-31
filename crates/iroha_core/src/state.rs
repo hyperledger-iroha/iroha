@@ -23063,6 +23063,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn apply(self) {
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
+            // Runtime-only alias context; the canonical stores below carry all
+            // persisted effects.
+            dataspace_catalog: _,
             parameters,
             peers,
             domain_committees,
@@ -23213,11 +23216,32 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
+            sorafs_pricing,
+            provider_credit_ledger,
+            provider_owners,
+            provider_ingest_completion_authorities,
+            da_pin_intents_by_ticket,
+            da_pin_intents_by_alias,
+            da_pin_intents_by_manifest,
+            da_pin_intents_by_lane_epoch,
             pin_manifests,
             manifest_aliases,
             replication_orders,
+            content_bundles,
+            content_chunks,
+            soradns_directory_records,
+            soradns_directory_pending,
+            soradns_directory_latest,
+            soradns_directory_history,
+            soradns_directory_prev_of,
+            soradns_directory_revocations,
+            soradns_release_signers,
+            soradns_rotation_policy,
+            soradns_last_publish_ms,
+            soradns_history_len,
             settlement_receipts,
             kagemusha_replay_keys,
+            direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -23248,7 +23272,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
-            ..
+            axt_lane_config: _,
+            axt_current_slot: _,
+            axt_lane_map: _,
+            current_dataspace_id: _,
         } = self;
         if !external_event_buf.is_empty() {
             external_event_sink.append(&mut external_event_buf);
@@ -23321,23 +23348,32 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();
+        sorafs_pricing.apply();
+        provider_credit_ledger.apply();
+        provider_owners.apply();
+        provider_ingest_completion_authorities.apply();
+        da_pin_intents_by_ticket.apply();
+        da_pin_intents_by_alias.apply();
+        da_pin_intents_by_manifest.apply();
+        da_pin_intents_by_lane_epoch.apply();
         pin_manifests.apply();
         manifest_aliases.apply();
         replication_orders.apply();
-        self.content_chunks.apply();
-        self.content_bundles.apply();
-        self.soradns_directory_records.apply();
-        self.soradns_directory_pending.apply();
-        self.soradns_directory_history.apply();
-        self.soradns_directory_prev_of.apply();
-        self.soradns_directory_revocations.apply();
-        self.soradns_release_signers.apply();
-        self.soradns_directory_latest.apply();
-        self.soradns_rotation_policy.apply();
-        self.soradns_last_publish_ms.apply();
-        self.soradns_history_len.apply();
+        content_chunks.apply();
+        content_bundles.apply();
+        soradns_directory_records.apply();
+        soradns_directory_pending.apply();
+        soradns_directory_history.apply();
+        soradns_directory_prev_of.apply();
+        soradns_directory_revocations.apply();
+        soradns_release_signers.apply();
+        soradns_directory_latest.apply();
+        soradns_rotation_policy.apply();
+        soradns_last_publish_ms.apply();
+        soradns_history_len.apply();
         settlement_receipts.apply();
         kagemusha_replay_keys.apply();
+        direct_lane_block_application_markers.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -24725,6 +24761,11 @@ impl State {
     /// Return the block storage backend used by state recovery and consensus sidecars.
     pub(crate) fn kura(&self) -> &Kura {
         &self.kura
+    }
+
+    /// Clone the block storage handle used by isolated snapshot-state reconstruction.
+    pub(crate) fn kura_handle(&self) -> Arc<Kura> {
+        Arc::clone(&self.kura)
     }
 
     /// Install or clear the shared Soracloud runtime handle used by core execution paths.
@@ -39612,6 +39653,51 @@ impl State {
         self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog, None)
     }
 
+    /// Verify that empty-state replay can recover the configured-primary geometry.
+    ///
+    /// Snapshot fallback must pass this read-only check before constructing or mutating an empty
+    /// [`State`]. Once a snapshot checkpoint compacts the earlier geometry cursor, replay from
+    /// genesis is unsafe and startup must retain the snapshot failure instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LaneLifecycleError` if the catalog does not match Kura's immutable configured
+    /// baseline or the retained geometry journal no longer reaches the primary replay floor.
+    pub fn preflight_configured_primary_geometry_replay(
+        kura: &Kura,
+        chain_id: &iroha_data_model::ChainId,
+        configured_lane_catalog: &LaneCatalog,
+    ) -> Result<(), LaneLifecycleError> {
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
+        let durable_hash = kura
+            .configured_lane_catalog_baseline()
+            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured-primary replay preflight has no authenticated Kura catalog baseline"
+                        .to_owned(),
+                )
+            })?;
+        if durable_hash != configured_hash {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                "configured-primary replay preflight mismatch: expected {durable_hash}, attempted {configured_hash}"
+            )));
+        }
+        let geometry = configured_primary_replay_geometry(chain_id, configured_lane_catalog)?;
+        let lineage_root = lane_incarnation_lineage_root(chain_id, &geometry.lineage);
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &geometry.lane_config,
+            &geometry.incarnations,
+            &geometry.activation_heights,
+            lineage_root,
+        )
+        .map_err(|error| {
+            LaneLifecycleError::Storage(format!(
+                "kura configured-primary replay preflight: {error}"
+            ))
+        })
+    }
+
     /// Anchor an empty, non-snapshot State to the authenticated configured primary lane.
     ///
     /// Authenticated Kura startup opens only this primary storage segment. The subsequent
@@ -39632,68 +39718,29 @@ impl State {
                     .to_owned(),
             ));
         }
+        Self::preflight_configured_primary_geometry_replay(
+            &self.kura,
+            &self.chain_id,
+            configured_lane_catalog,
+        )?;
         let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
-        let durable_hash = self
-            .kura
-            .configured_lane_catalog_baseline()
-            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
-            .ok_or_else(|| {
-                LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "configured-primary geometry anchor has no authenticated Kura catalog baseline"
-                        .to_owned(),
-                )
-            })?;
-        if durable_hash != configured_hash {
-            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
-                "configured-primary geometry anchor mismatch: expected {durable_hash}, attempted {configured_hash}"
-            )));
-        }
-        let primary = configured_lane_catalog
-            .lanes()
-            .first()
-            .cloned()
-            .ok_or_else(|| {
-                LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "configured lane catalog has no primary lane".to_owned(),
-                )
-            })?;
-        let primary_catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
-            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
-        let primary_incarnations =
-            derive_static_lane_incarnations(&self.chain_id, &primary_catalog);
-        let primary_incarnation = primary_incarnations
-            .get(&LaneId::SINGLE)
-            .copied()
-            .ok_or_else(|| {
-                LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "configured primary catalog does not contain lane zero".to_owned(),
-                )
-            })?;
-        let primary_lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&primary_catalog);
+        let geometry = configured_primary_replay_geometry(&self.chain_id, configured_lane_catalog)?;
         self.kura
             .establish_or_verify_configured_primary_geometry_anchor(
-                primary_lane_config.primary(),
-                primary_incarnation,
+                geometry.lane_config.primary(),
+                geometry.primary_incarnation,
                 configured_hash,
             )
             .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
         {
             let nexus = self.nexus.get_mut();
-            nexus.lane_catalog = primary_catalog.clone();
-            nexus.lane_config = primary_lane_config;
+            nexus.lane_catalog = geometry.catalog;
+            nexus.lane_config = geometry.lane_config;
             nexus.configured_lane_catalog = configured_lane_catalog.clone();
         }
-        *self.lane_incarnations.get_mut() = primary_incarnations;
-        *self.lane_incarnation_activation_heights.get_mut() = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        *self.lane_incarnation_lineage.get_mut() = BTreeMap::from([(
-            LaneId::SINGLE,
-            LaneIncarnationLineage {
-                generation: 0,
-                incarnation: primary_incarnation,
-                activation_height: 0,
-            },
-        )]);
+        *self.lane_incarnations.get_mut() = geometry.incarnations;
+        *self.lane_incarnation_activation_heights.get_mut() = geometry.activation_heights;
+        *self.lane_incarnation_lineage.get_mut() = geometry.lineage;
         Ok(())
     }
 
@@ -41875,6 +41922,30 @@ impl State {
         &mut self,
         zk: iroha_config::parameters::actual::Zk,
     ) -> core::result::Result<(), ZkConfigInstallError> {
+        self.validate_zk_install(&zk)?;
+        crate::gas::configure_confidential_gas(zk.gas.into());
+        self.zk = zk;
+        Ok(())
+    }
+
+    /// Install ZK settings into an isolated, non-running State reconstruction.
+    ///
+    /// Snapshot publication uses this after decoding a candidate payload. It performs the same
+    /// committed SCCP validation as [`Self::set_zk`] but deliberately does not mutate the
+    /// process-wide confidential-gas schedule.
+    pub(crate) fn install_zk_for_isolated_prevalidation(
+        &mut self,
+        zk: iroha_config::parameters::actual::Zk,
+    ) -> core::result::Result<(), ZkConfigInstallError> {
+        self.validate_zk_install(&zk)?;
+        self.zk = zk;
+        Ok(())
+    }
+
+    fn validate_zk_install(
+        &self,
+        zk: &iroha_config::parameters::actual::Zk,
+    ) -> core::result::Result<(), ZkConfigInstallError> {
         let pending_usage = *self.world.sccp_outbound_pending_usage.view().get();
         if !pending_usage.is_structurally_valid() {
             return Err(ZkConfigInstallError::InvalidSccpPendingUsage {
@@ -41890,8 +41961,6 @@ impl State {
             });
         }
         validate_sccp_pending_usage_against_config(pending_usage, &zk.sccp)?;
-        crate::gas::configure_confidential_gas(zk.gas.into());
-        self.zk = zk;
         Ok(())
     }
 
@@ -42472,6 +42541,15 @@ pub(crate) struct LaneIncarnationLineage {
     pub(crate) activation_height: u64,
 }
 
+struct ConfiguredPrimaryReplayGeometry {
+    catalog: LaneCatalog,
+    lane_config: iroha_config::parameters::actual::LaneConfig,
+    incarnations: BTreeMap<LaneId, Hash>,
+    activation_heights: BTreeMap<LaneId, u64>,
+    lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
+    primary_incarnation: Hash,
+}
+
 const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v1\0";
 const CONFIG_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:config:v1\0";
 const LIFECYCLE_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:lifecycle:v1\0";
@@ -42552,6 +42630,47 @@ fn derive_static_lane_incarnations(
             )
         })
         .collect()
+}
+
+fn configured_primary_replay_geometry(
+    chain_id: &iroha_data_model::ChainId,
+    configured_lane_catalog: &LaneCatalog,
+) -> Result<ConfiguredPrimaryReplayGeometry, LaneLifecycleError> {
+    let primary = configured_lane_catalog
+        .lanes()
+        .first()
+        .cloned()
+        .ok_or_else(|| {
+            LaneLifecycleError::ConfiguredCatalogBaseline(
+                "configured lane catalog has no primary lane".to_owned(),
+            )
+        })?;
+    let catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
+        .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
+    let incarnations = derive_static_lane_incarnations(chain_id, &catalog);
+    let primary_incarnation = incarnations.get(&LaneId::SINGLE).copied().ok_or_else(|| {
+        LaneLifecycleError::ConfiguredCatalogBaseline(
+            "configured primary catalog does not contain lane zero".to_owned(),
+        )
+    })?;
+    let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+    let lineage = BTreeMap::from([(
+        LaneId::SINGLE,
+        LaneIncarnationLineage {
+            generation: 0,
+            incarnation: primary_incarnation,
+            activation_height: 0,
+        },
+    )]);
+    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+    Ok(ConfiguredPrimaryReplayGeometry {
+        catalog,
+        lane_config,
+        incarnations,
+        activation_heights,
+        lineage,
+        primary_incarnation,
+    })
 }
 
 fn validate_lane_incarnation_map(
@@ -48145,6 +48264,14 @@ impl<'state> StateBlock<'state> {
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_pristine_certified_merge_stage()?;
+        if !self.state_ref.nexus_snapshot().enabled
+            && !merge_entry_is_queue_plan_admission_only(entry)
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "certified merge entry requires Nexus multilane mode unless it contains only QueuePlan admission controls"
+                    .to_owned(),
+            ));
+        }
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != self._curr_block.prev_block_hash()
             || entry.merge_qc.view != self._curr_block.view_change_index()
@@ -54277,6 +54404,35 @@ mod tiered_snapshot_diff_tests {
                 "{label} changed the process-wide gas schedule"
             );
         }
+    }
+
+    #[test]
+    fn isolated_zk_prevalidation_install_preserves_process_gas_schedule() {
+        let _gas_guard = crate::gas::lock_confidential_gas_for_tests();
+        let mut state = State::new_with_chain(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+        let gas_before = crate::gas::confidential_gas_schedule_for_tests();
+        let mut candidate = state.zk_snapshot();
+        candidate.gas.proof_base = gas_before.base_verify ^ 1;
+
+        state
+            .install_zk_for_isolated_prevalidation(candidate.clone())
+            .expect("isolated ZK install accepts valid empty SCCP state");
+
+        assert_eq!(
+            state.zk_snapshot().gas.proof_base,
+            candidate.gas.proof_base,
+            "isolated State must carry the candidate configuration for canonical replay"
+        );
+        assert_eq!(
+            crate::gas::confidential_gas_schedule_for_tests(),
+            gas_before,
+            "snapshot prevalidation must not mutate the running process gas schedule"
+        );
     }
 
     #[test]
@@ -64176,6 +64332,20 @@ pub(crate) mod deserialize {
                 ),
             });
         }
+        let autoscale_scale_out_window_blocks = std::num::NonZeroU16::new(
+            runtime.autoscale_scale_out_window_blocks,
+        )
+        .ok_or_else(|| json::Error::InvalidField {
+            field: "nexus_runtime.autoscale_scale_out_window_blocks".to_owned(),
+            message: "autoscale scale-out window must be non-zero".to_owned(),
+        })?;
+        let autoscale_scale_in_window_blocks = std::num::NonZeroU16::new(
+            runtime.autoscale_scale_in_window_blocks,
+        )
+        .ok_or_else(|| json::Error::InvalidField {
+            field: "nexus_runtime.autoscale_scale_in_window_blocks".to_owned(),
+            message: "autoscale scale-in window must be non-zero".to_owned(),
+        })?;
         let autoscale_sample_history =
             validate_snapshot_autoscale_sample_history(&runtime, committed_block_hashes)?;
         let lane_count = std::num::NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
@@ -64316,6 +64486,12 @@ pub(crate) mod deserialize {
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
         nexus.lane_catalog = catalog;
+        // These windows determine both the serialized history cap and which retained samples
+        // influence the first post-restart autoscale decision. Restore the snapshot-authenticated
+        // values before canonical reserialization; substituting process defaults here makes a
+        // writer-created snapshot non-canonical whenever operators tune either window.
+        nexus.autoscale.scale_out_window_blocks = autoscale_scale_out_window_blocks;
+        nexus.autoscale.scale_in_window_blocks = autoscale_scale_in_window_blocks;
         nexus.autoscale.last_transition_height = runtime.autoscale_last_transition_height;
         Ok((
             nexus,
@@ -67020,6 +67196,125 @@ seiyaku SequentialNfts {
         (key, marker)
     }
 
+    #[test]
+    fn world_transaction_apply_commits_sorafs_da_and_direct_lane_overlays() {
+        let world = World::default();
+        let mut block = world.block();
+
+        let provider_id = ProviderId::new([0x91; 32]);
+        let provider_owner = AccountId::new(checked_keypair().public_key().clone());
+        let provider_authority = ProviderIngestCompletionAuthorityV1::new(
+            provider_owner.clone(),
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x92; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x93; 32],
+            },
+        );
+        let mut pricing = PricingScheduleRecord::launch_default();
+        pricing.notes = Some("WorldTransaction apply regression".to_owned());
+        let credit = ProviderCreditRecord::new(
+            provider_id,
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            5,
+            7,
+            Metadata::default(),
+        );
+
+        let lane_id = LaneId::SINGLE;
+        let epoch = 11;
+        let sequence = 13;
+        let ticket = StorageTicketId::new([0x94; 32]);
+        let manifest = ManifestDigest::new([0x95; 32]);
+        let alias = "world-transaction-apply-regression".to_owned();
+        let mut intent = DaPinIntent::new(lane_id, epoch, sequence, ticket, manifest);
+        intent.alias = Some(alias.clone());
+        let intent_with_location = DaPinIntentWithLocation {
+            intent: intent.clone(),
+            location: DaCommitmentLocation {
+                block_height: 17,
+                index_in_bundle: 19,
+            },
+        };
+        let (marker_key, marker) = sample_direct_lane_application_marker(
+            lane_id,
+            lane_id,
+            DataSpaceId::UNIVERSAL,
+            23,
+            0x96,
+        );
+
+        {
+            let mut transaction =
+                block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+            *transaction.sorafs_pricing.get_mut() = pricing.clone();
+            transaction
+                .provider_credit_ledger
+                .insert(provider_id, credit.clone());
+            transaction
+                .provider_owners
+                .insert(provider_id, provider_owner.clone());
+            transaction
+                .provider_ingest_completion_authorities
+                .insert(provider_id, provider_authority.clone());
+            transaction
+                .da_pin_intents_by_ticket
+                .insert(ticket, intent_with_location.clone());
+            transaction
+                .da_pin_intents_by_alias
+                .insert(alias.clone(), ticket);
+            transaction
+                .da_pin_intents_by_manifest
+                .insert(manifest, ticket);
+            transaction
+                .da_pin_intents_by_lane_epoch
+                .insert((lane_id, epoch, sequence), ticket);
+            transaction
+                .direct_lane_block_application_markers
+                .insert(marker_key, marker.clone());
+            transaction.apply();
+        }
+
+        assert_eq!(block.sorafs_pricing.get(), &pricing);
+        assert_eq!(
+            block.provider_credit_ledger.get(&provider_id),
+            Some(&credit)
+        );
+        assert_eq!(
+            block.provider_owners.get(&provider_id),
+            Some(&provider_owner)
+        );
+        assert_eq!(
+            block
+                .provider_ingest_completion_authorities
+                .get(&provider_id),
+            Some(&provider_authority)
+        );
+        assert_eq!(
+            block.da_pin_intents_by_ticket.get(&ticket),
+            Some(&intent_with_location)
+        );
+        assert_eq!(block.da_pin_intents_by_alias.get(&alias), Some(&ticket));
+        assert_eq!(
+            block.da_pin_intents_by_manifest.get(&manifest),
+            Some(&ticket)
+        );
+        assert_eq!(
+            block
+                .da_pin_intents_by_lane_epoch
+                .get(&(lane_id, epoch, sequence)),
+            Some(&ticket)
+        );
+        assert_eq!(
+            block.direct_lane_block_application_markers.get(&marker_key),
+            Some(&marker)
+        );
+    }
+
     fn seed_direct_lane_application_marker(
         state: &State,
         lane_id: LaneId,
@@ -69009,6 +69304,42 @@ seiyaku SequentialNfts {
                 .to_string()
                 .contains("does not match the configured snapshot windows")
         );
+    }
+
+    #[test]
+    fn state_json_rejects_zero_autoscale_snapshot_windows() {
+        let state = state_with_snapshot_nexus_runtime();
+        let value = norito::json::to_value(&state).expect("serialize state");
+        for (field, expected_message) in [
+            (
+                "autoscale_scale_out_window_blocks",
+                "autoscale scale-out window must be non-zero",
+            ),
+            (
+                "autoscale_scale_in_window_blocks",
+                "autoscale scale-in window must be non-zero",
+            ),
+        ] {
+            let mut forged = value.clone();
+            let norito::json::Value::Object(root) = &mut forged else {
+                panic!("state snapshot must be an object");
+            };
+            let norito::json::Value::Object(runtime) = root
+                .get_mut("nexus_runtime")
+                .expect("nexus runtime snapshot")
+            else {
+                panic!("nexus runtime snapshot must be an object");
+            };
+            runtime.insert(field.to_owned(), norito::json::Value::from(0_u64));
+
+            let error = deserialize_state_snapshot_value(forged)
+                .err()
+                .expect("zero autoscale snapshot window must fail closed");
+            assert!(
+                error.to_string().contains(expected_message),
+                "unexpected {field} rejection: {error}"
+            );
+        }
     }
 
     #[test]
@@ -121810,6 +122141,33 @@ seiyaku IdentitylessRawCallback {
                 .1,
             PendingQueuePlanAdmissionDisposition::EligibleAbsent
         );
+
+        let candidate = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![certificate],
+            )
+            .expect("legacy QueuePlan candidate construction")
+            .expect("legacy QueuePlan controls produce a standalone candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &validator_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        state
+            .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+            .expect("QueuePlan-only certified merge entry remains legal with Nexus disabled");
+
+        let mut non_control_entry = entry;
+        non_control_entry.queue_plan_admissions.clear();
+        assert!(matches!(
+            state.block_with_certified_merge_entry(
+                carrier.header().clone(),
+                &non_control_entry,
+            ),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
+                if message.contains("requires Nexus multilane mode")
+        ));
     }
 
     #[test]

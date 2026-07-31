@@ -1,0 +1,29 @@
+{
+  "id": "soranet/pq-primitives",
+  "title": "SoraNet Post-Quantum Primitives",
+  "description": "Overview of the `soranet_pq` crate and how the SoraNet handshake consumes ML-KEM/ML-DSA helpers.",
+  "source": "@site/docs/soranet/pq-primitives.md",
+  "sourceDirName": "soranet",
+  "slug": "/soranet/pq-primitives",
+  "permalink": "/next/soranet/pq-primitives",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/soranet/pq-primitives.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "pq-primitives",
+    "title": "SoraNet Post-Quantum Primitives",
+    "sidebar_label": "PQ Primitives",
+    "description": "Overview of the `soranet_pq` crate and how the SoraNet handshake consumes ML-KEM/ML-DSA helpers."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Privacy Metrics Pipeline",
+    "permalink": "/next/soranet/privacy-metrics-pipeline"
+  },
+  "next": {
+    "title": "PQ Ratchet Runbook",
+    "permalink": "/next/soranet/pq-ratchet-runbook"
+  }
+}

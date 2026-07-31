@@ -4791,10 +4791,20 @@ impl FairV2Ingress {
         token: &FairV2IngressLeaderWireToken,
         owner: serviced_candidate_store::LeaderWireRuntimeOwner,
     ) -> Result<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt, String> {
+        let mut state = self.state.lock();
+        let receipt = Self::mark_leader_wire_runtime_locked(&mut state, token, owner)?;
+        self.debug_assert_consistent(&state);
+        Ok(receipt)
+    }
+
+    fn mark_leader_wire_runtime_locked(
+        state: &mut FairV2IngressState,
+        token: &FairV2IngressLeaderWireToken,
+        owner: serviced_candidate_store::LeaderWireRuntimeOwner,
+    ) -> Result<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt, String> {
         if owner.admission_ordinal() != token.scheduler_ordinal() {
             return Err("leader-wire runtime changed its shared scheduler ordinal".to_owned());
         }
-        let mut state = self.state.lock();
         let gate = state
             .leader_wire_lifecycle_gate
             .as_ref()
@@ -4820,13 +4830,11 @@ impl FairV2Ingress {
         record.status = FairV2IngressLeaderWireStatus::Runtime;
         record.restored_runtime_owner = Some(owner);
         record.ingress_predecessors.clear();
-        self.debug_assert_consistent(&state);
         Ok(receipt)
     }
 
-    /// Bind a drained productive carrier to its immutable generic runtime.
-    pub(crate) fn bind_leader_wire_runtime_ownership(
-        &self,
+    fn bind_leader_wire_runtime_ownership_locked(
+        state: &mut FairV2IngressState,
         ownership: &mut FairV2IngressOwnershipEvidence,
     ) -> Result<(), String> {
         if !ownership.validate_exact() {
@@ -4846,26 +4854,42 @@ impl FairV2Ingress {
             .then_some(())
             .ok_or_else(|| "leader-wire runtime receipt changed immutable ownership".to_owned());
         }
-        let owner = self
-            .restored_leader_wire_runtime_owner(&token)?
-            .map_or_else(
-                || {
-                    serviced_candidate_store::LeaderWireRuntimeOwner::new(
-                        token.identity_hash(),
-                        token.scheduler_ordinal(),
-                    )
-                },
-                Ok,
-            )?;
+        let record = state
+            .leader_wire_lifecycles
+            .get(&token.slot)
+            .ok_or_else(|| "leader-wire token has no bound lifecycle record".to_owned())?;
+        if record.token != token {
+            return Err("leader-wire runtime rebind changed immutable token".to_owned());
+        }
+        let owner = record.restored_runtime_owner.map_or_else(
+            || {
+                serviced_candidate_store::LeaderWireRuntimeOwner::new(
+                    token.identity_hash(),
+                    token.scheduler_ordinal(),
+                )
+            },
+            Ok,
+        )?;
         if owner.causal_lifecycle_key() != token.identity_hash()
             || owner.admission_ordinal() != token.scheduler_ordinal()
         {
             return Err("restored leader-wire runtime changed its token identity".to_owned());
         }
-        let receipt = self.mark_leader_wire_runtime(&token, owner)?;
+        let receipt = Self::mark_leader_wire_runtime_locked(state, &token, owner)?;
         if !ownership.install_leader_wire_runtime_receipt(receipt) {
             return Err("leader-wire runtime receipt could not bind ingress ownership".to_owned());
         }
+        Ok(())
+    }
+
+    /// Bind a drained productive carrier to its immutable generic runtime.
+    pub(crate) fn bind_leader_wire_runtime_ownership(
+        &self,
+        ownership: &mut FairV2IngressOwnershipEvidence,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock();
+        Self::bind_leader_wire_runtime_ownership_locked(&mut state, ownership)?;
+        self.debug_assert_consistent(&state);
         Ok(())
     }
 
@@ -6049,6 +6073,47 @@ impl FairV2Ingress {
                     .position(|entry| entry.admission_ordinal == admission_ordinal)
             })
             .expect("serialized fair-ingress candidate must remain queued until selection");
+        let leader_wire_ownership = {
+            let entry = state
+                .lanes
+                .get(&source)
+                .and_then(|lane| lane.entries.get(admitted_index))
+                .expect("selected fair-ingress entry remains queued for runtime handoff");
+            match entry.leader_wire_token.as_ref() {
+                None => None,
+                Some(token) => {
+                    let ownership = entry
+                        .inbound
+                        .ingress_ownership
+                        .as_ref()
+                        .cloned()
+                        .ok_or_else(|| {
+                            "leader-wire dequeue lost its fair-ingress ownership carrier".to_owned()
+                        })?;
+                    if ownership.leader_wire_token() != Some(token)
+                        || ownership.leader_wire_runtime_receipt().is_some()
+                    {
+                        return Err(
+                            "leader-wire dequeue changed its exact ingress ownership".to_owned()
+                        );
+                    }
+                    Some(ownership)
+                }
+            }
+        };
+        if let Some(mut ownership) = leader_wire_ownership {
+            // Persist and install the deterministic runtime owner while the
+            // physical carrier, durable Ingress record, and queue lock still
+            // form one atomic handoff. Existing downstream bind calls then
+            // validate this receipt idempotently.
+            Self::bind_leader_wire_runtime_ownership_locked(&mut state, &mut ownership)?;
+            let entry = state
+                .lanes
+                .get_mut(&source)
+                .and_then(|lane| lane.entries.get_mut(admitted_index))
+                .expect("selected leader-wire entry remains queued through durable handoff");
+            Arc::make_mut(&mut entry.inbound).ingress_ownership = Some(ownership);
+        }
         if let Some(reservation) = state
             .lanes
             .get(&source)

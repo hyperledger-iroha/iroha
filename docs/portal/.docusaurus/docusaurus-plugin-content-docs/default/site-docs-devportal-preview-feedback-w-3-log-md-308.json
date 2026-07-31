@@ -1,0 +1,29 @@
+{
+  "id": "devportal/preview-feedback/w3/preview-feedback-w3-log",
+  "title": "W3 beta invite log",
+  "description": "Timeline for the 2026-02-18 preview invite wave.",
+  "source": "@site/docs/devportal/preview-feedback/w3/log.md",
+  "sourceDirName": "devportal/preview-feedback/w3",
+  "slug": "/devportal/preview-feedback/w3/preview-feedback-w3-log",
+  "permalink": "/next/devportal/preview-feedback/w3/preview-feedback-w3-log",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/preview-feedback/w3/log.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "preview-feedback-w3-log",
+    "title": "W3 beta invite log",
+    "sidebar_label": "W3 log",
+    "description": "Timeline for the 2026-02-18 preview invite wave."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "W2 summary",
+    "permalink": "/next/devportal/preview-feedback/w2/preview-feedback-w2-summary"
+  },
+  "next": {
+    "title": "W3 summary",
+    "permalink": "/next/devportal/preview-feedback/w3/preview-feedback-w3-summary"
+  }
+}

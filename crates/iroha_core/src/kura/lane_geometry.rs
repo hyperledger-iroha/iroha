@@ -3352,6 +3352,64 @@ impl Kura {
         )
     }
 
+    /// Verify that compacted geometry can still reach the configured-primary replay floor.
+    ///
+    /// This is a read-only startup preflight. It deliberately does not finish pending GC, move
+    /// lane paths, repair markers, or rewrite the journal; callers use it before deciding that an
+    /// unusable snapshot may safely fall back to genesis-height Kura replay.
+    pub(crate) fn preflight_lane_geometry_recovery_floor_with_lineage_root(
+        &self,
+        authoritative: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        lineage_root: Hash,
+    ) -> Result<()> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let bindings = self.geometry_bindings(authoritative, incarnations, activation_heights)?;
+        let fingerprint = geometry_catalog_fingerprint(&bindings);
+        let journal = self.read_lane_geometry_journal()?;
+        let primary_binding = bindings.first().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary replay geometry has no primary binding",
+            )
+        })?;
+        if journal
+            .configured_primary_binding
+            .as_ref()
+            .is_some_and(|expected| expected != primary_binding)
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary geometry binding differs from its durable anchor",
+            ));
+        }
+        let recovery_floor = Self::lane_geometry_identity_at_applied_count(&journal, 0);
+        if recovery_floor.is_some_and(|identity| identity != (fingerprint, lineage_root)) {
+            if let Some(checkpoint) = journal.checkpoint.as_ref() {
+                return Err(self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "state snapshot at height {} is required because the configured-primary lane-geometry recovery floor was compacted",
+                        checkpoint.snapshot_height
+                    ),
+                ));
+            }
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary geometry identity does not match the retained recovery floor",
+            ));
+        }
+        Ok(())
+    }
+
     fn recover_lane_geometry_journal_with_lineage_root_inner(
         &self,
         authoritative: &LaneConfig,
@@ -3448,11 +3506,12 @@ impl Kura {
 
     /// Checkpoint recoverable lane geometry after a complete snapshot bundle is durable.
     ///
-    /// The caller must invoke this only after the snapshot data, digest, signature, Merkle
-    /// metadata, and snapshot directory entry have all been synchronized. Kura independently
-    /// joins the supplied snapshot identity to its canonical block hash and WSV checkpoint before
-    /// compacting any transition history. Archive deletion is then replayable from the compacted
-    /// journal and can never run ahead of that checkpoint.
+    /// The caller must invoke this only after the payload has passed the semantic restart reader
+    /// and the snapshot data, digest, signature, Merkle metadata, and snapshot directory entry
+    /// have all been synchronized. Kura independently joins the supplied snapshot identity to its
+    /// canonical block hash and WSV checkpoint before compacting any transition history. Archive
+    /// deletion is then replayable from the compacted journal and can never run ahead of that
+    /// checkpoint.
     ///
     /// # Errors
     /// Returns an error without deleting recovery evidence when the snapshot identity is stale,
@@ -3485,7 +3544,11 @@ impl Kura {
         )
     }
 
-    /// Checkpoint recoverable geometry against an exact retained-lineage identity.
+    /// Checkpoint restart-validated geometry against an exact retained-lineage identity.
+    ///
+    /// Callers must prove the snapshot can pass semantic restart initialization before invoking
+    /// this compaction boundary; durable bytes and canonical block/WSV identity alone are not
+    /// sufficient recovery evidence.
     pub(crate) fn checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
         &self,
         authoritative: &LaneConfig,
@@ -4288,23 +4351,8 @@ impl Kura {
                 ));
             }
         }
-        let identity_at_cursor = if desired_applied_count == 0 {
-            journal
-                .records
-                .first()
-                .map(|record| (record.previous_catalog, record.previous_lineage_root))
-                .or_else(|| {
-                    journal
-                        .checkpoint
-                        .as_ref()
-                        .map(|checkpoint| (checkpoint.catalog, checkpoint.lineage_root))
-                })
-        } else {
-            journal
-                .records
-                .get(desired_applied_count - 1)
-                .map(|record| (record.updated_catalog, record.updated_lineage_root))
-        };
+        let identity_at_cursor =
+            Self::lane_geometry_identity_at_applied_count(journal, desired_applied_count);
         if identity_at_cursor
             .is_some_and(|identity| identity != (authoritative_catalog, authoritative_lineage_root))
         {
@@ -4392,6 +4440,29 @@ impl Kura {
             )?;
         }
         Ok(())
+    }
+
+    fn lane_geometry_identity_at_applied_count(
+        journal: &LaneGeometryJournal,
+        desired_applied_count: usize,
+    ) -> Option<(Hash, Hash)> {
+        if desired_applied_count == 0 {
+            journal
+                .records
+                .first()
+                .map(|record| (record.previous_catalog, record.previous_lineage_root))
+                .or_else(|| {
+                    journal
+                        .checkpoint
+                        .as_ref()
+                        .map(|checkpoint| (checkpoint.catalog, checkpoint.lineage_root))
+                })
+        } else {
+            journal
+                .records
+                .get(desired_applied_count - 1)
+                .map(|record| (record.updated_catalog, record.updated_lineage_root))
+        }
     }
 
     fn geometry_retirement_identities(
@@ -19374,6 +19445,200 @@ mod tests {
                 &fixture.initial_activations,
             )
             .expect("restart recovers checkpoint-authoritative geometry");
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_is_read_only_when_floor_is_retained() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("retain primary-to-extended transition");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish extended geometry");
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal_before = fs::read(&journal_path).expect("retained geometry journal");
+        let initial_bindings = kura
+            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
+            .expect("configured-primary bindings");
+
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &initial,
+            &initial_incarnations,
+            &initial_activations,
+            unscoped_lineage_root(&initial_bindings),
+        )
+        .expect("retained transition must preserve the configured-primary replay floor");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after replay preflight"),
+            journal_before,
+            "replay preflight must not rewrite retained geometry"
+        );
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_checks_durable_binding_without_history() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("replay-binding");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+                .expect("open authenticated configured Kura");
+        let durable_incarnation = Hash::prehashed([0x61; Hash::LENGTH]);
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            durable_incarnation,
+            baseline,
+        )
+        .expect("bind configured primary");
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let durable_incarnations = BTreeMap::from([(LaneId::SINGLE, durable_incarnation)]);
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal = kura
+            .read_lane_geometry_journal()
+            .expect("read binding-only geometry journal");
+        assert!(journal.records.is_empty());
+        assert!(journal.checkpoint.is_none());
+        assert!(journal.configured_primary_binding.is_some());
+        let journal_before = fs::read(&journal_path).expect("binding-only journal bytes");
+
+        let mismatched_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x62; Hash::LENGTH]))]);
+        let mismatched_bindings = kura
+            .geometry_bindings(&lane_config, &mismatched_incarnations, &activation_heights)
+            .expect("mismatched replay bindings");
+        let error = kura
+            .preflight_lane_geometry_recovery_floor_with_lineage_root(
+                &lane_config,
+                &mismatched_incarnations,
+                &activation_heights,
+                unscoped_lineage_root(&mismatched_bindings),
+            )
+            .expect_err("durable configured-primary binding must fail closed");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "configured-primary geometry binding differs from its durable anchor",
+        );
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after rejected binding preflight"),
+            journal_before,
+            "binding mismatch preflight must not rewrite the journal"
+        );
+
+        let durable_bindings = kura
+            .geometry_bindings(&lane_config, &durable_incarnations, &activation_heights)
+            .expect("durable replay bindings");
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &lane_config,
+            &durable_incarnations,
+            &activation_heights,
+            unscoped_lineage_root(&durable_bindings),
+        )
+        .expect("matching durable configured-primary binding remains replayable");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after matching binding preflight"),
+            journal_before,
+            "successful binding preflight must also remain read-only"
+        );
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_requires_snapshot_after_compaction() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("create geometry transition to compact");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish extended geometry");
+        let (block_hash, state_hash) = durable_geometry_snapshot_identity(&kura, 20);
+        let extended_bindings = kura
+            .geometry_bindings(&extended, &extended_incarnations, &extended_activations)
+            .expect("extended checkpoint bindings");
+        let extended_lineage_root = unscoped_lineage_root(&extended_bindings);
+        let summary = kura
+            .checkpoint_lane_geometry_with_proven_snapshot(
+                extended_bindings,
+                extended_lineage_root,
+                20,
+                Some(block_hash),
+                state_hash,
+                Vec::new(),
+            )
+            .expect("compact transition behind the extended snapshot");
+        assert_eq!(summary.compacted_transitions, 1);
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal_before = fs::read(&journal_path).expect("compacted geometry journal");
+        let initial_bindings = kura
+            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
+            .expect("configured-primary bindings");
+
+        let error = kura
+            .preflight_lane_geometry_recovery_floor_with_lineage_root(
+                &initial,
+                &initial_incarnations,
+                &initial_activations,
+                unscoped_lineage_root(&initial_bindings),
+            )
+            .expect_err("empty-state replay must not cross compacted geometry");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "state snapshot at height 20 is required because the configured-primary lane-geometry recovery floor was compacted",
+        );
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after rejected replay preflight"),
+            journal_before,
+            "rejected replay preflight must leave compacted geometry untouched"
+        );
+
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            extended_lineage_root,
+        )
+        .expect("checkpoint-authoritative geometry remains a valid recovery floor");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after checkpoint preflight"),
+            journal_before,
+            "successful checkpoint preflight must also be read-only"
+        );
     }
 
     #[test]
