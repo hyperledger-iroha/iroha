@@ -10,6 +10,7 @@ readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2CertifiedResponseIdentitySeparationMutation.tla"
 readonly SANY_SUCCESS_MARKER="Semantic processing of module SumeragiV2CertifiedResponseIdentitySeparationMutation"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -74,6 +75,10 @@ run_case() {
   shift 3
   local log="${run_dir}/${label}.log"
   local actual_status
+  local expected_diagnostic
+  local expected_diagnostic_count=0
+  local initial_state_counterexample=0
+  local primary_diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -87,13 +92,58 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  elif [[ "$expected_status" -eq 12 || "$expected_status" -eq 13 ]]; then
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   for marker in "$@"; do
-    if ! grep -Fq "$marker" "$log"; then
-      echo "${label} missed expected marker: ${marker}" >&2
+    case "$marker" in
+      "Invariant "*)
+        expected_diagnostic="Error: ${marker}"
+        if [[ "$marker" == *" is violated by the initial state" ]]; then
+          expected_diagnostic="${expected_diagnostic}:"
+          initial_state_counterexample=1
+        fi
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      "Action property "*|"Temporal properties were violated.")
+        expected_diagnostic="Error: ${marker}"
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      *)
+        if ! grep -Fq "$marker" "$log"; then
+          echo "${label} missed expected marker: ${marker}" >&2
+          cat "$log" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done
+  if [[ "$expected_status" -eq 12 || "$expected_status" -eq 13 ]]; then
+    [[ "$expected_diagnostic_count" -eq 1 ]] || {
+      echo "${label} did not declare exactly one failure diagnostic" >&2
       cat "$log" >&2
       exit 1
+    }
+    primary_diagnostic_count="$(
+      grep -Ec \
+        "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+        "$log" || true
+    )"
+    [[ "$primary_diagnostic_count" -eq 1 ]] || {
+      echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+    if [[ "$initial_state_counterexample" -eq 0 ]]; then
+      sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
     fi
-  done
+  fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }
 
@@ -103,7 +153,7 @@ run_case separated-identities-fixed \
   "Model checking completed. No error has been found." \
   "The depth of the complete state graph search is 2."
 
-run_case archive-server-as-qc-signer-mutant \
+run_case archive-server-equals-cited-signer-mutant \
   certified_response_identity_archive_signer_bug.cfg 12 \
   "TLC2 Version 2.19" \
   "Invariant ValidRotatedArchiveResponseAccepted is violated." \
@@ -129,5 +179,5 @@ run_case archive-server-as-route-target-mutant \
 
 echo "[tlc] rotated non-roster archive, original route, relay, and frozen cited signer remained separate"
 echo "[tlc] exact request-hash, coordinate, cited-signer, and signature-owner negatives retained the live request"
-echo "[tlc] archive-as-QC-signer conflation rejected a valid recovery response"
+echo "[tlc] archive/cited-signer equality conflation rejected a valid recovery response"
 echo "[tlc] route-target authority conflation rejected a valid non-target recovery response"

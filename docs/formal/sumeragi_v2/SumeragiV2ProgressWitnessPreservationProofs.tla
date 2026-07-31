@@ -1307,12 +1307,45 @@ BY FifoRuntimeCreatesValidationOnlyForRunner,
        DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
        BeginTimeout, vars
 
+THEOREM ReplayRunNodeContinuationCreatesValidationOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => NewValidationOwnedBy(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE NewValidationOwnedBy(node)
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <2>1, Isa
+         DEF NewValidationOwnedBy,
+             AsyncCandidateProducerContinuationExactLocalReplayStep, vars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <2>2, Isa
+         DEF NewValidationOwnedBy,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1,
+           RuntimeStepCreatesValidationOnlyForRunner
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkCreatesValidationOnlyForRunner ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ RunNodeWork(node)
     => NewValidationOwnedBy(node)
-BY RuntimeStepCreatesValidationOnlyForRunner, IsaT(90)
+BY RuntimeStepCreatesValidationOnlyForRunner,
+   ReplayRunNodeContinuationCreatesValidationOnlyForRunner, IsaT(90)
    DEF NewValidationOwnedBy, RunNodeWork,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
@@ -1341,7 +1374,9 @@ THEOREM ClearedRecoveryPhaseExcludesRecoveryNodeRunner ==
 BY IsaT(60)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        RunNodeWork, ResponsiveReplayQuarantined,
-       ResponsiveReplayDraining
+       ResponsiveReplayDraining,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode
 
 THEOREM RunNodeWorkPreservesRecoveryValidationClearing ==
   \A node \in ValidatorIds:

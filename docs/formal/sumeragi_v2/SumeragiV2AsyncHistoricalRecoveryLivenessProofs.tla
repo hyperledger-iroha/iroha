@@ -330,6 +330,14 @@ BY Isa
        SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, ExecuteCommand,
        ExecuteApply, OpenHistoricalRecovery, PreGstCrash,
@@ -360,6 +368,14 @@ BY IsaT(600)
        SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, ExecuteCommand, ExecuteApply,
        ApplyDecision, NodeHasApplication,
@@ -404,6 +420,14 @@ PROOF
                  IngressDrainStep, SerializedRunnerRuntimeStep,
                  SerializedRuntimeStep,
                  SerializedRuntimePrecedesServeIngressStep,
+                 ResolveRunNodeCandidateProducerContinuation,
+                 ReplayRunNodeCandidateProducerContinuation,
+                 AsyncCandidateProducerContinuationExactLocalReplayStep,
+                 AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+                 AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+                 AsyncSchedulerExceptCausalControlAndNodeService,
+                 AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+                 AsyncSchedulerExceptCausalControlRunnerAndNodeService,
                  AsyncServeIngressTargetOnlyTurn, RuntimeStep,
                  ExecuteCommand, ExecuteApply,
                  PreGstCrash, PreGstResponsiveCrash,
@@ -1076,12 +1100,46 @@ BY HistoricalFifoRuntimeCreatesDecisionOnlyForRunner,
        DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
        BeginTimeout, vars
 
+THEOREM HistoricalReplayRunNodeContinuationCreatesDecisionOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => HistoricalNewDecisionOwnedBy(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE HistoricalNewDecisionOwnedBy(node)
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <2>1, Isa
+         DEF HistoricalNewDecisionOwnedBy,
+             AsyncCandidateProducerContinuationExactLocalReplayStep, vars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <2>2, Isa
+         DEF HistoricalNewDecisionOwnedBy,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1,
+           HistoricalRuntimeCreatesDecisionOnlyForRunner
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM HistoricalRunNodeWorkCreatesDecisionOnlyForRunner ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ RunNodeWork(node)
     => HistoricalNewDecisionOwnedBy(node)
-BY HistoricalRuntimeCreatesDecisionOnlyForRunner, IsaT(90)
+BY HistoricalRuntimeCreatesDecisionOnlyForRunner,
+   HistoricalReplayRunNodeContinuationCreatesDecisionOnlyForRunner,
+   IsaT(90)
    DEF HistoricalNewDecisionOwnedBy, RunNodeWork,
        LocalAdmissionStep, SelectedLocalAdmissionAdvance,
        SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
@@ -1156,6 +1214,14 @@ BY IsaT(600)
        SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, DeferredDrainStep, ExecuteCommand,
        ExecuteApply, ApplyDecision, OpenHistoricalRecovery,

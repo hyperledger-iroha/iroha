@@ -21,9 +21,10 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
 FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
-    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
-    "mutations, bounded TLC, trace replay, and production Verus"
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
+    "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
+    "recovery/ownership mutations, bounded TLC, trace replay, and production "
+    "Verus"
 )
 CHAOS_MARKER = (
     "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "

@@ -543,6 +543,48 @@ BY AsyncCausalRemainingWorkWeightIsPositive,
        AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncIoTypeInvariant, AsyncServeLifecycleTypeInvariant
 
+THEOREM AsyncCausalEpisodeStructuralRankAtFiniteCutIsFinite ==
+  \A node \in ValidatorIds, cutoffOrdinal \in Nat:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+               AsyncCausalEpisodeFrozenPredecessorOrigins(
+                 node, cutoffOrdinal))
+         /\ IsFiniteSet(
+               AsyncCausalEpisodeCandidateWorkTokens(
+                 node, cutoffOrdinal))
+         /\ IsFiniteSet(
+               AsyncCausalEpisodeExactCandidateOccurrenceTokens(
+                 node, cutoffOrdinal))
+         /\ IsFiniteSet(
+               AsyncCausalEpisodeServeWorkTokens(
+                 node, cutoffOrdinal))
+         /\ AsyncCausalEpisodeStructuralRank(node, cutoffOrdinal)
+              \in AsyncCausalEpisodeStructuralRankCarrier
+BY AsyncCausalRemainingWorkWeightIsPositive,
+   AsyncCausalEpisodeCandidateCarrierHasConfiguredBound,
+   AsyncCausalEpisodeExactOccurrenceBudgetFitsConfiguredEpisode,
+   DrainableIngressTurnReachRankIsNatural,
+   FS_Image, FS_Product, FS_Union, FS_Subset, FS_Interval,
+   FS_CardinalityType, IsaT(900)
+   DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCausalEpisodeCandidates,
+       AsyncCausalEpisodeCandidateWorkTokens,
+       AsyncCausalEpisodeExactCandidateOccurrenceTokens,
+       AsyncCausalExactRemainingOccurrenceBudget,
+       AsyncCausalEpisodeServeIngressIdentities,
+       AsyncCausalEpisodeServeIngressPrefixTokens,
+       AsyncCausalEpisodeServeIoPredecessorTokens,
+       AsyncCausalEpisodeServeOccurrenceTokens,
+       AsyncCausalEpisodeServeWorkTokens,
+       AsyncCausalEpisodeStructuralRank,
+       AsyncCausalEpisodeCandidateWorkBudget,
+       AsyncCausalEpisodeServeWorkBudget,
+       AsyncCausalEpisodeServeReachDebt,
+       AsyncCausalEpisodeStructuralRankCarrier,
+       AsyncCausalEpisodeServeRankCarrier,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncServeLifecycleTypeInvariant
+
 THEOREM AsyncCausalEpisodeTargetLifecycleOrdinalPersists ==
   \A candidate \in AsyncCandidateSet:
     /\ AsyncStrongTypeInvariant
@@ -880,6 +922,8 @@ THEOREM AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled ==
     LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
     IN /\ AsyncStrongTypeInvariant
        /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+       /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
        /\ ResponsiveProtectedCandidateOwned(candidate)
        => /\ AsyncCausalEpisodeFairOwner(
                 candidate.node, cutoffOrdinal)

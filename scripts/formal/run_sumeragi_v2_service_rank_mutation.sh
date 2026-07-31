@@ -6,6 +6,7 @@ readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b2
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -45,6 +46,31 @@ common=(
   -cleanup -workers 1 -fp 96 -seed 139154308881391968
 )
 
+assert_explored_counterexample() {
+  local label="$1"
+  local log="$2"
+  local expected_diagnostic="$3"
+  local primary_diagnostic_count
+  sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$label" "$log" "$expected_diagnostic"
+  if [[ "$expected_diagnostic" == "Error: Invariant "* ]]; then
+    sumeragi_v2_tlc_assert_exact_line \
+      "$label" "$log" "Error: The behavior up to this point is:"
+  fi
+  primary_diagnostic_count="$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" -eq 1 ]] || {
+    echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  sumeragi_v2_tlc_assert_terminal "$label" "$log"
+}
+
 set +e
 (
   cd "$FORMAL_DIR"
@@ -60,6 +86,9 @@ set -e
   cat "$run_dir/old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "old-service-rank" "$run_dir/old.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -78,6 +107,8 @@ done
     -config service_rank_coalesced.cfg \
     SumeragiV2ServiceRankMutation.tla
 ) >"$run_dir/coalesced.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "coalesced" "$run_dir/coalesced.log" 0
 grep -Fq "Model checking completed. No error has been found." \
   "$run_dir/coalesced.log" || {
   cat "$run_dir/coalesced.log" >&2
@@ -102,6 +133,10 @@ set -e
   cat "$run_dir/global-blocker-same-rank-swap.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "global-blocker-same-rank-swap" \
+  "$run_dir/global-blocker-same-rank-swap.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -120,6 +155,8 @@ done
     -config adequate_leader_global_blocker_exact_cell.cfg \
     SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla
 ) >"$run_dir/global-blocker-exact-cell.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "global-blocker-exact-cell" "$run_dir/global-blocker-exact-cell.log" 0
 grep -Fq "Model checking completed. No error has been found." \
   "$run_dir/global-blocker-exact-cell.log" || {
   cat "$run_dir/global-blocker-exact-cell.log" >&2
@@ -144,6 +181,9 @@ set -e
   cat "$run_dir/deferred-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-old" "$run_dir/deferred-old.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -161,6 +201,8 @@ done
     -config service_rank_deferred_coalesced.cfg \
     SumeragiV2ServiceRankMutation.tla
 ) >"$run_dir/deferred-coalesced.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "deferred-coalesced" "$run_dir/deferred-coalesced.log" 0
 grep -Fq "Model checking completed. No error has been found." \
   "$run_dir/deferred-coalesced.log" || {
   cat "$run_dir/deferred-coalesced.log" >&2
@@ -185,6 +227,9 @@ set -e
   cat "$run_dir/deferred-cursor-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-cursor-old" "$run_dir/deferred-cursor-old.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -203,6 +248,8 @@ done
     -config deferred_cursor_cyclic.cfg \
     SumeragiV2DeferredCursorMutation.tla
 ) >"$run_dir/deferred-cursor-cyclic.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "deferred-cursor-cyclic" "$run_dir/deferred-cursor-cyclic.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "6 distinct states" \
@@ -231,6 +278,10 @@ set -e
   cat "$run_dir/deferred-busy-priority-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-busy-priority-old" \
+  "$run_dir/deferred-busy-priority-old.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -250,6 +301,8 @@ done
     -config deferred_busy_fence.cfg \
     SumeragiV2DeferredBusyFenceMutation.tla
 ) >"$run_dir/deferred-busy-fence.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "deferred-busy-fence" "$run_dir/deferred-busy-fence.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "3 distinct states" \
@@ -278,6 +331,9 @@ set -e
   cat "$run_dir/busy-alias-old-rank.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "busy-alias-old-rank" "$run_dir/busy-alias-old-rank.log" \
+  "Error: Invariant OldIfRankDropped is violated."
 for marker in \
   "Invariant OldIfRankDropped is violated." \
   'phase = "AfterSign"' \
@@ -296,6 +352,8 @@ done
     -config busy_alias_weighted_rank.cfg \
     SumeragiV2BusyAliasRankMutation.tla
 ) >"$run_dir/busy-alias-weighted-rank.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "busy-alias-weighted-rank" "$run_dir/busy-alias-weighted-rank.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "2 distinct states" \
@@ -312,6 +370,8 @@ done
     -config busy_alias_guarded_kernel.cfg \
     SumeragiV2BusyAliasRankMutation.tla
 ) >"$run_dir/busy-alias-guarded-kernel.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "busy-alias-guarded-kernel" "$run_dir/busy-alias-guarded-kernel.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "3 distinct states" \
@@ -340,6 +400,10 @@ set -e
   cat "$run_dir/deferred-debt-invariant-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-debt-invariant-old" \
+  "$run_dir/deferred-debt-invariant-old.log" \
+  "Error: Invariant DeferredDebtInvariant is violated."
 for marker in \
   "Invariant DeferredDebtInvariant is violated." \
   'phase = "CompleteBusy"' \
@@ -367,6 +431,10 @@ set -e
   cat "$run_dir/deferred-debt-liveness-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-debt-liveness-old" \
+  "$run_dir/deferred-debt-liveness-old.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "Temporal properties were violated." \
   'phase = "Drain"' \
@@ -385,6 +453,8 @@ done
     -config deferred_debt_armed.cfg \
     SumeragiV2DeferredDebtMutation.tla
 ) >"$run_dir/deferred-debt-armed.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "deferred-debt-armed" "$run_dir/deferred-debt-armed.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "4 distinct states" \
@@ -413,6 +483,9 @@ set -e
   cat "$run_dir/deferred-handoff-rebusy.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-handoff-rebusy" "$run_dir/deferred-handoff-rebusy.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -431,6 +504,8 @@ done
     -config deferred_handoff_exact.cfg \
     SumeragiV2DeferredHandoffMutation.tla
 ) >"$run_dir/deferred-handoff-exact.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "deferred-handoff-exact" "$run_dir/deferred-handoff-exact.log" 0
 grep -Fq "Model checking completed. No error has been found." \
   "$run_dir/deferred-handoff-exact.log" || {
   cat "$run_dir/deferred-handoff-exact.log" >&2
@@ -455,6 +530,9 @@ set -e
   cat "$run_dir/head-only.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "head-only" "$run_dir/head-only.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -473,6 +551,8 @@ done
     -config ingress_indexed_scan.cfg \
     SumeragiV2IngressMutation.tla
 ) >"$run_dir/indexed-scan.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "indexed-scan" "$run_dir/indexed-scan.log" 0
 grep -Fq "Model checking completed. No error has been found." \
   "$run_dir/indexed-scan.log" || {
   cat "$run_dir/indexed-scan.log" >&2
@@ -497,6 +577,9 @@ set -e
   cat "$run_dir/capacity-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "capacity-old" "$run_dir/capacity-old.log" \
+  "Error: Invariant OldCapacityInvariant is violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Invariant OldCapacityInvariant is violated." \
@@ -515,6 +598,8 @@ done
     -config ingress_capacity_lane_bound.cfg \
     SumeragiV2IngressCapacityMutation.tla
 ) >"$run_dir/capacity-bounded.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "capacity-bounded" "$run_dir/capacity-bounded.log" 0
 grep -Fq "Model checking completed. No error has been found." \
   "$run_dir/capacity-bounded.log" || {
   cat "$run_dir/capacity-bounded.log" >&2
@@ -539,6 +624,10 @@ set -e
   cat "$run_dir/completion-capacity-conflated.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "completion-capacity-conflated" \
+  "$run_dir/completion-capacity-conflated.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -557,6 +646,9 @@ done
     -config completion_capacity_separated.cfg \
     SumeragiV2CompletionCapacityMutation.tla
 ) >"$run_dir/completion-capacity-separated.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "completion-capacity-separated" \
+  "$run_dir/completion-capacity-separated.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "4 distinct states" \
@@ -585,6 +677,10 @@ set -e
   cat "$run_dir/local-admission-producer-first.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "local-admission-producer-first" \
+  "$run_dir/local-admission-producer-first.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -603,6 +699,8 @@ done
     -config local_admission_alternating.cfg \
     SumeragiV2LocalAdmissionMutation.tla
 ) >"$run_dir/local-admission-alternating.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "local-admission-alternating" "$run_dir/local-admission-alternating.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "7 distinct states" \
@@ -631,6 +729,9 @@ set -e
   cat "$run_dir/serve-nonce-reuse.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "serve-nonce-reuse" "$run_dir/serve-nonce-reuse.log" \
+  "Error: Temporal properties were violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
@@ -649,6 +750,8 @@ done
     -config serve_nonce_fresh.cfg \
     SumeragiV2ServeNonceMutation.tla
 ) >"$run_dir/serve-nonce-fresh.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "serve-nonce-fresh" "$run_dir/serve-nonce-fresh.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "4 distinct states" \
@@ -677,6 +780,10 @@ set -e
   cat "$run_dir/deferred-primed-selector-old.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "deferred-primed-selector-old" \
+  "$run_dir/deferred-primed-selector-old.log" \
+  "Error: Invariant OldPrimedSelectorClaimHeld is violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Invariant OldPrimedSelectorClaimHeld is violated." \
@@ -697,6 +804,9 @@ done
     -config deferred_rigid_target_class.cfg \
     SumeragiV2DeferredPrimedSelectorMutation.tla
 ) >"$run_dir/deferred-rigid-target-class.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "deferred-rigid-target-class" \
+  "$run_dir/deferred-rigid-target-class.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "6 distinct states" \
@@ -725,6 +835,10 @@ set -e
   cat "$run_dir/busy-witness-stale-readiness.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "busy-witness-stale-readiness" \
+  "$run_dir/busy-witness-stale-readiness.log" \
+  "Error: Invariant OldActiveBusyWitnessInvariant is violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Invariant OldActiveBusyWitnessInvariant is violated." \
@@ -746,6 +860,9 @@ done
     -config busy_witness_combined_kernel.cfg \
     SumeragiV2BusyWitnessKernelMutation.tla
 ) >"$run_dir/busy-witness-combined-kernel.log" 2>&1
+sumeragi_v2_tlc_assert_fixed_success \
+  "busy-witness-combined-kernel" \
+  "$run_dir/busy-witness-combined-kernel.log" 0
 for marker in \
   "Model checking completed. No error has been found." \
   "8 distinct states" \
@@ -774,6 +891,10 @@ set -e
   cat "$run_dir/persist-install-height-alias.log" >&2
   exit 1
 }
+assert_explored_counterexample \
+  "persist-install-height-alias" \
+  "$run_dir/persist-install-height-alias.log" \
+  "Error: Invariant SerializedBusyOwnershipInvariant is violated."
 for marker in \
   "TLC2 Version 2.19" \
   "Invariant SerializedBusyOwnershipInvariant is violated." \
@@ -803,6 +924,10 @@ set -e
   cat "$run_dir/persist-install-canonical-vote.log" >&2
   exit 1
 }
+sumeragi_v2_tlc_assert_fixed_success \
+  "persist-install-canonical-vote" \
+  "$run_dir/persist-install-canonical-vote.log" \
+  "$persist_install_canonical_vote_status"
 for marker in \
   "Model checking completed. No error has been found." \
   "4 distinct states generated" \

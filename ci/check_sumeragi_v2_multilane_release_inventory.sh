@@ -33,7 +33,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=785
+readonly canonical_production_test_count=806
 
 require_nonignored_test() {
   local path="$1"
@@ -257,14 +257,14 @@ if (
         f"{canonical_production_test_count}"
     )
 expected_changed_module_counts = {
-    "sumeragi::authoritative_runtime_gate_tests": 38,
+    "sumeragi::authoritative_runtime_gate_tests": 40,
     "sumeragi::serviced_candidate_store::tests": 1,
     "sumeragi::v2_effects::tests": 66,
-    "sumeragi::v2_runtime::tests": 43,
+    "sumeragi::v2_runtime::tests": 52,
     "merge_sidecar::tests": 118,
     "sumeragi::v2_lane_work::tests": 53,
-    "sumeragi::v2_runner::tests": 33,
-    "sumeragi::v2_worker::tests": 120,
+    "sumeragi::v2_runner::tests": 34,
+    "sumeragi::v2_worker::tests": 129,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -291,8 +291,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "8f780531304a804fd9d99b13df5aff5b"
-    "6b48348a46142e93a74e6ded7b50e45f"
+    "877ec0909ecfb9c22118b9b976ec87d7"
+    "09e3d8d012cb2d693c8465524405fee5"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

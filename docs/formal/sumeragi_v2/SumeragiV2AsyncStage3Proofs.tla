@@ -692,8 +692,15 @@ Stage3ServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ Stage3KernelPending(candidate, position)
   /\ ~Stage3AuxProgress(candidate, position, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
-  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+        /\ asyncRunnerPhase[candidate.node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+Stage3CandidateProducerContinuationReentry(candidate, position, rank) ==
+  /\ Stage3AuxBlocked(candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 Stage3FiniteServeEpisodeResidualProperty(specification) ==
   specification
@@ -748,6 +755,10 @@ THEOREM Stage3SameNodeRunAuxOutcomeObligation ==
       /\ PostGstRunNode(candidate.node)
       => \/ Stage3AuxProgress(candidate, position, rank)'
          \/ Stage3ServeEpisodeResidual(candidate, position, rank)'
+         \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  candidate.node)
+            /\ Stage3CandidateProducerContinuationReentry(
+                 candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
                 NEW rank \in ReadyRunAuxCarrier,
@@ -756,8 +767,45 @@ PROOF
          PROVE \/ Stage3AuxProgress(candidate, position, rank)'
                \/ Stage3ServeEpisodeResidual(
                     candidate, position, rank)'
+               \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                        candidate.node)
+                  /\ Stage3CandidateProducerContinuationReentry(
+                       candidate, position, rank)'
     <2>1. RunNode(candidate.node)
       BY <1>1 DEF PostGstRunNode
+    <2>1c. CASE
+              \/ ResolveRunNodeCandidateProducerContinuation(candidate.node)
+              \/ ReplayRunNodeCandidateProducerContinuation(candidate.node)
+      BY <1>1, <2>1c,
+         AsyncBracketNextPreservesStrongTypeInvariant,
+         AsyncBracketNextPreservesProgressOwnership,
+         ReadyRunAuxRankInCarrier, HeadTailProperties,
+         SequenceSetAfterAppend, IsaT(900)
+         DEF Stage3CandidateProducerContinuationReentry,
+             Stage3AuxProgress, Stage3ServeEpisodeResidual,
+             Stage3AuxBlocked, Stage3KernelPending,
+             Stage3RankProgressExit, ProtectedOwnedAtServiceRank,
+             ProtectedServiceOwnershipExit,
+             ResponsiveProtectedCandidateOwned,
+             ProtectedCandidateOwned, CandidateServiceRank,
+             ServiceRankLess, ReadyRunAuxRank,
+             ReadyRunDeferredRank, ReadyRunTimeoutRank,
+             ReadyRunInnerRank, ReadyRunAuxOrdering,
+             ReadyRunAuxCarrier, ReadyRunDeferredOrdering,
+             ReadyRunDeferredCarrier, ReadyRunTimeoutOrdering,
+             ReadyRunTimeoutCarrier, ReadyRunInnerOrdering,
+             ReadyRunInnerCarrier, ReadyFifoDebt,
+             ReadyDeferredCount, ReadyTimeoutDebt,
+             ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+             ResolveRunNodeCandidateProducerContinuation,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             EnqueueCandidate, CandidateScheduled, SequenceSet,
+             AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant,
+             AsyncOutstandingCarrierInvariant, AsyncAllVars
     <2>2. CASE LocalAdmissionStep(candidate.node)
       BY <1>1, <2>2,
          AsyncBracketNextPreservesStrongTypeInvariant,
@@ -985,7 +1033,7 @@ PROOF
              AsyncProgressOwnershipInvariant,
              AsyncLogicalCandidateOwnershipInvariant,
              AsyncOutstandingCarrierInvariant, AsyncAllVars
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+    <2> QED BY <2>1, <2>1c, <2>2, <2>3, <2>4, <2>5, <2>6,
          RunNodeWorkConcreteActionCaseSplit
          DEF RunNode
   <1> QED BY <1>1
@@ -1211,16 +1259,20 @@ PROOF
                  => (Stage3AuxBlocked(candidate, position, rank)
                        ~> Stage3AuxProgress(candidate, position, rank))
     <2>1. AsyncSpecAt(initialContext)
-             => [](AsyncCurrentResponsiveVoters
-                    = AsyncVotersAt(initialContext))
-      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+             => /\ [](AsyncCurrentResponsiveVoters
+                       = AsyncVotersAt(initialContext))
+                /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
     <2>2. /\ Stage3AuxBlocked(candidate, position, rank)
              /\ ~(Stage3AuxProgress(candidate, position, rank)
                     \/ Stage3ServeEpisodeResidual(
                          candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-      BY ProtectedOwnedCandidateEnablesFairRunNode
+      BY <2>1, ProtectedOwnedCandidateEnablesFairRunNode, PTL
          DEF Stage3AuxBlocked, Stage3KernelPending,
              ProtectedOwnedAtServiceRank, Stage3AuxProgress
     <2>3. /\ Stage3AuxBlocked(candidate, position, rank)
@@ -1232,7 +1284,9 @@ PROOF
                \/ Stage3ServeEpisodeResidual(
                     candidate, position, rank)'
       BY Stage3SameNodeRunAuxOutcomeObligation, Isa
-         DEF PostGstRunNode
+         DEF PostGstRunNode,
+             Stage3ServeEpisodeResidual,
+             Stage3CandidateProducerContinuationReentry
     <2>4. Stage3AuxBlocked(candidate, position, rank)
               /\ [AsyncNext]_AsyncAllVars
             => Stage3AuxBlocked(candidate, position, rank)'
@@ -1241,6 +1295,7 @@ PROOF
                       candidate, position, rank)'
       BY Stage3SameNodeRunAuxOutcomeObligation,
          Stage3OtherStepUnlessAuxDescentObligation, Isa
+         DEF Stage3CandidateProducerContinuationReentry
     <2>5. CASE candidate.node \in AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => WF_AsyncAllVars(PostGstRunNode(candidate.node))

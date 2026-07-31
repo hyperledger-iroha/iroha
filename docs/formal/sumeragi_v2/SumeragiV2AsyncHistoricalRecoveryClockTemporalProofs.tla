@@ -496,8 +496,10 @@ THEOREM HistoricalDiscoveryDueNodeModeHasEnabledExactFairAction ==
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
      owner,
      mode \in HistoricalDiscoveryTimedOwnerModeCarrier:
-    HistoricalDiscoveryDueNodeOwnerAtMode(
-      node, clockValue, sourceRank, owner, mode)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalDiscoveryDueNodeOwnerAtMode(
+         node, clockValue, sourceRank, owner, mode)
       => ENABLED
            <<HistoricalDiscoveryDueNodeModeFairAction(
                owner, mode)>>_AsyncAllVars
@@ -769,8 +771,12 @@ PROOF
                  ~>
                HistoricalDiscoveryDueNodeModeProgressGoal(
                  node, clockValue, sourceRank, owner, mode)
-    <2>1. []AsyncStrongTypeInvariant
-      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. [](HistoricalDiscoveryDueNodeOwnerAtMode(
                 node, clockValue, sourceRank, owner, mode)
               /\ ~HistoricalDiscoveryDueNodeModeProgressGoal(
@@ -1382,6 +1388,8 @@ THEOREM HistoricalDiscoveryPacketTailHasFrozenConcreteAction ==
       \A packet, known, budget:
         /\ AsyncFrozenContextAt(initialContext)
         /\ PostGstReplayQuarantineExcluded
+        /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+        /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
         /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
              node, clockValue, sourceRank, packet, known, budget)
         /\ HistoricalDiscoveryPacketProducerIdentitySet(packet) = {}
@@ -1402,6 +1410,8 @@ PROOF
                 NEW packet, NEW known, NEW budget,
                 AsyncFrozenContextAt(initialContext),
                 PostGstReplayQuarantineExcluded,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
                   node, clockValue, sourceRank, packet, known, budget),
                 HistoricalDiscoveryPacketProducerIdentitySet(packet) = {}
@@ -1947,6 +1957,8 @@ THEOREM HistoricalDiscoveryLiveCandidateHasExactActionOwner ==
             HistoricalDiscoveryPacketCandidateDebtWitness(packet)
       IN /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
               node, clockValue, sourceRank, packet, known, budget)
+         /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+         /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
          /\ HistoricalDiscoveryPacketCandidateOwners(packet) # {}
          /\ <<"Candidate", candidate.causalOrigin>>
               \in HistoricalDiscoveryPacketFrozenKnownIdentitySet(
@@ -2028,8 +2040,10 @@ THEOREM HistoricalDiscoveryEpisodeHasKnownExactOwnerOrPacketTail ==
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
     \A packet, known, budget:
-      HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
-        node, clockValue, sourceRank, packet, known, budget)
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
+           node, clockValue, sourceRank, packet, known, budget)
         => \/ HistoricalDiscoveryCandidateServeLifecycleGoal(
                 node, clockValue, sourceRank, packet, known, budget)
            \/ /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
@@ -2335,12 +2349,20 @@ HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
 
 THEOREM HistoricalDiscoveryPhysicalKernelsDischargeLifecycleService ==
   \A specification:
-    HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
-      specification)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationExternalCoverageInvariant)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+    /\ HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
+         specification)
       => HistoricalDiscoveryCandidateServeLifecycleOwnerServiceProperty(
            specification)
 PROOF
   <1>1. ASSUME NEW specification,
+                specification
+                  => []AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                specification
+                  => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
                   specification)
          PROVE HistoricalDiscoveryCandidateServeLifecycleOwnerServiceProperty(
@@ -2381,7 +2403,9 @@ PROOF
                           packet, known, budget,
                           identity, job, occurrenceRank,
                           workerKind, workerMode)
-          BY HistoricalDiscoveryEpisodeHasKnownExactOwnerOrPacketTail
+          BY <1>1,
+             HistoricalDiscoveryEpisodeHasKnownExactOwnerOrPacketTail,
+             PTL
         <4>2. (/\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
                         node, clockValue, sourceRank,
                         packet, known, budget)
@@ -2622,8 +2646,12 @@ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual(
 
 THEOREM HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves ==
   \A specification:
-    HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual(
-      specification)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationExternalCoverageInvariant)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+    /\ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual(
+         specification)
       => /\ HistoricalDiscoveryFixedClockPacketServiceProperty(
                specification)
          /\ HistoricalDiscoveryCandidateServeIdentityBudgetProperty(
@@ -2649,6 +2677,8 @@ THEOREM AsyncSpecAndPacketCorridorResidualCloseFixedClockPrerequisites ==
       => HistoricalDiscoveryFixedClockTemporalPrerequisites(
            AsyncSpecAt(initialContext))
 BY AsyncSpecClosesHistoricalDiscoveryFixedClockNonPacketService,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves,
    Isa
    DEF HistoricalDiscoveryFixedClockTemporalPrerequisites,

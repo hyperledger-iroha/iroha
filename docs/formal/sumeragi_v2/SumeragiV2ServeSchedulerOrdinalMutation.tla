@@ -27,7 +27,7 @@ the admission actions below represent only a distinct post-cut ticket: they
 cannot replenish the old prefix, and shared admission must place that ticket
 strictly after the frozen timeout owner.
 
-The three mutation pairs isolate independent defects:
+The six mutation pairs isolate independent defects:
 
   * a separate Serve ordinal makes every ticket appear no later than the
     frozen timeout, so target-first drain/retransmit can lasso; and
@@ -35,6 +35,18 @@ The three mutation pairs isolate independent defects:
     drain/retransmit forever without taking the older Runtime episode.
   * the same target-first shortcut at Local can drain/retransmit forever while
     an already-admitted local completion keeps its lower shared ordinal.
+  * a continuation admitted strictly after an exact ingress target can be
+    selected only by the mutant.  The repaired selector still permits an
+    equal/earlier continuation to run once, then returns to the frozen ingress
+    target; the mutant repeatedly exposes the later continuation and leaves
+    the admitted target in a stuttering lasso.
+  * a dormant lifecycle may retain an older logical ordinal, but its replay
+    receives a fresh physical carrier after an already-admitted claim.  The
+    mutant selects by the stale logical ordinal and leaves the claim pending.
+  * installing a producer continuation is a named residual, not claim
+    progress.  The repaired kernel services that residual and re-enters the
+    same claim; the mutant treats a raw lower rank as an exit and loses the
+    only enabled claim owner.
 
 Weak fairness is placed on the whole runner action, matching production.  It
 cannot rescue either mutant by selecting an internal branch which the mutant
@@ -45,7 +57,12 @@ RunnerPhases == {"Runtime", "Local", "Ingress"}
 TransitionNames ==
   {"Initial", "AdmitShared", "AdmitSeparate", "DuplicateCoalesced",
    "AdmitSharedLocal", "OlderRuntime", "OlderLocal", "TargetOnly",
-   "AlwaysTargetFirst", "Drain", "DrainLocal"}
+   "AlwaysTargetFirst", "Drain", "DrainLocal",
+   "IngressBeforeLaterContinuation", "PermittedContinuation",
+   "IngressAfterPermittedContinuation", "ContinuationOvertake",
+   "ClaimBeforeDormantReplay", "DormantLogicalOvertake",
+   "InstallContinuationResidual", "ContinuationRankedReentry",
+   "ClaimAuxProgress", "RawRankDescent"}
 
 VARIABLES
   runnerPhase,
@@ -221,6 +238,206 @@ DrainExactIngressRecordToLocal ==
   /\ UNCHANGED <<timeoutPending, localPending, ticketEpoch,
                   sharedHighWatermarkAdvanced>>
 
+(***************************************************************************
+Continuation/ingress cut regression.
+
+The initial state nondeterministically covers both selector boundaries.  A
+strictly later continuation must yield immediately to the frozen ingress
+target.  An equal/earlier continuation remains a legal predecessor, but its
+single coalesced lifecycle is consumed before the target runs.  The mutant
+exposes the later continuation as a target-first runner arm; after the first
+observable overtake that arm is a stutter and admits the expected temporal
+counterexample without inventing stronger branch fairness.
+***************************************************************************)
+ContinuationCutMutationInit ==
+  /\ runnerPhase = "Ingress"
+  /\ timeoutPending
+  /\ localPending
+  /\ ticketActive
+  /\ ticketIsLater \in BOOLEAN
+  /\ ticketEpoch = FALSE
+  /\ lastDrainedEpoch = FALSE
+  /\ ~sharedHighWatermarkAdvanced
+  /\ lastTransition = "Initial"
+
+AdmittedIngressPrecedesLaterContinuation ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ localPending
+  /\ ticketIsLater
+  /\ timeoutPending' = FALSE
+  /\ ticketActive' = FALSE
+  /\ sharedHighWatermarkAdvanced' = TRUE
+  /\ lastTransition' = "IngressBeforeLaterContinuation"
+  /\ UNCHANGED <<runnerPhase, localPending, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch>>
+
+PermittedContinuationPrecedesIngress ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ localPending
+  /\ ~ticketIsLater
+  /\ localPending' = FALSE
+  /\ lastTransition' = "PermittedContinuation"
+  /\ UNCHANGED <<runnerPhase, timeoutPending, ticketActive, ticketIsLater,
+                  ticketEpoch, lastDrainedEpoch,
+                  sharedHighWatermarkAdvanced>>
+
+AdmittedIngressRunsAfterPermittedContinuation ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ ~localPending
+  /\ timeoutPending' = FALSE
+  /\ ticketActive' = FALSE
+  /\ sharedHighWatermarkAdvanced' = TRUE
+  /\ lastTransition' = "IngressAfterPermittedContinuation"
+  /\ UNCHANGED <<runnerPhase, localPending, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch>>
+
+LaterContinuationOvertakesAdmittedIngress ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ localPending
+  /\ ticketIsLater
+  /\ lastTransition' = "ContinuationOvertake"
+  /\ UNCHANGED <<runnerPhase, timeoutPending, localPending,
+                  ticketActive, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch, sharedHighWatermarkAdvanced>>
+
+ContinuationCutFixedRunner ==
+  \/ AdmittedIngressPrecedesLaterContinuation
+  \/ PermittedContinuationPrecedesIngress
+  \/ AdmittedIngressRunsAfterPermittedContinuation
+
+ContinuationOvertakeBugRunner ==
+  \/ LaterContinuationOvertakesAdmittedIngress
+  \/ PermittedContinuationPrecedesIngress
+  \/ AdmittedIngressRunsAfterPermittedContinuation
+
+(***************************************************************************
+Claim physical-cut regression.
+
+`localPending` represents a dormant leader-wire identity whose immutable
+logical ordinal predates the certified-response claim.  `ticketIsLater`
+records the repaired admission fact: reactivation allocated a fresh physical
+carrier and current lane-prefix snapshot after the claim's frozen physical
+cut.  The fixed runner consumes the claim first.  The mutant consults only
+the stale logical ordinal and repeatedly exposes the dormant carrier ahead of
+the claim.
+***************************************************************************)
+ClaimPhysicalCutMutationInit ==
+  /\ runnerPhase = "Ingress"
+  /\ timeoutPending
+  /\ localPending
+  /\ ticketActive
+  /\ ticketIsLater
+  /\ ticketEpoch = FALSE
+  /\ lastDrainedEpoch = FALSE
+  /\ ~sharedHighWatermarkAdvanced
+  /\ lastTransition = "Initial"
+
+ClaimRunsBeforeFreshDormantCarrier ==
+  /\ timeoutPending
+  /\ localPending
+  /\ ticketActive
+  /\ ticketIsLater
+  /\ timeoutPending' = FALSE
+  /\ ticketActive' = FALSE
+  /\ sharedHighWatermarkAdvanced' = TRUE
+  /\ lastTransition' = "ClaimBeforeDormantReplay"
+  /\ UNCHANGED <<runnerPhase, localPending, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch>>
+
+DormantLogicalIdentityOvertakesClaim ==
+  /\ timeoutPending
+  /\ localPending
+  /\ ticketActive
+  /\ ticketIsLater
+  /\ lastTransition' = "DormantLogicalOvertake"
+  /\ UNCHANGED <<runnerPhase, timeoutPending, localPending, ticketActive,
+                  ticketIsLater, ticketEpoch, lastDrainedEpoch,
+                  sharedHighWatermarkAdvanced>>
+
+ClaimPhysicalCutFixedRunner ==
+  ClaimRunsBeforeFreshDormantCarrier
+
+ClaimLogicalOvertakeBugRunner ==
+  DormantLogicalIdentityOvertakesClaim
+
+(***************************************************************************
+Claim ranked-kernel re-entry regression.
+
+The first fixed step lowers the structural rank only by installing an exact
+producer-continuation residual.  The next fair turn services that residual
+and re-enters the same ranked claim kernel; only the final step is auxiliary
+claim progress.  The mutant discards the ranked kernel on a raw lower-rank
+observation without publishing the continuation owner, leaving no enabled
+path to the retained claim.
+***************************************************************************)
+ClaimRankedReentryMutationInit ==
+  /\ runnerPhase = "Runtime"
+  /\ timeoutPending
+  /\ ~localPending
+  /\ ticketActive
+  /\ ~ticketIsLater
+  /\ ticketEpoch = FALSE
+  /\ lastDrainedEpoch = FALSE
+  /\ ~sharedHighWatermarkAdvanced
+  /\ lastTransition = "Initial"
+
+InstallClaimContinuationResidual ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ ~localPending
+  /\ lastTransition = "Initial"
+  /\ ticketActive' = FALSE
+  /\ localPending' = TRUE
+  /\ lastTransition' = "InstallContinuationResidual"
+  /\ UNCHANGED <<runnerPhase, timeoutPending, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch, sharedHighWatermarkAdvanced>>
+
+ServiceClaimContinuationAndReenterRankedKernel ==
+  /\ timeoutPending
+  /\ ~ticketActive
+  /\ localPending
+  /\ lastTransition = "InstallContinuationResidual"
+  /\ ticketActive' = TRUE
+  /\ localPending' = FALSE
+  /\ lastTransition' = "ContinuationRankedReentry"
+  /\ UNCHANGED <<runnerPhase, timeoutPending, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch, sharedHighWatermarkAdvanced>>
+
+ClaimAuxProgressAfterRankedReentry ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ ~localPending
+  /\ lastTransition = "ContinuationRankedReentry"
+  /\ timeoutPending' = FALSE
+  /\ ticketActive' = FALSE
+  /\ sharedHighWatermarkAdvanced' = TRUE
+  /\ lastTransition' = "ClaimAuxProgress"
+  /\ UNCHANGED <<runnerPhase, localPending, ticketIsLater, ticketEpoch,
+                  lastDrainedEpoch>>
+
+RawLowerRankDropsClaimKernel ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ ~localPending
+  /\ lastTransition = "Initial"
+  /\ ticketActive' = FALSE
+  /\ lastTransition' = "RawRankDescent"
+  /\ UNCHANGED <<runnerPhase, timeoutPending, localPending, ticketIsLater,
+                  ticketEpoch, lastDrainedEpoch,
+                  sharedHighWatermarkAdvanced>>
+
+ClaimRankedReentryFixedRunner ==
+  \/ InstallClaimContinuationResidual
+  \/ ServiceClaimContinuationAndReenterRankedKernel
+  \/ ClaimAuxProgressAfterRankedReentry
+
+ClaimRawDescentBugRunner ==
+  RawLowerRankDropsClaimKernel
+
 FixedRunner ==
   \/ OlderRuntimePrecedesServeIngress
   \/ TargetOnlyAfterOlderEpisode
@@ -306,6 +523,36 @@ LocalTargetFirstBugSpec ==
   /\ WF_MutationVars(AlwaysTargetFirstRunner)
   /\ WF_MutationVars(DrainExactIngressRecordToLocal)
 
+ContinuationCutFixedSpec ==
+  /\ ContinuationCutMutationInit
+  /\ [][ContinuationCutFixedRunner]_MutationVars
+  /\ WF_MutationVars(ContinuationCutFixedRunner)
+
+ContinuationOvertakeBugSpec ==
+  /\ ContinuationCutMutationInit
+  /\ [][ContinuationOvertakeBugRunner]_MutationVars
+  /\ WF_MutationVars(ContinuationOvertakeBugRunner)
+
+ClaimPhysicalCutFixedSpec ==
+  /\ ClaimPhysicalCutMutationInit
+  /\ [][ClaimPhysicalCutFixedRunner]_MutationVars
+  /\ WF_MutationVars(ClaimPhysicalCutFixedRunner)
+
+ClaimLogicalOvertakeBugSpec ==
+  /\ ClaimPhysicalCutMutationInit
+  /\ [][ClaimLogicalOvertakeBugRunner]_MutationVars
+  /\ WF_MutationVars(ClaimLogicalOvertakeBugRunner)
+
+ClaimRankedReentryFixedSpec ==
+  /\ ClaimRankedReentryMutationInit
+  /\ [][ClaimRankedReentryFixedRunner]_MutationVars
+  /\ WF_MutationVars(ClaimRankedReentryFixedRunner)
+
+ClaimRawDescentBugSpec ==
+  /\ ClaimRankedReentryMutationInit
+  /\ [][ClaimRawDescentBugRunner]_MutationVars
+  /\ WF_MutationVars(ClaimRawDescentBugRunner)
+
 FreshPostDrainRecordDoesNotReuseImmediateEpoch ==
   ticketActive => ticketEpoch # lastDrainedEpoch
 
@@ -337,5 +584,54 @@ SharedAdmissionAdvancesSchedulerHighWatermark ==
 EventuallyOlderTimeoutEpisodeRuns == <>(~timeoutPending)
 
 EventuallyOlderLocalEpisodeRuns == <>(~localPending)
+
+LaterContinuationCannotOwnTurnAheadOfAdmittedIngress ==
+  /\ timeoutPending
+  /\ ticketActive
+  /\ localPending
+  /\ ticketIsLater
+    => lastTransition # "ContinuationOvertake"
+
+PermittedContinuationRetainsFrozenIngressTarget ==
+  lastTransition = "PermittedContinuation"
+    => /\ timeoutPending
+       /\ ticketActive
+       /\ ~sharedHighWatermarkAdvanced
+
+EventuallyAdmittedIngressRuns == <>sharedHighWatermarkAdvanced
+
+FreshDormantReplayUsesPostClaimPhysicalPosition ==
+  /\ timeoutPending
+  /\ localPending
+  /\ ticketActive
+    => ticketIsLater
+
+DormantLogicalIdentityCannotOwnClaimTurn ==
+  /\ timeoutPending
+  /\ localPending
+  /\ ticketActive
+  /\ ticketIsLater
+    => lastTransition # "DormantLogicalOvertake"
+
+ClaimCutPersistsUntilAuxProgress ==
+  timeoutPending => ticketActive
+
+EventuallyClaimRunsBeforeDormantReplay == <>(~timeoutPending)
+
+ExplicitContinuationOwnsLowerRankExit ==
+  /\ timeoutPending
+  /\ ~ticketActive
+    => localPending
+
+ContinuationReentryRetainsClaim ==
+  lastTransition = "ContinuationRankedReentry"
+    => /\ timeoutPending
+       /\ ticketActive
+       /\ ~localPending
+
+RawRankDescentCannotEraseClaimKernel ==
+  lastTransition # "RawRankDescent"
+
+EventuallyClaimAuxProgressAfterContinuation == <>(~timeoutPending)
 
 =============================================================================

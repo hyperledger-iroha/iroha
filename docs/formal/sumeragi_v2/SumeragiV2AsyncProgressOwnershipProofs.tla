@@ -5193,6 +5193,178 @@ PROOF
     <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
 
+THEOREM ExactLocalContinuationReplayPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    /\ AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node),
+                AsyncCandidateProducerContinuationExactLocalReplayStep(
+                  node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. LET candidate ==
+                  AsyncCandidateProducerContinuationSelectedLocalCandidate(
+                    node)
+           IN /\ AsyncRuntimeScalarTypeInvariant
+              /\ candidate.node = node
+              /\ ~CandidateScheduled(candidate)
+      BY <1>1, IsaT(300)
+         DEF AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationExactReplayIdentity,
+             AsyncCandidateProducerContinuationSelectedLocalCandidate,
+             AsyncCandidateProducerContinuationSelectedReplayRecord,
+             AsyncCandidateProducerContinuationSelectedResolutionRecord,
+             AsyncCandidateProducerContinuationResolutionRequired,
+             AsyncCandidateProducerContinuationResolutionReady,
+             AsyncCandidateProducerContinuationResolutionRecordsForNode,
+             AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+             AsyncCandidateProducerContinuationHandoffOwned,
+             AsyncCandidateProducerContinuationLocalReplayCarrier,
+             CandidateScheduled
+    <2>2. LET candidate ==
+                  AsyncCandidateProducerContinuationSelectedLocalCandidate(
+                    node)
+           IN /\ asyncCommandQueues' =
+                    [asyncCommandQueues EXCEPT
+                       ![node] = Append(@, candidate)]
+              /\ UNCHANGED
+                   <<asyncOutstandingWork,
+                     asyncDeferredCompletionQueues,
+                     asyncDeferredProgressQueues,
+                     asyncDeferredNormalQueues, asyncCausalQueues>>
+              /\ UNCHANGED
+                   <<asyncIoQueues, asyncOutstandingWork,
+                     asyncIoReadyCompletions,
+                     asyncLocalReadyCompletions>>
+              /\ UNCHANGED AsyncProgressOwnershipCoreVars
+              /\ UNCHANGED AsyncBusyConsumerVars
+      BY <1>1, Isa
+         DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationSelectedLocalCandidate,
+             EnqueueCandidate,
+             AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+             AsyncProgressOwnershipCoreVars, AsyncBusyConsumerVars,
+             AsyncIoVars, vars
+    <2>3. LET candidate ==
+                  AsyncCandidateProducerContinuationSelectedLocalCandidate(
+                    node)
+           IN /\ AsyncLogicalCandidateOwnershipInvariant'
+              /\ QueuedCandidates' = QueuedCandidates \cup {candidate}
+              /\ ActiveBusyCompletionCarrier \subseteq
+                   ActiveBusyCompletionCarrier'
+      BY <1>1, <2>1, <2>2,
+         FreshCommandAppendPreservesLogicalOwnership
+         DEF AsyncProgressOwnershipInvariant
+    <2>4. AsyncOutstandingCarrierInvariant'
+      BY <1>1, <2>2, AsyncOutstandingCarrierStutter
+         DEF AsyncProgressOwnershipInvariant
+    <2>5. /\ SerializedBusyOwnershipInvariant'
+           /\ BusyCompletionWitnessInvariant'
+      BY <1>1, <2>2, <2>3,
+         ProgressCoreFramePreservesBusyOwnership
+    <2> QED BY <2>3, <2>4, <2>5
+         DEF AsyncProgressOwnershipInvariant
+  <1> QED BY <1>1
+
+THEOREM ExactRuntimeContinuationReplayPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    /\ AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node),
+                AsyncCandidateProducerContinuationExactRuntimeReplayStep(
+                  node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+      BY <1>1, IsaT(300)
+         DEF ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             AsyncCandidateProducerContinuationExactReplayIdentity,
+             AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+             AsyncCandidateProducerContinuationSelectedReplayRecord,
+             AsyncCandidateProducerContinuationSelectedResolutionRecord,
+             AsyncCandidateProducerContinuationResolutionRequired,
+             AsyncCandidateProducerContinuationResolutionRecordsForNode,
+             AsyncCandidateProducerContinuationLocallyReconstructibleKinds,
+             AsyncCandidateProducerContinuationSourceClass,
+             AsyncPersistInstallCommandsForNodeThisStep,
+             AsyncPersistInstallCommandsThisStep,
+             AsyncPersistInstallCommandThisStep,
+             FifoRuntimeStep, DeferredDrainStep,
+             DeferredWorkOwnsRuntimeTurn, NextNodeCommand,
+             NextDeferredCommand,
+             RemoveNextNodeCommand, RemoveNextDeferredCommand,
+             DeferCommand, DiscardCommand,
+             ExecuteCommand, ExecuteRegularCommand,
+             ExecuteDecisionFetch, ExecuteSignProposal,
+             ExecuteSignVote, ExecuteFormPrepareQC,
+             ExecuteSignTimeout, ExecutePersistInstall,
+             ExecutePersistDecision, ExecuteRequestCertifiedBody,
+             ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
+             ExecuteRejectAuthenticatedJunk
+    <2>2. UNCHANGED AsyncIoVars
+      BY <1>1, <2>1
+         DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             AsyncIoTimeoutLifecycleRetirementTransition
+    <2>3. CASE DeferredDrainStep(node)
+      BY <1>1, <2>2, <2>3,
+         DeferredDrainPreservesProgressOwnership
+    <2>4. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>2, <2>4,
+         FifoRuntimePreservesProgressOwnership
+    <2> QED BY <1>1, <2>3, <2>4
+         DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep
+  <1> QED BY <1>1
+
+THEOREM ReplayRunNodeContinuationPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <1>1, <2>1,
+         ExactLocalContinuationReplayPreservesProgressOwnership
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      <3>1. UNCHANGED AsyncProgressOwnershipVars
+        BY <2>2, Isa
+           DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+               AsyncProgressOwnershipVars,
+               AsyncProgressOwnershipCoreVars,
+               AsyncBusyConsumerVars,
+               AsyncProgressOwnershipSchedulerVars,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3> QED BY <1>1, <3>1, AsyncProgressOwnershipStutter
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      BY <1>1, <2>3,
+         ExactRuntimeContinuationReplayPreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkPreservesProgressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
@@ -5206,17 +5378,19 @@ PROOF
                 RunNodeWork(node)
          PROVE AsyncProgressOwnershipInvariant'
     <2>1r. CASE
-              AsyncCandidateProducerContinuationResolutionRequired(node)
-      <3>1. ResolveRunNodeCandidateProducerContinuation(node)
-        BY <1>1, <2>1r DEF RunNodeWork
+              ResolveRunNodeCandidateProducerContinuation(node)
       <3>2. UNCHANGED AsyncProgressOwnershipVars
-        BY <3>1, Isa
+        BY <2>1r, Isa
            DEF ResolveRunNodeCandidateProducerContinuation,
                AsyncSchedulerExceptCausalControlAndNodeService,
                AsyncProgressOwnershipVars,
                AsyncProgressOwnershipCoreVars,
                AsyncProgressOwnershipSchedulerVars, vars
       <3> QED BY <1>1, <3>2, AsyncProgressOwnershipStutter
+    <2>1p. CASE
+              ReplayRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>1p,
+         ReplayRunNodeContinuationPreservesProgressOwnership
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, LocalAdmissionPreservesProgressOwnership
     <2>2. CASE IngressDrainStep(node)
@@ -5238,7 +5412,8 @@ PROOF
     <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>5,
          SerializedLocalPredecessorPreservesProgressOwnership
-    <2> QED BY <1>1, <2>1r, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>1r, <2>1p, <2>1, <2>2, <2>3, <2>4,
+                 <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 

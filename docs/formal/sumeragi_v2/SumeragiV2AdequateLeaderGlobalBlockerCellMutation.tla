@@ -5,26 +5,26 @@ EXTENDS Naturals
 This mutation isolates the equal-rank witness-swap defect in the
 adequate-leader global-blocker closure.
 
-The rank-only specification may replace the frozen source cell with an
-unrelated cell at the same service rank.  Fairly servicing and replenishing
-that replacement does not release the original cell, so the original-cell
-progress property has a fair lasso.
+The rank-only specification may select an unrelated cell at the same service
+rank as the frozen source cell.  Fairly servicing and replenishing that
+replacement does not release the original cell, so the original-cell progress
+property has a fair lasso.
 
-The exact-cell specification carries the frozen cell identity through
-selection.  Its fair service action therefore releases the original cell
-before unrelated equal-rank replenishment can continue.
+The exact-cell specification selects the frozen cell identity.  Both
+specifications use the same service action, so selection identity is the only
+red/green semantic difference.
 ***************************************************************************)
 
 VARIABLES originalOwned, replacementGeneration, selectedCell
 
 vars == <<originalOwned, replacementGeneration, selectedCell>>
 
-Cells == {"Original", "Replacement"}
+Cells == {"Unselected", "Original", "Replacement"}
 
 CellRank(cell) ==
-  IF cell \in Cells
+  IF cell \in {"Original", "Replacement"}
   THEN <<2, 1>>
-  ELSE <<3, 1>>
+  ELSE <<0, 0>>
 
 TypeInvariant ==
   /\ originalOwned \in BOOLEAN
@@ -32,56 +32,53 @@ TypeInvariant ==
   /\ selectedCell \in Cells
 
 SelectedCellHasOriginalRank ==
-  CellRank(selectedCell) = CellRank("Original")
+  \/ selectedCell = "Unselected"
+  \/ CellRank(selectedCell) = CellRank("Original")
 
-RankOnlyInit ==
+Init ==
   /\ originalOwned = TRUE
   /\ replacementGeneration = 0
-  /\ selectedCell = "Original"
+  /\ selectedCell = "Unselected"
 
 SelectEqualRankReplacement ==
   /\ originalOwned
-  /\ selectedCell = "Original"
+  /\ selectedCell = "Unselected"
   /\ selectedCell' = "Replacement"
   /\ UNCHANGED <<originalOwned, replacementGeneration>>
 
-ServiceAndReplenishReplacement ==
+SelectFrozenOriginal ==
   /\ originalOwned
-  /\ selectedCell = "Replacement"
-  /\ replacementGeneration' = 1 - replacementGeneration
-  /\ UNCHANGED <<originalOwned, selectedCell>>
+  /\ selectedCell = "Unselected"
+  /\ selectedCell' = "Original"
+  /\ UNCHANGED <<originalOwned, replacementGeneration>>
+
+ServiceSelectedCell ==
+  /\ originalOwned
+  /\ selectedCell \in {"Original", "Replacement"}
+  /\ IF selectedCell = "Original"
+        THEN /\ originalOwned' = FALSE
+             /\ UNCHANGED replacementGeneration
+        ELSE /\ originalOwned' = TRUE
+             /\ replacementGeneration' = 1 - replacementGeneration
+  /\ UNCHANGED selectedCell
 
 RankOnlyNext ==
-  SelectEqualRankReplacement \/ ServiceAndReplenishReplacement
+  SelectEqualRankReplacement \/ ServiceSelectedCell
 
 RankOnlySpec ==
-  /\ RankOnlyInit
+  /\ Init
   /\ [][RankOnlyNext]_vars
   /\ WF_vars(SelectEqualRankReplacement)
-  /\ WF_vars(ServiceAndReplenishReplacement)
-
-ExactCellInit == RankOnlyInit
-
-ServiceExactOriginalCell ==
-  /\ originalOwned
-  /\ selectedCell = "Original"
-  /\ originalOwned' = FALSE
-  /\ UNCHANGED <<replacementGeneration, selectedCell>>
-
-ChurnReplacementAfterOriginalService ==
-  /\ ~originalOwned
-  /\ replacementGeneration' = 1 - replacementGeneration
-  /\ selectedCell' = "Replacement"
-  /\ UNCHANGED originalOwned
+  /\ WF_vars(ServiceSelectedCell)
 
 ExactCellNext ==
-  ServiceExactOriginalCell \/ ChurnReplacementAfterOriginalService
+  SelectFrozenOriginal \/ ServiceSelectedCell
 
 ExactCellSpec ==
-  /\ ExactCellInit
+  /\ Init
   /\ [][ExactCellNext]_vars
-  /\ WF_vars(ServiceExactOriginalCell)
-  /\ WF_vars(ChurnReplacementAfterOriginalService)
+  /\ WF_vars(SelectFrozenOriginal)
+  /\ WF_vars(ServiceSelectedCell)
 
 OriginalCellEventuallyReleased ==
   originalOwned ~> ~originalOwned

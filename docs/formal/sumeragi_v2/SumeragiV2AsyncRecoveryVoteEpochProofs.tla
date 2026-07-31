@@ -11,8 +11,11 @@ conjuncts in one invariant makes the final temporal proof an ordinary
 Init/Next induction rather than an implicit reachability claim.
 
 Replay tracks the exact ingress-admission owner read by `RunNodeWork`.
-Restart also clears the node's Serve reservations, but reservation emptiness
-is not an enabledness gate and is therefore not added as a stronger premise.
+Restart independently revalidates every unsealed active-height Serve
+lifecycle and persists its typed terminal before replay becomes visible.
+Consequently replay observes neither a physical Serve carrier nor requester-
+dependent Dormant/AwaitingRetry debt; the monotone lifecycle and scheduler
+high-watermarks remain retained.
 ***************************************************************************)
 
 AsyncRecoveryExecutionInvariant ==
@@ -1015,6 +1018,14 @@ BY IsaT(1200)
        AsyncSchedulerExceptServiceActivation,
        AsyncNonCrashStep, AsyncRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        RunHistoricalServer, HistoricalIdleStep,
        AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
        AsyncNonClockVars, OpenHistoricalRecovery,
@@ -1047,12 +1058,27 @@ BY IsaT(1200)
        AsyncIoVars, AsyncDeferredVars,
        AsyncLocalAdmissionVars, vars
 
+THEOREM AsyncInitEstablishesLeaderWireIngressCarrierOwnership ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncLeaderWireIngressCarrierOwnershipInvariant
+BY FS_CardinalityType, Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncLeaderWireIngressCarrierOwnershipInvariant,
+       AsyncLeaderWireIngressCarrierCoordinates,
+       AsyncLeaderWireLifecycleIngressProtected,
+       AsyncLeaderWireAdmissionMatchesRecord,
+       AsyncLeaderWireLifecycleIdentityDerivable,
+       AsyncChunkExactLifecycleCoordinatesRetained,
+       IngressLane, IngressLaneDepth
+
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
   /\ ReceivedTimeoutVotePoolInvariant
   /\ AsyncRecoveryTypeInvariant
   /\ AsyncRestartAuthorityInvariant
@@ -1093,10 +1119,16 @@ PROOF
              AsyncNextCertifiedResponseClaimOrdinal,
              AsyncCandidateServiceTombstones,
              AsyncNextCandidateServiceOrdinal,
-             AsyncCandidateServiceTombstoneSet
+             AsyncCandidateServiceTombstoneSet,
+             AsyncCandidateProducerContinuationLifecycleCoverageInvariant,
+             AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn,
+             AsyncCandidateProducerContinuationLifecycleCoveredIn
     <2>3a. AsyncCertifiedResponseClaimIngressOwnershipInvariant
       BY <1>1, EmptyCertifiedResponseClaimHasIngressOwnership
          DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit
+    <2>3d. AsyncLeaderWireIngressCarrierOwnershipInvariant
+      BY <1>1,
+         AsyncInitEstablishesLeaderWireIngressCarrierOwnership
     <2>4. ReceivedTimeoutVotePoolInvariant
       BY <1>1, AsyncInitEstablishesTimeoutPoolInvariant
     <2>5. /\ AsyncRecoveryTypeInvariant
@@ -1118,8 +1150,8 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>4, <2>5,
-                <2>6, <2>7
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>3d, <2>4,
+                <2>5, <2>6, <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1158,6 +1190,7 @@ PROOF
            /\ AsyncSchedulerTypeInvariant
            /\ AsyncControlServiceStateTypeInvariant
            /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+           /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
            /\ ReceivedTimeoutVotePoolInvariant
            /\ AsyncRecoveryTypeInvariant
            /\ AsyncRestartAuthorityInvariant
@@ -1187,6 +1220,13 @@ PROOF
       BY <1>1, <2>1,
          CertifiedResponseClaimIngressOwnershipStutter
          DEF AsyncAllVars, AsyncSchedulerVars
+    <2>4c. AsyncLeaderWireIngressCarrierOwnershipInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncLeaderWireIngressCarrierOwnershipInvariant,
+             AsyncLeaderWireIngressCarrierCoordinates,
+             AsyncChunkExactLifecycleCoordinatesRetained,
+             IngressLane
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>1,
          AsyncAllVarsStutterPreservesTimeoutPoolInvariant
@@ -1210,8 +1250,8 @@ PROOF
     <2>8. AsyncSerializedBusyKernelInvariant'
       BY <2>1, <2>2,
          CoreVarsStutterPreservesSerializedBusyKernelInvariant
-    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
-                <2>8
+    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6,
+                <2>7, <2>8
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1861,7 +1901,23 @@ BY RestartSignatureReplayCommandsAreSignatures,
    RestartReplayReplayingCandidateShape,
    SMTT(180), Isa
    DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, LocalAdmissionStep, AdmitProducerCompletion,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       ResponsiveReplayQuarantined,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       LocalAdmissionStep, AdmitProducerCompletion,
        AdmitCausalHead, IngressDrainStep, DrainFairIngressSelected,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
@@ -1906,12 +1962,14 @@ BY RestartSignatureReplayCommandsAreSignatures,
        SequenceSet, vars
 
 (***************************************************************************
-Replay entry removes every exact-Serve ingress admission owned by the
-recovering node.  The only transition which can add such an admission is
-`AdmitHiddenPacket`; replay quarantine excludes the recovering node from that
-action.  Drain and receiver-close transitions only transform or remove
-existing admission records.  The lemmas below make that transition audit
-explicit before the execution invariant consumes it.
+Replay entry removes every active exact-Serve ingress selector owner for the
+recovering node.  Durable undrained waiters remain only as dormant debt;
+physically drained lifecycles have no old scheduler ticket, and volatile
+policy-rejection occurrences are discarded.  The only transition which can
+add an active admission is `AdmitHiddenPacket`; replay quarantine excludes the
+recovering node from that action.  Drain and receiver-close transitions only
+transform or remove existing active records.  The lemmas below make that
+transition audit explicit before the execution invariant consumes it.
 ***************************************************************************)
 THEOREM ServeIngressAdmissionStutterPreservesOwnerIdentities ==
   \A owner:
@@ -2020,12 +2078,30 @@ BY ReplayingNetworkStepPreservesEmptyRecoveryIngressOwners,
        AsyncIoVars, AsyncServeIngressAdmissionVars,
        AsyncRecoveryVars
 
+THEOREM ReplayRunNodeContinuationPreservesEmptyServeIngressOwners ==
+  \A owner, node:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
+BY ServeIngressAdmissionStutterPreservesOwnerIdentities, IsaT(180)
+   DEF ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncIoTimeoutLifecycleRetirementTransition,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       AsyncIoVars, AsyncServeIngressAdmissionVars,
+       AsyncServeLifecycleVars, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, vars
+
 THEOREM RunNodeWorkPreservesEmptyServeIngressOwners ==
   \A owner, node:
     /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
     /\ RunNodeWork(node)
     => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
 BY PopSelectedIngressDoesNotCreateServeIngressOwners,
+   ReplayRunNodeContinuationPreservesEmptyServeIngressOwners,
    ServeIngressAdmissionStutterPreservesOwnerIdentities,
    IsaT(300)
    DEF RunNodeWork, LocalAdmissionStep,
@@ -2275,6 +2351,33 @@ BY Isa
    DEF RunHistoricalServer, DrainHistoricalIngressSelected,
        HistoricalIdleStep, vars
 
+THEOREM ReplayRunNodeContinuationLeavesOutstandingTags ==
+  \A node:
+    ReplayRunNodeCandidateProducerContinuation(node)
+      => UNCHANGED asyncOutstandingTags
+PROOF
+  <1>1. ASSUME NEW node,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE UNCHANGED asyncOutstandingTags
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <2>1, Isa
+         DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <2>2, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncSchedulerExceptCausalControlRunnerAndNodeService
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      BY <2>3, DeferredDrainStepLeavesOutstandingTags,
+         FifoRuntimeStepLeavesOutstandingTags, Isa
+         DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkOutstandingTagsFrame ==
   \A node:
     /\ AsyncTypeInvariant
@@ -2299,6 +2402,9 @@ PROOF
       BY <2>1r, Isa
          DEF ResolveRunNodeCandidateProducerContinuation,
              AsyncSchedulerExceptCausalControlAndNodeService
+    <2>1p. CASE
+              ReplayRunNodeCandidateProducerContinuation(node)
+      BY <2>1p, ReplayRunNodeContinuationLeavesOutstandingTags
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
@@ -2329,7 +2435,8 @@ PROOF
       BY <2>5, Isa DEF AsyncServeIngressTargetOnlyTurn, vars
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <2>6, SerializedLocalPredecessorLeavesOutstandingTags
-    <2> QED BY <1>1, <2>1r, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <1>1, <2>1r, <2>1p, <2>2, <2>3, <2>4, <2>5,
+                 <2>6
          DEF RunNodeWork
   <1> QED BY <1>1
 
@@ -2584,12 +2691,15 @@ THEOREM ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness ==
     /\ asyncRecoveryPhase = "Replaying"
     /\ UNCHANGED AsyncRecoveryControlVars
     /\ (SerializedRuntimeStep(node)
-          \/ SerializedRuntimePrecedesServeIngressStep(node))
+          \/ SerializedRuntimePrecedesServeIngressStep(node)
+          \/ AsyncCandidateProducerContinuationExactRuntimeReplayStep(node))
     => SequenceSet(asyncRecoveryReplayQueue)' \cap
          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
 BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
    DEF SerializedRuntimeStep,
-       SerializedRuntimePrecedesServeIngressStep, RuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       RuntimeStep,
        DeferredDrainStep, FifoRuntimeStep,
        DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
@@ -2638,6 +2748,85 @@ BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
        AsyncCandidateWithIdentity, CandidateConsumerCurrent,
        SequenceSet, AsyncRecoveryControlVars, vars
 
+THEOREM ReplayingContinuationExactLocalReplayDoesNotCreateRecoveryCandidate ==
+  \A node:
+    /\ AsyncTypeInvariant
+    /\ AsyncRecoveryTypeInvariant
+    /\ asyncRecoveryPhase = "Replaying"
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    /\ AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+    => ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
+         \subseteq
+           ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
+BY SequenceSetAfterAppend, SMTT(45), Isa
+   DEF ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateProducerContinuationRecordSet,
+       AsyncCandidateProducerContinuationRecord,
+       ResponsiveReplayQuarantined,
+       EnqueueCandidate,
+       ResponsiveReplayScheduledCandidates,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, CandidateScheduled,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncRecoveryTypeInvariant, AsyncCommandQueueOwnership,
+       SequenceSet, vars
+
+THEOREM ReplayingReplayRunNodeContinuationPreservesRecoveryCandidateFreshness ==
+  \A node:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncRecoveryTypeInvariant
+    /\ AsyncRecoveryExecutionInvariant
+    /\ asyncRecoveryPhase = "Replaying"
+    /\ UNCHANGED AsyncRecoveryControlVars
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => SequenceSet(asyncRecoveryReplayQueue)' \cap
+         ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
+PROOF
+  <1>1. ASSUME NEW node,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncRecoveryTypeInvariant,
+                AsyncRecoveryExecutionInvariant,
+                asyncRecoveryPhase = "Replaying",
+                UNCHANGED AsyncRecoveryControlVars,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE SequenceSet(asyncRecoveryReplayQueue)' \cap
+                 ResponsiveReplayScheduledCandidates(
+                   asyncRecoveryNode)' = {}
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <1>1, <2>1,
+         ReplayingContinuationExactLocalReplayDoesNotCreateRecoveryCandidate,
+         Isa
+         DEF AsyncRecoveryExecutionInvariant,
+             AsyncRecoveryControlVars, AsyncRecoveryVars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <1>1, <2>2, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncRecoveryExecutionInvariant,
+             ResponsiveReplayScheduledCandidates,
+             QueuedCandidates, DeferredCandidates, CausalCandidates,
+             TrackedWorkCandidates,
+             AsyncRecoveryControlVars, AsyncRecoveryVars, SequenceSet, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      BY <1>1, <2>3,
+         ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness ==
   \A node:
     /\ StrongInductiveInvariant
@@ -2653,6 +2842,7 @@ BY ReplayingLocalAdmissionDoesNotCreateRecoveryCandidate,
    ReplayingSerializedLocalPredecessorDoesNotCreateRecoveryCandidate,
    ReplayingIngressDrainDoesNotCreateRecoveryCandidate,
    ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness,
+   ReplayingReplayRunNodeContinuationPreservesRecoveryCandidateFreshness,
    Isa
    DEF RunNodeWork, SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -2785,6 +2975,7 @@ PROOF
     <2>1. asyncOutstandingTags[node] = {}
       BY <1>1 DEF AsyncRecoveryExecutionInvariant
     <2>1a. \/ ResolveRunNodeCandidateProducerContinuation(node)
+            \/ ReplayRunNodeCandidateProducerContinuation(node)
             \/ LocalAdmissionStep(node)
             \/ IngressDrainStep(node)
             \/ SerializedRunnerRuntimeStep(node)
@@ -2796,6 +2987,10 @@ PROOF
       BY <2>1, <2>1r, Isa
          DEF ResolveRunNodeCandidateProducerContinuation,
              AsyncSchedulerExceptCausalControlAndNodeService
+    <2>1p. CASE
+              ReplayRunNodeCandidateProducerContinuation(node)
+      BY <2>1, <2>1p,
+         ReplayRunNodeContinuationLeavesOutstandingTags
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>1, <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
@@ -2810,7 +3005,8 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <2>1, <2>6,
          SerializedLocalPredecessorLeavesOutstandingTags
-    <2> QED BY <2>1a, <2>1r, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <2>1a, <2>1r, <2>1p, <2>2, <2>3, <2>4, <2>5,
+                 <2>6
   <1> QED BY <1>1
 
 THEOREM ReplayingRunNodeWorkPreservesRecoveryTags ==
@@ -2896,14 +3092,23 @@ THEOREM ResetNodeSchedulerForRestartSetsOutstandingTags ==
            [asyncOutstandingTags EXCEPT ![node] = {}]
 BY DEF ResetNodeSchedulerForRestart
 
-THEOREM ResetNodeSchedulerForRestartClearsServeIngressOwners ==
+THEOREM ResetNodeSchedulerForRestartDischargesServeIngressDebt ==
   \A node, replay:
     ResetNodeSchedulerForRestart(node, replay)
-      => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
-BY Isa
-   DEF ResetNodeSchedulerForRestart,
-       AsyncServeIngressAdmissionsWithoutNode,
-       AsyncServeIngressLifecycleOwnerIdentities,
+      => /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+         /\ AsyncServeOffQueueReservations(node)' = {}
+         /\ \A admission \in asyncServeAdmissions:
+              admission.node = node
+                => \E terminal \in asyncServeTombstones':
+                     /\ terminal.node = admission.node
+                     /\ terminal.identity = admission.identity
+                     /\ terminal.family = admission.family
+                     /\ terminal.view = admission.view
+                     /\ terminal.ordinal = admission.ordinal
+BY SameHeightRestartDischargesEveryLocalServeLifecycle,
+   SameHeightRestartPreservesServeHighWatermarks,
+   Isa
+   DEF AsyncServeIngressLifecycleOwnerIdentities,
        AsyncServeIngressAdmissionIdentities
 
 THEOREM UniqueReplayTailPreservesUniqueValues ==
@@ -3133,7 +3338,8 @@ PROOF
       BY <1>1, Isa DEF PreGstResponsiveReplay
     <2>6b. AsyncServeIngressLifecycleOwnerIdentities(
               asyncRecoveryNode)' = {}
-      BY <2>3, ResetNodeSchedulerForRestartClearsServeIngressOwners
+      BY <2>3,
+         ResetNodeSchedulerForRestartDischargesServeIngressDebt
     <2>6a. SequenceHasUniqueValues(asyncRecoveryReplayQueue')
       <3> DEFINE Node == asyncRecoveryNode
       <3> DEFINE Signatures == RestartSignatureReplay(Node)
@@ -3515,6 +3721,7 @@ THEOREM AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType ==
   /\ AsyncNext
   => AsyncControlServiceStateTypeInvariant'
 BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
+   AsyncControlServiceTransitionPreservesCandidateProducerContinuationLifecycleCoverage,
    AsyncCandidateLifecycleDistinctNewRootsReceiveDistinctOwnership,
    AsyncCandidateLifecycleHighWatermarkAdvancesByFullFreshSet,
    AsyncServeIngressSharedHighWatermarkAdvancesByFreshTickets,
@@ -3615,6 +3822,9 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncOrderedScheduledOriginsForNodeAfter,
        AsyncFirstScheduledOriginIndexAfter,
        AsyncControlServiceStateTypeInvariant,
+       AsyncCandidateProducerContinuationLifecycleCoverageInvariant,
+       AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn,
+       AsyncCandidateProducerContinuationLifecycleCoveredIn,
        AsyncControlServiceRecordSet,
        AsyncControlServiceRecord,
        AsyncControlServiceSlots,
@@ -3678,6 +3888,56 @@ PROOF
          AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType
   <1> QED BY <1>1
 
+THEOREM AsyncNextPreservesLeaderWireIngressCarrierOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => AsyncLeaderWireIngressCarrierOwnershipInvariant'
+BY AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut,
+   AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix,
+   AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier,
+   AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle,
+   CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner,
+   LeaderWireIngressDrainNeverInventsRuntimeOwner,
+   RuntimeLeaderWireCannotRetireMerelyFromIngressPop,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically,
+   AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal,
+   LeaderWireIngressAdmissionRefinesLifecycleTransition,
+   LeaderWireIngressDrainRefinesLifecycleTransition,
+   LeaderWireLastConsumerRefinesLifecycleTransition,
+   LeaderWireTerminalRetirementRefinesLifecycleTransition,
+   LeaderWireRestartReopenRefinesLifecycleTransition,
+   FS_CardinalityType, FS_Subset, IsaT(7200)
+   DEF AsyncStrongTypeInvariant,
+       AsyncLeaderWireIngressCarrierOwnershipInvariant,
+       AsyncLeaderWireIngressCarrierCoordinates,
+       AsyncLeaderWireLifecycleIngressProtected,
+       AsyncLeaderWireAdmissionMatchesRecord,
+       AsyncLeaderWireLifecycleIdentityDerivable,
+       AsyncChunkExactLifecycleCoordinatesRetained,
+       AsyncLeaderWireLifecycleTransition,
+       AsyncLeaderWireLifecycleIngressAdmissionTransition,
+       AsyncLeaderWireLifecycleIngressDrainTransition,
+       AsyncLeaderWireLifecycleConsumerTransition,
+       AsyncLeaderWireLifecycleTerminalTransition,
+       AsyncLeaderWireLifecycleRestartTransition,
+       AsyncLeaderWireLifecycleStateAfterIngressAdmission,
+       AsyncLeaderWireLifecycleRecordAfterIngressDrain,
+       AsyncLeaderWireLifecyclesAfterIngressDrain,
+       AsyncLeaderWireLifecycleStateAfterConsumerStep,
+       AsyncLeaderWireLifecycleRecordAfterRestart,
+       AsyncLeaderWireLifecyclesAfterRestart,
+       RetireLeaderWireLifecycleSlot,
+       AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       PopSelectedIngress, DrainFairIngressSelected,
+       DrainHistoricalIngressSelected,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       AsyncAllVars, AsyncSchedulerVars, IngressLane
+
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
     => AsyncStrongTypeInvariant'
@@ -3703,6 +3963,8 @@ PROOF
     <2>2f. AsyncSerializedBusyKernelInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2g. AsyncCertifiedResponseClaimIngressOwnershipInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2j. AsyncLeaderWireIngressCarrierOwnershipInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2h. AsyncControlServiceStateTypeInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
@@ -3741,8 +4003,11 @@ PROOF
     <2>11. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
       BY <1>1, <2>2, <2>2g,
          AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant
+    <2>12. AsyncLeaderWireIngressCarrierOwnershipInvariant'
+      BY <1>1, <2>2j,
+         AsyncNextPreservesLeaderWireIngressCarrierOwnership
     <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
-                <2>8, <2>9, <2>10, <2>11
+                <2>8, <2>9, <2>10, <2>11, <2>12
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 

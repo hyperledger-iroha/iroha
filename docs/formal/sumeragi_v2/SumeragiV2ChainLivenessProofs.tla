@@ -1194,24 +1194,28 @@ BY IndexedAdequateLeaderFixedDeadlineDisseminationAndExposureSupplyLocalConverge
 (***************************************************************************
 Release-facing declaration.
 
-This remains proofless until the indexed product supplies the fresh-self
-quantitative provider bundle, the previously closed starvation dependency
-needed by qualitative DirectTimeout dissemination, and target-local
-fresh-self corridor exposure.  The theorem above routes the resulting local
-Decision convergence through the three reviewed historical residuals,
-successor starvation freedom, and the separately closed rotating-leader/
-application one-height result.  The live chain premise is exactly the indexed
-product and the explicit environmental `IndexedGstEventuallyCondition`.
+The indexed product now supplies the fresh-self quantitative deadline and
+qualitative dissemination property from the exact substituted Async state,
+projected bracket steps, concrete selected-owner fairness, and local
+activation.  Target-local fresh-self exposure is proved independently.  The
+theorem above routes their resulting local Decision convergence through the
+three reviewed historical residuals, successor starvation freedom, and the
+separately closed rotating-leader/application one-height result.  The live
+chain premise is exactly the indexed product and the explicit environmental
+`IndexedGstEventuallyCondition`.
 Bounded TLC generation exhaustion is diagnostic only; the live model uses
 `Nat`, and production physical nonexhaustion follows from strict same-view
 Prepare-rank ascent.  Keeping the declaration here makes the remaining
-provider debts visible without adding a synthetic ledger entry or pretending
-the production safety/refinement seam is a temporal theorem.
+environmental boundary visible without adding a synthetic ledger entry or
+pretending the production safety/refinement seam is a temporal theorem.
 ***************************************************************************)
 THEOREM HeightLivenessObligation ==
   /\ IndexedLiveChainSpec
   /\ IndexedGstEventuallyCondition
   => IndexedHeightLivenessProperty
+BY IndexedLiveChainSpecProvidesLocalAdequateLeaderFixedDeadlineAndResponsiveDissemination,
+   IndexedLiveChainSpecProvidesLocalAdequateLeaderFreshSelfCorridorExposure,
+   IndexedHeightLivenessFromFixedDeadlineDisseminationAndExposureProofs
 
 
 =============================================================================

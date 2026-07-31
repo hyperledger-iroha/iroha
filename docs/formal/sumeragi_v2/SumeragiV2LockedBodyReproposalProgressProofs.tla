@@ -602,7 +602,8 @@ THEOREM RetainedLockAsyncInitEstablishesCandidateServiceLifecycle ==
   \A initialContext:
     AsyncInitAt(initialContext)
       => AsyncCandidateServiceLifecycleInvariant
-BY Isa
+BY AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision,
+   Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceLifecycleInvariant,
@@ -628,6 +629,7 @@ THEOREM RetainedLockAsyncNextPreservesCandidateServiceLifecycle ==
   /\ AsyncNext
   => AsyncCandidateServiceLifecycleInvariant'
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision,
    AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
    AsyncNextPreservesCandidateProducerContinuationScheduledExclusion,
    AsyncCandidateServicesThisStepIsSingleton,

@@ -16,6 +16,7 @@ readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"
 readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"
 readonly NORMALIZER="${REPO_ROOT}/scripts/normalize_sumeragi_v2_tlc_trace.py"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -113,6 +114,7 @@ if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then
   echo "TLC did not emit the expected decision witness (status=${tlc_status})" >&2
   exit 1
 fi
+sumeragi_v2_tlc_assert_regular_log "replay-decision-witness" "$tlc_log"
 
 if ! python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" >"$normalized_trace"; then
   echo "TLC decision witness normalization failed" >&2

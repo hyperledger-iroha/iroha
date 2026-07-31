@@ -23,8 +23,7 @@ reduced to the exact Decision-stage service
 pipeline retained by the final witness layer.  Height productivity is closed
 by the exact tick-blocked Runtime proof: weak fairness returns every undecided
 responsive voter to Local, while durable Decision receipts accumulate over the
-finite frozen roster.  The one declaration without proof is the complete
-remaining abstract temporal debt.  The leader declaration is the conjunction
+finite frozen roster.  The leader closure below is the conjunction
 of exact scheduler-origin readiness, physical transport/ordinary-runner/
 timeout-quorum convergence, and target/context/leader/view/subject-indexed
 semantic phase composition.  Its occurrence rank counts every distinct
@@ -116,6 +115,12 @@ BY AsyncLiveProvidesAdequateLeaderExactResidualKernel,
 THEOREM AdequateLeaderExactClosureResidualObligation ==
   \A initialContext:
     AdequateLeaderExactClosureResidualProperty(AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecSuppliesAdequateLeaderFixedDeadlineAndResponsiveDissemination,
+   AdequateLeaderFixedDeadlineAndDisseminationCloseExactResidual,
+   PTL
+   DEF AdequateLeaderExactClosureResidualProperty,
+       AdequateLeaderExactResidualKernelProperty,
+       AdequateLeaderLocalTargetDecisionConvergenceProperty
 
 THEOREM AdequateLeaderServiceKernelObligation ==
   \A initialContext:

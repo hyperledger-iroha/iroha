@@ -8,11 +8,13 @@ An honest certified response is a transport completion.  Its outer `source`
 is therefore the aggregate untrusted relay/resource hop.  The response
 separately retains the exact signed-request hash, authenticated current
 archive server, archive signature owner, and explicit frozen-QC signer
-citation.  The fixed ownership predicate follows the request hash and cited
+citation.  V5 requires the archive server itself to belong to the frozen
+CommitQC signer set while keeping it distinct from the outer relay.  The fixed
+ownership predicate follows the request hash, archive signer, and cited
 responder.  The mutant incorrectly treats the outer relay source as the
 CommitQC signer and consequently loses the Decision recovery owner when the
 response candidate is scheduled.  The legacy fixed Mode string is retained
-for the frozen runner configuration; it now selects this explicit projection.
+for the frozen runner configuration.
 
 This small model isolates the source projection used by
 `DecisionCertifiedFetchOwned`.  It is bounded mutation evidence, not a proof
@@ -30,7 +32,8 @@ RemoteSigner == "validator-1"
 OtherSigner == "validator-2"
 RotatedArchive == "archive-current-9"
 AsyncUntrustedSource == "untrusted-transport-hop"
-Validators == {Node, RemoteSigner, OtherSigner, "validator-3"}
+Validators ==
+  {Node, RemoteSigner, OtherSigner, RotatedArchive, "validator-3"}
 
 RecoveryContext ==
   [chain |-> "sora",
@@ -46,7 +49,7 @@ CommitQc ==
    view |-> RecoveryView,
    phase |-> "Commit",
    subject |-> RecoverySubject,
-   signers |-> {Node, RemoteSigner, OtherSigner}]
+   signers |-> {Node, RemoteSigner, OtherSigner, RotatedArchive}]
 
 ExactRequestPreimage ==
   [round |-> [height |-> RecoveryContext.height, view |-> RecoveryView],
@@ -122,7 +125,7 @@ HonestCertifiedResponseShape ==
   /\ Node \in CommitQc.signers
   /\ RemoteSigner \in CommitQc.signers \ {Node}
   /\ AsyncUntrustedSource \notin Validators
-  /\ RotatedArchive \notin CommitQc.signers
+  /\ RotatedArchive \in CommitQc.signers \ {Node}
   /\ CertifiedResponse.source = AsyncUntrustedSource
   /\ CertifiedRequest.source = Node
   /\ CertifiedRequest.envelope.recipient = RotatedArchive
@@ -141,6 +144,7 @@ ExplicitCitedResponderOwnsResponse ==
   /\ CertifiedResponse.envelope.requestHash = ExactRequestHash
   /\ CertifiedResponse.envelope.signatureOwner =
        CertifiedResponse.envelope.archiveServer
+  /\ CertifiedResponse.envelope.archiveServer \in CommitQc.signers
   /\ CertifiedResponse.envelope.citedResponder \in CommitQc.signers
   /\ candidateScheduled
 

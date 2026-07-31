@@ -117,9 +117,9 @@ use super::{
     v2_chunks::{V2ChunkError, encode_payload},
     v2_recovery::PendingKuraApply,
     v2_runtime::{
-        BodyAvailableReservation, DecisionProposalRetirement, EnqueueError, NetworkIngressError,
-        LeaderWireRuntimeTerminal, RetiredBodyPipelineCompletions, RuntimeClockError,
-        RuntimeEffectOwnership, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
+        BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
+        LeaderWireRuntimeTerminal, NetworkIngressError, RetiredBodyPipelineCompletions,
+        RuntimeClockError, RuntimeEffectOwnership, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
         RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
     },
     v2_transport::{
@@ -2262,11 +2262,8 @@ pub(crate) trait EffectRuntime {
     /// Reserve or release the scheduler-visible proposal producer for one
     /// authoritative view. Production retains it only when this node is the
     /// frozen-roster leader.
-    fn reconcile_active_view_producer(
-        &mut self,
-        tag: EventTag,
-        retain: bool,
-    ) -> Result<(), String>;
+    fn reconcile_active_view_producer(&mut self, tag: EventTag, retain: bool)
+    -> Result<(), String>;
     /// Retire the exact view producer only after its Proposal and chunks enter
     /// guarded remote fanout with the inherited lifecycle owner.
     fn complete_active_view_producer_after_proposal_fanout(
@@ -2504,7 +2501,9 @@ impl EffectRuntime for SerializedV2Runtime {
     fn take_leader_wire_runtime_terminals(
         &mut self,
     ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
-        Ok(SerializedV2Runtime::take_leader_wire_runtime_terminals(self))
+        Ok(SerializedV2Runtime::take_leader_wire_runtime_terminals(
+            self,
+        ))
     }
 
     fn set_external_lifecycle_owners(
@@ -4382,7 +4381,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if self.retained_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services)
-                .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
             if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
                 return Err(self.close(error, services));
             }
@@ -4443,7 +4444,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if self.retained_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services)
-                .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
             if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
                 return Err(self.close(error, services));
             }
@@ -9133,8 +9136,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             !tag.strictly_advances(owner.tag) || retained_apply_owners.contains(key)
         });
 
-        let retain_local_producer =
-            self.local_validator == Some(self.context.leader(tag.view()));
+        let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
             .reconcile_active_view_producer(tag, retain_local_producer)
             .map_err(EffectExecutorError::Runtime)?;
@@ -9735,10 +9737,7 @@ mod tests {
         external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
         external_lifecycle_owner_capacity: Option<usize>,
         active_view_producer_retained: bool,
-        completed_proposal_fanouts: Vec<(
-            wire::ConsensusRound,
-            RuntimeEffectOwnership,
-        )>,
+        completed_proposal_fanouts: Vec<(wire::ConsensusRound, RuntimeEffectOwnership)>,
         leader_wire_terminal_batches: VecDeque<Vec<LeaderWireRuntimeTerminal>>,
         leader_wire_terminal_after_lock: Option<LeaderWireRuntimeTerminal>,
         leader_wire_terminal_after_decision: Option<LeaderWireRuntimeTerminal>,
@@ -20240,10 +20239,8 @@ mod tests {
     #[test]
     fn leader_wire_terminal_batch_attempts_every_owner_after_one_transfer_fails() {
         let fixture = Fixture::new();
-        let (_first_directory, first) =
-            leader_wire_runtime_terminal_fixture(&fixture, 95);
-        let (_second_directory, second) =
-            leader_wire_runtime_terminal_fixture(&fixture, 96);
+        let (_first_directory, first) = leader_wire_runtime_terminal_fixture(&fixture, 95);
+        let (_second_directory, second) = leader_wire_runtime_terminal_fixture(&fixture, 96);
         let mut executor = fixture.executor(EffectQueueConfig::default());
         executor
             .runtime
@@ -20253,9 +20250,7 @@ mod tests {
         services.fail_on = Some("leader-wire-terminal");
 
         assert!(
-            executor
-                .consume_effects(Vec::new(), &mut services)
-                .is_err(),
+            executor.consume_effects(Vec::new(), &mut services).is_err(),
             "the first injected terminal-transfer failure must fail closed"
         );
         assert_eq!(

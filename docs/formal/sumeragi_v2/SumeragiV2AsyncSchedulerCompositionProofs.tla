@@ -626,6 +626,102 @@ PROOF
     <2> QED BY <2>2, <2>4
   <1> QED BY <1>1
 
+THEOREM ReplayRunNodeContinuationPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      <3> DEFINE Record ==
+             AsyncCandidateProducerContinuationSelectedReplayRecord(node)
+      <3> DEFINE Candidate == Record.candidate
+      <3>1. /\ AsyncCandidateTyped(Candidate)
+             /\ ProgressCommitSource(Candidate)
+             /\ EnqueueCandidate(Candidate)
+        BY <1>1, <2>1, Isa
+           DEF Record, Candidate,
+               AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncControlServiceStateTypeInvariant,
+               AsyncCandidateProducerContinuationExactLocalReplayStep,
+               AsyncCandidateProducerContinuationSelectedLocalCandidate,
+               AsyncCandidateProducerContinuationSelectedReplayRecord,
+               AsyncCandidateProducerContinuationSelectedResolutionRecord,
+               AsyncCandidateProducerContinuationResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationRecordSet,
+               AsyncCandidateProducerContinuationRecord,
+               AsyncCandidateProducerContinuationSourceClass,
+               AsyncCandidateProducerContinuationLocallyReconstructibleKinds,
+               ProgressCommitSource, ProgressCommitVoteHistory
+      <3>2. QueuedProgressCommitHistoryInvariant'
+        BY <1>1, <3>1,
+           EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>3. UNCHANGED <<asyncDeferredProgressQueues,
+                        asyncCausalQueues>>
+        BY <2>1, Isa
+           DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+               AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+               AsyncDeferredVars
+      <3>4. /\ DeferredProgressCommitHistoryInvariant'
+             /\ CausalProgressCommitHistoryInvariant'
+             /\ ProtectedDeferredProgressInvariant'
+        BY <1>1, <3>3,
+           UnchangedDeferredProgressQueuesPreserveCommitHistory,
+           UnchangedCausalQueuesPreserveProgressCommitHistory,
+           LockAdvancePreservesProtectedDeferredProgressInvariant
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               ProgressFrontierAction
+      <3> QED BY <3>2, <3>4
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      <3>1. UNCHANGED <<asyncCommandQueues,
+                        asyncDeferredProgressQueues,
+                        asyncCausalQueues>>
+        BY <2>2, Isa
+           DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+               AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+               AsyncDeferredVars
+      <3> QED BY <1>1, <3>1,
+           UnchangedSchedulerCarriersPreserveProgressCommitSlots
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1,
+           RuntimeStepPreservesProgressCommitSlotInvariant
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkPreservesProgressCommitSlotInvariant ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
@@ -660,6 +756,7 @@ PROOF
                /\ CausalProgressCommitHistoryInvariant'
                /\ ProtectedDeferredProgressInvariant'
     <2>1. \/ ResolveRunNodeCandidateProducerContinuation(node)
+           \/ ReplayRunNodeCandidateProducerContinuation(node)
            \/ LocalAdmissionStep(node)
            \/ IngressDrainStep(node)
            \/ SerializedRunnerRuntimeStep(node)
@@ -676,6 +773,10 @@ PROOF
                AsyncSchedulerExceptCausalControlAndNodeService
       <3> QED BY <1>1, <3>1,
            UnchangedSchedulerCarriersPreserveProgressCommitSlots
+    <2>1p. CASE
+              ReplayRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>1p,
+         ReplayRunNodeContinuationPreservesProgressCommitSlotInvariant
     <2>2. CASE LocalAdmissionStep(node)
       BY <1>1, <2>2,
          LocalAdmissionPreservesProgressCommitSlotInvariant
@@ -700,7 +801,8 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>6,
          SerializedLocalPredecessorPreservesProgressCommitSlotInvariant
-    <2> QED BY <2>1, <2>1r, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <2>1, <2>1r, <2>1p, <2>2, <2>3, <2>4, <2>5,
+                 <2>6
   <1> QED BY <1>1
 
 THEOREM RunHistoricalServerLeavesProgressCarriers ==

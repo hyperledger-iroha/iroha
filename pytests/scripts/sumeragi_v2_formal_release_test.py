@@ -19,10 +19,10 @@ HEAD = "1" * 40
 TREE = "2" * 40
 LOCK = "3" * 64
 FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
-    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness/"
-    "liveness-ownership/historical-discovery-rank mutations, bounded TLC, "
-    "trace replay, and production Verus"
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
+    "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
+    "recovery/ownership mutations, bounded TLC, trace replay, and production "
+    "Verus"
 )
 
 
@@ -45,6 +45,7 @@ def _fixture(
     checker_status: int = 0,
     cross_tool_required: bool = False,
     emit_cross_tool: bool | None = None,
+    skip_artifact: str | None = None,
 ) -> tuple[Path, dict[str, str], Path]:
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -82,19 +83,25 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
       >target/formal/sumeragi_v2/verus_evidence.json
     printf '%s\n' 'fixture production Verus verification passed' \
       >target/formal/sumeragi_v2/verus.log
-    printf '%s\n' \
-      $'schema_version\t1' \
-      $'backend\tapalache' \
-      $'result_count\t3' \
-      >target/formal/sumeragi_v2/multilane_apalache_evidence.tsv
-    printf '%s\n' \
-      '{{"event":"start","memory_limit_bytes":2147483648,"sample_interval_seconds":0.25,"schema_version":1}}' \
-      '{{"accounting_method":"rss","event":"sample","memory_bytes":4096,"memory_limit_bytes":2147483648,"physical_footprint_bytes":0,"process_count":1,"rss_bytes":4096,"schema_version":1}}' \
-      '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
-      >target/formal/sumeragi_v2/tlaps_resource.jsonl
-    printf '%s\n' \
-      '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
-      >target/formal/sumeragi_v2/tlaps_resource_summary.json
+    if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != multilane_apalache_evidence.tsv ]]; then
+      printf '%s\n' \
+        $'schema_version\t1' \
+        $'backend\tapalache' \
+        $'result_count\t3' \
+        >target/formal/sumeragi_v2/multilane_apalache_evidence.tsv
+    fi
+    if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != tlaps_resource.jsonl ]]; then
+      printf '%s\n' \
+        '{{"event":"start","memory_limit_bytes":2147483648,"sample_interval_seconds":0.25,"schema_version":1}}' \
+        '{{"accounting_method":"rss","event":"sample","memory_bytes":4096,"memory_limit_bytes":2147483648,"physical_footprint_bytes":0,"process_count":1,"rss_bytes":4096,"schema_version":1}}' \
+        '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
+        >target/formal/sumeragi_v2/tlaps_resource.jsonl
+    fi
+    if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != tlaps_resource_summary.json ]]; then
+      printf '%s\n' \
+        '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
+        >target/formal/sumeragi_v2/tlaps_resource_summary.json
+    fi
     if [[ "${{FORMAL_EMIT_CROSS_TOOL:-0}}" == 1 ]]; then
       printf '%s\n' '{{"backend_verification":true,"canonical":true}}' \
         >target/formal/sumeragi_v2/cross_tool_evidence.json
@@ -186,12 +193,17 @@ esac
     env["FORMAL_CHECKER_STATUS"] = str(checker_status)
     env["FORMAL_CROSS_TOOL_REQUIRED"] = "1" if cross_tool_required else "0"
     env["FORMAL_EMIT_CROSS_TOOL"] = "1" if emit_cross_tool else "0"
+    env["FORMAL_SKIP_ARTIFACT"] = skip_artifact or ""
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = MANIFEST
     env["JAVA_BIN"] = str(tools["java"])
     env["TLAPM_BIN"] = str(tools["tlapm"])
     env["TLA2TOOLS_JAR"] = str(tools["tla2tools.jar"])
     evidence = tmp_path / "evidence"
     env["SUMERAGI_V2_FORMAL_EVIDENCE_DIR"] = str(evidence)
+    if skip_artifact is not None:
+        stale_artifact = repo / "target" / "formal" / "sumeragi_v2" / skip_artifact
+        stale_artifact.parent.mkdir(parents=True, exist_ok=True)
+        stale_artifact.write_text("stale evidence from a prior run\n", encoding="utf-8")
     return launcher, env, evidence
 
 
@@ -327,6 +339,33 @@ def test_formal_launcher_preserves_pipeline_failure_without_completion(
     assert result.returncode == 1
     assert "formal release command failed (gate=73, tee=0)" in result.stderr
     assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
+
+
+def test_formal_launcher_rejects_stale_artifact_when_gate_skips_regeneration(
+    tmp_path: Path,
+) -> None:
+    for stale_artifact in (
+        "multilane_apalache_evidence.tsv",
+        "tlaps_resource.jsonl",
+        "tlaps_resource_summary.json",
+    ):
+        case_dir = tmp_path / stale_artifact.replace(".", "-")
+        launcher, env, evidence = _fixture(case_dir, skip_artifact=stale_artifact)
+
+        result = _run(launcher, env)
+
+        assert result.returncode == 1
+        assert "did not produce regular TLAPS/Verus/multilane Apalache evidence" in (
+            result.stderr
+        )
+        assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
+        assert not (
+            launcher.parents[1]
+            / "target"
+            / "formal"
+            / "sumeragi_v2"
+            / stale_artifact
+        ).exists()
 
 
 @pytest.mark.parametrize("gate_mode", ["no-marker", "duplicate-marker"])

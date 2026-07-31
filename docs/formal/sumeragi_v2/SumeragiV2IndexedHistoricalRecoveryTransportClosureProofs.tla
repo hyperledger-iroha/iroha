@@ -335,7 +335,9 @@ fairness premise.
 The Candidate tombstone and Serve reservation/tombstone high-watermark are
 included explicitly because the fixed-clock producer episode consumes those
 finite namespaces before occurrence-rank descent; that episode itself is not
-called progress.
+called progress.  Producer-continuation external coverage and reserved Local
+replay capacity are included because a selected historical runner is enabled
+only after both ownership cases are closed.
 ***************************************************************************)
 
 IndexedHistoricalTemporalSupportAt(initialContext) ==
@@ -345,6 +347,10 @@ IndexedHistoricalTemporalSupportAt(initialContext) ==
        AsyncStrongTypeInvariant
   /\ IndexedHistoricalTransport(initialContext)!
        AsyncProgressOwnershipInvariant
+  /\ IndexedHistoricalTransport(initialContext)!
+       AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ IndexedHistoricalTransport(initialContext)!
+       AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
   /\ IndexedHistoricalTransport(initialContext)!
        DecisionTimeoutFrontierInvariant
   /\ IndexedHistoricalTransport(initialContext)!
@@ -384,52 +390,62 @@ PROOF
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesProgressOwnership
     <2>4. IndexedHistoricalTransport(initialContext)!
+             AsyncCandidateProducerContinuationExternalCoverageInvariant
+      BY <2>1,
+         IndexedHistoricalTransport(initialContext)!
+           AsyncInitEstablishesCandidateProducerContinuationExternalCoverage
+    <2>5. IndexedHistoricalTransport(initialContext)!
              DecisionTimeoutFrontierInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesDecisionTimeoutFrontier
-    <2>5. IndexedHistoricalTransport(initialContext)!
+    <2>6. IndexedHistoricalTransport(initialContext)!
              DecisionFrontierUniquenessInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesDecisionFrontierUniqueness
-    <2>6. IndexedHistoricalTransport(initialContext)!
+    <2>7. IndexedHistoricalTransport(initialContext)!
              PostGstReplayQuarantineExcluded
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitExcludesPostGstReplayQuarantine
-    <2>7. IndexedHistoricalTransport(initialContext)!
+    <2>8. IndexedHistoricalTransport(initialContext)!
              ExactDecisionFanoutRetentionInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesExactDecisionFanoutRetention
-    <2>8. IndexedHistoricalTransport(initialContext)!
+    <2>9. IndexedHistoricalTransport(initialContext)!
              Stage2BusyKernelInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            Stage2BusyKernelInitObligation
-    <2>9. IndexedHistoricalTransport(initialContext)!
+    <2>10. IndexedHistoricalTransport(initialContext)!
              AsyncDeferredHandoffOwnershipInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesDeferredHandoffOwnership
-    <2>10. IndexedHistoricalTransport(initialContext)!
+    <2>11. IndexedHistoricalTransport(initialContext)!
              HistoricalTemporalIdentityLifecycleInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            HistoricalTemporalInitEstablishesIdentityLifecycle
-    <2>11. IndexedHistoricalTransport(initialContext)!
+    <2>12. IndexedHistoricalTransport(initialContext)!
              HistoricalCommitCertificateRequestCompletenessInvariant
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesHistoricalCommitRequestCompleteness
-    <2>12. IndexedHistoricalTransport(initialContext)!
+    <2>13. IndexedHistoricalTransport(initialContext)!
               AsyncFrozenContextAt(initialContext)
       BY <2>1,
          IndexedHistoricalTransport(initialContext)!
            AsyncInitEstablishesFrozenContext
+    <2>14. IndexedHistoricalTransport(initialContext)!
+              AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      BY <2>1,
+         IndexedHistoricalTransport(initialContext)!
+           AsyncInitEstablishesCandidateProducerContinuationLocalReplayCapacity
     <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7,
-                 <2>8, <2>9, <2>10, <2>11, <2>12
+                 <2>8, <2>9, <2>10, <2>11, <2>12, <2>13, <2>14
          DEF IndexedHistoricalTemporalSupportAt
   <1> QED BY <1>1
 
@@ -467,62 +483,76 @@ PROOF
            IndexedHistoricalTransport(initialContext)!
              AsyncBracketNextPreservesProgressOwnership
       <3>5. IndexedHistoricalTransport(initialContext)!
+               AsyncCandidateProducerContinuationExternalCoverageInvariant'
+        BY <3>1, <3>2,
+           IndexedHistoricalTransport(initialContext)!
+             AsyncNextPreservesCandidateProducerContinuationExternalCoverage,
+           Isa
+           DEF IndexedHistoricalTemporalSupportAt,
+               IndexedHistoricalTransport!AsyncAllVars
+      <3>6. IndexedHistoricalTransport(initialContext)!
                DecisionTimeoutFrontierInvariant'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              AsyncBracketPreservesDecisionTimeoutFrontier
            DEF IndexedHistoricalTemporalSupportAt
-      <3>6. IndexedHistoricalTransport(initialContext)!
+      <3>7. IndexedHistoricalTransport(initialContext)!
                DecisionFrontierUniquenessInvariant'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              AsyncBracketPreservesStrongDecisionFrontier
            DEF IndexedHistoricalTemporalSupportAt,
                IndexedHistoricalTransport!AsyncStrongTypeInvariant
-      <3>7. IndexedHistoricalTransport(initialContext)!
+      <3>8. IndexedHistoricalTransport(initialContext)!
                PostGstReplayQuarantineExcluded'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              AsyncNextPreservesPostGstReplayQuarantineExclusion
            DEF IndexedHistoricalTemporalSupportAt
-      <3>8. IndexedHistoricalTransport(initialContext)!
+      <3>9. IndexedHistoricalTransport(initialContext)!
                ExactDecisionFanoutRetentionInvariant'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              AsyncNextPreservesExactDecisionFanoutRetention
            DEF IndexedHistoricalTemporalSupportAt
-      <3>9. IndexedHistoricalTransport(initialContext)!
+      <3>10. IndexedHistoricalTransport(initialContext)!
                Stage2BusyKernelInvariant'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              Stage2BusyKernelNextObligation
            DEF IndexedHistoricalTemporalSupportAt
-      <3>10. IndexedHistoricalTransport(initialContext)!
+      <3>11. IndexedHistoricalTransport(initialContext)!
                AsyncDeferredHandoffOwnershipInvariant'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              Stage2AsyncNextPreservesDeferredHandoffOwnership
            DEF IndexedHistoricalTemporalSupportAt
-      <3>11. (IndexedHistoricalTransport(initialContext)!
+      <3>12. (IndexedHistoricalTransport(initialContext)!
                HistoricalTemporalIdentityLifecycleInvariant)'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              HistoricalTemporalBracketPreservesIdentityLifecycle
            DEF IndexedHistoricalTemporalSupportAt
-      <3>12. (IndexedHistoricalTransport(initialContext)!
+      <3>13. (IndexedHistoricalTransport(initialContext)!
                HistoricalCommitCertificateRequestCompletenessInvariant)'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              AsyncBracketPreservesHistoricalCommitRequestCompleteness
            DEF IndexedHistoricalTemporalSupportAt
-      <3>13. (IndexedHistoricalTransport(initialContext)!
+      <3>14. (IndexedHistoricalTransport(initialContext)!
                 AsyncFrozenContextAt(initialContext))'
         BY <3>1, <3>2,
            IndexedHistoricalTransport(initialContext)!
              AsyncNextPreservesFrozenContext
            DEF IndexedHistoricalTemporalSupportAt
+      <3>15. IndexedHistoricalTransport(initialContext)!
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant'
+        BY <3>1, <3>2,
+           IndexedHistoricalTransport(initialContext)!
+             AsyncBracketNextPreservesCandidateProducerContinuationLocalReplayCapacity
+           DEF IndexedHistoricalTemporalSupportAt
       <3> QED BY <3>3, <3>4, <3>5, <3>6, <3>7, <3>8,
-                   <3>9, <3>10, <3>11, <3>12, <3>13
+                   <3>9, <3>10, <3>11, <3>12, <3>13, <3>14, <3>15
            DEF IndexedHistoricalTemporalSupportAt
     <2> QED BY <2>1
   <1> QED BY <1>1
@@ -1120,11 +1150,13 @@ PROOF
                    IndexedChainSpec)
           BY <1>1, <3>1,
              IndexedChainSpecAndPacketServiceResidualProvidePhysicalKernels
-        <4> QED BY <4>1,
+        <4> QED BY <3>1, <4>1,
+             IndexedChainSpecAlwaysHistoricalTemporalSupport,
              IndexedHistoricalTransport(initialContext)!
                HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves
              DEF IndexedHistoricalTransport(initialContext)!
-                   HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual
+                   HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual,
+                 IndexedHistoricalTemporalSupportAt
       <3>2. CASE ~IndexedChainSpec
         BY <3>2
            DEF IndexedHistoricalTransport(initialContext)!
@@ -11753,6 +11785,8 @@ BY IndexedChainSpecAlwaysHistoricalTemporalSupport,
        IndexedHistoricalTransport!HistoricalCommitRequestLifecycleRank,
        IndexedHistoricalTransport!ExactDecisionRequestLifecycleIngressRank,
        IndexedHistoricalTransport!
+         ExactDecisionRequestIngressContinuationPrefixCleared,
+       IndexedHistoricalTransport!
          ExactDecisionRequestIngressProducerEpisodeBudget,
        IndexedHistoricalTransport!AsyncAllVars
 
@@ -11841,6 +11875,8 @@ BY IndexedChainSpecAlwaysHistoricalTemporalSupport,
          HistoricalDecisionRequestLifecycleResidual,
        IndexedHistoricalTransport!HistoricalDecisionRequestLifecycleRank,
        IndexedHistoricalTransport!ExactDecisionRequestLifecycleIngressRank,
+       IndexedHistoricalTransport!
+         ExactDecisionRequestIngressContinuationPrefixCleared,
        IndexedHistoricalTransport!
          ExactDecisionRequestIngressProducerEpisodeBudget,
        IndexedHistoricalTransport!AsyncAllVars

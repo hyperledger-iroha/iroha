@@ -622,7 +622,13 @@ BY AsyncNextAdvancesNodeViews,
    DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
        Safety, CandidateConsumerCurrent, AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep, RunNode, RunNodeWork,
-       SerializedRuntimeStep, FifoRuntimeStep, ExecuteCommand,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       FifoRuntimeStep, ExecuteCommand,
        ExecutePersistInstall, PersistInstallTC, vars
 
 THEOREM RankedLeaderOwnerExitIsExecutionDiscardPacemakerOrTerminal ==
@@ -642,7 +648,13 @@ BY PostGstCurrentConsumerRetirementAdvancesPacemakerCoordinate, Isa
        ProtectedCandidateOwned, CandidateScheduled,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        PostGstRunNode, RunNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        DiscardCommand, DeferCommand
 
@@ -2882,6 +2894,69 @@ BY IsaT(900)
        TrackedWorkCandidates, SequenceSet,
        AsyncNext, AsyncControlServiceSlotTransition
 
+THEOREM AsyncContinuationReplayPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                ExactLeaderSchedulerOriginInductionContext,
+                AsyncNext,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE ExactLeaderSchedulerOriginProvenanceInvariant'
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <1>1, <2>1, IsaT(1500)
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant,
+             ExactLeaderSchedulerOriginProvenanceInvariant,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationExactReplayIdentity,
+             AsyncCandidateProducerContinuationSelectedLocalCandidate,
+             AsyncCandidateProducerContinuationSelectedReplayRecord,
+             AsyncCandidateProducerContinuationSelectedResolutionRecord,
+             AsyncCandidateProducerContinuationResolutionRequired,
+             AsyncCandidateProducerContinuationResolutionReady,
+             AsyncCandidateProducerContinuationResolutionRecordsForNode,
+             AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+             AsyncCandidateProducerContinuationHandoffOwned,
+             AsyncCandidateProducerContinuationLocalReplayCarrier,
+             AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+             AsyncCandidateProducerContinuationRecordAfterStep,
+             AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+             EnqueueCandidate,
+             DispatchableSameIdentityLeaderOwner,
+             ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+             ExactLeaderSchedulerParked,
+             ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+             CommandExecutionReady, CommandDispatchable,
+             CandidateScheduled, CandidateScheduledAfter,
+             CandidateScheduledIn,
+             QueuedCandidates, DeferredCandidates, CausalCandidates,
+             TrackedWorkCandidates, SequenceSet,
+             AsyncNext, AsyncControlServiceSlotTransition
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <1>1, <2>2,
+         ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant,
+             ExactLeaderSchedulerReadinessFrame,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1,
+           AsyncRuntimePreservesExactLeaderSchedulerOriginProvenance
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM AsyncRunNodeWorkPreservesExactLeaderSchedulerOriginProvenance ==
   \A node \in ValidatorIds:
     /\ ExactLeaderSchedulerOriginInductionContext
@@ -2907,6 +2982,10 @@ PROOF
              AsyncCandidateServiceStateAfterReclamation,
              AsyncControlServiceSlotTransition,
              AsyncNext
+    <2>0p. CASE
+             ReplayRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>0p,
+         AsyncContinuationReplayPreservesExactLeaderSchedulerOriginProvenance
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1,
          AsyncLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance
@@ -2931,7 +3010,8 @@ PROOF
         BY <2>5 DEF SerializedLocalPrecedesServeIngressStep
       <3> QED BY <1>1, <3>1,
            AsyncSelectedLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance
-    <2> QED BY <1>1, <2>0, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>0, <2>0p, <2>1, <2>2, <2>3, <2>4,
+                 <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 
@@ -5621,6 +5701,8 @@ THEOREM AdequateLeaderProtectedIngressWindowPreventsTimeoutOvertake ==
                 /\ (RunNodeWork(node)
                       => \/ ResolveRunNodeCandidateProducerContinuation(
                                node)
+                         \/ ReplayRunNodeCandidateProducerContinuation(
+                              node)
                          \/ AsyncServeIngressTargetOnlyTurn(node)))
 BY AdequateLeaderProtectedIngressLifecyclePrecedesTimeout,
    AsyncLeaderWireIngressTicketExcludesLaterLocalWork,
@@ -8468,7 +8550,8 @@ THEOREM AsyncInitEstablishesCandidateServiceTombstoneLifecycle ==
   \A initialContext:
     AsyncInitAt(initialContext)
       => AsyncCandidateServiceTombstoneLifecycleInvariant
-BY Isa
+BY AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision,
+   Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceTombstoneLifecycleInvariant,
@@ -8495,6 +8578,7 @@ THEOREM AsyncNextPreservesCandidateServiceTombstoneLifecycle ==
   /\ AsyncNext
   => AsyncCandidateServiceTombstoneLifecycleInvariant'
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision,
    AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
    AsyncCandidateServicesThisStepIsSingleton,
    AsyncCandidateTerminalRetirementsThisStepIsSingleton,
@@ -8522,7 +8606,24 @@ BY AsyncNextPreservesControlServiceStateTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep, RuntimeStep,
        DrainFairIngressSelected, AdmitCausalHead,
        AdmitProducerCompletion, ServiceIoWorkerWork,
@@ -8776,9 +8877,11 @@ AdequateLeaderTargetServicedCandidateOwnerIdentitySet(
 (***************************************************************************
 Producer-continuation retirement memory.
 
-Across a pre-GST restart, only a Terminal record paired with the exact durable
-candidate-service tombstone is stable.  That stricter predicate remains
-available below for reset/replay consumers.
+Across a pre-GST restart, a Terminal producer-continuation record is stable
+exactly when its retirement is durable, it has the matching retained
+candidate-service tombstone, or the exact lifecycle reservation is no longer
+covered.  That three-way predicate remains available below for reset/replay
+consumers.
 
 Inside the frozen post-GST corridor, restart is disabled.  The selected
 owner's exact Terminal record is therefore sufficient retirement memory.  If

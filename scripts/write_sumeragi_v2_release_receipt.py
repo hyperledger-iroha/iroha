@@ -179,9 +179,10 @@ _IDENTITY_KEYS = {
     "cargo_lock_sha256",
 }
 _FORMAL_FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
-    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
-    "mutations, bounded TLC, trace replay, and production Verus"
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
+    "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
+    "recovery/ownership mutations, bounded TLC, trace replay, and production "
+    "Verus"
 )
 _SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
 _SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -353,7 +354,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 785
+_PRODUCTION_TEST_COUNT = 806
 _G_UNIT_TEST_COUNT = 280
 _G_UNIT_GROUPS = (
     (
@@ -439,7 +440,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        38,
+        40,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -470,11 +471,11 @@ _PRODUCTION_MODULES = (
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 43),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 52),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 33),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 120),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -1091,7 +1092,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-formal-launcher",
                 "pytest",
-                24,
+                26,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py",
             ),

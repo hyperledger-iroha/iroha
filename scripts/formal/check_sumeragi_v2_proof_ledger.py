@@ -207,6 +207,17 @@ ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
 ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
+# These two shards carry the reviewed exact-ingress and producer-continuation
+# proof seams.  Keep their narrow, source-current ceilings explicit so one
+# additional line or theorem still fails instead of silently raising the
+# limit for every release shard.
+ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
+    "SumeragiV2AsyncInstallRunnerProofs": 5_775,
+    "SumeragiV2AsyncProgressOwnershipProofs": 5_658,
+}
+ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
+    "SumeragiV2AsyncInstallRunnerProofs": 156,
+}
 ASYNC_LIVENESS_THEOREM_MAX_LINES = 600
 ASYNC_LIVENESS_THEOREM_MAX_STEPS = 256
 ASYNC_NETWORK_RELEASE_THEOREMS = (
@@ -235,9 +246,9 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "DormantLeaderWireOwnsNoIngressSchedulerBarrier",
     "AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut",
     "AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal",
-    "AdmitDormantLeaderWireRetainsOrdinalsAndFrozenPrefix",
-    "AdmitDormantLeaderWirePreservesPotentialPredecessorOrdinals",
-    "AtomicDormantLeaderWireAdmissionConsumesRealPacketAndPotential",
+    "AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix",
+    "AdmitDormantLeaderWirePreservesLogicalPotentialPredecessors",
+    "AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier",
     "AsyncLeaderWireActionInertDormantHasNoExactAdmissionPacket",
     "AsyncLiveServeIngressDuplicateRetainsSchedulerOrdinal",
     "AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle",
@@ -476,11 +487,14 @@ ASYNC_LIVENESS_SHARDS = (
     ),
 )
 # The finite-runner closure is an acyclic side cone over Stage2 and the causal
-# work budget.  Deadlock imports that proved closure rather than the immediately
-# preceding chain shard; every other non-root shard imports its chain predecessor.
+# work budget.  Deadlock imports that proved closure plus the producer-
+# continuation coverage needed by its concrete readiness theorem rather than
+# the immediately preceding chain shard; every other non-root shard imports
+# its chain predecessor.
 ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
     "SumeragiV2AsyncDeadlockProofs": (
         "SumeragiV2AsyncFiniteRunnerEpisodeProofs",
+        "SumeragiV2AsyncCandidateProducerContinuationProofs",
     ),
 }
 ASYNC_LIVENESS_DEBT_SHARD = "SumeragiV2AsyncOutstandingLivenessDebt"
@@ -524,6 +538,7 @@ ASYNC_CAUSAL_EPISODE_PROOF_MODULES = (
     "SumeragiV2AsyncCausalWorkBudgetProofs",
     "SumeragiV2AsyncFiniteRunnerEpisodeProofs",
     "SumeragiV2AsyncCandidateProducerContinuationProofs",
+    "SumeragiV2AsyncHistoricalCandidateProducerContinuationProofs",
 )
 ADEQUATE_LEADER_CONTINUATION_PROOF_MODULES = (
     "SumeragiV2AdequateLeaderProducerTransportClosureProofs",
@@ -557,6 +572,7 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2EmptyProducerHandoffMutation.tla",
     "SumeragiV2ProducerOriginReservationMutation.tla",
     "SumeragiV2ProducerContinuationCausalRankMutation.tla",
+    "SumeragiV2ProducerReplayCapacityMutation.tla",
     "SumeragiV2RepresentativeLiveScopeMutation.tla",
     "SumeragiV2FixedCorridorPhysicalBudgetMutation.tla",
     "SumeragiV2FixedCorridorActionCreditMutation.tla",
@@ -635,6 +651,10 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "producer_origin_reservation_duplicate_retry_bug.cfg",
     "producer_continuation_causal_rank_fixed.cfg",
     "producer_continuation_causal_rank_stage_only_bug.cfg",
+    "producer_replay_capacity_fixed.cfg",
+    "producer_replay_capacity_blind_invariant_bug.cfg",
+    "producer_replay_capacity_non_atomic_replay_bug.cfg",
+    "producer_replay_capacity_replenishment_lasso_bug.cfg",
     "representative_live_scope_fixed.cfg",
     "representative_live_scope_missing_premise_bug.cfg",
     "fixed_corridor_physical_budget_fixed.cfg",
@@ -665,13 +685,19 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_ARTIFACTS = (
     "serve_scheduler_always_target_first_bug.cfg",
     "serve_scheduler_older_local_fixed.cfg",
     "serve_scheduler_local_target_first_bug.cfg",
+    "serve_scheduler_continuation_cut_fixed.cfg",
+    "serve_scheduler_continuation_overtake_bug.cfg",
+    "serve_scheduler_claim_physical_cut_fixed.cfg",
+    "serve_scheduler_claim_logical_overtake_bug.cfg",
+    "serve_scheduler_claim_ranked_reentry_fixed.cfg",
+    "serve_scheduler_claim_raw_descent_bug.cfg",
 )
 SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER = (
     "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh"
 )
 SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
     "SumeragiV2ServeSchedulerOrdinalMutation.tla": (
-        "14d6931231cac8b73f44ec8a0f16283e994aa3ef98dd67aeb2d71dbe9c705f40"
+        "7261a89801226b308edcf25f56e70292ea4585fb728ce1d0432f7fbf96763ced"
     ),
     "serve_scheduler_shared_ordinal_fixed.cfg": (
         "fc89024f227baa0f464ecdacdfd0541ea45badbf864de83f1153ad65f778ce35"
@@ -691,10 +717,54 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
     "serve_scheduler_local_target_first_bug.cfg": (
         "4b94b098b88f5dc7cc4ebd7f124e1dc4482774b8f937f01af7ee53e78396d975"
     ),
+    "serve_scheduler_continuation_cut_fixed.cfg": (
+        "8c1438e15e94ea36dba6c0d7e74665cd642ad69ea93cec72c418515cdd18e6ff"
+    ),
+    "serve_scheduler_continuation_overtake_bug.cfg": (
+        "3a431c32acb86b99982b9725e177a1d1e8f68d23269bda97835ff619fb43f80d"
+    ),
+    "serve_scheduler_claim_physical_cut_fixed.cfg": (
+        "c810fdb21b437594d4874cd0bd3267cf8ebc73ce9a4b892be991e2989ecb5255"
+    ),
+    "serve_scheduler_claim_logical_overtake_bug.cfg": (
+        "fd027c222c6a7a49d0988943bbbc2fe7369f07c0c68e1de1f9b2be9b214befb9"
+    ),
+    "serve_scheduler_claim_ranked_reentry_fixed.cfg": (
+        "4fd95ff86607654b53791658883fd191a6511c88aa74350ca23ab21a59e3268f"
+    ),
+    "serve_scheduler_claim_raw_descent_bug.cfg": (
+        "965b2f2b71534f09b8b2bcbc701729b44549edcd51f5d0d7ce3fe89da6c93584"
+    ),
     SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER: (
-        "b27d8782df4e5daaff8e331d71c15e05a0dc42064d4f37bc044934e51979bcf8"
+        "556a595942ccc943ffc0acc896ca967c70f9c363fda24b55bfa235f17e85ad10"
     ),
 }
+SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
+    (
+        "preflight and SANY execution",
+        "if (($#)); then",
+        "assert_nonzero_state_space() {",
+        "cd4e26166d5fefa8422eb53db4bbe68a6304f75b73d9b1c32be9bf7a94525d39",
+    ),
+    (
+        "nonzero state-space checker",
+        "assert_nonzero_state_space() {",
+        "run_tlc() {",
+        "37270a8ab03ab36ace3d8582867a16bdc00b93072b2be85f01f0c7f89a1ae6fe",
+    ),
+    (
+        "TLC status and terminal-marker checker",
+        "run_tlc() {",
+        'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
+        "2aadc6b5c6b1a8949af6540d9d0cd9c59bc4d4c1b565439a375f71b22ca8e943",
+    ),
+    (
+        "six-repaired then six-mutant execution tail",
+        'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
+        None,
+        "32263ec888f11ba49a9ae953043ec71ec06da855f2524fa1e271ae79c896d15c",
+    ),
+)
 SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2ServeSchedulerOrdinalMutation*.tla",
     "serve_scheduler_*.cfg",
@@ -731,7 +801,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_SHA256 = {
         "dabf0dfd92215a53e7acc51e974af2188aaa542bb437d7e81da77596a76300bc"
     ),
     COMMIT_IMPORT_PROVENANCE_MUTATION_RUNNER: (
-        "42e6c8de30d7c5670f2ed47a5d88f9448ae5d6992ff1e1c51ea75132ea37b849"
+        "129dbbcb237a97a636f0a52cfba725be87eee5dab6fa0833852891181271a899"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
@@ -753,6 +823,432 @@ _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
     "bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
     "bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
     "bash scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+)
+SHARED_TLC_RESULT_CONTRACT = (
+    "scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+)
+SHARED_TLC_RESULT_CONTRACT_CALLERS = (
+    "scripts/formal/check_sumeragi_v2_replay_trace.sh",
+    "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_inflight_first_release.sh",
+    "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_multilane_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_productive_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_progress_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_tlc.sh",
+    "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+)
+SHARED_TLC_RESULT_SPECIALIZED_CALLERS = (
+    "scripts/formal/check_sumeragi_v2_replay_trace.sh",
+    "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+    "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_tlc.sh",
+)
+SHARED_TLC_RESULT_CONTRACT_SHA256 = {
+    SHARED_TLC_RESULT_CONTRACT: (
+        "f89449d336dc4b6f3a9e7c78e3b05780e0d59ca7de200cce5669ca1fb9715f74"
+    ),
+    "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
+        "f9db394da086d89622c1459a7dd497c495b52774acacb1b498c1dd3efd60769e"
+    ),
+    "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
+        "e219267868924ac2318757007855d090f26d3613d69f5b0894ec50fe0180757b"
+    ),
+    "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
+        "1ca1f4aa0c48e43a8d671959621359fe935e8f3e641ac9a45c9ed71edfe40e84"
+    ),
+    "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
+        "a57cbd496d759f43f1082cdce6e65a69a241f2a3abfb25f0ea6a931c72fdc4dd"
+    ),
+    "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh": (
+        "b9b428904d383c42d1a7777ac33ec7fd0922ea5bca17f046883b8ab47b280f8d"
+    ),
+    "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh": (
+        "8f527b34e8e0bfc805aa308eafc1f0c76a07e87e77f73d5e4071bb436f471e1b"
+    ),
+    "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh": (
+        "c0194e00332dd0b9dfcee1298a04dc45821b192913e1156a24f4938f4690b120"
+    ),
+    "scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh": (
+        "8c2ebdb33f53f243e33c611dede252b42165da9e0f81fa89d75d9298b9cfda8f"
+    ),
+    "scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh": (
+        "129dbbcb237a97a636f0a52cfba725be87eee5dab6fa0833852891181271a899"
+    ),
+    "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh": (
+        "afec183a6cc8c5d1ff118e5e1676eb10877c0b43d6580fdfdd8574fa3b2a7932"
+    ),
+    "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh": (
+        "0c521f2d552215a2112254990d614b0e205fd134ddf2c78ce7525e1146efc137"
+    ),
+    "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
+        "46cc895ff6a6cbd410ab557dd887c264831fd65d5162df107d9736e71f2b9bc3"
+    ),
+    "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
+        "260779cbee48cb30ebc35573d3d6f5f86520487f34463cd1b8450ab8793d0c09"
+    ),
+    "scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh": (
+        "aa819a23d9ec07154c9a60534fcd191a4e39674ca197f6452b1e37480c58ef6f"
+    ),
+    "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
+        "65702851d065468bc417ee2dc28feaef00cfc5f439b229a9643038d10e4de58c"
+    ),
+    "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
+        "0b18255d2f7124f60097267b269f17a835ab20ea1cc8dec742e37b5b8adc4d14"
+    ),
+    "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh": (
+        "320f160009a54db1529e8e03290486931076ab778cfecb01431912fe3ca7c1d6"
+    ),
+    "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
+        "7d7c3e43d9ac792c3cb648ead7fef3a602cfa4df9818239987834d1227f846fe"
+    ),
+    "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
+        "3c6c0a192bcba0ec20519f913df82c1287d621d0a40ef2066dc8434ed62bd660"
+    ),
+    "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
+        "0a6edde7fd8f827a7af32005fc2436a3370d02d00801e7a0a974477f6a8f554f"
+    ),
+    "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh": (
+        "e0d59013a307e6693d447ab8ef80f4b3a67fcbb43bd5161eb99ec4ee90969e2e"
+    ),
+    "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh": (
+        "a0ff98fc89be2c5095b0c98e7a56fde83f48dd9b9ef53496d2603dc395080d03"
+    ),
+    "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
+        "a1dd1eb6d9e9c925210c55ba0ced6b63669cc0b1f33f4a8319e6645f5cdb8de5"
+    ),
+    "scripts/formal/run_sumeragi_v2_progress_mutations.sh": (
+        "80c4d36d5aef2aed9d5ddd500cc3500344e7cf8b044a329dbe815b65689daa17"
+    ),
+    "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh": (
+        "04cf6200d9a8f0db91518087b3918c6037ab92b56ccb5e86ae9bda4f77c9fb14"
+    ),
+    "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh": (
+        "b1f66896acf7b68d2e2648bfd73e23d69d430ad50a475047b07811e30da06aa0"
+    ),
+    "scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh": (
+        "2647986ff71237568e0e4a6f08e2e906006cbd579bf61c7891ec3eb6036ac675"
+    ),
+    "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh": (
+        "878b9b930f1b348d4122a9323dce4d0a08b8899418d3e3f41e8bd451f2ae1274"
+    ),
+    "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
+        "2628cc89a4e15ae1981ce0822a6133f5248b779a1e494f4eadfce1c58f8bbd88"
+    ),
+    "scripts/formal/run_sumeragi_v2_tlc.sh": (
+        "30b3b26e59a8f0d1792211f6d987498dee848f48865151c7fc36933f83e65abd"
+    ),
+    "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
+        "b3cbbcf89f2706b63aca2b5ea78ed118107b881b46f7ca293858ffb8d7f98ed2"
+    ),
+}
+SHARED_TLC_RESULT_BRANCH_PROFILES = {
+    "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 1),
+    "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
+        6,
+        5,
+        0,
+        1,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
+        6,
+        40,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh": (
+        1,
+        2,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh": (
+        4,
+        3,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh": (
+        2,
+        2,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh": (
+        1,
+        8,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh": (
+        10,
+        11,
+        0,
+        7,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
+        4,
+        0,
+        0,
+        2,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh": (
+        2,
+        1,
+        0,
+        1,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
+        1,
+        9,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh": (
+        0,
+        0,
+        0,
+        0,
+        2,
+    ),
+    "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
+        30,
+        73,
+        0,
+        1,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
+        0,
+        37,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh": (
+        1,
+        9,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
+        3,
+        2,
+        0,
+        1,
+        1,
+    ),
+    "scripts/formal/run_sumeragi_v2_progress_mutations.sh": (
+        22,
+        24,
+        2,
+        6,
+        2,
+    ),
+    "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh": (
+        1,
+        1,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh": (
+        4,
+        11,
+        1,
+        1,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh": (
+        1,
+        2,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh": (
+        6,
+        0,
+        0,
+        6,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
+        17,
+        6,
+        0,
+        11,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_tlc.sh": (7, 1, 0, 0, 4),
+    "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
+        3,
+        43,
+        0,
+        2,
+        0,
+    ),
+}
+SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES = {
+    caller: (1, 1, 2, 1, 1)
+    for caller in SHARED_TLC_RESULT_CONTRACT_CALLERS
+}
+SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
+    {
+        "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 0),
+        "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
+            1,
+            1,
+            0,
+            1,
+            1,
+        ),
+        "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
+            1,
+            1,
+            1,
+            1,
+            1,
+        ),
+        "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh": (
+            0,
+            0,
+            1,
+            1,
+            0,
+        ),
+        "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
+            1,
+            1,
+            3,
+            1,
+            0,
+        ),
+        "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
+            0,
+            1,
+            2,
+            1,
+            1,
+        ),
+        "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
+            3,
+            1,
+            1,
+            1,
+            1,
+        ),
+        "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh": (
+            1,
+            1,
+            1,
+            1,
+            1,
+        ),
+        "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
+            17,
+            1,
+            2,
+            1,
+            1,
+        ),
+        "scripts/formal/run_sumeragi_v2_tlc.sh": (1, 1, 2, 2, 0),
+        "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
+            1,
+            1,
+            0,
+            1,
+            1,
+        ),
+    }
+)
+SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
+    "a9aac15ecae31c9acc872efc62338fa3ae80165288d224f1dfb156cdcecc6458"
+)
+SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
+    "c0f77106efde5d9d5a7158e15d988a387ca90a5732f899e6ba052ce2ff3d6346"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
@@ -1034,6 +1530,21 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "producer_continuation_causal_rank_stage_only_bug.cfg": (
         "ab55fd59f1653601cf19b79d24d26a875bbc3f44503586c70bfb89f2abead3d4"
     ),
+    "SumeragiV2ProducerReplayCapacityMutation.tla": (
+        "7308867958c4e51d170d73000c9c02b41a871ba6a056b282485ac3c8b742152a"
+    ),
+    "producer_replay_capacity_fixed.cfg": (
+        "0b08365ef5269da08fc37c20e191b5a531e62a947db51e65c5ada9d794b1bbcd"
+    ),
+    "producer_replay_capacity_blind_invariant_bug.cfg": (
+        "ab13127ba49f160b486ce0496eb7c7a40497a52026ce262dd1b8910235b60c04"
+    ),
+    "producer_replay_capacity_non_atomic_replay_bug.cfg": (
+        "671a654d498fbcf0db02f1ab5fdb5619f503ad8fe225cbda60d3d56e43ec7fd2"
+    ),
+    "producer_replay_capacity_replenishment_lasso_bug.cfg": (
+        "cb50abfe31bf3c24454e3f3a0b055f2a889b6ce7070aa0b54533485684bf098f"
+    ),
     "representative_live_scope_fixed.cfg": (
         "3579a888b90aa2c08be038a7d09b4bde18a9abb066206a13c2cdcf9ccf3e5c4c"
     ),
@@ -1101,7 +1612,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "a94a946e62230d7a656c0945737b744945e73051f812c7ece7d6c35f107a7e2a"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "6ab0a34ea46efb754dee4cb6847c6d820a74e19a254e34985a9fa9ca9754d43e"
+        "7d7c3e43d9ac792c3cb648ead7fef3a602cfa4df9818239987834d1227f846fe"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -1124,6 +1635,7 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2EmptyProducerHandoffMutation*.tla",
     "SumeragiV2ProducerOriginReservationMutation*.tla",
     "SumeragiV2ProducerContinuationCausalRankMutation*.tla",
+    "SumeragiV2ProducerReplayCapacityMutation*.tla",
     "SumeragiV2RepresentativeLiveScopeMutation*.tla",
     "SumeragiV2FixedCorridorPhysicalBudgetMutation*.tla",
     "SumeragiV2FixedCorridorActionCreditMutation*.tla",
@@ -1151,6 +1663,7 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "empty_producer_handoff_*.cfg",
     "producer_origin_reservation_*.cfg",
     "producer_continuation_causal_rank_*.cfg",
+    "producer_replay_capacity_*.cfg",
     "representative_live_scope_*.cfg",
     "fixed_corridor_physical_budget_*.cfg",
     "fixed_corridor_action_credit_*.cfg",
@@ -1192,7 +1705,7 @@ INDEXED_SERVICE_ACTIVATION_MUTATION_SHA256 = {
         "11091b99cbaa5ebce85065da07dfb46eb326243da412e715e6d5bb774f162d81"
     ),
     INDEXED_SERVICE_ACTIVATION_MUTATION_RUNNER: (
-        "7e34909da791d7b62353188a01f9baa61268a8b9ac26e04d072c801a47a9b069"
+        "aa819a23d9ec07154c9a60534fcd191a4e39674ca197f6452b1e37480c58ef6f"
     ),
 }
 INDEXED_SERVICE_ACTIVATION_MUTATION_FORMAL_GLOBS = (
@@ -1445,7 +1958,7 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
         "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
     ),
     POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
-        "465d3818a9767d033362278940e4057dd67ff32b927e65b1f671678b5ec53d34"
+        "a0ff98fc89be2c5095b0c98e7a56fde83f48dd9b9ef53496d2603dc395080d03"
     ),
 }
 
@@ -7560,7 +8073,7 @@ _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
         "ed7172e200b6ebe76d6c6048a08e6610b83e709b66dc8e0dd972998d5e8f2b0f"
     ),
     "busy_deferred_source_identity_coalesces_across_consumer_view_change": (
-        "5697b48a09be59a0e0bf1f030c69bdf2bf83ed4eb53604f6483b03499d87d0fc"
+        "0211f040af62cc365cba5896c4b9479a60cbee09a41b1fbdc61d295000ae1494"
     ),
     "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims": (
         "c021ecccfdd60ea3ff9e4cced99dbb2b489adccfd1fe65874f81953b3989f3ab"
@@ -7576,6 +8089,400 @@ _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
     ),
     "timeout_signed_callback_is_restart_scoped_before_control_delivery": (
         "edcc41a7ae22aa8599821e7d7e14bb69257163f2d411df628af057cf431c7b6b"
+    ),
+}
+_SERVICED_CANDIDATE_V4_STORE_STRUCT_SHA256 = {
+    "ServicedCandidateKey": (
+        "7ac3f413238c7b14472d7353286b7f4cd8a066be9a454ab8f398911024f1997e"
+    ),
+    "PersistedServicedCandidate": (
+        "b270b68c01fa0b0f10f8415fd36c9f2fa80f8ff627fee866ca0bf3c35b86b207"
+    ),
+    "PersistedServicedCandidatesV3": (
+        "bb1e47bffc2d32ebcea3f96f98072eca3713fb508264bd6624380af71e061d67"
+    ),
+    "ProducerContinuationAddress": (
+        "7fd1d0c883e804f99c21932bdee838f7916ba6b40a199bba8dfd9d8a9754b4fd"
+    ),
+    "ProducerContinuationIdentity": (
+        "97c0e3f9975d0cca536ec1a3f10e2cc69ede8bbf46af872fb0e77e2197b847f6"
+    ),
+    "ProducerContinuationHandoffToken": (
+        "b032bb2a7c2cd3780d412ce491850ecbe93e509afbf6f71fe3b5d3b37ee8f26d"
+    ),
+    "ProducerContinuationTerminalToken": (
+        "050296874d4404b103aa3dde9b19c85e9d1bd20420b060830cfbb732e19a58e2"
+    ),
+    "ProducerContinuationRecord": (
+        "39f1a443523f864b560701817bb47a49562279bb7c418193513e00114a6a3025"
+    ),
+    "PersistedProducerContinuation": (
+        "31b05bf0c63cd416ef90421cc08b6b0787749a8ee36cd60682fe11440c313947"
+    ),
+    "PersistedServicedCandidatesV4": (
+        "a57ae940f4b09d1a20d4ad1e70b3e42bdcdfefd57f5f6d2bb76de521796bdf82"
+    ),
+    "DecodedServicedCandidates": (
+        "a48fe3bc044d00aed0f51dfe9eec473faf28cf42895c563449836fcfecb594a5"
+    ),
+    "RestoredServicedCandidates": (
+        "513bcbab69e770685d1c32b901aba58927aaeb681c4bd114efb196ed333aad5e"
+    ),
+    "ServicedCandidateStore": (
+        "7098d19291be10396014a59d8083053dcbbb28bad1e80e1be329f63beb503791"
+    ),
+}
+_SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
+    "serviced_candidate_stage_for_kind_code": (
+        "a070c60ab3c6db44c662f78c421d68f10091bd46996233e2d8b34b866fb1bd6c"
+    ),
+    "producer_continuation_source_class_for_kind_code": (
+        "66595513df39f7abcac6fd0bcb65d80b610a07578b828b8a359314c10a82a7de"
+    ),
+    "identity_new": (
+        "9343fe68e2fc3c9b379bd172cfd37b8360c6cf12ec941fdb3edada4c8c3d480b"
+    ),
+    "identity_address": (
+        "ca643f22795e66325b0f2bf8a2c353cbc0ee88db23e68ca787a62559fac62e57"
+    ),
+    "identity_has_exact_stage": (
+        "6979be6b70abbc3b31e225deb4d012d7cf93cf2629d892808ec7ce6f92b0063b"
+    ),
+    "record_new": (
+        "0af698eefd7b9740f7e89c73bbd74ad562cc504618057a302ccad5548aae6d4c"
+    ),
+    "record_handoff_token": (
+        "cf8495dc2c9c36c24925d318bf5f531d87576d16a8ac8a35c42ae0c314f995e4"
+    ),
+    "record_terminal_token": (
+        "240867fd2bee3e1e0336daee1b91922146bf787a7c076dec15d038b113887b08"
+    ),
+    "producer_continuations_are_valid": (
+        "80eef029cbd13f7d277b04ac833a74b7781fc77cd5b950d03c4a2653e63400b5"
+    ),
+    "leader_wire_terminal_matches_runtime": (
+        "9efc97b58851cedd570b0659917aa1906aa31f653cc385e43de3cb600e8c044d"
+    ),
+    "leader_wire_control_phase_matches_candidate": (
+        "c200345c7008a00d68732f2a235b3950f04c0e63fbe78b51478a9e7fdc88f220"
+    ),
+    "leader_wire_stable_terminal_matches_runtime": (
+        "3e025a26fdd14c00e5664a2d34355169bc7b650de2534939586f3a7b50ebb9d4"
+    ),
+    "leader_wire_load_and_reconcile": (
+        "5565b0ee9e26b188138e5dc31ed5da9766cdc249b5c49df42f0fd237a18a0f63"
+    ),
+    "store_open": (
+        "89ddfaf9974da9f175de80d61767eb020c49b5672c2a73de8610fddd8d0b0e76"
+    ),
+    "store_open_with_capacities": (
+        "5b754c14060c56c57d91ec48147d0afd45df29e1215f543703298a606469cfc3"
+    ),
+    "store_load": (
+        "8ad2fa2d46a62e9428cd175f7869c8a247fe53776b1a9c0c01c7fb028a9799d5"
+    ),
+    "store_reserve_producer_continuation": (
+        "452de9ed84f0d1f83c17df83d58f87f7530b60e98d022f11694e9896a5181b4e"
+    ),
+    "store_persist_with_producer_continuations": (
+        "6e358bdb8fe65c77795efd88adc49a6054b95e812217854d2757e07aa028b942"
+    ),
+    "encode_payload_frame": (
+        "7cb4861444e43a3904493bfcb15ff8eb92f5ee6fdbe763eec691701a11efa71f"
+    ),
+    "encode_frame_v4": (
+        "14296fa8c429ee49f9ccba935bdc06f984941eefda1b0e995d091741e6130ad2"
+    ),
+    "encode_frame_v3": (
+        "bd12646c0dfab04045c7d8527c2c920e31fc7bf8200058ffe87589b86ef0b195"
+    ),
+    "decode_frame": (
+        "c6d86c1a78e3df5299570c3a409750c852ba7552ce54fcbff48b5e4833bf7d48"
+    ),
+}
+_SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256 = {
+    "SelectedProducerLifecycle": (
+        "240a5920ce99612d24578a815f697889d1c06d8beb9a1e300ab4c5338f998ec6"
+    ),
+    "ProducerReservationToken": (
+        "3f01d4fabf54fd84371442ca9c6b6b499902ef2eda684eb13234fc4d1e6e46d3"
+    ),
+    "PendingProducerHandoff": (
+        "3c9f5ad566a113a3c007f67ab3a86a8ac33495cbc6e158ae187f3a617a0b0f6b"
+    ),
+}
+_SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
+    "producer_parent_replay_source_for_stage": (
+        "de61146d932b8f0f65a799f8102e83013fce7f875e82d591b22528c75caab41f"
+    ),
+    "producer_parent_is_locally_reconstructible": (
+        "6d46edcfbf32039e6c1f17bd7a1fa0203a8faa6069f2b69fcf5f2684c0bcd458"
+    ),
+    "producer_parent_has_exact_local_replay_binding": (
+        "235feed79743cfcdff3ad31fd607c05546ad593ee8d5bd76dbdf6eaf40b2120c"
+    ),
+    "serviced_candidate_stage": (
+        "af1e74ad7671148c9dfe5fdade32ff32608e17cdf60c7e4c268095d8ff0f1060"
+    ),
+    "serviced_candidate_policy": (
+        "c97b7a274f8c1084c6ad10c2f92278ba44b959e06019ebac6823fe01424ae8f0"
+    ),
+    "is_authenticated_ingress_event": (
+        "0408babdc67c1e2be458f42b3dd3f9421c8de0e24c4d850f514272316e42d5cf"
+    ),
+    "serviced_candidate_record_kind": (
+        "df98895bd5deed6e3cb2af8c7153211e4e6a23808a4b60769300d77536ff6f6c"
+    ),
+    "candidate_lifecycle_capacity": (
+        "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
+    ),
+    "open_with_aggregator_and_publication_with_capacity": (
+        "1daf3c9bf5c7ddb904080ee76f476d33d4ca50e252fe906fdfae7dc5080c13b6"
+    ),
+    "dormant_producer_lifecycle": (
+        "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
+    ),
+    "dormant_local_fifo_reservations": (
+        "e2dac966c3f6ca19c566c952433e598c749e1e55793a6db460df4f14a26b0aa6"
+    ),
+    "bind_selected_producer_lifecycle": (
+        "e7824df390bb5cbce2a5d9721e9aa0b70fb410f0446ac606f1ac06a44522b90d"
+    ),
+    "clear_selected_producer_lifecycle": (
+        "31da2a7879318a3bdd6de93f996576fc9a192743dbfbcb3f4e39dca4dfbdabc4"
+    ),
+    "producer_lifecycle_slot": (
+        "087e97f8f57945f92a9709d230014f7692ab110f8e8b7657984c403019d9cbe0"
+    ),
+    "reserve_selected_producer_continuation": (
+        "c171f50e2609887556ec8dd796d59b1b064787d2d972f3c0c939910c87f1a122"
+    ),
+    "persist_producer_lifecycles": (
+        "923100ada06b4b713c15ed273d9306f4d592e9a25194d3be5d355d6077ea94b9"
+    ),
+    "rollback_producer_reservation": (
+        "f6a2ae48d02fa974e796886695810d7518cd0530fc3578f9b36f3dee3896fb08"
+    ),
+    "release_unrecorded_producer": (
+        "f76e88fba43eb1e40b178a5b6817d35c381bfb629666779e7a632af3f3bf60bf"
+    ),
+    "terminalize_producer_continuation": (
+        "7f885aee1e1ef617dbdd47906175f080b877a355a7f3f7c5d5f706480f04f221"
+    ),
+    "release_goal_reached_producer": (
+        "c36862b2029a3d819de48bcc9b3cedf43bf751a3402d0e9c7d90478108dd353f"
+    ),
+    "serviced_candidate": (
+        "a5f7c1722916144f07b7ba9da462b6309aeacf460c7a33452125aca1cac64d96"
+    ),
+    "ensure_serviced_candidate_capacity_before_step": (
+        "91ef40b02e85a0afd3182474bd76abbf582d7dd5ec4de6d3da4999cc1385f175"
+    ),
+    "record_serviced_candidate": (
+        "f08d28569d85834d2f0b86053673075e60f8db38c9b7bd6708002f7f55b3e9b0"
+    ),
+    "producer_handoff_evidence": (
+        "2b553732a9df3b84f8d4b8495b063129278080a7a775624d13c6ac9b87278a39"
+    ),
+    "acknowledge_producer_handoff": (
+        "038ccb3a1d6c463f3b10f01491139d5fcbe4827d5a8efad09a7c54de6134bc79"
+    ),
+    "reclaim_serviced_candidates": (
+        "4b6695268578047cfb71599953c31e4e601049e0de55340616944d1dd6fc28d0"
+    ),
+    "step_with_defer_policy": (
+        "ce2ac96788d35d6b7592c9896871d3e7abc24a0896aa76588f0d6c5497570ae4"
+    ),
+    "drain_deferred_with_handoff_for_ordinals": (
+        "a3e97e5ef3e2f39b2a563512d858e586633353900933be31dcceff811433bcfd"
+    ),
+    "drive_effects": (
+        "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
+    ),
+}
+_SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256 = {
+    "RuntimeDormantLocalFifoReservation": (
+        "6e85865f52ff4ce41ec7d2d3a363927035b2e2f3a87ad34424943030bcc34ad6"
+    ),
+    "BoundedIngress": (
+        "a4d78a51426a19aef155655baaaef40487fc64e23eb01ba89d02581020d02516"
+    ),
+}
+_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
+    "dormant_completion": (
+        "be7724361d11298229e3d807cc4ea6d4cc42eaf52e2bf236e5f405324aecf95c"
+    ),
+    "dormant_is_local_fifo_stage": (
+        "b362acc1a6152e4b6c9bbf0b8bcea133791c89c8ae4033c5048f10e09e175388"
+    ),
+    "install_dormant_local_fifo_reservations": (
+        "42c699bccbd2f051c8300cc714dab9b3f32c0268a37d95226f0ecb466dabc2b2"
+    ),
+    "dormant_local_fifo_replacement": (
+        "349d197fc00128460c723ecb4cc4fc7b3253390d9847b61dac38e7157fb9af61"
+    ),
+    "occupied_with_dormant_reservations": (
+        "2a57306de4cfb2074082a0f67c34ffe9cb3d99ce2021c31256272d268a1bbe0e"
+    ),
+    "oldest_active_lifecycle_ordinal": (
+        "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
+    ),
+    "with_driver_and_lifecycle_ordinals": (
+        "8b34854604799e519f0e40d85bac7f72564ee67ae94c6731222f45af13bcc863"
+    ),
+    "minimum_active_lifecycle_ordinal": (
+        "0c38e2c8725a12a05c06884f8ae22d3ea7c6395243dc08800afdbf4d1190d812"
+    ),
+    "complete_leader_wire_runtime_owner": (
+        "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
+    ),
+    "step": (
+        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
+    ),
+    "dispatch_one_adapter_deferred": (
+        "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
+    ),
+}
+_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
+    "run_inner": (
+        "bfef5a8070c6c26f13509e97f0c744f856c68d454165657043195fe1b122b307"
+    ),
+}
+_SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
+    "snapshot_roundtrips_and_rejects_a_b_a_resurrection": (
+        "d19e863f444d25bb405fcfc183438c9abd6e64fd7ce82453c91059bb2874007d"
+    ),
+    "v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically": (
+        "10a637f7e21143470bdd72792630231d35801c52bbfa745786c836067b7dd244"
+    ),
+    "leader_wire_gate_reconciles_producer_first_terminal_crash": (
+        "f225f861684b5a468fd1e45a9424e614b91b8bfebfd75e10e429c91dbd32b58d"
+    ),
+    "leader_wire_gate_rejects_producer_terminal_from_foreign_view_or_phase": (
+        "8db1b977e059aadd6bbce9e3746e4fea23167446b3fb64e058616eb41d7cb96a"
+    ),
+    "snapshot_rejects_corruption_stale_context_and_capacity_exhaustion": (
+        "9092b4ebab5ec88f8ad99a573352aedb05fe29385f5ff01215bf088c35511059"
+    ),
+    "decision_reclamation_is_canonical_only_for_an_empty_snapshot": (
+        "ef03bf7b54f58eb0ee9e358a780c023aedce3abc15e0e453041c6b1a905c9d9a"
+    ),
+    "snapshot_rejects_truncation_version_ordering_duplicates_and_oversize": (
+        "11a74c656afed6467421484b12819a41ae85d8f974e5baf22deaac81d6f218ac"
+    ),
+    "v4_rejects_noncanonical_or_over_capacity_producer_tables": (
+        "5067bd4555946a59ee5abe37e5b9f473df832bb3f0337f15f14c269d78b8b578"
+    ),
+    "producer_identity_stage_projection_rejects_foreign_root_and_successor_stages": (
+        "ec16de15110425ee5c28d0dbaf66cd52445dc5f2cd97439877f079aede5ad2a8"
+    ),
+    "bounded_slot_reuse_requires_terminal_strict_view_and_ordinal_advance": (
+        "4017b4a9c58712e9a2b2caa0a711743dbb7396d9b8cf4377efb3cdcfff1dea65"
+    ),
+    "one_logical_candidate_cannot_resurrect_at_another_bounded_address": (
+        "46e731b36475000ff68a866a46d0bfcd0bf58c3e4cf33ec44dbd214ec04a8b5a"
+    ),
+    "snapshot_rejects_nonregular_artifacts": (
+        "39491e581cd4fb191c2c2e69732fb4a0f43affa5d8858341f57d5481619a55f1"
+    ),
+    "snapshot_load_and_retire_never_follow_substituted_symlinks": (
+        "0bf9947be38b34e9b2c7f6b6bd843891f94d3395cf9534dcfb94b50a55664cb2"
+    ),
+    "finalized_snapshot_retirement_leaves_successor_rollover_empty": (
+        "9dfc3ea78bfb71d17057a004f0b83684da96a9196108c707b563167b47d1cf0c"
+    ),
+}
+_SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
+    "direct_internal_discard_tombstones_a_b_a_and_survives_restart": (
+        "268e4e8fd26c5b3b62932dd41b4236280da417d5ee2a1177a7d481c8896b722c"
+    ),
+    "nonquorum_vote_retransmission_rebuilds_volatile_pool_after_restart": (
+        "7eae3ba682981dc555f9a9b47d68a51c82aedaa16c93df529e12f9aa000b1415"
+    ),
+    "deferred_discard_tombstones_before_owner_release_and_restart": (
+        "6c8a8889a5bde297808772feef4b1785e48f1c62190382f8995d8ee69c410874"
+    ),
+    "serviced_candidate_write_failure_is_fail_closed_and_retains_deferred_owner": (
+        "36092769fa443044ada01878360c825f359e5d0eae1626a785d15316d8fd97cd"
+    ),
+    "restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect": (
+        "4222e8a1cfb308f0fb76cec9ca1fc8e0f57c19c70cf425dad9648afa402e63d9"
+    ),
+    "live_producer_owner_cannot_replace_immutable_identity": (
+        "fe58056b871ed225ceabf68f95ff99b6ea7882da5ba9e384c45d0864a74eb697"
+    ),
+    "restored_producer_rejects_a_mismatched_replay_identity_without_mutation": (
+        "5d60f0048536308e5941ed4d3b2fb29582aaec680779fb08018679c53f3b52c7"
+    ),
+    "conditional_transport_service_reserves_and_coalesces_a_producer_lifecycle": (
+        "568344c3d6fdf01c1b581b660d29745582535719ce7e8ce769e687fa791afa56"
+    ),
+    "retired_empty_handoff_terminalizes_once_and_exact_replay_coalesces": (
+        "e274d206d3ddcb9b20ce007ad054edb6ae186ab3e820805a8ff79b2d82896c0a"
+    ),
+    "every_producer_stage_has_an_explicit_replay_parent_contract": (
+        "b8e89dc784c68b18af0655cf038f10c7b5a00ba0ff82a7b4b93bb86f56968469"
+    ),
+    "speculative_producer_rollback_restores_free_and_terminal_slots": (
+        "e3f51f4cd516672cd6f6df3be78aac042301bb729969bb372c7f9fa4879d75f2"
+    ),
+    "process_only_producer_replacement_rollback_stays_volatile_across_restart": (
+        "9fbe52a9ad219c3e55150f5a28eb56476a7281df064b9597634be378fb55037c"
+    ),
+    "process_only_producer_replacement_release_stays_volatile_across_restart": (
+        "871f97d2c3f706e03e24a886af3c6a2c71ab1b012b07fe100c5b8305f3672f6d"
+    ),
+    "process_only_producer_replacement_handoff_does_not_resurrect_predecessor": (
+        "b7254054777aec82f239fb2b9368e03d9901bb4d7290d4e6037e2c8cfaf6c883"
+    ),
+    "retiring_busy_local_parent_releases_unacknowledged_producer_owner": (
+        "09a0afa0c3ec41ef59ba88d093180fff339408e66a5325d3f3086485c2498381"
+    ),
+    "terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_source": (
+        "3c64469fa90eddc9df2a6fa0f63abc93e403761ae64797a7ef6d96cee4e4f122"
+    ),
+    "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims": (
+        "0bcfb8cd24bde2a60cbe0132dfc76bbf7633734ec8121d796c55a7cf8a62a72e"
+    ),
+    "serviced_candidate_snapshot_is_bound_to_the_local_validator_owner": (
+        "e2d69a7243f71d2818ffabcbdd78e9585c6245b447a882e8f6dc319067a956ee"
+    ),
+    "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate": (
+        "ba375e6b8c6f36c2499442618aac887719c64f89a44e7c9739bfd6e06b16fda9"
+    ),
+    "serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner": (
+        "ed7172e200b6ebe76d6c6048a08e6610b83e709b66dc8e0dd972998d5e8f2b0f"
+    ),
+    "post_wal_oversized_continuation_fails_closed_and_replays_exact_record": (
+        "a357f97d00052efa6f464ac0571f3440c8ff94f8a459883be3d864adfb3ec91f"
+    ),
+}
+_SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
+    "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
+        "653fac9ef34bfb376711f643fe231ee9860cb7c1ef29570d514a3f870a531c1c"
+    ),
+    "restart_dormant_completion_batch_atomically_replaces_latent_slots": (
+        "873666090e3d2a5ddb8e06524080c9b7eefb120b35a0af25775b7f00ed827397"
+    ),
+    "dormant_local_fifo_metadata_rejects_wrong_stage_ordinal_and_capacity": (
+        "456409603047b47666be7596841a38ea734112a9554722274a09582d32d1ec69"
+    ),
+    "restored_exact_stage_coalesces_at_full_capacity_without_aliasing_successors": (
+        "48b4fb3b9c32dd7b8230e757d04c4b6b88de00a9ccaef6d44e6fcdc37c71fe96"
+    ),
+    "restored_producer_preflight_cannot_change_completion_service_class": (
+        "bd1273f883c17b13d555ed690c5cfaec2b62ab159c20e2be49def98a3058e7e2"
+    ),
+    "restored_serve_high_watermark_precedes_startup_runtime_owner": (
+        "73e82a3200d1ad1bc6f7a678f3632e3d885a9ae8d0367fb9aa907feb10584aa0"
+    ),
+    "busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation": (
+        "f29534831f806e2bad3c57424aaa768f206f74e4615008397b96d3e2f137a104"
+    ),
+}
+_SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
+    "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
+        "a64e65c344cd7a423ff744f2e651356d0aae41e5878097c8df18af92e61cf66b"
     ),
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
@@ -8045,7 +8952,7 @@ _REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256 = {
 }
 
 _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
-    "73795105423f27420fe13c19133a4853c2a6adbd2c50ba01b9e7f5ec43a918ee"
+    "b1f66896acf7b68d2e2648bfd73e23d69d430ad50a475047b07811e30da06aa0"
 )
 
 DORMANT_REPLY_CLOCK_MUTATION_ARTIFACTS = (
@@ -8539,6 +9446,7 @@ HISTORICAL_TEMPORAL_REVIEWED_EXTENDS = {
     "SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs": (
         "SumeragiV2AsyncHistoricalRecoveryTransportClosureProofs",
         "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "SumeragiV2AsyncHistoricalCandidateProducerContinuationProofs",
     ),
     "SumeragiV2AsyncHistoricalFiniteRunnerEpisodeProofs": (
         "SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs",
@@ -10409,7 +11317,7 @@ HISTORICAL_LOCAL_AUTHORITY_REQUIRED_OPERATORS = (
     "IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty",
     "IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty",
     "IndexedLocalAdequateLeaderTargetProofInvariantsProperty",
-    "IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty",
+    "IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty",
     "IndexedLocalAdequateLeaderProducerTransportClosureProperty",
     "IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty",
     "IndexedAdequateLeaderLocalFairBehaviorAt",
@@ -10463,10 +11371,10 @@ HISTORICAL_LOCAL_AUTHORITY_EXACT_OPERATOR_BODIES = {
         "IndexedAdequateLeaderWitness(initialContext)! "
         "AdequateLeaderTargetProofInvariantsProperty(IndexedChainSpec)"
     ),
-    "IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty": (
+    "IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty": (
         "\\A initialContext \\in AdmissibleContextRecords: "
         "IndexedAdequateLeaderWitness(initialContext)! "
-        "AdequateLeaderAuthorityDeadlineActiveReceiptDecisionCarryProperty( "
+        "AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty( "
         "IndexedChainSpec)"
     ),
     "IndexedLocalAdequateLeaderProducerTransportClosureProperty": (
@@ -10581,10 +11489,40 @@ HISTORICAL_LOCAL_AUTHORITY_REQUIRED_PROOF_TOKENS = {
         "IndexedLiveChainSpecProvidesLocalAdequateLeaderProofInvariants",
         "AdequateLeaderCompletedLocalProviderKernelSuppliesSemanticKernel",
     ),
-    "IndexedAdequateLeaderAuthorityCarryAndExposureSupplyLocalSemanticKernel": (
-        "AdequateLeaderAuthorityBoundReceiptCarrySuppliesLocalSemanticKernel",
-        "IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty",
+    "IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster": (
+        "IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster",
+        "AdequateLeaderFixedCorridorDeadlineSource",
+        "AdequateLeaderFreshSynchronizedTargetCorridor",
+        "AdequateLeaderLocalTargetDecisionSource",
+    ),
+    (
+        "IndexedLiveChainSpecProvidesLocalAdequateLeader"
+        "FixedDeadlineAndResponsiveDissemination"
+    ): (
+        "IndexedLiveChainSpecProjectsIndexedChainSpec",
+        "IndexedChainSpecEstablishesCompositionInvariant",
+        "IndexedAdequateLeaderWitnessVariablesAreExact",
+        "IndexedLiveChainSpecProvidesAdequateLeaderLocalFairBehavior",
+        "IndexedLiveChainSpecProvidesLocalAdequateLeaderProofInvariants",
+        "IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster",
+        "IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster",
+        "IndexedAllResponsiveJoinedIsStable",
+        "IndexedLiveInstanceActivationObligation",
+        "IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec",
+        (
+            "AsyncLiveSpecSuppliesAdequateLeaderFixedDeadline"
+            "AndResponsiveDissemination"
+        ),
+        "PTL",
+    ),
+    (
+        "IndexedAdequateLeaderFixedDeadlineDissemination"
+        "AndExposureSupplyLocalConvergence"
+    ): (
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalTargetConvergence",
+        "IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty",
         "IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty",
+        "IndexedLocalAdequateLeaderDecisionConvergenceProperty",
     ),
     "IndexedChainSpecClosesLocalExactDecisionOffSchedulerCorridor": (
         "ExactDecisionRequestClockOwnerConvergence",
@@ -10606,7 +11544,7 @@ HISTORICAL_LOCAL_AUTHORITY_REQUIRED_PROOF_TOKENS = {
     ),
     "IndexedChainSpecJoinedArchiveOwnerProducesTypedAuthority": (
         "IndexedChainSpecResponsiveActiveRosterEventuallySetsExactGst",
-        "IndexedLocalAdequateLeaderSemanticKernelProvidesDecisionConvergence",
+        "IndexedLocalAdequateLeaderDecisionConvergenceProperty",
         "IndexedChainSpecProvidesLocalExactDecisionStageService",
         "PostGstResponsiveDecisionHasExactServiceSource",
         "IndexedLocalAppliedVoterSuppliesTypedArchiveAuthority",
@@ -10669,10 +11607,6 @@ HISTORICAL_LOCAL_AUTHORITY_REQUIRED_PROOF_TOKENS = {
         "IndexedExactHistoricalRecoveryProgress",
         "PTL",
     ),
-    "IndexedHistoricalAuthorityCarryAndExposureDischargeExactProgress": (
-        "IndexedAdequateLeaderAuthorityCarryAndExposureSupplyLocalSemanticKernel",
-        "IndexedHistoricalReleaseResidualsDischargeExactProgress",
-    ),
 }
 
 HISTORICAL_LOCAL_AUTHORITY_FORBIDDEN_DEPENDENCIES = (
@@ -10728,7 +11662,7 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     ),
     "historical-recovery-authority-acquisition": (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+        "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
         "=> IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty"
     ),
     "historical-recovery-certificate-rank-progress": (
@@ -10741,7 +11675,7 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     ),
     "historical-recovery-decision-rank-progress": (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+        "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
         "=> IndexedHistoricalDecisionRankProgressResidualProperty"
     ),
     "genesis-height-successor-handoff": (
@@ -11053,7 +11987,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "AdequateLeaderExactClosureResidualProperty",
     ): (
         "/\\ AdequateLeaderExactResidualKernelProperty(specification) "
-        "/\\ AdequateLeaderSemanticCompositionProperty(specification)"
+        "/\\ AdequateLeaderLocalTargetDecisionConvergenceProperty(specification)"
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -12062,8 +12996,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetNonDescentEpisodeBudgetFrontier",
     ): (
-        "\\E known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( "
-        "target, leaderContext, leader, leaderView, subject): "
+        "/\\ known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( "
+        "target, leaderContext, leader, leaderView, subject) "
         "/\\ AdequateLeaderTargetNonDescentEpisodeAtBudget( "
         "target, leaderContext, leader, leaderView, subject, "
         "sourceOccurrenceRank, known, budget) "
@@ -12082,12 +13016,14 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "AdequateLeaderTargetOccurrenceRankCarrier, "
         "owner \\in AdequateLeaderFrozenCandidateOwnerUniverse( "
         "target, leaderContext, leader, leaderView, subject), "
+        "known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( "
+        "target, leaderContext, leader, leaderView, subject), "
         "budget \\in Nat: /\\ "
         "AdequateLeaderTargetProtocolSubjectSource( target, leaderContext, "
         "leader, leaderView, subject) /\\ "
         "AdequateLeaderTargetNonDescentEpisodeBudgetFrontier( "
         "target, leaderContext, leader, leaderView, "
-        "subject, sourceOccurrenceRank, owner, budget) "
+        "subject, sourceOccurrenceRank, owner, known, budget) "
         "~> AdequateLeaderTargetOccurrenceRankServiceExitGoal( "
         "target, leaderContext, leader, leaderView, "
         "subject, sourceOccurrenceRank, owner)"
@@ -12587,6 +13523,54 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionNormalRequestIngressContinuationPrefixBlocked",
+    ): (
+        "/\\ ExactDecisionRequestIngressLaneResidual( "
+        "node, qc, archive, request) "
+        "/\\ ~NodeHasApplication(archive) "
+        "/\\ AsyncCandidateProducerContinuationRunnerResolutionRequired(archive)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressContinuationPrefixCleared",
+    ): (
+        "\\/ NodeHasApplication(archive) "
+        "\\/ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(archive)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressContinuationPrefixGoal",
+    ): (
+        "\\/ ExactDecisionRequestLifecycleGoal(node, qc, archive, request) "
+        "\\/ ExactDecisionRequestIngressContinuationPrefixCleared(archive)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressContinuationPrefixAtBudget",
+    ): (
+        "/\\ ExactDecisionNormalRequestIngressContinuationPrefixBlocked( "
+        "node, qc, archive, request) "
+        "/\\ record = "
+        "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord( "
+        "archive) "
+        "/\\ status = record.status "
+        '/\\ status \\in {"Reserved", "Materialized"} '
+        "/\\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget( "
+        "archive, record.identity, record.ordinal, record.address.stage, "
+        "status, budget)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressContinuationPrefixClosureProperty",
+    ): (
+        "specification => \\A node, qc, archive, request: "
+        "ExactDecisionNormalRequestIngressContinuationPrefixBlocked( "
+        "node, qc, archive, request) "
+        "~> ExactDecisionRequestIngressContinuationPrefixGoal( "
+        "node, qc, archive, request)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty",
     ): (
         "specification => \\A node, qc, archive, request, "
@@ -12613,6 +13597,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "node, qc, archive, request, rank, budget) "
         "/\\ ~ExactDecisionRequestLifecycleRankGoal( "
         "node, qc, archive, request, rank) "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixCleared( archive) "
         "=> /\\ ExactDecisionRequestLifecycleConcreteFairOwner( "
         "archive, request) "
         "\\in ExactDecisionRequestLifecycleConcreteFairOwnerKinds "
@@ -12644,6 +13629,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "node, qc, archive, request, rank, budget) "
         "/\\ ~ExactDecisionRequestLifecycleRankGoal( "
         "node, qc, archive, request, rank) "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixCleared( archive) "
         "/\\ <<ExactDecisionRequestLifecycleSelectedConcreteFairAction( "
         "archive, request)>>_AsyncAllVars "
         "=> ExactDecisionRequestLifecycleRankCellOutcome( "
@@ -12664,7 +13650,9 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty",
     ): (
-        "ExactDecisionRequestLifecycleRankDescentProperty(specification)"
+        "/\\ ExactDecisionRequestLifecycleRankDescentProperty(specification) "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixClosureProperty( "
+        "specification)"
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -14731,6 +15719,10 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "IndexedHistoricalTransport(initialContext)! "
         "AsyncProgressOwnershipInvariant /\\ "
         "IndexedHistoricalTransport(initialContext)! "
+        "AsyncCandidateProducerContinuationExternalCoverageInvariant /\\ "
+        "IndexedHistoricalTransport(initialContext)! "
+        "AsyncCandidateProducerContinuationLocalReplayCapacityInvariant /\\ "
+        "IndexedHistoricalTransport(initialContext)! "
         "DecisionTimeoutFrontierInvariant /\\ "
         "IndexedHistoricalTransport(initialContext)! "
         "DecisionFrontierUniquenessInvariant /\\ "
@@ -14982,6 +15974,175 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
 # In particular, receipt subject equality must come from one-height
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness",
+    ): (
+        "\\A initialContext, owner: "
+        "owner \\in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext) "
+        "=> AsyncSpecAt(initialContext) "
+        "=> WF_AsyncAllVars( "
+        "AdequateLeaderFixedSelectedServiceOwnerAction(owner))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderFixedSelectedOwnerFairnessProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedGlobalSelectionAndPreCandidateServiceSupplyRawRouteStep",
+    ): (
+        "\\A specification: "
+        "/\\ AdequateLeaderFixedGlobalBlockerSelectionClosureProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedPreCandidateEntryServiceProperty(specification) "
+        "=> AdequateLeaderFixedPreCandidateRawRouteRankStepProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedPreCandidateRawRouteStepClosesRank",
+    ): (
+        "\\A specification: "
+        "AdequateLeaderFixedPreCandidateRawRouteRankStepProperty(specification) "
+        "=> AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedPipelineProducerHandoffStartsRawRouteRank",
+    ): (
+        "\\A sourceDormantPotential, knownDormantPotential: "
+        "\\A initialContext, target, leaderContext, leader, leaderView, "
+        "receipt, route, token, episodeTarget, sourceOccurrenceRank, "
+        "sourceOccurrenceOwner, sourceCutoffOrdinal, known, sourceRank, "
+        "budget: "
+        "AdequateLeaderFixedPipelineProducerHandoffFrontier( "
+        "initialContext, target, leaderContext, leader, leaderView, receipt, "
+        "route, token, episodeTarget, sourceOccurrenceRank, "
+        "sourceOccurrenceOwner, sourceCutoffOrdinal, sourceDormantPotential, "
+        "knownDormantPotential, known, sourceRank, budget) "
+        "=> AdequateLeaderFixedPreCandidateRawRouteRankFrontier( "
+        "initialContext, target, leaderContext, leader, leaderView, receipt, "
+        "sourceRank, sourceRank)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+    ): (
+        "\\A specification: "
+        "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
+        "/\\ "
+        "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty( "
+        "specification) "
+        "=> AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        (
+            "AsyncLiveSpecSuppliesAdequateLeaderAuthorityDeadline"
+            "FreshSelfQuantitativeProviderBundle"
+        ),
+    ): (
+        "\\A initialContext: AsyncLiveSpecAt(initialContext) "
+        "=> AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveFreshSelfBundleSuppliesFixedDeadlineAndResponsiveDissemination",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveSpecSuppliesAdequateLeaderFixedDeadlineAndResponsiveDissemination",
+    ): (
+        "\\A initialContext: AsyncLiveSpecAt(initialContext) "
+        "=> AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalTargetConvergence",
+    ): (
+        "\\A specification: "
+        "/\\ AdequateLeaderLocalFreshSelfCorridorExposureProperty(specification) "
+        "/\\ AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty( "
+        "specification) "
+        "=> AdequateLeaderLocalTargetDecisionConvergenceProperty(specification)"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalConvergence",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderLocalTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderFixedDeadlineAndDisseminationCloseExactResidual",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderExactClosureResidualProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualObligation",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderExactClosureResidualProperty("
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "AsyncSpecClosesExactDecisionRequestIngressContinuationPrefix",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionRequestIngressContinuationPrefixClosureProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressContinuationPrefixHasFiniteRankWitness",
+    ): (
+        "\\A node, qc, archive, request: "
+        "/\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncProgressOwnershipInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ ExactDecisionNormalRequestIngressContinuationPrefixBlocked( "
+        "node, qc, archive, request) "
+        "=> \\E record \\in AsyncCandidateProducerContinuationRecordSet, "
+        'status \\in {"Reserved", "Materialized"}, '
+        "budget \\in AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
+        "ExactDecisionRequestIngressContinuationPrefixAtBudget( "
+        "node, qc, archive, request, record, status, budget)"
+    ),
     (
         "SumeragiV2AdequateLeaderCorridorEntryContinuationProofs",
         "AsyncLiveProvidesAdequateLeaderViewExposureRankStep",
@@ -16112,8 +17273,10 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "AsyncCertifiedResponseClaimStateAfterAdmission( "
         "responseRetirementState, CHOOSE item \\in "
         "AsyncCertifiedResponseClaimAdmissionsThisStep: TRUE) "
+        "timeoutRetirementState == "
+        "AsyncControlServiceStateAfterTimeoutRetirement(responseState) "
         "candidateReclamationState == "
-        "AsyncCandidateServiceStateAfterReclamation(responseState) "
+        "AsyncCandidateServiceStateAfterReclamation( timeoutRetirementState) "
         "candidateMarkedState == IF AsyncCandidateServicesThisStep # {} "
         "THEN AsyncCandidateServiceStateAfterSuccessfulService( "
         "candidateReclamationState, CHOOSE candidate \\in "
@@ -16136,12 +17299,19 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "AsyncCandidateLifecycleStateAfterCarrierUpdate( "
         "candidateServiceState) compactedState == "
         "AsyncCandidateLifecycleStateAfterCompaction(carrierState) "
+        "leaderWireState == "
+        "AsyncCandidateLifecycleStateAfterLeaderWireAdmission( compactedState) "
         "serveIngressState == "
         "AsyncCandidateLifecycleStateAfterServeIngressAdmission( "
-        "compactedState) IN "
+        "leaderWireState) IN "
+        "/\\ AsyncFreshLeaderWireLifecycleAdmissionsAreSingularThisStep "
+        "/\\ AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn( "
+        "compactedState) "
+        "/\\ AsyncFreshLeaderWireLifecycleSchedulerOrdinalMatchesIn( "
+        "compactedState) "
         "/\\ AsyncFreshServeIngressAdmissionsAreSingularThisStep "
         "/\\ AsyncFreshServeIngressSchedulerReservationMatchesIn( "
-        "compactedState) "
+        "leaderWireState) "
         "/\\ AsyncCandidateLifecycleReservationsAvailableIn( serveIngressState) "
         "/\\ AsyncCandidateTerminalServiceReservationAvailableIn( "
         "candidateReclamationState) "
@@ -16647,26 +17817,6 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",
-        "AdequateLeaderAuthorityBoundReceiptCarrySuppliesSemanticComposition",
-    ): (
-        "\\A initialContext: "
-        "AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty( "
-        "AsyncLiveSpecAt(initialContext)) "
-        "=> AdequateLeaderSemanticCompositionProperty( "
-        "AsyncLiveSpecAt(initialContext))"
-    ),
-    (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "AdequateLeaderAuthorityBoundReceiptCarryClosesExactResidual",
-    ): (
-        "\\A initialContext: "
-        "AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty( "
-        "AsyncLiveSpecAt(initialContext)) "
-        "=> AdequateLeaderExactClosureResidualProperty( "
-        "AsyncLiveSpecAt(initialContext))"
-    ),
-    (
-        "SumeragiV2AsyncTemporalClosureProofs",
         "AdequateLeaderServiceKernelObligation",
     ): (
         "\\A initialContext: "
@@ -16872,6 +18022,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A node, qc, archive, request, rank, budget: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
+        "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+        "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixCleared(archive) "
         "/\\ ExactDecisionRequestLifecycleAtRankAndBudget( "
         "node, qc, archive, request, rank, budget) "
         "/\\ ~ExactDecisionRequestLifecycleRankGoal( "
@@ -16925,6 +18078,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A node, qc, archive, request, rank, budget: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
+        "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+        "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixCleared(archive) "
         "/\\ ExactDecisionRequestLifecycleAtRankAndBudget( "
         "node, qc, archive, request, rank, budget) "
         "/\\ ~ExactDecisionRequestLifecycleRankGoal( "
@@ -16970,7 +18126,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "ExactDecisionRequestRankDescentDerivesFiniteEpisodeClosure",
     ): (
         "\\A initialContext: "
-        "ExactDecisionRequestLifecycleRankDescentProperty( "
+        "/\\ ExactDecisionRequestLifecycleRankDescentProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixClosureProperty( "
         "AsyncSpecAt(initialContext)) "
         "=> ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty( "
         "AsyncSpecAt(initialContext))"
@@ -16980,7 +18138,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "ExactDecisionRequestFiniteProducerEpisodeClosesAtRank",
     ): (
         "\\A initialContext: "
-        "ExactDecisionRequestLifecycleRankDescentProperty( "
+        "/\\ ExactDecisionRequestLifecycleRankDescentProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixClosureProperty( "
         "AsyncSpecAt(initialContext)) "
         "=> ExactDecisionRequestLifecycleRankCellClosureProperty( "
         "AsyncSpecAt(initialContext))"
@@ -16990,7 +18150,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "ExactDecisionRequestLifecycleRankDescentClosesLifecycle",
     ): (
         "\\A initialContext: "
-        "ExactDecisionRequestLifecycleRankDescentProperty( "
+        "/\\ ExactDecisionRequestLifecycleRankDescentProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressContinuationPrefixClosureProperty( "
         "AsyncSpecAt(initialContext)) "
         "=> ExactDecisionRequestLifecycleConvergenceProperty( "
         "AsyncSpecAt(initialContext))"
@@ -17228,6 +18390,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
         "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+        "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -17634,6 +18798,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
         "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+        "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -17699,6 +18865,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
         "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+        "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -17726,6 +18894,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
         "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+        "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -18440,7 +19610,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
     ): (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+        "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
         "/\\ IndexedHistoricalRecoveryTemporalResidualKernels "
         "=> IndexedExactHistoricalRecoveryProgress"
     ),
@@ -18449,15 +19619,16 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "IndexedHistoricalReleaseResidualsDischargeExactProgress",
     ): (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+        "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
         "=> IndexedExactHistoricalRecoveryProgress"
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalAuthorityCarryAndExposureDischargeExactProgress",
+        "IndexedHistoricalFixedDeadlineDisseminationAndExposureDischargeExactProgress",
     ): (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty "
+        "/\\ IndexedLocalAdequateLeaderFixedDeadlineAnd"
+        "ResponsiveDisseminationProperty "
         "/\\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty "
         "=> IndexedExactHistoricalRecoveryProgress"
     ),
@@ -18844,7 +20015,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "IndexedHistoricalStrictHeightServiceCompositionClosesAuthority",
     ): (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+        "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
         "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
         "/\\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty "
         "=> IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty"
@@ -18854,7 +20025,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "IndexedHistoricalStrictHeightServiceCompositionClosesDecisionRank",
     ): (
         "/\\ IndexedLiveChainSpec "
-        "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+        "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
         "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
         "/\\ IndexedHistoricalDecisionTargetOwnerRankProgressProperty "
         "=> IndexedHistoricalDecisionRankProgressResidualProperty"
@@ -18977,6 +20148,189 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
 }
 
 FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness",
+    ): (
+        "AdequateLeaderFixedSelectedServiceOwnerSet",
+        "AdequateLeaderFixedSelectedServiceOwnerAction",
+        "AsyncSpecAt",
+        "AsyncFairnessAt",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness",
+    ): (
+        "AsyncLiveSpecProjectsAsyncSpec",
+        "AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness",
+        "AdequateLeaderFixedSelectedOwnerFairnessProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedGlobalSelectionAndPreCandidateServiceSupplyRawRouteStep",
+    ): (
+        "AdequateLeaderFixedPipelineServiceRankFrontierHasExactCell",
+        "AdequateLeaderFixedSelectedExactCellProjectsToServiceFrontier",
+        "AdequateLeaderFixedStrictGoalsProjectToServiceRankDescent",
+        "AdequateLeaderFixedPreCandidateRawRouteRankStepProperty",
+        "AdequateLeaderFixedGlobalBlockerSelectionClosureProperty",
+        "AdequateLeaderFixedPreCandidateEntryServiceProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedPreCandidateRawRouteStepClosesRank",
+    ): (
+        "AdequateLeaderFixedPipelineRankOrderingIsWellFounded",
+        "WellFoundedLeadsTo",
+        "AdequateLeaderFixedPreCandidateRawRouteRankStepProperty",
+        "AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedPipelineProducerHandoffStartsRawRouteRank",
+    ): (
+        "AdequateLeaderFixedPipelineProducerHandoffFrontier",
+        "AdequateLeaderFixedPreCandidateRawRouteRankFrontier",
+        "AdequateLeaderFixedPreCandidateRouteCarrier",
+        "AdequateLeaderFixedAnyPipelineTokenCarrier",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+    ): (
+        "AdequateLeaderFixedPipelineProducerHandoffStartsRawRouteRank",
+        "AdequateLeaderFixedSelectedOwnerFairnessProperty",
+        "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty",
+        "AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty",
+        "AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty",
+        "WF1",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep",
+    ): (
+        "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStep",
+        "AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness",
+        "AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders",
+        "AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep",
+        "AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry",
+        "AdequateLeaderFixedGlobalBlockerProvidersSupplyRankStep",
+        "AdequateLeaderFixedGlobalBlockerRankClosesOwnerSelection",
+        "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+        "AdequateLeaderFixedGlobalSelectionAndPreCandidateServiceSupplyRawRouteStep",
+        "AdequateLeaderFixedPreCandidateRawRouteStepClosesRank",
+        "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        (
+            "AsyncLiveSpecSuppliesAdequateLeaderAuthorityDeadline"
+            "FreshSelfQuantitativeProviderBundle"
+        ),
+    ): (
+        "AsyncLiveSpecSuppliesAdequateLeaderConfiguredBudget",
+        "AsyncLiveSpecProjectsAsyncSpec",
+        "AsyncSpecAlwaysStrongTypeInvariant",
+        "AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness",
+        "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineImmediateSourceEntry",
+        "AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementProviders",
+        "AsyncLiveProvidesAdequateLeaderFixedPipelineTokenOwnershipAndTailCarry",
+        "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginHistory",
+        "AsyncLiveProvidesAdequateLeaderFixedCutPerAction",
+        "AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry",
+        "AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep",
+        "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep",
+        "AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders",
+        "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep",
+        "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineDecisionRetention",
+        "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveFreshSelfBundleSuppliesFixedDeadlineAndResponsiveDissemination",
+    ): (
+        "AdequateLeaderAuthorityDeadlineFreshSelfBundleSuppliesFixedDeadlineService",
+        "StarvationFreedomObligation",
+        "AsyncLiveProvidesResponsiveDecisionDissemination",
+        "AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveSpecSuppliesAdequateLeaderFixedDeadlineAndResponsiveDissemination",
+    ): (
+        (
+            "AsyncLiveSpecSuppliesAdequateLeaderAuthorityDeadline"
+            "FreshSelfQuantitativeProviderBundle"
+        ),
+        "AsyncLiveFreshSelfBundleSuppliesFixedDeadlineAndResponsiveDissemination",
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalTargetConvergence",
+    ): (
+        "AdequateLeaderFixedDeadlineServiceClosesFreshSelfCorridor",
+        "AdequateLeaderLocalFreshSelfCorridorExposureProperty",
+        "AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty",
+        "AdequateLeaderLocalTargetDecisionConvergenceProperty",
+        "AdequateLeaderFreshSynchronizedTargetCorridor",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalConvergence",
+    ): (
+        "AsyncLiveProvidesLocalFreshSelfCorridorExposure",
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalTargetConvergence",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderFixedDeadlineAndDisseminationCloseExactResidual",
+    ): (
+        "AsyncLiveProvidesAdequateLeaderExactResidualKernel",
+        "AdequateLeaderFixedDeadlineAndDisseminationSupplyLocalConvergence",
+        "AdequateLeaderExactClosureResidualProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualObligation",
+    ): (
+        "AsyncLiveSpecSuppliesAdequateLeaderFixedDeadlineAndResponsiveDissemination",
+        "AdequateLeaderFixedDeadlineAndDisseminationCloseExactResidual",
+        "AdequateLeaderExactClosureResidualProperty",
+        "AdequateLeaderExactResidualKernelProperty",
+        "AdequateLeaderLocalTargetDecisionConvergenceProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "AsyncSpecClosesExactDecisionRequestIngressContinuationPrefix",
+    ): (
+        "AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure",
+        "AsyncSpecAlwaysUsesFixedResponsiveVoters",
+        "ExactDecisionRequestIngressContinuationPrefixClosureProperty",
+        "ExactDecisionNormalRequestIngressContinuationPrefixBlocked",
+        "ExactDecisionRequestIngressContinuationPrefixGoal",
+        "ExactDecisionRequestIngressContinuationPrefixCleared",
+        "AsyncVoterCandidateProducerContinuationResolutionClosureProperty",
+        "AsyncVoterCandidateProducerContinuationEpisodePending",
+        "PTL",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressContinuationPrefixHasFiniteRankWitness",
+    ): (
+        "CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive",
+        "ExactDecisionRequestIngressContinuationPrefixAtBudget",
+        "ExactDecisionNormalRequestIngressContinuationPrefixBlocked",
+        "AsyncCandidateProducerContinuationFrozenPrefixAtBudget",
+        "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord",
+        "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",
+        "AsyncCandidateProducerContinuationRecordSet",
+    ),
     (
         "SumeragiV2AdequateLeaderCorridorEntryContinuationProofs",
         "AsyncLiveProvidesAdequateLeaderViewExposureRankStep",
@@ -20608,7 +21962,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AdequateLeaderServiceKernelObligation",
     ): (
         "AdequateLeaderExactClosureResidualObligation",
-        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+        "AdequateLeaderLocalTargetConvergenceSuppliesDecisionConvergence",
         "AdequateLeaderExactClosureResidualProperty",
     ),
     (
@@ -20784,6 +22138,11 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "ExactDecisionRequestIngressIoServicePersistsAndLowers",
         "ExactDecisionRequestIngressRunnerActionCreatesGoal",
+        "ExactDecisionRequestIngressLocalProducerCannotAscendRank",
+        "ExactDecisionRequestIngressOlderLocalInterleaveCannotAscendRank",
+        "ExactDecisionRequestIngressRuntimeActivationCannotAscendRank",
+        "ExactDecisionRequestEarlierIngressOwnerServiceLowersRank",
+        "ExactDecisionRequestFrozenServeBarrierPredecessorServiceLowersRank",
         "ExactDecisionRequestFrozenServeBarrierMaterializationLowersRank",
         "ExactDecisionRequestLifecycleFrozenOwnerServiceConsumesBudget",
         "ExactDecisionRequestLifecycleFrozenOwnersDoNotReplenish",
@@ -20812,6 +22171,8 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "AsyncSpecAlwaysStrongTypeInvariant",
         "AsyncSpecAlwaysProgressOwnershipInvariant",
+        "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+        "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
         "ExactDecisionRequestLifecycleSelectedActionEnabledAtEpisode",
         "ExactDecisionRequestLifecycleBracketStepPreservesEpisodeOrGoal",
         "ExactDecisionRequestLifecycleConcreteOwnerPersistsInRankCell",
@@ -20839,6 +22200,9 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness",
         "ExactDecisionRequestLifecycleRankDescentProperty",
         "ExactDecisionRequestLifecycleConcreteActionOriginProperty",
+        "ExactDecisionRequestIngressContinuationPrefixClosureProperty",
+        "ExactDecisionRequestIngressContinuationPrefixGoal",
+        "ExactDecisionRequestIngressContinuationPrefixCleared",
         "ExactDecisionRequestLifecycleRankCellOutcome",
         "ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty",
         "PTL",
@@ -20880,6 +22244,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionRequestAdmissionCoalescingOutcomeIsDischarged",
     ): (
         "AsyncSpecProvidesExactDecisionRequestLifecycleRankDescent",
+        "AsyncSpecClosesExactDecisionRequestIngressContinuationPrefix",
         "ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty",
     ),
     (
@@ -21241,6 +22606,8 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionTargetNeutralFairEpisodeStep",
     ): (
+        "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+        "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
         "ExactDecisionAsyncSpecAlwaysCandidateTombstones",
         "ExactDecisionTargetNeutralSelectedOwnerIsReady",
         "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
@@ -21378,29 +22745,6 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralResidualReachesDeadlineOrGoal",
         "ExactDecisionTargetNeutralDueHeadReachesReadyGoal",
         "ExactDecisionTargetNeutralDeadline",
-    ),
-    (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "AdequateLeaderAuthorityBoundReceiptCarrySuppliesSemanticComposition",
-    ): (
-        "AsyncLiveSpecProjectsAsyncSpec",
-        "AsyncSpecAlwaysStrongTypeInvariant",
-        "AsyncLiveProvidesLocalFreshSelfCorridorExposure",
-        "AdequateLeaderLocalSelfExposureSuppliesTargetCorridorEntry",
-        "AdequateLeaderAuthorityBoundReceiptCarrySuppliesFreshSelfLeaderDecision",
-        "AdequateLeaderLocalExposureAndProtectedServiceSupplyViewReach",
-        "AdequateLeaderAuthorityBoundReceiptCarrySuppliesTargetSemanticComposition",
-        "AdequateLeaderSemanticCompositionProperty",
-        "PTL",
-    ),
-    (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "AdequateLeaderAuthorityBoundReceiptCarryClosesExactResidual",
-    ): (
-        "AsyncLiveProvidesAdequateLeaderExactResidualKernel",
-        "AdequateLeaderAuthorityBoundReceiptCarrySuppliesSemanticComposition",
-        "AdequateLeaderExactClosureResidualProperty",
-        "PTL",
     ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",
@@ -21625,9 +22969,10 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalAuthorityCarryAndExposureDischargeExactProgress",
+        "IndexedHistoricalFixedDeadlineDisseminationAndExposureDischargeExactProgress",
     ): (
-        "IndexedAdequateLeaderAuthorityCarryAndExposureSupplyLocalSemanticKernel",
+        "IndexedAdequateLeaderFixedDeadlineDisseminationAnd"
+        "ExposureSupplyLocalConvergence",
         "IndexedHistoricalReleaseResidualsDischargeExactProgress",
     ),
     (
@@ -22798,10 +24143,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 782
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 806
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "62846b01b09e3377b768793223e6fc1c3103c6dede907d9169bff8c70610a749"
+    "877ec0909ecfb9c22118b9b976ec87d709e3d8d012cb2d693c8465524405fee5"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -22872,7 +24217,7 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "43ac1f9d461eaebc54570a59b0846abadaa9e8791a8bfc89e02a234e99276555"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "aea80dabf6ded49bc809d46aea57d438caacdc7df61c1197ec1ce0e2f307abb4"
+        "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
@@ -22885,7 +24230,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        36,
+        40,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -22916,11 +24261,11 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 43),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 52),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 33),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 119),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -23430,6 +24775,8 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark",
     "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
     "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
+    "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
+    "sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -23817,12 +25164,21 @@ _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
     ),
 }
 
+_EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
+    "barrier": (
+        "0fd794936441324fa30589c8b167829bd9653da162d7155717d01017e0084ad1"
+    ),
+    "matches_barrier": (
+        "3e4b041edb19097dedb4907b8ac46217cac63bd6db20364af4e1fd7979f5c002"
+    ),
+}
+
 _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
     "CertifiedServeProducerEpisode::drop": (
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
-        "2b64002dd924f1bf7163a6724641b7f9234f8ad40c638f564c7249fbefbe3eb2"
+        "879cf4ba9107a88226a572068e941693ffd3c2f69c8f1dce943c709cc1321693"
     ),
     "V2IoCommandQueue::try_begin_producer_episode": (
         "918c8208cde905cc74c7146a81eca81a4f6df71c73ddab94b1728cea02c726c0"
@@ -23831,16 +25187,16 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "af55e56ebf4bffef6b765e06aec105ede58a1be56f9612c310799fe67aef2ec1"
     ),
     "V2IoCommandQueue::serve_barrier": (
-        "61b54e2187e52cbf77e1cdf4f60113362cfc6031a8729a92c343592217e1a827"
+        "dee6a2b1e77fa2dcf0293a601b25a21006eefd2d8557051d9be4beef33630003"
     ),
     "V2IoCommandQueue::claim_serve_runtime_episode": (
-        "77b455c8eeee5bbdde56d94af22feec8ea899916faab238030ce6fde75332047"
+        "776649d85722700536fff55e1af781a66aa8694492c550ba3361255d516d0c2e"
     ),
     "V2IoCommandQueue::serve_runtime_predecessor_capacity_available": (
-        "4cb48bd7ec489685517e6ec7e08c44e05f96e11b690380ffc22ca205b5b11dec"
+        "203786f0b005ec7cf105e7189d4f05a23efe71d241c1cb16b3a700c2d4036733"
     ),
     "V2IoCommandQueue::finish_serve_runtime_episode_turn": (
-        "94f0778fce9eb42a67ae57c74c315567f18a3379f058bd46985ca66b3ad2e427"
+        "02d2bb266994d99ca4fdef5ec8d90fef193a969fe2136eb6e0f0a7f0ae47f0df"
     ),
     "V2IoCommandQueue::try_send_as": (
         "4b09b1fb37cd30d067a58a3f9902ebb3f23d22af95e5f72b49bfccbb39a1587f"
@@ -23867,7 +25223,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "aa2d628cbb2b5f54d0901f9949d3581d6188efe72a3656958e95e9e9dacbae92"
     ),
     "ProductionV2Services::drain_completions_inner": (
-        "e0cfd26d94b03adeffd8bb0c880d27424480e0e9f3b307959a642d14f6591c5d"
+        "412bd6deef3d72f2cf66d11b56c36ad6e85bbeb9f66c602a821b0d4929dd12ec"
     ),
 }
 
@@ -23888,13 +25244,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
     "minimum_active_lifecycle_ordinal": (
-        "11c553881b36b3d5c68d2bd4f35a4e78f49a246610e18a19540fa50429f4ddc8"
+        "0c38e2c8725a12a05c06884f8ae22d3ea7c6395243dc08800afdbf4d1190d812"
     ),
     "active_lifecycle_uses_ordinal": (
-        "981d37687ac46526c1b81723dc11b9e5e25e540ee98c65f4f766810643f6b616"
+        "3383cbf7969a7f8d792f56ed9c148c4ca523f6366bfac8c60b53a68af427a4fc"
     ),
     "older_lifecycle_predates_exact_serve": (
         "2b832129d3f5e91ea0e333400277c9715785f896b460b0de55e398d2cdc69b30"
+    ),
+}
+
+_EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
+    "oldest_active_lifecycle_ordinal": (
+        "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
+    ),
+    "uses_lifecycle_ordinal": (
+        "248f70bfe769734211acc566c8b91b7e0faf037990be47f95b231d5f102a557a"
     ),
 }
 
@@ -23912,13 +25277,40 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
         "4e807f3dd45e855a96923c803bd970dbc2a6684583b8dfa84aa6db788c5206c1"
     ),
     "production_drain_publishes_worker_completion_behind_full_runtime_fifo": (
-        "9018850556b6083f5121f34163d1382566f8b7ea5cea4c8b614a85b27ecf650c"
+        "913796745fa6c589f20dd309da632c1dfb05f84aa963377b04ffa9a0556e21eb"
     ),
     "drained_exact_retransmission_gets_fresh_scheduler_ordinal": (
-        "f5cf44a24b0e1b0d4dbd8014db678b1c9dce93d428ec9222a82fda0dbf043f2b"
+        "f21eea2060d0b4f969dda5681df7ea0e208af2b0080aaa9fc23271cef72e1b56"
     ),
     "certified_serve_future_slot_blocks_control_and_consensus_replenishment": (
         "d1ff8afcad02c99641e66021fd334b88f7f93eb8d3713dc346c08cff915d3342"
+    ),
+}
+
+_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256 = {
+    "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
+        "653fac9ef34bfb376711f643fe231ee9860cb7c1ef29570d514a3f870a531c1c"
+    ),
+}
+
+_LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
+    "restored_productive_retry_freezes_the_current_physical_source_prefix": (
+        "3fa33cdfc0eb55bf7e025c57d340439fbe527c5cf1ba29b48e8779db5be8cd65"
+    ),
+    "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire": (
+        "e994c3391ce2626972c26c57a37039f71573adb9d82bbcfa64619edb70640255"
+    ),
+}
+
+_LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
+    "fair_v2_ingress_admit_leader_wire": (
+        "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
+    ),
+    "try_recv_if_at_checked": (
+        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+    ),
+    "ingress_scheduler_ordinals": (
+        "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
 }
 
@@ -24408,7 +25800,7 @@ _PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256 = {
         "76c27a4cf75123379bdd30fd759589189574587442a29333618dd6fa78e6a145"
     ),
     "data_frame_wire_len_from_payload_len_with_peer_key_bytes": (
-        "6a7f400c67afdc25c834fdb17f782baf374017cca082295f88bbfda501199fb1"
+        "6a7f400c67afbc25c834fdb17f782baf374017cca082295f88bbfda501199fb1"
     ),
     "data_frame_wire_len_from_payload_len": (
         "33df4c34f2034f666dfe403b97869e498094f42a6fe35c5ce0ab75164fe0bcbe"
@@ -24910,7 +26302,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "5dc0c2bc91dfedf3972f1d7f13b45c0d8ce923d6e1ba25ea139b77f82285857b"
     ),
     "try_recv_if_at_checked": (
-        "f8e33e730395060fec32b387e03cee628290309603ef3320ec8f7de03af1f041"
+        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
     ),
 }
 
@@ -31442,9 +32834,13 @@ def _async_liveness_shard_contract(
                 f"{module}.tla exceeds {ASYNC_LIVENESS_SHARD_MAX_BYTES} bytes: "
                 f"found {encoded_size}"
             )
-        if line_count > ASYNC_LIVENESS_SHARD_MAX_LINES:
+        reviewed_line_limit = ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES.get(
+            module,
+            ASYNC_LIVENESS_SHARD_MAX_LINES,
+        )
+        if line_count > reviewed_line_limit:
             errors.append(
-                f"{module}.tla exceeds {ASYNC_LIVENESS_SHARD_MAX_LINES} lines: "
+                f"{module}.tla exceeds {reviewed_line_limit} lines: "
                 f"found {line_count}"
             )
         expected_extends = (
@@ -31463,9 +32859,15 @@ def _async_liveness_shard_contract(
 
         declarations = _top_level_declarations(source)
         theorem_declarations = [item for item in declarations if item[1] == "theorem"]
-        if len(theorem_declarations) > ASYNC_LIVENESS_SHARD_MAX_THEOREMS:
+        reviewed_theorem_limit = (
+            ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS.get(
+                module,
+                ASYNC_LIVENESS_SHARD_MAX_THEOREMS,
+            )
+        )
+        if len(theorem_declarations) > reviewed_theorem_limit:
             errors.append(
-                f"{module}.tla exceeds {ASYNC_LIVENESS_SHARD_MAX_THEOREMS} "
+                f"{module}.tla exceeds {reviewed_theorem_limit} "
                 f"top-level theorems: found {len(theorem_declarations)}"
             )
         stripped = strip_tla_comments(source)
@@ -31757,7 +33159,8 @@ def _top_level_theorem_body(
     )
     declaration = re.compile(
         rf"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
-        rf"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+        rf"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
+        rf"(?:[ \t]+|[ \t]*\n[ \t]*)"
         rf"{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*=="
     ).search(stripped)
     if declaration is None:
@@ -31780,7 +33183,8 @@ def _proofless_release_theorem_errors(
     errors: list[str] = []
     declaration = re.compile(
         r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
-        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
+        r"(?:[ \t]+|[ \t]*\n[ \t]*)"
         r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)=\n]*\))?\s*=="
     )
     proof = re.compile(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b")
@@ -32272,6 +33676,49 @@ def _async_candidate_producer_continuation_contract_errors(
             '{"BeginDecision", "PersistDecision"} => record.node = target) '
             '/\\ record.identity.payload.causalOrigin = record.causalOrigin'
         ),
+        "AsyncCandidateProducerContinuationFrozenRecords": (
+            "{record \\in "
+            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
+            "/\\ record.ordinal <= targetOrdinal /\\ record.causalOrigin "
+            "\\in "
+            "AsyncCandidateProducerContinuationFrozenPredecessorOrigins( "
+            "node, targetOrdinal)}"
+        ),
+        "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates": (
+            "{candidate \\in AsyncCandidateSet: \\E record \\in "
+            "AsyncCandidateProducerContinuationFrozenRecords( node, "
+            'targetOrdinal): /\\ record.status = "Reserved" /\\ '
+            'record.sourceClass = "Local" /\\ '
+            "~AsyncCandidateProducerContinuationConcreteSuccessorOwned(record) "
+            "/\\ ~AsyncCandidateProducerContinuationHandoffRetired(record) "
+            "/\\ candidate = record.candidate}"
+        ),
+        "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates": (
+            "{AsyncLeaderWireRuntimeCandidate(record.item): record \\in "
+            "asyncLeaderWireLifecycles, /\\ record.recipient = node "
+            "/\\ record.schedulerOrdinal < targetOrdinal /\\ \\/ "
+            "AsyncLeaderWireLifecycleDormant(record) \\/ "
+            "AsyncLeaderWireLifecycleActive(record)}"
+        ),
+        "AsyncCandidateProducerContinuationFrozenCandidateOwners": (
+            "AsyncCausalEpisodeCandidates(node, targetOrdinal) \\cup "
+            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
+            "node, targetOrdinal) \\cup "
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates( "
+            "node, targetOrdinal)"
+        ),
+        "AsyncCandidateProducerContinuationFrozenCandidateTokens": (
+            '{<<"Candidate", candidate, token>>: candidate \\in '
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
+            "targetOrdinal), token \\in "
+            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}"
+        ),
+        "AsyncCandidateProducerContinuationFrozenStatusTokens": (
+            '{<<"Continuation", record.identity, token>>: record \\in '
+            "AsyncCandidateProducerContinuationFrozenRecords( node, "
+            "targetOrdinal), token \\in "
+            "1..AsyncCandidateProducerContinuationStatusRank(record.status)}"
+        ),
         "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty": (
             "specification => \\A node \\in AsyncVotersAt(initialContext), "
             "identity, targetOrdinal \\in Nat \\ {0}, targetStage \\in "
@@ -32514,7 +33961,40 @@ def _async_candidate_producer_continuation_contract_errors(
         "AsyncCandidateProducerContinuationScheduledExclusionInvariant": (
             "\\A candidate \\in QueuedCandidates \\cup DeferredCandidates "
             "\\cup CausalCandidates \\cup TrackedWorkCandidates: "
-            "~AsyncCandidateProducerContinuationBlocks(candidate)"
+            "\\/ ~AsyncCandidateProducerContinuationBlocks(candidate) \\/ "
+            "AsyncCandidateProducerContinuationExactReplayCarrier(candidate)"
+        ),
+        "AsyncCandidateProducerContinuationExactReplayCarrier": (
+            "\\E record \\in AsyncCandidateProducerContinuations: /\\ "
+            'record.status \\in {"Reserved", "Materialized"} /\\ '
+            'record.sourceClass = "Local" /\\ record.candidate = candidate '
+            "/\\ record.ordinal = AsyncCandidateLifecycleOrdinal(candidate)"
+        ),
+        "AsyncCandidateProducerContinuationLocalReplayCarrier": (
+            '/\\ record.sourceClass = "Local" /\\ '
+            "CandidateScheduled(record.candidate)"
+        ),
+        "AsyncCandidateProducerContinuationLocalReplayCarrierAfter": (
+            '/\\ record.sourceClass = "Local" /\\ '
+            "CandidateScheduledAfter(record.candidate)"
+        ),
+        "AsyncCandidateProducerContinuationExactLocalReplayStep": (
+            "LET record == "
+            "AsyncCandidateProducerContinuationSelectedReplayRecord(node) IN "
+            '/\\ record.status = "Reserved" /\\ '
+            'record.sourceClass = "Local" /\\ '
+            "~AsyncCandidateProducerContinuationRunnerResolutionReady(node) /\\ "
+            'asyncRunnerPhase[node] = "Local" /\\ '
+            "asyncRunnerBudget[node] > 0 /\\ "
+            "CanEnqueueClass(node, record.candidate.class) /\\ "
+            "AsyncCandidateProducerContinuationExactReplayIdentity( node, "
+            "AsyncCandidateProducerContinuationSelectedLocalCandidate(node)) "
+            "/\\ AsyncCandidateLifecycleOrdinal(record.candidate) = "
+            "record.ordinal /\\ EnqueueCandidate(record.candidate) /\\ "
+            "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
+            "AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService /\\ "
+            "asyncRunnerPhase' = asyncRunnerPhase /\\ asyncRunnerBudget' = "
+            "[asyncRunnerBudget EXCEPT ![node] = @ - 1]"
         ),
         "AsyncCandidateProducerContinuationHandoffCandidatesThisStep": (
             "IF candidate \\in AsyncCandidateServicesThisStep THEN "
@@ -32539,7 +34019,10 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationHandoffOwned": (
             '\\/ /\\ record.sourceClass = "Local" /\\ '
+            "\\/ "
             "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
+            "\\/ "
+            "AsyncCandidateProducerContinuationLocalReplayCarrier(record) "
             '\\/ /\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
             "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
             "\\/ AsyncCandidateConditionalTransportCarrier(record) \\/ "
@@ -32589,6 +34072,32 @@ def _async_candidate_producer_continuation_contract_errors(
             "\\/ "
             "AsyncCandidateProducerContinuationHandoffRetired(record)"
         ),
+        "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress": (
+            "\\/ ~AsyncIngressSchedulerBarrierActive(node) "
+            "\\/ record.ordinal <= AsyncEarliestIngressSchedulerOrdinal(node)"
+        ),
+        "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode": (
+            "{record \\in "
+            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
+            "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress("
+            "node, record)}"
+        ),
+        "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord": (
+            "AsyncCandidateProducerContinuationSelectedResolutionRecord(node)"
+        ),
+        "AsyncCandidateProducerContinuationRunnerResolutionRequired": (
+            "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode("
+            "node) # {}"
+        ),
+        "AsyncCandidateProducerContinuationRunnerResolutionReady": (
+            "LET record == "
+            "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord("
+            "node) IN /\\ "
+            "AsyncCandidateProducerContinuationRunnerResolutionRequired(node) "
+            '/\\ \\/ record.status = "Materialized" \\/ '
+            "AsyncCandidateProducerContinuationConcreteSuccessorOwned(record) "
+            "\\/ AsyncCandidateProducerContinuationHandoffRetired(record)"
+        ),
         "ResolveCandidateProducerContinuation": (
             "/\\ node \\in AsyncCurrentResponsiveVoters /\\ "
             "AsyncCandidateProducerContinuationResolutionReady(node) /\\ "
@@ -32621,25 +34130,37 @@ def _async_candidate_producer_continuation_contract_errors(
             "/\\ gst /\\ ServiceVolatileBodyProducerContinuation(node) /\\ "
             "AsyncNonRunnerOuterFrame"
         ),
-        "ResolveHistoricalRecoveryCandidateProducerContinuation": (
-            "/\\ HistoricalRecoveryTarget(node) /\\ node \\in "
-            "AsyncActiveServiceNodes /\\ node \\in up /\\ "
-            "~NodeHasApplication(node) /\\ "
-            "AsyncCandidateProducerContinuationResolutionRequired(node) /\\ "
-            "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
-            "AsyncSchedulerExceptCausalControlAndNodeService /\\ "
-            "asyncNodeServiceDeadlines' = [asyncNodeServiceDeadlines EXCEPT "
-            "![node] = asyncNow + AsyncDeliveryBound]"
-        ),
         "AsyncCandidateProducerContinuationSelectedForResolution": (
             "/\\ ResolveCandidateProducerContinuation(record.node) /\\ "
             "AsyncCandidateProducerContinuationSelectedResolutionRecord( "
             "record.node) = record"
         ),
+        "AsyncCandidateProducerContinuationSelectedForRunnerResolution": (
+            "/\\ ResolveRunNodeCandidateProducerContinuation(record.node) "
+            "/\\ AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord( "
+            "record.node) = record"
+        ),
+        "AsyncCandidateProducerContinuationSelectedForRunnerReplay": (
+            "/\\ ReplayRunNodeCandidateProducerContinuation(record.node) "
+            "/\\ AsyncCandidateProducerContinuationExactRuntimeReplayStep( "
+            "record.node) /\\ "
+            "AsyncCandidateProducerContinuationSelectedReplayRecord( "
+            "record.node) = record"
+        ),
+        "AsyncCandidateProducerContinuationSelectedForAcknowledgement": (
+            "\\/ AsyncCandidateProducerContinuationSelectedForResolution(record) "
+            "\\/ "
+            "AsyncCandidateProducerContinuationSelectedForRunnerResolution(record) "
+            "\\/ "
+            "AsyncCandidateProducerContinuationSelectedForRunnerReplay(record)"
+        ),
         "AsyncCandidateProducerContinuationHandoffOwnedAfterIn": (
             '\\/ /\\ record.sourceClass = "Local" /\\ '
+            "\\/ "
             "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
-            'state, record) \\/ /\\ record.sourceClass = '
+            "state, record) \\/ "
+            "AsyncCandidateProducerContinuationLocalReplayCarrierAfter(record) "
+            '\\/ /\\ record.sourceClass = '
             '"ConditionalTransport" /\\ \\/ '
             "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
             "state, record) \\/ "
@@ -32657,23 +34178,15 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateConditionalTransportRetiredAfterIn(state, record) "
             "\\/ AsyncCandidateVolatileBodyRetiredAfterIn(state, record)"
         ),
-        "AsyncCandidateProducerContinuationSelectedForHistoricalRecovery": (
-            "/\\ ResolveHistoricalRecoveryCandidateProducerContinuation("
-            "record.node) /\\ "
-            "AsyncCandidateProducerContinuationSelectedResolutionRecord( "
-            "record.node) = record"
-        ),
         "AsyncCandidateProducerContinuationRecordAfterStep": (
             'IF record.status = "Terminal" THEN record ELSE IF \\/ '
             "AsyncCandidateProducerContinuationTerminalAfter(record) \\/ "
-            "AsyncCandidateProducerContinuationSelectedForHistoricalRecovery( "
-            "record) \\/ "
-            "/\\ AsyncCandidateProducerContinuationSelectedForResolution( "
+            "/\\ AsyncCandidateProducerContinuationSelectedForAcknowledgement( "
             'record) /\\ \\/ record.status = "Materialized" \\/ /\\ '
             'record.status = "Reserved" /\\ '
             "AsyncCandidateProducerContinuationHandoffRetiredAfterIn( state, "
             'record) THEN [record EXCEPT !.status = "Terminal"] ELSE IF /\\ '
-            "AsyncCandidateProducerContinuationSelectedForResolution( "
+            "AsyncCandidateProducerContinuationSelectedForAcknowledgement( "
             'record) /\\ record.status = "Reserved" /\\ '
             "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn( "
             "state, "
@@ -32722,6 +34235,151 @@ def _async_candidate_producer_continuation_contract_errors(
             errors.append(
                 f"{path}: {symbol} must retain exactly the reviewed "
                 "two-argument (specification, initialContext) contract"
+            )
+
+    exact_proof_theorem_statements = {
+        "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight": (
+            "\\A command \\in AsyncCandidateSet: "
+            "AsyncCandidateProducerContinuationSuccessorBatchWeight(command) "
+            '+ AsyncCandidateProducerContinuationStatusRank("Reserved") < '
+            "AsyncCandidateProducerContinuationCausalWeight(command.kind)"
+        ),
+        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound": (
+            "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ "
+            "AsyncStrongTypeInvariant /\\ "
+            "AsyncCandidateServiceLifecycleInvariant => /\\ IsFiniteSet( "
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
+            "targetOrdinal)) /\\ Cardinality( "
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
+            "targetOrdinal)) <= AsyncCandidateProducerEpisodeCapacity + "
+            "AsyncCandidateProducerContinuationCapacity + "
+            "Cardinality(AsyncLeaderWireLifecycleSlotSet)"
+        ),
+        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst": (
+            "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ gst "
+            "/\\ AsyncStrongTypeInvariant /\\ "
+            "AsyncProgressOwnershipInvariant /\\ "
+            "AsyncCandidateServiceLifecycleInvariant /\\ AsyncNext => "
+            "(AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
+            "node, targetOrdinal))' \\subseteq "
+            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
+            "node, targetOrdinal)"
+        ),
+        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge": (
+            "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ "
+            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant "
+            "/\\ AsyncCandidateServiceLifecycleInvariant /\\ AsyncNext /\\ "
+            "AsyncControlServiceSlotTransition /\\ "
+            "AsyncCandidateProducerContinuationExactLocalReplayStep(node) => "
+            "(AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
+            "targetOrdinal))' = "
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
+            "targetOrdinal)"
+        ),
+        "CandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
+            "\\A node \\in ValidatorIds, identity, targetOrdinal \\in Nat "
+            "\\ {0}, targetStage \\in "
+            "AsyncCandidateServiceStageClasses, status \\in "
+            '{"Reserved", "Materialized"}, budget \\in '
+            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: /\\ "
+            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant "
+            "/\\ AsyncCandidateServiceLifecycleInvariant /\\ "
+            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
+            "identity, targetOrdinal, targetStage, status, budget) /\\ "
+            "[AsyncNext]_AsyncAllVars => \\/ "
+            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
+            "identity, targetOrdinal, targetStage, status, budget)' \\/ "
+            "(AsyncCandidateProducerContinuationPrefixDescentGoal( node, "
+            "identity, targetOrdinal, targetStage, status, budget))'"
+        ),
+    }
+    for symbol, expected in exact_proof_theorem_statements.items():
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed producer-continuation theorem "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        observed = " ".join(statement.split())
+        if observed != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact reviewed "
+                "producer-continuation rank statement; "
+                f"expected {expected!r}; found {observed!r}"
+            )
+
+    exact_leader_wire_producer_statement_sha256 = {
+        "AsyncFrozenServeSourceCannotResurrectAtGst": (
+            "9c7153b36e085242cbb711e2f4ae749aead7d6e93c55bef96ab28bb2b3ada029"
+        ),
+        "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier": (
+            "fd416be39c0929f6e02c44fe86b363be6591b1f2c91420ea9d46b9777b7191d6"
+        ),
+        "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded": (
+            "f42decd8d5a9b10dae1f22827c5c843f6dcefbdafdfba0f22fc769e80ddc8a4c"
+        ),
+        "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded": (
+            "70aa067368776f24476ddb5f2996fec56facda720290835d19b585c9b97c0843"
+        ),
+        "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded": (
+            "d715302c130ef21e1e420bedc8c1ba59ab688a132c9809a293aa5bedb6eb2411"
+        ),
+        "AsyncFrozenLeaderWireBarrierRankIsFinite": (
+            "662bcd0a80d7e2310837b49250628f88fd9ca5a4fd94748c6ea9d5fbc939ca10"
+        ),
+        "AsyncCertifiedResponsePhysicalBarrierRankIsFinite": (
+            "168d7a958824266232560350961095a2c622914a9ace3cd710a8d51b17b5ba36"
+        ),
+        "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell": (
+            "e1f1dd69579e3bbd611ab72d59e10646d447af05222e3aa5373958448079730f"
+        ),
+        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst": (
+            "3ce66fb8fafade197c26bf362bcbb25e47c2128161a5ea166dbdfd6c80fcd660"
+        ),
+        "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish": (
+            "7402b0b99d66537dd7bcd34c4165cb90b04e871b7530f13b25e27a4117bb8f51"
+        ),
+        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends": (
+            "93613b25fe6f3385483165e67268a3b54a679d8e8f6829c17cf7a970e8c7b3bd"
+        ),
+    }
+    for symbol, expected_sha256 in (
+        exact_leader_wire_producer_statement_sha256.items()
+    ):
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed leader-wire producer theorem {symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        observed = " ".join(statement.split())
+        observed_sha256 = hashlib.sha256(observed.encode("utf-8")).hexdigest()
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact leader-wire "
+                "producer statement SHA-256 "
+                f"{expected_sha256}; found {observed_sha256}"
             )
 
     source_class_split = _top_level_theorem_body(
@@ -32821,6 +34479,7 @@ def _async_candidate_producer_continuation_contract_errors(
         "ResolveCandidateProducerContinuationNeverReplaysDrainedParent",
         "CandidateProducerContinuationBlocksRunnerUntilHandoffResolution",
         "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
+        "ExternalCandidateProducerContinuationSelectionIsReady",
         "AsyncCandidateProducerContinuationGstExcludesResetReplay",
         "ConditionalTransportContinuationReadyEnablesFairService",
         "VolatileBodyContinuationReadyEnablesFairService",
@@ -32830,10 +34489,30 @@ def _async_candidate_producer_continuation_contract_errors(
         "ExternalContinuationPersistsOrDescendsOrReplayExits",
         "LocalContinuationPersistsOrDescendsOrReplayExits",
         "CandidateProducerContinuationSuccessorBatchConsumesFrozenWeight",
+        "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
         "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
+        "AsyncFrozenServeSourceCannotResurrectAtGst",
+        "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
+        "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded",
+        "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded",
+        "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded",
+        "AsyncFrozenLeaderWireBarrierRankIsFinite",
+        "AsyncCertifiedResponsePhysicalBarrierRankIsFinite",
+        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound",
+        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+        "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
+        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
+        "HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay",
+        "HistoricalCandidateProducerContinuationNonreadyTurnUsesLocalReplay",
+        "HistoricalCandidateProducerContinuationLocalReplayTurnApproachesReady",
+        "HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage",
+        "HistoricalCandidateProducerContinuationReadyTurnExitsSelectedStatus",
         "CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive",
         "CandidateProducerContinuationFrozenOriginsCannotReplenish",
         "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+        "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish",
+        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends",
         "CandidateProducerContinuationFairResolutionStrictlyDescendsFrozenPrefix",
         "CandidateProducerContinuationDormantGoalIsReadyOrExited",
         "AsyncCandidateProducerContinuationReclamationPreservesIdentity",
@@ -32879,8 +34558,119 @@ def _async_candidate_producer_continuation_contract_errors(
         "AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed": (
             "AsyncCandidateProducerContinuationTerminalAfter",
             "AsyncCandidateProducerContinuationSelectedForResolution",
-            "AsyncCandidateProducerContinuationSelectedForHistoricalRecovery",
+            "AsyncCandidateProducerContinuationSelectedForAcknowledgement",
             "AsyncCandidateProducerContinuationRecordAfterStep",
+        ),
+        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound": (
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
+            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
+            "AsyncCandidateProducerEpisodeCapacity",
+            "AsyncCandidateProducerContinuationCapacity",
+            "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
+            "AsyncLeaderWireLifecycleSlotUniverseIsFinite",
+            "AsyncLeaderWireLifecycleSlotSet",
+        ),
+        "AsyncFrozenServeSourceCannotResurrectAtGst": (
+            "AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal",
+            "AsyncIngressPhysicalHighWatermarkIsMonotone",
+            "AsyncSharedSchedulerHighWatermarkIsMonotone",
+            "AsyncServeQueuedIdentityDepartureInstallsTombstone",
+            "AsyncServeTombstonedIdentityCannotRequeueAtGst",
+        ),
+        "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier": (
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
+            "AsyncFrozenLeaderWireBarrierRecords",
+            "AsyncLeaderWireLifecycleDormant",
+            "AsyncLeaderWireLifecycleActive",
+        ),
+        "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded": (
+            "NatLessThanWellFounded",
+            "WFLexPairOrdering",
+            "AsyncFrozenLeaderWireIngressRankOrdering",
+            "AsyncFrozenLeaderWireIngressRankCarrier",
+        ),
+        "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded": (
+            "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded",
+            "AsyncFrozenLeaderWireIngressDependencyRankOrdering",
+            "AsyncFrozenLeaderWireIngressDependencyRankCarrier",
+            "AsyncFrozenLeaderWirePhysicalRankOrdering",
+        ),
+        "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded": (
+            "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
+            "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded",
+            "AsyncFrozenLeaderWireBarrierRankOrdering",
+            "AsyncFrozenLeaderWireBarrierRankCarrier",
+        ),
+        "AsyncFrozenLeaderWireBarrierRankIsFinite": (
+            "AsyncLeaderWirePotentialPredecessorUniverseIsFinite",
+            "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
+            "AsyncFrozenLeaderWireBarrierRank",
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
+        ),
+        "AsyncCertifiedResponsePhysicalBarrierRankIsFinite": (
+            "AsyncCertifiedResponsePhysicalBarrierRank",
+            "AsyncCertifiedResponseFrozenLeaderWireRecords",
+            "AsyncCertifiedResponseFrozenLeaderWireStageTokens",
+            "AsyncFrozenLeaderWireIngressDependencyRankCarrier",
+        ),
+        "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell": (
+            "AsyncLeaderWireLifecycleSharedOrdinalInvariant",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
+            "AsyncLeaderWireContinuationSharedOrdinalNoCollisionInvariant",
+            "CandidateAdmissionCoalesced",
+        ),
+        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst": (
+            "AsyncSharedSchedulerHighWatermarkIsMonotone",
+            "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
+            "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
+            "AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix",
+            "PostGstStepCannotCreateDormantLeaderWirePotential",
+            "RuntimeLeaderWireCannotRetireMerelyFromIngressPop",
+            "RetireLeaderWireLifecycleRetainsTerminalTombstone",
+        ),
+        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst": (
+            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
+            "AsyncCandidateProducerContinuationGstExcludesResetReplay",
+            "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
+            "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
+            "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
+        ),
+        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge": (
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
+            "AsyncCandidateProducerContinuationExactLocalReplayStep",
+            "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
+            "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
+        ),
+        "CandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
+            "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
+            "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+            "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
+            "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
+            "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+            "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
+            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
+        ),
+        "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish": (
+            "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
+            "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+            "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
+            "ClaimedResponseCapacityCreatesPrioritySource",
+            "PrioritySourceSelectsClaimedResponse",
+            "DrainFairIngressSelectedClaimPopShape",
+            "AsyncFrozenServeSourceCannotResurrectAtGst",
+            "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
+            "AsyncServeQueuedIdentityDepartureInstallsTombstone",
+            "AsyncServeTombstonedIdentityCannotRequeueAtGst",
+        ),
+        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends": (
+            "ExternalContinuationFairServiceStrictlyDropsStatusRank",
+            "LocalContinuationFairResolutionStrictlyDropsStatusRank",
+            "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
+            "AsyncCandidateProducerContinuationFrozenSourcePrefixRank",
+            "AsyncCandidateProducerContinuationFrozenPrefixRankOrdering",
         ),
         "ResolveCandidateProducerContinuationNeverReplaysDrainedParent": (
             "ResolveCandidateProducerContinuation",
@@ -32889,7 +34679,7 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "CandidateProducerContinuationBlocksRunnerUntilHandoffResolution": (
             "RunNodeWork",
-            "AsyncCandidateProducerContinuationResolutionRequired",
+            "AsyncCandidateProducerContinuationRunnerResolutionRequired",
         ),
         "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner": (
             "AsyncCandidateProducerContinuationResolutionRecordsForNode",
@@ -32948,9 +34738,11 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationScheduledExclusionInvariant",
         ),
         "RunNodeWork": (
-            "IF AsyncCandidateProducerContinuationResolutionRequired(node) "
-            "THEN "
-            "ResolveHistoricalRecoveryCandidateProducerContinuation(node)",
+            "IF AsyncCandidateProducerContinuationRunnerResolutionRequired(node) "
+            "THEN IF "
+            "AsyncCandidateProducerContinuationRunnerResolutionReady(node) THEN "
+            "ResolveRunNodeCandidateProducerContinuation(node) ELSE "
+            "ReplayRunNodeCandidateProducerContinuation(node)",
         ),
         "AsyncControlServiceStateAfterReset": (
             "producerContinuations |-> "
@@ -33024,6 +34816,238 @@ def _async_candidate_producer_continuation_contract_errors(
     return errors
 
 
+def _historical_candidate_producer_continuation_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the historical Local replay premise and frozen carrier charge."""
+
+    path = (
+        formal_dir
+        / "SumeragiV2AsyncHistoricalCandidateProducerContinuationProofs.tla"
+    )
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: historical producer-continuation contract must be a "
+            "regular file"
+        ]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [
+            f"{path}: cannot read historical producer-continuation "
+            f"contract: {error}"
+        ]
+
+    errors: list[str] = []
+    theorem = "HistoricalCandidateProducerContinuationLocalReplayStepCannotReplenish"
+    expected = (
+        "\\A node \\in ValidatorIds, record \\in "
+        "AsyncCandidateProducerContinuationRecordSet, distance \\in 1..2: "
+        "/\\ AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant /\\ "
+        "HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance( "
+        "node, record, distance) /\\ [AsyncNext]_AsyncAllVars => \\/ "
+        "HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance( "
+        "node, record, distance)' \\/ "
+        "HistoricalCandidateProducerContinuationLocalReplayProgress( node, "
+        "record, distance)'"
+    )
+    extracted = _top_level_theorem_body(
+        source,
+        theorem,
+        preserve_string_contents=True,
+    )
+    if extracted is None:
+        errors.append(
+            f"{path}: missing reviewed historical producer-continuation "
+            f"theorem {theorem}"
+        )
+    else:
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        observed = " ".join(statement.split())
+        if observed != expected:
+            errors.append(
+                f"{path}:{line}: {theorem} must retain the exact progress-"
+                "ownership and Local replay non-replenishment statement; "
+                f"expected {expected!r}; found {observed!r}"
+            )
+
+    required_dependencies = {
+        theorem: (
+            "HistoricalCandidateProducerContinuationStepPersistsOrExits",
+            "AsyncProgressOwnershipInvariant",
+        ),
+        "AsyncLiveProvidesHistoricalCandidateProducerContinuationLocalReplayDescent": (
+            "AsyncSpecAlwaysProgressOwnershipInvariant",
+            theorem,
+        ),
+        "HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+        ),
+        "HistoricalCandidateProducerContinuationSelectedLocalExitDropsFrozenPrefix": (
+            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
+            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
+        ),
+    }
+    for symbol, dependencies in required_dependencies.items():
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed historical producer-continuation "
+                f"theorem {symbol}"
+            )
+            continue
+        body, line = extracted
+        missing = [
+            dependency
+            for dependency in dependencies
+            if not _tla_dependency_present(body, dependency)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain historical "
+                f"producer-continuation dependencies {missing!r}"
+            )
+    return errors
+
+
+def _ordinary_candidate_producer_deadlock_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Keep continuation progress available to ordinary and historical runners."""
+
+    path = formal_dir / "SumeragiV2AsyncDeadlockProofs.tla"
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: producer-continuation deadlock contract must be a "
+            "regular file"
+        ]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [
+            f"{path}: cannot read producer-continuation deadlock contract: "
+            f"{error}"
+        ]
+
+    errors: list[str] = []
+    exact_operators = {
+        "RunnerCandidateProducerContinuationAtStatus": (
+            "/\\ gst /\\ node \\in AsyncCurrentResponsiveVoters \\cup "
+            "asyncHistoricalRecoveryTargets /\\ status \\in "
+            '{"Reserved", "Materialized"} /\\ record.status = status /\\ '
+            "record \\in "
+            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node)"
+        ),
+        "HistoricalProducerContinuationLocalWorkDecreaseStep": (
+            "\\E node \\in AsyncCurrentResponsiveVoters \\cup "
+            "asyncHistoricalRecoveryTargets, record \\in "
+            "AsyncCandidateProducerContinuationRecordSet, status \\in "
+            '{"Reserved", "Materialized"}: /\\ '
+            "RunnerCandidateProducerContinuationAtStatus( node, record, "
+            "status) /\\ "
+            "AsyncCandidateProducerContinuationTargetStatusExit( "
+            "record.identity, status)'"
+        ),
+        "HistoricalProducerContinuationReplayLocalWorkDecreaseStep": (
+            "\\E node \\in AsyncCurrentResponsiveVoters \\cup "
+            "asyncHistoricalRecoveryTargets: "
+            "HistoricalProducerContinuationReplayDebt(node)' < "
+            "HistoricalProducerContinuationReplayDebt(node)"
+        ),
+    }
+    for symbol, expected in exact_operators.items():
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed ordinary continuation operator "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        observed = " ".join(body.split())
+        if observed != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact ordinary/"
+                "historical continuation domain; "
+                f"expected {expected!r}; found {observed!r}"
+            )
+
+    theorem_dependencies = {
+        "HistoricalRecoveryResolutionStrictlyDecreasesLocalWork": (
+            "AsyncCurrentResponsiveVoters",
+            "asyncHistoricalRecoveryTargets",
+            "PostGstRunNode",
+            "PostGstRunHistoricalRecoveryNode",
+            "HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage",
+        ),
+        "HistoricalRecoveryExactReplayStrictlyDecreasesLocalWork": (
+            "AsyncCurrentResponsiveVoters",
+            "asyncHistoricalRecoveryTargets",
+            "PostGstRunNode",
+            "PostGstRunHistoricalRecoveryNode",
+            "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
+        ),
+        "PostGstPacketRecipientRunnerIsConcreteTransportProgress": (
+            "HistoricalRecoveryResolutionStrictlyDecreasesLocalWork",
+            "HistoricalRecoveryExactReplayStrictlyDecreasesLocalWork",
+            "PostGstRunNode",
+            "PostGstRunHistoricalRecoveryNode",
+        ),
+    }
+    for symbol, dependencies in theorem_dependencies.items():
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed ordinary continuation theorem "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        missing = [
+            dependency
+            for dependency in dependencies
+            if not _tla_dependency_present(body, dependency)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain ordinary-voter "
+                f"continuation dependencies {missing!r}"
+            )
+        if (
+            symbol
+            == "PostGstPacketRecipientRunnerIsConcreteTransportProgress"
+            and re.search(
+                r"recipient[ \t\r\n]+\\in[ \t\r\n]+"
+                r"asyncHistoricalRecoveryTargets[ \t\r\n]*"
+                r"/\\[ \t\r\n]*PostGstRunHistoricalRecoveryNode",
+                strip_tla_comments(body, preserve_string_contents=True),
+            )
+        ):
+            errors.append(
+                f"{path}:{line}: {symbol} may not classify an ordinary "
+                "responsive continuation as a historical-recovery runner"
+            )
+    return errors
+
+
 def _adequate_leader_producer_origin_contract_errors(
     formal_dir: Path,
 ) -> list[str]:
@@ -33065,6 +35089,30 @@ def _adequate_leader_producer_origin_contract_errors(
         )
 
     exact_operator_bodies = {
+        "AdequateLeaderTargetScheduledProducerOriginOwner": (
+            "\\E candidate \\in QueuedCandidates \\cup DeferredCandidates "
+            "\\cup CausalCandidates \\cup TrackedWorkCandidates: /\\ "
+            "candidate.node \\in {target, leader} /\\ "
+            "candidate.consumerContext = leaderContext /\\ "
+            "candidate.height = leaderContext.height /\\ "
+            "candidate.view = leaderView /\\ candidate.subject = subject /\\ "
+            "candidate.kind \\in AsyncCandidateServiceTrackedKinds /\\ "
+            "AsyncCandidateScheduledProducerOriginReservation(candidate)"
+        ),
+        "AdequateLeaderTargetDurableBodyTerminalOwner": (
+            "\\E owner \\in AdequateLeaderFrozenCandidateOwnerUniverse( "
+            "target, leaderContext, leader, leaderView, subject): "
+            "AdequateLeaderTargetProducerOriginDurableBodyTerminal( target, "
+            "leaderContext, leader, leaderView, subject, owner)"
+        ),
+        "AdequateLeaderTargetDurableReplayOriginOwner": (
+            "\\E candidate \\in AsyncCandidateSet, rank \\in "
+            "AdequateLeaderTargetSemanticRankCarrier: /\\ "
+            "AdequateLeaderFrozenTargetCandidateIdentity( candidate, rank, "
+            "target, leaderContext, leader, leaderView, subject) /\\ "
+            "candidate.causalOrigin \\in "
+            "AsyncCandidateLifecycleDurableReplayOriginsForNode( candidate.node)"
+        ),
         "AdequateLeaderTargetProducerTransportOccurrenceSource": (
             "/\\ AdequateLeaderTargetNonDescentEpisodeAtBudget( target, "
             "leaderContext, leader, leaderView, subject, sourceOccurrenceRank, "
@@ -33085,9 +35133,15 @@ def _adequate_leader_producer_origin_contract_errors(
             "sourceOccurrenceRank, known, owner)"
         ),
         "AdequateLeaderTargetConcreteProducerTransportOwner": (
-            "\\/ AsyncCandidateProducerContinuationExactOwner( target, "
+            "\\/ AdequateLeaderTargetScheduledProducerOriginOwner( target, "
+            "leaderContext, leader, leaderView, subject) \\/ "
+            "AsyncCandidateProducerContinuationExactOwner( target, "
             "leaderContext, leader, leaderView, subject) \\/ "
             "AdequateLeaderTargetCommitQcRebroadcastResidual( target, "
+            "leaderContext, leader, leaderView, subject) \\/ "
+            "AdequateLeaderTargetDurableBodyTerminalOwner( target, "
+            "leaderContext, leader, leaderView, subject) \\/ "
+            "AdequateLeaderTargetDurableReplayOriginOwner( target, "
             "leaderContext, leader, leaderView, subject) \\/ \\E item \\in "
             "AsyncNetworkItems: /\\ AdequateLeaderTargetWireIdentity( item, "
             "target, leaderContext, leader, leaderView, subject) /\\ "
@@ -33118,6 +35172,25 @@ def _adequate_leader_producer_origin_contract_errors(
             "sourceOccurrenceRank, known, budget, owner) => "
             "AdequateLeaderTargetConcreteProducerTransportOwner( target, "
             "leaderContext, leader, leaderView, subject))"
+        ),
+        "AdequateLeaderTargetProducerOriginExposureOrGoalProperty": (
+            "specification => [](\\A target \\in ValidatorIds, "
+            "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+            "leaderView \\in Views, subject \\in Subjects, "
+            "sourceOccurrenceRank \\in "
+            "AdequateLeaderTargetOccurrenceRankCarrier, known \\in SUBSET "
+            "AdequateLeaderFrozenOwnerUniverse( target, leaderContext, "
+            "leader, leaderView, subject), budget \\in Nat, owner \\in "
+            "AdequateLeaderFrozenCandidateOwnerUniverse( target, "
+            "leaderContext, leader, leaderView, subject): "
+            "AdequateLeaderTargetProducerTransportOccurrenceSource( target, "
+            "leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, budget, owner) => \\/ "
+            "AdequateLeaderTargetConcreteProducerTransportOwner( target, "
+            "leaderContext, leader, leaderView, subject) \\/ "
+            "AdequateLeaderTargetProducerTransportOccurrenceGoal( target, "
+            "leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, owner))"
         ),
         "AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty": (
             "specification => \\A target \\in ValidatorIds, leaderContext "
@@ -33158,9 +35231,27 @@ def _adequate_leader_producer_origin_contract_errors(
             )
 
     required_operator_dependencies = {
+        "AdequateLeaderTargetConcreteProducerTransportOwner": (
+            "AdequateLeaderTargetScheduledProducerOriginOwner",
+            "AsyncCandidateProducerContinuationExactOwner",
+            "AdequateLeaderTargetCommitQcRebroadcastResidual",
+            "AdequateLeaderTargetDurableBodyTerminalOwner",
+            "AdequateLeaderTargetDurableReplayOriginOwner",
+            "LeaderWireLogicalServiceActive",
+            "LeaderWireIngressOwned",
+            "LeaderWireCandidateOwned",
+            "LeaderWireLiveControlServiceOwner",
+        ),
         "AdequateLeaderTargetProducerOriginExposureProperty": (
             "AdequateLeaderTargetProducerTransportOccurrenceSource",
             "AdequateLeaderTargetConcreteProducerTransportOwner",
+            "AdequateLeaderFrozenOwnerUniverse",
+            "AdequateLeaderFrozenCandidateOwnerUniverse",
+        ),
+        "AdequateLeaderTargetProducerOriginExposureOrGoalProperty": (
+            "AdequateLeaderTargetProducerTransportOccurrenceSource",
+            "AdequateLeaderTargetConcreteProducerTransportOwner",
+            "AdequateLeaderTargetProducerTransportOccurrenceGoal",
             "AdequateLeaderFrozenOwnerUniverse",
             "AdequateLeaderFrozenCandidateOwnerUniverse",
         ),
@@ -33214,10 +35305,35 @@ def _adequate_leader_producer_origin_contract_errors(
             )
 
     theorem_contracts = {
+        "AdequateLeaderScheduledProducerOriginUsesBoundedLifecycleToken": (
+            "AsyncCandidateSchedulerCoverageExposesBoundedProducerOrigin",
+            "AdequateLeaderTargetScheduledProducerOriginOwner",
+            "AsyncCandidateScheduledProducerOriginReservation",
+            "AsyncCandidateScheduledProducerOriginReservationToken",
+            "AsyncCandidateLifecycleOrdinal",
+        ),
         "AdequateLeaderProducerTransportOccurrenceSourceIsOwnedOrExactDebt": (
             "AdequateLeaderTargetProducerTransportOccurrenceSource",
             "AdequateLeaderTargetConcreteProducerTransportOwner",
             "AdequateLeaderTargetUnownedProducerOriginDebt",
+        ),
+        "AdequateLeaderProducerOriginReceiptClosesExactDebt": (
+            "AdequateLeaderProducerOriginSourceNamesExactReceiptOrPhysicalTerminal",
+            "AdequateLeaderProducerOriginReceiptExposesExactReplacement",
+            "AdequateLeaderTargetProducerTransportOccurrenceSource",
+            "AdequateLeaderTargetProducerTransportOccurrenceGoal",
+            "AdequateLeaderTargetConcreteProducerTransportOwner",
+            "AdequateLeaderTargetScheduledProducerOriginOwner",
+            "AdequateLeaderTargetDurableBodyTerminalOwner",
+            "AdequateLeaderTargetDurableReplayOriginOwner",
+        ),
+        "AdequateLeaderProducerOriginInvariantsProvideExposureOrGoal": (
+            "AdequateLeaderProducerOriginReceiptClosesExactDebt",
+            "AdequateLeaderTargetProducerOriginExposureOrGoalProperty",
+            "AsyncStrongTypeInvariant",
+            "AsyncProgressOwnershipInvariant",
+            "AsyncCandidateServiceTombstoneLifecycleInvariant",
+            "PTL",
         ),
         "AdequateLeaderConcreteProducerOriginAndClosureProvideOccurrenceClosure": (
             "AdequateLeaderTargetProducerOriginExposureProperty",
@@ -33227,8 +35343,31 @@ def _adequate_leader_producer_origin_contract_errors(
             "AdequateLeaderTargetProducerTransportOccurrenceGoal",
             "PTL",
         ),
+        "AdequateLeaderReceiptExposureAndConcreteClosureProvideOccurrenceClosure": (
+            "AdequateLeaderTargetProducerOriginExposureOrGoalProperty",
+            "AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty",
+            "AdequateLeaderTargetProducerTransportOccurrenceClosureProperty",
+            "AdequateLeaderTargetProducerTransportOccurrenceSource",
+            "AdequateLeaderTargetProducerTransportOccurrenceGoal",
+            "PTL",
+        ),
     }
     exact_theorem_statements = {
+        "AdequateLeaderScheduledProducerOriginUsesBoundedLifecycleToken": (
+            "\\A target, leaderContext, leader, leaderView, subject: /\\ "
+            "AsyncCandidateLifecycleSchedulerCoverageInvariant /\\ "
+            "AsyncCandidateLifecycleStageIdentityInvariant /\\ "
+            "AdequateLeaderTargetScheduledProducerOriginOwner( target, "
+            "leaderContext, leader, leaderView, subject) => \\E candidate "
+            "\\in QueuedCandidates \\cup DeferredCandidates \\cup "
+            "CausalCandidates \\cup TrackedWorkCandidates: /\\ "
+            "candidate.node \\in {target, leader} /\\ "
+            "candidate.consumerContext = leaderContext /\\ "
+            "candidate.view = leaderView /\\ candidate.subject = subject /\\ "
+            "AsyncCandidateScheduledProducerOriginReservation(candidate) /\\ "
+            "(AsyncCandidateScheduledProducerOriginReservationToken(candidate)) "
+            ".ordinal = AsyncCandidateLifecycleOrdinal(candidate)"
+        ),
         "AdequateLeaderProducerTransportOccurrenceSourceIsOwnedOrExactDebt": (
             "\\A target, leaderContext, leader, leaderView, subject, "
             "sourceOccurrenceRank, known, budget, owner: "
@@ -33241,10 +35380,41 @@ def _adequate_leader_producer_origin_contract_errors(
             "leaderContext, leader, leaderView, subject, "
             "sourceOccurrenceRank, known, budget, owner)"
         ),
+        "AdequateLeaderProducerOriginReceiptClosesExactDebt": (
+            "\\A target, leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, budget, owner: /\\ "
+            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant /\\ "
+            "AsyncCandidateServiceTombstoneLifecycleInvariant /\\ "
+            "AdequateLeaderTargetProducerTransportOccurrenceSource( target, "
+            "leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, budget, owner) => \\/ "
+            "AdequateLeaderTargetConcreteProducerTransportOwner( target, "
+            "leaderContext, leader, leaderView, subject) \\/ "
+            "AdequateLeaderTargetProducerTransportOccurrenceGoal( target, "
+            "leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, owner)"
+        ),
+        "AdequateLeaderProducerOriginInvariantsProvideExposureOrGoal": (
+            "\\A specification: /\\ (specification => "
+            "[]AsyncStrongTypeInvariant) /\\ (specification => "
+            "[]AsyncProgressOwnershipInvariant) /\\ (specification => "
+            "[]AsyncCandidateServiceTombstoneLifecycleInvariant) => "
+            "AdequateLeaderTargetProducerOriginExposureOrGoalProperty( "
+            "specification)"
+        ),
         "AdequateLeaderConcreteProducerOriginAndClosureProvideOccurrenceClosure": (
             "\\A specification: /\\ "
             "AdequateLeaderTargetProducerOriginExposureProperty(specification) "
             "/\\ "
+            "AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty( "
+            "specification) => "
+            "AdequateLeaderTargetProducerTransportOccurrenceClosureProperty( "
+            "specification)"
+        ),
+        "AdequateLeaderReceiptExposureAndConcreteClosureProvideOccurrenceClosure": (
+            "\\A specification: /\\ "
+            "AdequateLeaderTargetProducerOriginExposureOrGoalProperty( "
+            "specification) /\\ "
             "AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty( "
             "specification) => "
             "AdequateLeaderTargetProducerTransportOccurrenceClosureProperty( "
@@ -33283,10 +35453,10 @@ def _adequate_leader_producer_origin_contract_errors(
                 f"reviewed dependencies {missing!r}"
             )
 
-    # This exact live provider is the requested release leaf, not an axiom or
-    # a composition theorem.  Until an Async theorem supplies origin exposure
-    # from durable state, keeping it absent is the machine-checked proof-debt
-    # marker.  A future real provider must update this contract and its tests.
+    # The reviewed provider above derives exposure-or-goal from the exact
+    # scheduled reservation, durable terminal/replay origin, and receipt
+    # invariants.  Generic aggregate facades remain forbidden: they would hide
+    # the concrete producer-origin split that this contract is meant to seal.
     for forbidden_provider in (
         "AsyncLiveProvidesAdequateLeaderTargetProducerTransportOccurrenceClosure",
         "AsyncLiveProvidesAdequateLeaderTargetProducerTransportClosure",
@@ -33296,9 +35466,9 @@ def _adequate_leader_producer_origin_contract_errors(
             code_only,
         ):
             errors.append(
-                f"{path}: {forbidden_provider} must remain explicitly "
-                "unproved until a concrete durable producer-origin exposure "
-                "theorem is available"
+                f"{path}: {forbidden_provider} may not replace the exact "
+                "receipt-backed scheduled/durable producer-origin exposure "
+                "theorem"
             )
     return errors
 
@@ -36409,72 +38579,68 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
 def _serviced_candidate_production_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
-    """Seal durable candidate identity, persistence, and owner-retirement order."""
+    """Seal the V3-decode/V4-emit producer lifecycle and runtime handoff."""
 
-    module_path = (
-        repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs"
-    )
-    store_path = (
-        repo_root
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "serviced_candidate_store.rs"
-    )
-    adapter_path = (
-        repo_root
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2.rs"
-    )
-    runner_path = (
-        repo_root
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2_runner.rs"
-    )
+    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
+    paths = {
+        "module": base / "mod.rs",
+        "store": base / "serviced_candidate_store.rs",
+        "adapter": base / "v2.rs",
+        "runtime": base / "v2_runtime.rs",
+        "runner": base / "v2_runner.rs",
+        "worker": base / "v2_worker.rs",
+    }
+    descriptions = {
+        "module": "serviced-candidate module registration",
+        "store": "V3/V4 serviced-candidate durable store",
+        "adapter": "producer-continuation adapter ownership",
+        "runtime": "producer-continuation serialized runtime",
+        "runner": "producer-continuation high-water binding",
+        "worker": "producer-continuation worker quarantine ownership",
+    }
     errors: list[str] = []
-    for path, description in (
-        (module_path, "serviced-candidate module registration"),
-        (store_path, "serviced-candidate durable store"),
-        (adapter_path, "serviced-candidate adapter integration"),
-        (runner_path, "serviced-candidate configured-capacity binding"),
-    ):
+    for key, path in paths.items():
         if not path.is_file() or path.is_symlink():
-            errors.append(f"{path}: {description} must be a regular file")
+            errors.append(f"{path}: {descriptions[key]} must be a regular file")
     if errors:
         return errors
 
-    module_source = module_path.read_text(encoding="utf-8")
-    store_source = store_path.read_text(encoding="utf-8")
-    adapter_source = adapter_path.read_text(encoding="utf-8")
-    runner_source = runner_path.read_text(encoding="utf-8")
+    sources = {
+        key: path.read_text(encoding="utf-8") for key, path in paths.items()
+    }
+    structural = {
+        key: mask_rust_comments_and_literals(source)
+        for key, source in sources.items()
+    }
     _require_rust_source_token_sequence(
-        module_path,
-        module_source,
+        paths["module"],
+        sources["module"],
         "pub(crate) mod serviced_candidate_store;",
         "the private durable candidate store must remain compiled into Sumeragi",
         errors,
     )
     for literal, description in (
         (
-            "const FORMAT_VERSION: u16 = 3;",
-            "serviced-candidate frame version",
+            "const FORMAT_VERSION_V3: u16 = 3;",
+            "decode-only compatibility version must remain exactly V3",
+        ),
+        (
+            "const FORMAT_VERSION: u16 = 4;",
+            "the sole emitted serviced-candidate version must remain V4",
         ),
         (
             'const FRAME_MAGIC: &[u8; 8] = b"SUMVCAND";',
             "serviced-candidate frame magic",
         ),
+        (
+            "pub(crate) const SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE: usize = 11;",
+            "closed eleven-stage producer address geometry",
+        ),
     ):
-        observed = mask_rust_comments(store_source).count(literal)
+        observed = mask_rust_comments(sources["store"]).count(literal)
         if observed != 1:
             errors.append(
-                f"{store_path}: {description} must occur exactly once in "
+                f"{paths['store']}: {description} must occur exactly once in "
                 f"executable source; found {observed}"
             )
 
@@ -36483,506 +38649,691 @@ def _serviced_candidate_production_source_fidelity_errors(
             "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
             "#[norito(deny_unknown_fields)]",
         ),
-        "PersistedServicedCandidates": (
+        "PersistedServicedCandidate": (
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "PersistedServicedCandidatesV3": (
             "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
             "#[norito(deny_unknown_fields)]",
         ),
+        "ProducerContinuationAddress": (
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "ProducerContinuationIdentity": (
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "ProducerContinuationHandoffToken": (
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq)]",
+        ),
+        "ProducerContinuationTerminalToken": (
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "ProducerContinuationRecord": (
+            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "PersistedProducerContinuation": (
+            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "PersistedServicedCandidatesV4": (
+            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
+            "#[norito(deny_unknown_fields)]",
+        ),
+        "DecodedServicedCandidates": (),
+        "RestoredServicedCandidates": (),
         "ServicedCandidateStore": ("#[derive(Debug)]",),
     }
     for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_STORE_STRUCT_SHA256.items()
+        _SERVICED_CANDIDATE_V4_STORE_STRUCT_SHA256.items()
     ):
-        items = rust_struct_items(store_source, name)
+        items = rust_struct_items(sources["store"], name)
         if len(items) != 1:
             errors.append(
-                f"{store_path}: require exactly one real serviced-candidate "
-                f"struct named {name}; found {len(items)}"
+                f"{paths['store']}: require exactly one real V4 "
+                f"serviced-candidate struct named {name}; found {len(items)}"
             )
             continue
         item = items[0]
         _require_rust_item_context(
-            store_path,
+            paths["store"],
             item,
             (),
-            f"serviced-candidate carrier {name}",
+            f"V4 serviced-candidate schema {name}",
             errors,
             expected_attributes=store_struct_attributes[name],
         )
         _require_rust_item_token_sha256(
-            store_path,
+            paths["store"],
             item,
             expected_sha256,
-            f"serviced-candidate carrier {name}",
+            f"V4 serviced-candidate schema {name}",
             errors,
         )
 
-    store_items: dict[str, RustItem | None] = {}
-    for name in (
-        "snapshot_metadata_is_safe",
-        "snapshot_metadata_unchanged",
-        "open_bound_snapshot",
-        "encode_frame",
-        "decode_frame",
+    for source_key, digests, expected_attributes in (
+        (
+            "adapter",
+            _SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256,
+            {
+                "SelectedProducerLifecycle": (
+                    "#[derive(Clone, Debug, PartialEq, Eq)]",
+                ),
+                "ProducerReservationToken": (
+                    "#[derive(Clone, Debug, PartialEq, Eq)]",
+                ),
+                "PendingProducerHandoff": (
+                    "#[derive(Clone, Debug, PartialEq, Eq)]",
+                ),
+            },
+        ),
+        (
+            "runtime",
+            _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256,
+            {
+                "RuntimeDormantLocalFifoReservation": (
+                    "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]",
+                ),
+                "BoundedIngress": (),
+            },
+        ),
     ):
-        item = _require_rust_item(store_path, store_source, name, errors)
-        _require_rust_item_context(
-            store_path,
-            item,
-            (),
-            f"serviced-candidate store helper {name}",
-            errors,
-        )
-        store_items[name] = item
-    for name in ("open", "load", "persist", "retire"):
-        store_items[name] = _require_qualified_rust_item(
-            store_path,
-            store_source,
-            "ServicedCandidateStore",
-            name,
-            errors,
-            f"durable serviced-candidate {name}",
-        )
-    for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_STORE_ITEM_SHA256.items()
-    ):
-        _require_rust_item_token_sha256(
-            store_path,
-            store_items.get(name),
-            expected_sha256,
-            f"durable serviced-candidate {name}",
-            errors,
-        )
-
-    store_test_context = (
-        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
-    )
-    for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_STORE_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(store_path, store_source, name, errors)
-        expected_attributes = (
-            ("#[cfg(unix)]", "#[test]")
-            if name
-            == "snapshot_load_and_retire_never_follow_substituted_symlinks"
-            else ("#[test]",)
-        )
-        _require_rust_item_context(
-            store_path,
-            item,
-            store_test_context,
-            f"serviced-candidate store regression {name}",
-            errors,
-            expected_attributes=expected_attributes,
-        )
-        _require_rust_item_token_sha256(
-            store_path,
-            item,
-            expected_sha256,
-            f"serviced-candidate store regression {name}",
-            errors,
-        )
-
-    adapter_items: dict[str, RustItem | None] = {}
-    for name in (
-        "append_serviced_candidate_certificate",
-        "append_serviced_candidate_timeout_certificate",
-        "serviced_candidate_stage",
-        "serviced_candidate_policy",
-        "is_authenticated_ingress_event",
-        "serviced_candidate_record_kind",
-        "append_serviced_candidate_event",
-        "serviced_candidate_event_fields",
-        "candidate_lifecycle_capacity",
-        "serviced_candidate_capacity_with_geometry",
-        "serviced_candidate_capacity",
-    ):
-        item = _require_rust_item(adapter_path, adapter_source, name, errors)
-        _require_rust_item_context(
-            adapter_path,
-            item,
-            (),
-            f"serviced-candidate semantic helper {name}",
-            errors,
-            expected_attributes=("#[cfg(test)]",)
-            if name == "serviced_candidate_capacity"
-            else (),
-        )
-        adapter_items[name] = item
-    adapter_items["capacity_geometry_new"] = _require_qualified_rust_item(
-        adapter_path,
-        adapter_source,
-        "ServicedCandidateCapacityGeometry",
-        "new",
-        errors,
-        "serviced-candidate configured-capacity constructor",
-    )
-    for name in (
-        "open_with_capacity_geometry",
-        "open_deferred_status_with_capacity_geometry",
-        "serviced_candidate",
-        "ensure_serviced_candidate_capacity_before_step",
-        "record_serviced_candidate",
-        "reclaim_serviced_candidates",
-        "step_with_defer_policy",
-        "drain_deferred_with_evidence",
-        "drain_deferred_with_evidence_for_ordinals",
-        "retain_failed_serviced_deferred_owner",
-        "drive_effects",
-    ):
-        adapter_items[name] = _require_qualified_rust_item(
-            adapter_path,
-            adapter_source,
-            "SumeragiV2Adapter",
-            name,
-            errors,
-            f"serviced-candidate adapter seam {name}",
-            expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-            if name
-            in {
-                "open_with_capacity_geometry",
-                "open_deferred_status_with_capacity_geometry",
-            }
-            else (),
-        )
-    adapter_items["open_with_aggregator_and_publication"] = (
-        _require_qualified_rust_item(
-            adapter_path,
-            adapter_source,
-            "SumeragiV2Adapter",
-            "open_with_aggregator_and_publication",
-            errors,
-            "serviced-candidate restart binding",
-            expected_attributes=("#[allow(clippy::too_many_arguments)]",),
-        )
-    )
-    adapter_items["open_with_aggregator_and_publication_with_capacity"] = (
-        _require_qualified_rust_item(
-            adapter_path,
-            adapter_source,
-            "SumeragiV2Adapter",
-            "open_with_aggregator_and_publication_with_capacity",
-            errors,
-            "serviced-candidate configured-capacity restart binding",
-            expected_attributes=("#[allow(clippy::too_many_arguments)]",),
-        )
-    )
-
-    for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_PRODUCTION_STRUCT_SHA256.items()
-    ):
-        items = rust_struct_items(adapter_source, name)
-        if len(items) != 1:
-            errors.append(
-                f"{adapter_path}: require exactly one real serviced-candidate "
-                f"production carrier named {name}; found {len(items)}"
+        for name, expected_sha256 in digests.items():
+            items = rust_struct_items(sources[source_key], name)
+            if len(items) != 1:
+                errors.append(
+                    f"{paths[source_key]}: require exactly one real producer "
+                    f"ownership struct named {name}; found {len(items)}"
+                )
+                continue
+            item = items[0]
+            _require_rust_item_context(
+                paths[source_key],
+                item,
+                (),
+                f"producer ownership carrier {name}",
+                errors,
+                expected_attributes=expected_attributes[name],
             )
-            continue
-        item = items[0]
-        _require_rust_item_context(
-            adapter_path,
-            item,
-            (),
-            f"serviced-candidate production carrier {name}",
-            errors,
-            expected_attributes=("#[derive(Clone, Copy, Debug, PartialEq, Eq)]",)
-            if name == "ServicedCandidateCapacityGeometry"
-            else ("#[derive(Clone, Debug, PartialEq, Eq)]",),
-        )
-        _require_rust_item_token_sha256(
-            adapter_path,
-            item,
-            expected_sha256,
-            f"serviced-candidate production carrier {name}",
-            errors,
-        )
+            _require_rust_item_token_sha256(
+                paths[source_key],
+                item,
+                expected_sha256,
+                f"producer ownership carrier {name}",
+                errors,
+            )
 
-    for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_PRODUCTION_ITEM_SHA256.items()
-    ):
-        _require_rust_item_token_sha256(
-            adapter_path,
-            adapter_items.get(name),
-            expected_sha256,
-            f"serviced-candidate production item {name}",
-            errors,
-        )
+    def collect_items(
+        source_key: str,
+        specs: tuple[tuple[str, str] | tuple[str, str, str], ...],
+        digests: dict[str, str],
+    ) -> dict[str, RustItem | None]:
+        found: dict[str, RustItem | None] = {}
+        for spec in specs:
+            key, name = spec[:2]
+            items = rust_function_items_from_structural(
+                sources[source_key], structural[source_key], name
+            )
+            if len(spec) == 3:
+                required = rust_code_tokens(spec[2])
+                items = tuple(
+                    item
+                    for item in items
+                    if _token_sequence_count(
+                        rust_code_tokens(item.source), required
+                    )
+                    >= 1
+                )
+            if len(items) != 1:
+                errors.append(
+                    f"{paths[source_key]}: require exactly one real "
+                    f"serviced-candidate function item named {name}; "
+                    f"found {len(items)}"
+                )
+                found[key] = None
+                continue
+            item = items[0]
+            found[key] = item
+            _require_rust_item_token_sha256(
+                paths[source_key],
+                item,
+                digests[key],
+                f"V4 serviced-candidate item {key}",
+                errors,
+            )
+        return found
 
-    runner_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in _SERVICED_CANDIDATE_RUNNER_ITEM_SHA256.items():
-        item = _require_rust_item(runner_path, runner_source, name, errors)
-        runner_items[name] = item
-        _require_rust_item_context(
-            runner_path,
-            item,
-            (),
-            f"serviced-candidate configured-capacity runner {name}",
-            errors,
-            expected_attributes=("#[allow(clippy::too_many_lines)]",),
-        )
-        _require_rust_item_token_sha256(
-            runner_path,
-            item,
-            expected_sha256,
-            f"serviced-candidate configured-capacity runner {name}",
-            errors,
-        )
-
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate_stage"],
-        """
-reducer::Event::ResumeAfterReplay { .. }
-| reducer::Event::RetransmitElapsed { .. }
-| reducer::Event::Persisted { .. }
-| reducer::Event::PersistenceFailed { .. }
-| reducer::Event::Signed { .. } => None
-""",
-        "restart-scoped signature callbacks may not be durably suppressed",
-        errors,
+    store_specs = (
+        (
+            "serviced_candidate_stage_for_kind_code",
+            "serviced_candidate_stage_for_kind_code",
+        ),
+        (
+            "producer_continuation_source_class_for_kind_code",
+            "producer_continuation_source_class_for_kind_code",
+        ),
+        (
+            "identity_new",
+            "new",
+            "candidate: ServicedCandidateKey, causal_lifecycle_key: Hash",
+        ),
+        (
+            "identity_address",
+            "address",
+            "ProducerContinuationAddress { lifecycle_slot: self.lifecycle_slot",
+        ),
+        ("identity_has_exact_stage", "has_exact_stage"),
+        (
+            "record_new",
+            "new",
+            "status: ProducerContinuationStatus, handoff_candidates:",
+        ),
+        ("record_handoff_token", "handoff_token"),
+        ("record_terminal_token", "terminal_token"),
+        ("producer_continuations_are_valid", "producer_continuations_are_valid"),
+        (
+            "leader_wire_terminal_matches_runtime",
+            "leader_wire_terminal_matches_runtime",
+        ),
+        (
+            "leader_wire_control_phase_matches_candidate",
+            "leader_wire_control_phase_matches_candidate",
+        ),
+        (
+            "leader_wire_stable_terminal_matches_runtime",
+            "leader_wire_stable_terminal_matches_runtime",
+        ),
+        ("leader_wire_load_and_reconcile", "load_and_reconcile"),
+        (
+            "store_open",
+            "open",
+            "lifecycle_capacity: usize, ) -> Result<(Self, RestoredServicedCandidates)",
+        ),
+        ("store_open_with_capacities", "open_with_capacities"),
+        ("store_load", "load"),
+        (
+            "store_reserve_producer_continuation",
+            "reserve_producer_continuation",
+        ),
+        (
+            "store_persist_with_producer_continuations",
+            "persist_with_producer_continuations",
+        ),
+        ("encode_payload_frame", "encode_payload_frame"),
+        ("encode_frame_v4", "encode_frame_v4"),
+        ("encode_frame_v3", "encode_frame_v3"),
+        ("decode_frame", "decode_frame"),
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate_policy"],
-        "serviced_candidate_stage(event).map(|_| ServicedCandidatePolicy::Suppress)",
-        "serviced-candidate policy must be the total projection of the closed stage carrier",
-        errors,
+    store_items = collect_items(
+        "store",
+        store_specs,
+        _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256,
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate_record_kind"],
+    encode_v3 = _require_rust_item(
+        paths["store"], sources["store"], "encode_frame_v3", errors
+    )
+    _require_rust_item_context(
+        paths["store"],
+        encode_v3,
+        (),
+        "V3 compatibility encoder",
+        errors,
+        expected_attributes=("#[cfg(test)]",),
+    )
+
+    adapter_specs = tuple(
+        (name, name)
+        for name in _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256
+    )
+    adapter_items = collect_items(
+        "adapter",
+        adapter_specs,
+        _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256,
+    )
+    runtime_names = {
+        "dormant_completion": "completion",
+        "dormant_is_local_fifo_stage": "is_local_fifo_stage",
+        "install_dormant_local_fifo_reservations": (
+            "install_dormant_local_fifo_reservations"
+        ),
+        "dormant_local_fifo_replacement": "dormant_local_fifo_replacement",
+        "occupied_with_dormant_reservations": (
+            "occupied_with_dormant_reservations"
+        ),
+        "oldest_active_lifecycle_ordinal": "oldest_active_lifecycle_ordinal",
+        "with_driver_and_lifecycle_ordinals": (
+            "with_driver_and_lifecycle_ordinals"
+        ),
+        "minimum_active_lifecycle_ordinal": "minimum_active_lifecycle_ordinal",
+        "complete_leader_wire_runtime_owner": (
+            "complete_leader_wire_runtime_owner"
+        ),
+        "step": "step",
+        "dispatch_one_adapter_deferred": "dispatch_one_adapter_deferred",
+    }
+    runtime_items = collect_items(
+        "runtime",
+        tuple(runtime_names.items()),
+        _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256,
+    )
+    runner_items = collect_items(
+        "runner",
+        (("run_inner", "run_inner"),),
+        _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256,
+    )
+
+    def require_item_sequence(
+        source_key: str,
+        items: dict[str, RustItem | None],
+        key: str,
+        sequence: str,
+        description: str,
+    ) -> None:
+        _require_rust_token_sequence(
+            paths[source_key],
+            items.get(key),
+            sequence,
+            description,
+            errors,
+        )
+
+    def require_item_order(
+        source_key: str,
+        items: dict[str, RustItem | None],
+        key: str,
+        sequences: tuple[str, ...],
+        description: str,
+    ) -> None:
+        item = items.get(key)
+        if item is None:
+            return
+        tokens = rust_code_tokens(item.body)
+        positions = [
+            _token_sequence_positions(tokens, rust_code_tokens(sequence))
+            for sequence in sequences
+        ]
+        if any(len(found) != 1 for found in positions) or any(
+            left[0] >= right[0]
+            for left, right in zip(positions, positions[1:])
+            if left and right
+        ):
+            errors.append(
+                f"{paths[source_key]}:{item.line}: {description} must retain "
+                "the exact reviewed order"
+            )
+
+    require_item_sequence(
+        "store",
+        store_items,
+        "serviced_candidate_stage_for_kind_code",
         """
-if disposition == reducer::StepDisposition::Applied {
-    Some(ServicedCandidateRecordKind::Transient)
-} else if !is_authenticated_ingress_event(event)
-    && disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
-{
-    Some(ServicedCandidateRecordKind::DurableTerminal)
-} else {
-    None
+match kind {
+    0..=6 => Some(kind),
+    8 => Some(7),
+    9 => Some(8),
+    10 => Some(9),
+    14 => Some(10),
+    _ => None,
 }
 """,
-        "only applied service and exact internal NoMatchingWork may consume a serviced-identity slot",
-        errors,
+        "the producer stage projection must reject every untracked event kind",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "producer_continuation_source_class_for_kind_code",
+        """
+match kind {
+    0 | 6 | 9 | 10 | 14 => Some(ProducerContinuationSourceClass::Local),
+    1..=5 => Some(ProducerContinuationSourceClass::ConditionalTransport),
+    8 => Some(ProducerContinuationSourceClass::VolatileBody),
+    _ => None,
+}
+""",
+        "every producer stage must retain its exact physical replay class",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "identity_new",
+        """
+if lifecycle_slot == 0 || admission_ordinal == 0 {
+    return Err(
+        "producer-continuation lifecycle slot and ordinal must be non-zero".to_owned(),
+    );
+}
+let stage = serviced_candidate_stage_for_kind_code(candidate.kind).ok_or_else(|| {
+    "producer-continuation candidate kind has no serviced stage".to_owned()
+})?;
+""",
+        "producer identity construction must reject zero ownership and untracked stages",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "record_new",
+        """
+handoff_candidates.len() > MAX_PRODUCER_CONTINUATION_HANDOFFS
+    || handoff_candidates.windows(2).any(|pair| pair[0] >= pair[1])
+    || handoff_candidates.iter().any(|successor| {
+        !successor.has_exact_stage()
+            || successor.admission_ordinal != identity.admission_ordinal
+            || successor.lifecycle_slot != identity.lifecycle_slot
+            || successor.causal_lifecycle_key != identity.causal_lifecycle_key
+            || successor.candidate.context_id != identity.candidate.context_id
+            || successor.candidate.height != identity.candidate.height
+            || successor.candidate.owner != identity.candidate.owner
+            || *successor == identity
+    })
+""",
+        "producer handoffs must be finite, ordered, and inherit exact lifecycle identity",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "producer_continuations_are_valid",
+        """
+identity.address() != persisted.address
+    || identity.admission_ordinal == 0
+    || identity.lifecycle_slot == 0
+    || identity.lifecycle_slot > lifecycle_capacity
+    || !identity.has_exact_stage()
+    || producer_continuation_source_class_for_kind_code(identity.candidate.kind)
+        != Some(record.source_class)
+    || !identity.candidate.belongs_to(context_id, height, owner)
+    || !identities.insert(identity)
+    || !candidate_identities.insert(identity.candidate)
+    || !ordinal_stages.insert((identity.admission_ordinal, identity.stage))
+""",
+        "decoded producer identities must preserve address, stage, geometry, and context",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "producer_continuations_are_valid",
+        """
+record.status != ProducerContinuationStatus::Terminal
+    && !active_ordinals.insert(identity.admission_ordinal)
+""",
+        "one live producer ordinal may own only one active continuation identity",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_open",
+        """
+let record_capacity = lifecycle_capacity
+    .checked_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
+""",
+        "both bounded producer tables must derive the complete eleven-stage geometry",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_open_with_capacities",
+        """
+if producer_continuation_capacity % SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE != 0 {
+    return Err(
+        "producer-continuation capacity must be an exact lifecycle-stage geometry"
+            .to_owned(),
+    );
+}
+""",
+        "producer capacity must remain an exact multiple of the closed stage count",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_open_with_capacities",
+        """
+let max_frame_bytes = FIXED_FRAME_HEADROOM_BYTES
+    .checked_add(serviced_frame_bytes)
+    .and_then(|bytes| bytes.checked_add(producer_frame_bytes))
+""",
+        "the frame bound must charge both independent bounded tables",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_load",
+        """
+state.records.len() > self.serviced_capacity
+    || state.producer_continuations.len() > self.producer_continuation_capacity
+""",
+        "load must enforce both independent table capacities",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_load",
+        """
+state.decision_reclaimed
+    && (!state.records.is_empty() || !state.producer_continuations.is_empty())
+""",
+        "Decision reclamation must leave both durable tables empty",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_load",
+        """
+let record = if persisted.record.status == ProducerContinuationStatus::Terminal
+{
+    persisted.record
+} else {
+    ProducerContinuationRecord::new(
+        persisted.record.identity,
+        ProducerContinuationStatus::Reserved,
+        Vec::new(),
+    )
+""",
+        "restart must normalize executable handoff state to selector-inert Reserved",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_reserve_producer_continuation",
+        """
+if incumbent.identity == record.identity {
+    if incumbent != &record {
+        return Err(
+            "an exact producer-continuation retry changed its frozen record".to_owned(),
+        );
+    }
+    return Ok(ProducerContinuationReservation::Coalesced);
+}
+""",
+        "retry coalescing must compare the complete frozen producer record",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_reserve_producer_continuation",
+        """
+if incumbent.status != ProducerContinuationStatus::Terminal
+    || incumbent.identity.candidate.context_id != record.identity.candidate.context_id
+    || incumbent.identity.candidate.height != record.identity.candidate.height
+    || incumbent.identity.candidate.source_view >= record.identity.candidate.source_view
+    || incumbent.identity.admission_ordinal >= record.identity.admission_ordinal
+""",
+        "slot replacement must require terminal ownership and strict view/ordinal advance",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_persist_with_producer_continuations",
+        """
+if decision_reclaimed && (!records.is_empty() || !producer_continuations.is_empty()) {
+""",
+        "persisted Decision reclamation must reject either retained table",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_persist_with_producer_continuations",
+        """
+record.status == ProducerContinuationStatus::Terminal
+    && !records.contains_key(&record.identity.candidate)
+""",
+        "a durable producer terminal must retain its exact service tombstone",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "store_persist_with_producer_continuations",
+        """
+let state = PersistedServicedCandidatesV4 {
+    format_version: FORMAT_VERSION,
+""",
+        "production persistence must emit V4 only",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "encode_payload_frame",
+        """
+if frame_len > max_frame_bytes {
+    return Err("serviced-candidate frame exceeds its derived byte bound".to_owned());
+}
+""",
+        "frame emission must enforce the derived maximum size",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "encode_payload_frame",
+        """
+frame.extend_from_slice(Hash::new(&payload).as_ref());
+frame.extend_from_slice(&payload);
+""",
+        "frame emission must checksum the exact canonical payload",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "encode_frame_v4",
+        "encode_payload_frame(FORMAT_VERSION, state.encode(), max_frame_bytes)",
+        "production encoding must advertise V4",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "decode_frame",
+        "if !matches!(version, FORMAT_VERSION_V3 | FORMAT_VERSION)",
+        "decoding must accept exactly compatibility V3 and current V4",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "decode_frame",
+        """
+if payload_offset.checked_add(payload_len) != Some(bytes.len()) {
+    return Err("serviced-candidate frame length is inconsistent".to_owned());
+}
+let payload = &bytes[payload_offset..];
+if Hash::new(payload).as_ref() != &bytes[digest_offset..payload_offset] {
+    return Err("serviced-candidate snapshot checksum mismatch".to_owned());
+}
+""",
+        "decoding must enforce exact length and checksum before schema selection",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "decode_frame",
+        """
+if state.format_version != FORMAT_VERSION_V3 || state.encode() != payload {
+    return Err("v3 serviced-candidate snapshot is not canonically encoded".to_owned());
+}
+""",
+        "V3 compatibility decoding must bind its inner version and canonical bytes",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "decode_frame",
+        """
+serviced_capacity: state.capacity,
+producer_continuation_capacity: state.capacity,
+decision_reclaimed: state.decision_reclaimed,
+records: state.records,
+producer_continuations: Vec::new(),
+""",
+        "V3 migration must map old capacity exactly and invent no producer lifecycle",
+    )
+    require_item_sequence(
+        "store",
+        store_items,
+        "decode_frame",
+        """
+if state.format_version != FORMAT_VERSION || state.encode() != payload {
+    return Err("v4 serviced-candidate snapshot is not canonically encoded".to_owned());
+}
+""",
+        "V4 decoding must bind its inner version and canonical bytes",
+    )
+
+    require_item_sequence(
+        "store",
+        store_items,
+        "leader_wire_terminal_matches_runtime",
+        """
+candidate.context_id() == context_id
+    && candidate.height() == height
+    && candidate.owner() == owner
+    && candidate.source_view() == token.identity.view
+    && terminal.source_class() == ProducerContinuationSourceClass::ConditionalTransport
+    && token.source_class == super::FairV2IngressLeaderWireSourceClass::Control
+    && leader_wire_control_phase_matches_candidate(token, candidate)
+    && identity.causal_lifecycle_key() == runtime_owner.causal_lifecycle_key
+    && identity.admission_ordinal() == runtime_owner.admission_ordinal
+""",
+        "leader-wire producer terminals must match context, owner, view, phase, source, and runtime",
+    )
+
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "candidate_lifecycle_capacity",
+        """
+.saturating_add(geometry.effect_work_capacity)
+.saturating_add(CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY)
+""",
+        "lifecycle capacity must charge configured effect work and durable replay",
     )
     _require_rust_source_token_sequence(
-        adapter_path,
-        adapter_source,
+        paths["adapter"],
+        sources["adapter"],
         """
-const SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE: usize = ServicedCandidateStage::COUNT;
+const _: () = assert!(
+    SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == ServicedCandidateStage::COUNT
+);
 const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == 11);
 """,
-        "serviced-candidate capacity must derive the exact eleven-class reducer stage carrier",
+        "adapter capacity must share the exact eleven-stage store geometry",
         errors,
     )
-    _require_rust_source_token_sequence(
-        adapter_path,
-        adapter_source,
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "serviced_candidate",
         """
-const ALL: [Self; 11] = [
-    Self::LocalProposalReady,
-    Self::ProposalReceived,
-    Self::VoteReceived,
-    Self::QuorumCertificateReceived,
-    Self::TimeoutVoteReceived,
-    Self::TimeoutCertificateReceived,
-    Self::TimeoutElapsed,
-    Self::BodyAvailable,
-    Self::BodyStored,
-    Self::ValidationCompleted,
-    Self::ApplicationCompleted,
-];
-const COUNT: usize = Self::ALL.len();
-""",
-        "serviced-candidate stage carrier must enumerate eleven distinct boundary classes",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["candidate_lifecycle_capacity"],
-        """
-let serviced = semantic_ingress_capacity(roster_len)
-    .saturating_add(MAX_DEFERRED_INPUTS)
-    .saturating_add(MAX_DEFERRED_INPUTS)
-    .saturating_add(deferred_progress_capacity(roster_len));
-let active = geometry
-    .runtime_command_capacity
-    .saturating_add(geometry.runtime_command_capacity.saturating_mul(3))
-    .saturating_add(geometry.effect_work_capacity)
-    .saturating_add(CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY);
-serviced.saturating_add(active).saturating_add(1)
-""",
-        "serviced-candidate lifecycle capacity must cover service queues, configured causal work, durable replay, and the clock",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate_capacity_with_geometry"],
-        """
-candidate_lifecycle_capacity(roster_len, geometry)
-    .saturating_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
-""",
-        "serviced-candidate capacity must multiply complete lifecycle geometry by the exact stage carrier",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["open_with_aggregator_and_publication_with_capacity"],
-        """
-let serviced_candidate_capacity =
-    serviced_candidate_capacity_with_geometry(wire_context.roster.len(), capacity_geometry);
-let (serviced_candidate_store, restored_serviced_candidates) =
-    ServicedCandidateStore::open(
-        &wal_path,
-        wire_context.id(),
-        wire_context.height,
-        serviced_candidate_owner,
-        serviced_candidate_capacity,
-    )
-""",
-        "restart must bind the durable store to the configured frozen capacity",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["open_with_aggregator_and_publication_with_capacity"],
-        """
-serviced_candidates: restored_serviced_candidates.records.clone(),
-durable_serviced_candidates: restored_serviced_candidates.records,
-serviced_candidate_capacity,
-""",
-        "restart must restore only the durable-terminal subset into process-local memory",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["open_with_capacity_geometry"],
-        """
-Self::open_with_aggregator_and_publication_with_capacity(
-    wal_path,
-    verified_context,
-    local_validator,
-    generation,
-    consensus_key_hash,
-    fingerprints,
-    Box::<BlsNormalSignatureAggregator>::default(),
-    true,
-    capacity_geometry,
-    deferred_admission_ordinals,
-)
-""",
-        "ordinary production open must forward the validated capacity geometry",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["open_deferred_status_with_capacity_geometry"],
-        """
-Self::open_with_aggregator_and_publication_with_capacity(
-    wal_path,
-    verified_context,
-    local_validator,
-    generation,
-    consensus_key_hash,
-    fingerprints,
-    Box::<BlsNormalSignatureAggregator>::default(),
-    false,
-    capacity_geometry,
-    deferred_admission_ordinals,
-)
-""",
-        "successor production open must forward the validated capacity geometry",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("run_inner"),
-        """
-let effect_work_capacity = usize::try_from(shared_config.limits.effect_work_capacity)?;
-validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
-let runtime_queue = runtime_queue_config(&shared_config)?;
-let effect_queue = effect_queue_config(&shared_config)?;
-let serviced_candidate_capacity_geometry = ServicedCandidateCapacityGeometry::new(
-    usize::try_from(shared_config.limits.runtime_command_capacity)?,
-    effect_work_capacity,
-);
-""",
-        "production must derive candidate capacity from the existing validated runtime and effect limits",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("run_inner"),
-        """
-SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(
-    wal_path,
-    verified_context,
-    local_validator,
-    Generation::new(context.height),
-    consensus_key_hash,
-    fingerprints,
-    serviced_candidate_capacity_geometry,
-    deferred_admission_ordinals.clone(),
-)
-""",
-        "successor construction must use configured candidate geometry",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("run_inner"),
-        """
-SumeragiV2Adapter::open_with_capacity_geometry(
-    wal_path,
-    verified_context,
-    local_validator,
-    Generation::new(context.height),
-    consensus_key_hash,
-    fingerprints,
-    serviced_candidate_capacity_geometry,
-    deferred_admission_ordinals.clone(),
-)
-""",
-        "ordinary construction must use configured candidate geometry",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate"],
-        """
-let owner: [u8; 32] = self.fingerprints.node.into();
-let mut projection = Vec::new();
 append_deferred_projection_field(&mut projection, &self.wire_context.id().encode());
 append_deferred_projection_u64(&mut projection, self.wire_context.height);
 append_deferred_projection_field(&mut projection, &owner);
 append_deferred_projection_field(&mut projection, &leader.encode());
 append_deferred_projection_u64(&mut projection, source_view);
 """,
-        "candidate identity must bind local owner, context, height, leader, and source view",
-        errors,
+        "candidate identity must bind context, height, local owner, leader, and view",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate"],
-        """
-let carrier_identity = if matches!(
-    event,
-    reducer::Event::ProposalReceived { .. }
-        | reducer::Event::VoteReceived { .. }
-        | reducer::Event::QuorumCertificateReceived { .. }
-        | reducer::Event::TimeoutVoteReceived { .. }
-        | reducer::Event::TimeoutCertificateReceived { .. }
-) {
-    None
-} else {
-    authenticated_wire_identity
-};
-""",
-        "equivalent authenticated network carriers must share one semantic owner",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["serviced_candidate"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "serviced_candidate",
         """
 ServicedCandidateKey::new(
     self.wire_context.id(),
@@ -36997,267 +39348,423 @@ ServicedCandidateKey::new(
     evidence,
 )
 """,
-        "candidate service identity must exclude mutable scheduler priority",
-        errors,
+        "candidate identity must exclude mutable scheduler priority",
     )
     _require_rust_source_token_sequence(
-        adapter_path,
-        adapter_source,
+        paths["adapter"],
+        sources["adapter"],
         "pub(crate) priority: DeferredPriority,",
-        "deferred physical scheduling evidence must retain its selected priority",
+        "deferred service evidence must retain its selected physical priority",
         errors,
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["ensure_serviced_candidate_capacity_before_step"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "ensure_serviced_candidate_capacity_before_step",
         "let capacity = self.serviced_candidate_capacity;",
-        "pre-step admission must use the capacity frozen at adapter construction",
-        errors,
+        "pre-step admission must use capacity frozen at adapter construction",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["ensure_serviced_candidate_capacity_before_step"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "producer_parent_replay_source_for_stage",
         """
-if self.serviced_candidates.len() < capacity {
-    return Ok(());
-}
-let mut projected = self.reducer.clone();
-let disposition = projected.step(event.clone())?.disposition();
-if serviced_candidate_record_kind(event, disposition).is_none() {
-    return Ok(());
-}
-Err(self.fail_serviced_candidate_store(format!(
-    "derived serviced-candidate capacity {capacity} is exhausted before semantic service"
-)))
-""",
-        "full serviced-candidate capacity must be projected before a consuming reducer mutation",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["record_serviced_candidate"],
-        "let capacity = self.serviced_candidate_capacity;",
-        "record insertion must use the capacity frozen at adapter construction",
-        errors,
-    )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["record_serviced_candidate"],
-        """
-if !process_marker_exists {
-    assert_eq!(self.serviced_candidates.insert(key, service_view), None);
-}
-if !durable_terminal_retirement {
-    return Ok(());
+ServicedCandidateStage::ProposalReceived
+| ServicedCandidateStage::VoteReceived
+| ServicedCandidateStage::QuorumCertificateReceived
+| ServicedCandidateStage::TimeoutVoteReceived
+| ServicedCandidateStage::TimeoutCertificateReceived => {
+    ProducerParentReplaySource::ConditionalResponsiveTransport
 }
 """,
-        "successful service must retain process memory without persisting it as a terminal",
-        errors,
+        "transport-owned stages must remain conditional rather than forged Local roots",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["record_serviced_candidate"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "producer_parent_has_exact_local_replay_binding",
         """
-assert_eq!(
-    self.durable_serviced_candidates.insert(key, service_view),
+ProducerParentReplaySource::ConditionalResponsiveTransport => false,
+ProducerParentReplaySource::VolatileBodyReconstruction => false,
+""",
+        "nonlocal producer classes may not forge immediate local replay evidence",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "open_with_aggregator_and_publication_with_capacity",
+        """
+let restored_producer_continuation_ordinal_high_watermark = restored_producer_continuations
+    .values()
+    .map(|record| record.identity().admission_ordinal())
+    .max();
+""",
+        "the immutable producer high-water must be captured before reclamation",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "dormant_local_fifo_reservations",
+        """
+(record.status() != ProducerContinuationStatus::Terminal).then_some(*address)
+""",
+        "restart coverage must validate every nonterminal producer class",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "dormant_local_fifo_reservations",
+        """
+ProducerParentReplaySource::ConditionalResponsiveTransport,
+ProducerContinuationSourceClass::ConditionalTransport
+""",
+        "restart coverage must retain conditional transport ownership",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "dormant_local_fifo_reservations",
+        """
+ProducerParentReplaySource::VolatileBodyReconstruction,
+ProducerContinuationSourceClass::VolatileBody
+""",
+        "restart coverage must retain volatile-body ownership",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "producer_lifecycle_slot",
+        """
+if existing_slot
+    .replace(slot)
+    .is_some_and(|existing| existing != slot)
+{
+    return Err("one producer lifecycle occupied multiple bounded slots".to_owned());
+}
+""",
+        "one causal producer lifecycle must occupy one bounded slot",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "producer_lifecycle_slot",
+        """
+record.status() == ProducerContinuationStatus::Terminal
+    && identity.admission_ordinal() < selected.admission_ordinal
+    && identity.candidate().source_view() < candidate.source_view()
+""",
+        "the allocator may reuse only terminal older-view and older-ordinal slots",
+    )
+    require_item_order(
+        "adapter",
+        adapter_items,
+        "step_with_defer_policy",
+        (
+            "let producer_reservation = self.reserve_selected_producer_continuation(producer_candidate)?",
+            "self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)",
+            "self.reducer.step(event)",
+            "self.record_serviced_candidate",
+        ),
+        "direct service must reserve and persist producer ownership before source retirement",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "step_with_defer_policy",
+        """
+// Every selected exact producer class reserves its immutable lifecycle
+let producer_candidate = if producer_stage.is_some() {
+    serviced_candidate
+} else {
     None
-);
-if let Err(reason) = self.serviced_candidate_store.persist(
-    &self.durable_serviced_candidates,
-    self.serviced_candidates_decision_reclaimed,
-) {
-    self.durable_serviced_candidates.remove(&key);
-    if !process_marker_exists {
-        self.serviced_candidates.remove(&key);
-    }
-    return Err(self.fail_serviced_candidate_store(reason));
-}
+};
 """,
-        "successful service must retain process memory while only terminal service persists durably",
-        errors,
+        "all selected producer classes must reserve a lifecycle",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["reclaim_serviced_candidates"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "step_with_defer_policy",
         """
-if decision_durable && !self.serviced_candidates_decision_reclaimed {
-    self.serviced_candidates.clear();
-    self.durable_serviced_candidates.clear();
-    self.serviced_candidates_decision_reclaimed = true;
-    durable_changed = true;
-}
+if self.selected_producer_lifecycle.is_some()
+    && serviced_candidate.is_some()
+    && locally_reconstructible_producer
+    && !producer_parent_has_exact_local_replay_binding(
 """,
-        "only the first durable Decision may reclaim both candidate-memory classes",
-        errors,
+        "only locally reconstructible producer classes require immediate local replay proof",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["step_with_defer_policy"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "drain_deferred_with_handoff_for_ordinals",
         """
- self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)?;
-let outcome = self.reducer.step(event)?;
+let producer_continuation = self
+    .deferred_producer_continuations
+    .get(&deferred_ordinal)
+    .cloned();
 """,
-        "direct service must reserve marker capacity before mutating the reducer",
-        errors,
+        "deferred service must retain its pre-reserved exact producer owner",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["step_with_defer_policy"],
+    require_item_order(
+        "adapter",
+        adapter_items,
+        "drain_deferred_with_handoff_for_ordinals",
+        (
+            "self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)",
+            "self.reducer.step(event)",
+            "self.record_serviced_candidate",
+            """
+self.deferred_producer_continuations
+    .remove(&deferred_ordinal);
+if let Some(admission) = input.admission
+""",
+        ),
+        "deferred service must record before releasing its physical producer owner",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "acknowledge_producer_handoff",
         """
-let effects = self.drive_effects(outcome.into_effects())?;
-let record_kind = serviced_candidate_record_kind(&queued, disposition);
-let serviced_candidate = record_kind.and(serviced_candidate);
-let durable_terminal_retirement =
-    record_kind == Some(ServicedCandidateRecordKind::DurableTerminal);
-self.record_serviced_candidate(serviced_candidate, durable_terminal_retirement)?;
-if let Some(admission) = admission {
-    self.record_ingress_delivery(admission);
-}
+if pending.token != token || !token.matches_reserved(&record) {
 """,
-        "direct service must install positive memory before releasing ingress ownership",
-        errors,
+        "handoff acknowledgement must consume the exact frozen record",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["drain_deferred_with_evidence_for_ordinals"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "acknowledge_producer_handoff",
         """
-if let Err(error) =
-    self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)
-{
-    self.retain_failed_serviced_deferred_owner(input);
-    return Err(error);
-}
-let event = input.event.clone();
-let observed_event = event.clone();
-let outcome = self.reducer.step(event)?;
+if evidence == ProducerContinuationHandoffEvidence::DurableTerminal
+    && !pending.durable_terminal_evidence
 """,
-        "deferred service must reserve marker capacity or retain its exact physical owner",
-        errors,
+        "durable terminal acknowledgement must require retained exact evidence",
     )
-    _require_rust_token_sequence(
-        adapter_path,
-        adapter_items["drain_deferred_with_evidence_for_ordinals"],
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "acknowledge_producer_handoff",
         """
-let effects = self.drive_effects(outcome.into_effects())?;
-let record_kind = serviced_candidate_record_kind(&observed_event, disposition);
-let serviced_candidate = record_kind.and(serviced_candidate);
-let durable_terminal_retirement =
-    record_kind == Some(ServicedCandidateRecordKind::DurableTerminal);
-if let Err(error) =
-    self.record_serviced_candidate(serviced_candidate, durable_terminal_retirement)
-{
-    self.retain_failed_serviced_deferred_owner(input);
-    return Err(error);
-}
-if let Some(admission) = input.admission {
-    self.record_ingress_delivery(admission);
-}
+if evidence == ProducerContinuationHandoffEvidence::VolatileTerminal
+    && pending.durable_terminal_evidence
 """,
-        "deferred service must install positive memory before owner release and requeue on failure",
-        errors,
+        "durable terminal evidence may not be weakened to volatile",
     )
-    drive_effects = adapter_items["drive_effects"]
-    if drive_effects is not None:
-        tokens = rust_code_tokens(drive_effects.body)
-        ordered_sequences = (
+    require_item_order(
+        "adapter",
+        adapter_items,
+        "drive_effects",
+        (
             "let persisted = reducer::Event::Persisted { tag, id }",
             "let continuation = match self.reducer.step(persisted.clone())",
             "self.prune_ingress_records()",
             "self.reclaim_serviced_candidates()?",
             "self.record_reducer_outcome",
-        )
-        positions = [
-            _token_sequence_positions(tokens, rust_code_tokens(sequence))
-            for sequence in ordered_sequences
-        ]
-        if any(len(found) != 1 for found in positions) or any(
-            left[0] >= right[0]
-            for left, right in zip(positions, positions[1:])
-            if left and right
-        ):
-            errors.append(
-                f"{adapter_path}:{drive_effects.line}: durable WAL "
-                "Persisted handling must prune ingress, reclaim candidate "
-                "tombstones, and only then publish the reducer outcome"
-            )
-
-    adapter_test_context = (
-        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+        ),
+        "durable WAL completion must reclaim only after ingress pruning and before publication",
     )
-    tests_with_long_lines = {
-        "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate",
-        "busy_deferred_source_identity_coalesces_across_consumer_view_change",
-        "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims",
-    }
-    adapter_tests: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(adapter_path, adapter_source, name, errors)
-        adapter_tests[name] = item
-        expected_attributes = (
-            ("#[test]", "#[allow(clippy::too_many_lines)]")
-            if name in tests_with_long_lines
-            else ("#[test]",)
-        )
-        _require_rust_item_context(
-            adapter_path,
-            item,
-            adapter_test_context,
-            f"serviced-candidate adapter regression {name}",
-            errors,
-            expected_attributes=expected_attributes,
-        )
-        _require_rust_item_token_sha256(
-            adapter_path,
-            item,
-            expected_sha256,
-            f"serviced-candidate adapter regression {name}",
-            errors,
-        )
-
-    reclaim_regression = adapter_tests.get(
-        "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims"
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "reclaim_serviced_candidates",
+        """
+self.serviced_candidates.clear();
+self.durable_serviced_candidates.clear();
+self.producer_continuations.clear();
+self.durable_producer_continuations.clear();
+self.restored_dormant_producer_continuations.clear();
+self.deferred_producer_continuations.clear();
+self.pending_producer_handoffs.clear();
+""",
+        "Decision reclamation must atomically retire service and producer ownership",
     )
-    if reclaim_regression is not None:
-        tokens = rust_code_tokens(reclaim_regression.body)
-        ordered_sequences = (
-            "let wal_records_before = adapter.wal.recovered_records().len()",
-            "adapter.receive_authenticated",
-            "adapter.wal.recovered_records().len() > wal_records_before",
-            "let (restarted, _startup) = "
-            "SumeragiV2Adapter::open_with_aggregator",
-            "drop(restarted)",
-            "let (mut replayed_again, _startup) = "
-            "SumeragiV2Adapter::open_with_aggregator",
-            "let post_replay = unowned_body_event(&replayed_again, marker)",
-            "replayed_again.step(post_replay)",
-        )
-        positions = [
-            _token_sequence_positions(tokens, rust_code_tokens(sequence))
-            for sequence in ordered_sequences
-        ]
-        if any(len(found) != 1 for found in positions) or any(
-            left[0] >= right[0]
-            for left, right in zip(positions, positions[1:])
-            if left and right
-        ):
-            errors.append(
-                f"{adapter_path}:{reclaim_regression.line}: reclaim failure "
-                "regression must observe WAL advancement before first replay "
-                "and a second restart before the resurrection probe"
-            )
 
-    for path, source in (
-        (store_path, store_source),
-        (adapter_path, adapter_source),
-    ):
-        structural = mask_rust_comments_and_literals(source)
-        for forbidden in ("std::env", "var_os", "serde_json"):
-            if forbidden in structural:
+    require_item_sequence(
+        "runtime",
+        runtime_items,
+        "install_dormant_local_fifo_reservations",
+        """
+if !self.commands.is_empty()
+    || self.reserved_body_available.is_some()
+    || !self.dormant_local_fifo_reservations.is_empty()
+""",
+        "dormant FIFO ownership must install before any physical runtime work",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
+        "occupied_with_dormant_reservations",
+        """
+.and_then(|occupied| occupied.checked_add(self.dormant_local_fifo_reservations.len()))
+""",
+        "dormant Local owners must consume physical queue capacity",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
+        "oldest_active_lifecycle_ordinal",
+        """
+self.dormant_local_fifo_reservations.iter().try_fold(
+    command_minimum,
+""",
+        "dormant Local owners must participate in global minimum selection",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
+        "dormant_local_fifo_replacement",
+        """
+if self.dormant_local_fifo_reservations.contains(&expected) {
+    return Ok(Some(expected));
+}
+""",
+        "exact local replay must atomically replace its latent FIFO slot",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
+        "with_driver_and_lifecycle_ordinals",
+        (
+            "driver.dormant_local_fifo_reservations()",
+            "BoundedIngress::with_lifecycle_ordinals",
+            "ingress.install_dormant_local_fifo_reservations",
+            "retain_effect_ownership",
+        ),
+        "restart must install dormant FIFO owners before startup successors",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
+        "step",
+        (
+            "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
+            "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
+            "token.identity().causal_lifecycle_key() != effect_parent.causal_origin().lifecycle_key",
+            "self.driver.acknowledge_producer_handoff(token, evidence)",
+        ),
+        "runtime must retain successors and verify parent identity before acknowledgement",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
+        "dispatch_one_adapter_deferred",
+        (
+            "self.retain_effect_ownership",
+            "token.identity().admission_ordinal() != lifecycle_owner.lifecycle_ordinal()",
+            "token.identity().causal_lifecycle_key() != lifecycle_owner.causal_origin().lifecycle_key",
+            "self.driver.acknowledge_producer_handoff",
+        ),
+        "deferred runtime service must retain successors before exact acknowledgement",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
+        "complete_leader_wire_runtime_owner",
+        """
+receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
+    || receipt.owner().causal_lifecycle_key() != parent.causal_origin().lifecycle_key
+""",
+        "leader-wire completion must retain exact runtime ordinal and causal key",
+    )
+    require_item_order(
+        "runner",
+        runner_items,
+        "run_inner",
+        (
+            "adapter.restored_producer_continuation_ordinal_high_watermark()",
+            "lifecycle_ordinals.advance_past(high_watermark)",
+            "LeaderWireLifecycleStoreGate::open",
+            "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
+            "LeaderWireIngressBinding::bind",
+            "SerializedV2Runtime::new_with_lifecycle_ordinals",
+        ),
+        "both restored high-waters must advance the shared source before ingress/runtime construction",
+    )
+
+    def seal_regressions(
+        source_key: str,
+        inventory: dict[str, str],
+        long_tests: set[str] = set(),
+        unix_tests: set[str] = set(),
+    ) -> None:
+        test_module_offset = structural[source_key].find("mod tests")
+        if test_module_offset < 0:
+            errors.append(
+                f"{paths[source_key]}: serviced-candidate regression module is missing"
+            )
+            return
+        for name, expected_sha256 in inventory.items():
+            items = rust_function_items_from_structural(
+                sources[source_key], structural[source_key], name
+            )
+            if len(items) != 1:
                 errors.append(
-                    f"{path}: serviced-candidate ownership may not depend on "
-                    f"an environment toggle or legacy codec token {forbidden}"
+                    f"{paths[source_key]}: require exactly one real V4 regression "
+                    f"named {name}; found {len(items)}"
+                )
+                continue
+            item = items[0]
+            item_offset = sources[source_key].find(item.source)
+            expected = (
+                ("#[cfg(unix)]", "#[test]")
+                if name in unix_tests
+                else (
+                    ("#[test]", "#[allow(clippy::too_many_lines)]")
+                    if name in long_tests
+                    else ("#[test]",)
+                )
+            )
+            observed_attributes = _leading_rust_attributes(
+                sources[source_key],
+                structural[source_key],
+                item_offset,
+            )
+            if item_offset <= test_module_offset or observed_attributes != expected:
+                errors.append(
+                    f"{paths[source_key]}:{item.line}: V4 regression {name} "
+                    f"must remain in the test module with attributes {expected!r}; "
+                    f"found {observed_attributes!r}"
+                )
+            _require_rust_item_token_sha256(
+                paths[source_key],
+                item,
+                expected_sha256,
+                f"V4 serviced-candidate regression {name}",
+                errors,
+            )
+
+    seal_regressions(
+        "store",
+        _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256,
+        unix_tests={
+            "snapshot_load_and_retire_never_follow_substituted_symlinks"
+        },
+    )
+    seal_regressions(
+        "adapter",
+        _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256,
+        long_tests={
+            "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate",
+            "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims",
+        },
+    )
+    seal_regressions(
+        "runtime",
+        _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256,
+    )
+    seal_regressions(
+        "worker",
+        _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256,
+    )
+
+    for source_key in ("store", "adapter", "runtime", "runner", "worker"):
+        executable = structural[source_key]
+        for forbidden in ("std::env", "var_os", "serde_json"):
+            if forbidden in executable:
+                errors.append(
+                    f"{paths[source_key]}: serviced-candidate ownership may not "
+                    "depend on an environment toggle or legacy codec token "
+                    f"{forbidden}"
                 )
     return errors
 
@@ -38278,8 +40785,8 @@ def _proof_obligation_architecture_errors(
                 )
 
         for symbol, required in {
-            "IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty": (
-                "AdequateLeaderAuthorityDeadlineActiveReceiptDecisionCarryProperty",
+            "IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty": (
+                "AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty",
                 "IndexedChainSpec",
             ),
             "IndexedAdequateLeaderLocalFairBehaviorAt": (
@@ -38302,7 +40809,7 @@ def _proof_obligation_architecture_errors(
             if missing:
                 errors.append(
                     f"{module}.tla:{line}: {symbol} must retain exact "
-                    "authority-carry/fair-owner dependencies; "
+                    "fixed-deadline/fair-owner dependencies; "
                     f"missing={missing!r}"
                 )
 
@@ -38327,12 +40834,34 @@ def _proof_obligation_architecture_errors(
                 "AdequateLeaderLocalTargetDecisionSource(target) "
                 "=> IndexedAllResponsiveJoined(initialContext)"
             ),
+            "IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster": (
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "target \\in ValidatorIds, "
+                "leaderContext \\in ContextRecords, "
+                "leaderView \\in Views, "
+                "startTime, deadline \\in Nat: "
+                "/\\ IndexedCompositionInvariant "
+                "/\\ IndexedAdequateLeaderWitness(initialContext)! "
+                "AdequateLeaderFixedCorridorDeadlineSource( target, "
+                "leaderContext, leaderView, startTime, deadline) "
+                "/\\ ~IndexedAdequateLeaderWitness(initialContext)!"
+                "NodeHasDecision(target) "
+                "=> IndexedAllResponsiveJoined(initialContext)"
+            ),
             (
                 "IndexedLiveChainSpecProvidesLocalAdequateLeader"
                 "FreshSelfCorridorExposure"
             ): (
                 "IndexedLiveChainSpec => "
                 "IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty"
+            ),
+            (
+                "IndexedLiveChainSpecProvidesLocalAdequateLeader"
+                "FixedDeadlineAndResponsiveDissemination"
+            ): (
+                "IndexedLiveChainSpec => "
+                "IndexedLocalAdequateLeaderFixedDeadlineAnd"
+                "ResponsiveDisseminationProperty"
             ),
             "IndexedAdequateLeaderCompletedProvidersSupplyLocalSemanticKernel": (
                 "/\\ IndexedLiveChainSpec /\\ "
@@ -38342,11 +40871,14 @@ def _proof_obligation_architecture_errors(
                 "/\\ IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty "
                 "=> IndexedLocalAdequateLeaderSemanticKernelProperty"
             ),
-            "IndexedAdequateLeaderAuthorityCarryAndExposureSupplyLocalSemanticKernel": (
-                "/\\ "
-                "IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty "
+            (
+                "IndexedAdequateLeaderFixedDeadlineDissemination"
+                "AndExposureSupplyLocalConvergence"
+            ): (
+                "/\\ IndexedLocalAdequateLeaderFixedDeadlineAnd"
+                "ResponsiveDisseminationProperty "
                 "/\\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty "
-                "=> IndexedLocalAdequateLeaderSemanticKernelProperty"
+                "=> IndexedLocalAdequateLeaderDecisionConvergenceProperty"
             ),
         }
         for symbol, expected in exact_statements.items():
@@ -38565,9 +41097,14 @@ def _proof_obligation_architecture_errors(
         )
         for reviewed_exposure_symbol in (
             "IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster",
+            "IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster",
             (
                 "IndexedLiveChainSpecProvidesLocalAdequateLeader"
                 "FreshSelfCorridorExposure"
+            ),
+            (
+                "IndexedLiveChainSpecProvidesLocalAdequateLeader"
+                "FixedDeadlineAndResponsiveDissemination"
             ),
         ):
             reviewed_exposure = _top_level_theorem_body(
@@ -38734,7 +41271,28 @@ def _proof_obligation_architecture_errors(
                 '[ownerKind |-> "Retire", node |-> 0, '
                 "source |-> AsyncUntrustedSource, slot |-> slot]"
             ),
-            "AdequateLeaderFixedCommitQcStageCarrier": "0..6",
+            "AdequateLeaderFixedCommitQcTransportCharge": (
+                "AsyncOneWayTransportBudget"
+            ),
+            "AdequateLeaderFixedCommitQcIoCharge": (
+                "AsyncIoDrainBudget * AsyncDeliveryBound"
+            ),
+            "AdequateLeaderFixedCommitQcRunnerCharge": (
+                "2 * AsyncRuntimeCycleBudget * AsyncDeliveryBound"
+            ),
+            "AdequateLeaderFixedCommitQcRetransmitCharge": (
+                "3 * AsyncRetransmitPeriod"
+            ),
+            "AdequateLeaderFixedCommitQcCompletionCharge": (
+                "AsyncCompletionReserve"
+            ),
+            "AdequateLeaderFixedCommitQcDisseminationClockBudget": (
+                "AdequateLeaderFixedCommitQcTransportCharge "
+                "+ AdequateLeaderFixedCommitQcIoCharge "
+                "+ AdequateLeaderFixedCommitQcRunnerCharge "
+                "+ AdequateLeaderFixedCommitQcRetransmitCharge "
+                "+ AdequateLeaderFixedCommitQcCompletionCharge"
+            ),
         }
         for symbol, exact in exact_arithmetic.items():
             require_operator(symbol, exact=exact)
@@ -38762,6 +41320,11 @@ def _proof_obligation_architecture_errors(
             required=(
                 "AdequateLeaderFixedLeaderPipelineBudgetMatchesConfiguration",
                 "AdequateLeaderFixedCommitQcDisseminationClockBudget",
+                "AdequateLeaderFixedCommitQcTransportCharge",
+                "AdequateLeaderFixedCommitQcIoCharge",
+                "AdequateLeaderFixedCommitQcRunnerCharge",
+                "AdequateLeaderFixedCommitQcRetransmitCharge",
+                "AdequateLeaderFixedCommitQcCompletionCharge",
                 "AsyncFixedCorridorServiceBudget",
             ),
         )
@@ -38809,7 +41372,7 @@ def _proof_obligation_architecture_errors(
                 "AdequateLeaderFixedDiscoveredPipelineOriginsForToken",
                 "AdequateLeaderFixedLivePipelineOriginsForToken",
                 "AdequateLeaderFrozenTargetCorridor",
-                "AdequateLeaderFixedAuthorityPipelineTokenCompleted",
+                "AdequateLeaderFixedAuthorityPipelineRemainingTokens",
             ),
             forbidden=(
                 "AdequateLeaderFixedDiscoveredPipelineOriginSlotsForToken",
@@ -38895,7 +41458,13 @@ def _proof_obligation_architecture_errors(
                 "AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty( "
                 "specification)"
             ),
-            required=("NatLessThanWellFounded", "WellFoundedLeadsTo"),
+            required=(
+                "AdequateLeaderFixedPipelineOriginEpisodeBudgetOrderingIsWellFounded",
+                "WellFoundedLeadsTo",
+                "AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal",
+                "AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering",
+                "AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier",
+            ),
         )
         require_theorem(
             "AdequateLeaderFixedOriginEpisodeClosureSuppliesSelectedOwnerService",
@@ -38952,6 +41521,21 @@ def _proof_obligation_architecture_errors(
             ),
         )
         require_operator(
+            "AdequateLeaderFixedCandidatePipelineServiceCellIdentity",
+            exact=(
+                '[kind |-> "Candidate", token |-> token, '
+                "candidate |-> candidate, cutoffOrdinal |-> cutoffOrdinal, "
+                "semanticRank |-> semanticRank]"
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedPreCandidatePipelineServiceCellIdentity",
+            exact=(
+                '[kind |-> "PreCandidate", token |-> token, '
+                "route |-> route]"
+            ),
+        )
+        require_operator(
             "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
             required=(
                 "AdequateLeaderFixedCandidatePipelineServiceCellIdentity",
@@ -38997,6 +41581,24 @@ def _proof_obligation_architecture_errors(
             ),
         )
         require_operator(
+            "AdequateLeaderFixedGlobalBlockerStrictRankGoal",
+            exact=(
+                "\\/ AdequateLeaderFixedGlobalBlockerSelectionGoal( "
+                "initialContext, target, leaderContext, leader, leaderView, "
+                "receipt, sourceRank, snapshot.serviceCellIdentity) "
+                "\\/ \\E lowerRank \\in SetLessThan( blockerRank, "
+                "AdequateLeaderFixedGlobalBlockerRankOrdering, "
+                "AdequateLeaderFixedGlobalBlockerRankCarrier): "
+                "AdequateLeaderFixedGlobalBlockerAtRank( initialContext, "
+                "target, leaderContext, leader, leaderView, receipt, "
+                "sourceRank, snapshot, clockValue, lowerRank)"
+            ),
+            forbidden=(
+                "CHOOSE",
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontier",
+            ),
+        )
+        require_operator(
             "AdequateLeaderFixedGlobalBlockerPending",
             required=(
                 "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
@@ -39024,6 +41626,17 @@ def _proof_obligation_architecture_errors(
         )
         require_theorem(
             "AdequateLeaderFixedPipelineServiceRankFrontierHasExactCell",
+            exact_statement=(
+                "\\A initialContext, target, leaderContext, leader, "
+                "leaderView, receipt, sourceRank: "
+                "AdequateLeaderFixedPipelineServiceRankFrontier( "
+                "initialContext, target, leaderContext, leader, leaderView, "
+                "receipt, sourceRank) => \\E cellIdentity \\in "
+                "AdequateLeaderFixedPipelineServiceCellIdentityCarrier: "
+                "AdequateLeaderFixedPipelineServiceRankFrontierForCell( "
+                "initialContext, target, leaderContext, leader, leaderView, "
+                "receipt, sourceRank, cellIdentity)"
+            ),
             required=(
                 "AdequateLeaderFixedPipelineServiceRankFrontier",
                 "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
@@ -39032,6 +41645,16 @@ def _proof_obligation_architecture_errors(
         )
         require_theorem(
             "AdequateLeaderFixedSelectedExactCellProjectsToServiceFrontier",
+            exact_statement=(
+                "\\A initialContext, target, leaderContext, leader, "
+                "leaderView, receipt, sourceRank, cellIdentity: "
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontierForCell( "
+                "initialContext, target, leaderContext, leader, leaderView, "
+                "receipt, sourceRank, cellIdentity) => "
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontier( "
+                "initialContext, target, leaderContext, leader, leaderView, "
+                "receipt, sourceRank)"
+            ),
             required=(
                 "AdequateLeaderFixedSelectedPipelineServiceRankFrontierForCell",
                 "AdequateLeaderFixedSelectedPipelineServiceRankFrontier",
@@ -39039,47 +41662,258 @@ def _proof_obligation_architecture_errors(
         )
         require_theorem(
             "AdequateLeaderFixedGlobalSelectionAndSelectedServiceSupplyPipelineRankDescent",
+            exact_statement=(
+                "\\A specification: "
+                "/\\ AdequateLeaderFixedGlobalBlockerSelectionClosureProperty( "
+                "specification) "
+                "/\\ AdequateLeaderFixedSelectedPipelineServiceRankDescentProperty( "
+                "specification) => "
+                "AdequateLeaderFixedPipelineServiceRankDescentProperty("
+                "specification)"
+            ),
             required=(
                 "AdequateLeaderFixedPipelineServiceRankFrontierHasExactCell",
                 "AdequateLeaderFixedSelectedExactCellProjectsToServiceFrontier",
             ),
         )
-
-        for stage, symbol in enumerate(
-            (
-                "AdequateLeaderFixedCommitQcWalDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcReceivedReducerDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcDeliveryCandidateDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcIngressDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcPacketDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcRetainedDeadlineKernelProperty",
+        require_theorem(
+            "AdequateLeaderFixedSelectedActionsCarryPipelineRank",
+            exact_statement=(
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ AsyncProgressOwnershipInvariant "
+                "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+                "/\\ "
+                "AsyncCandidateProducerContinuationExternalCoverageInvariant "
+                "/\\ "
+                "AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
+                "=> /\\ AdequateLeaderFixedCutPerActionProvider "
+                "/\\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider "
+                "/\\ "
+                "AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling "
+                "/\\ "
+                "AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling"
             ),
-            start=1,
+            required=(
+                "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
+            ),
+        )
+        for symbol in (
+            "AsyncLiveProvidesAdequateLeaderFixedCutPerAction",
+            "AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep",
+            "AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry",
         ):
-            require_operator(
+            require_theorem(
                 symbol,
                 required=(
-                    "AdequateLeaderFixedCommitQcDeadlineKernelProperty",
-                    str(stage),
+                    "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+                    "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
+                    "AdequateLeaderFixedSelectedActionsCarryPipelineRank",
                 ),
             )
-        require_operator(
-            "AdequateLeaderFixedCommitQcSixDeadlineKernelProperties",
+        require_theorem(
+            "AdequateLeaderFixedGlobalBlockerFactsSupplyProviders",
+            exact_statement=(
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ AsyncProgressOwnershipInvariant "
+                "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+                "/\\ "
+                "AsyncCandidateProducerContinuationExternalCoverageInvariant "
+                "/\\ "
+                "AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
+                "/\\ PostGstReplayQuarantineExcluded "
+                "=> /\\ AdequateLeaderFixedGlobalBlockerEntryProvider "
+                "/\\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider "
+                "/\\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider "
+                "/\\ "
+                "AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider "
+                "/\\ "
+                "AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider "
+                "/\\ "
+                "AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider"
+            ),
             required=(
-                "AdequateLeaderFixedCommitQcRetainedDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcPacketDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcIngressDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcDeliveryCandidateDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcReceivedReducerDeadlineKernelProperty",
-                "AdequateLeaderFixedCommitQcWalDeadlineKernelProperty",
+                "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
+                "OverdueResponsivePacketEnablesConcreteProgress",
+                "DueNodeServiceEnablesConcreteGateProgress",
+            ),
+        )
+        require_theorem(
+            "AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders",
+            required=(
+                "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+                "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
+                "AdequateLeaderFixedGlobalBlockerFactsSupplyProviders",
+            ),
+        )
+
+        retired_authority_deadline_dependencies = (
+            "AdequateLeaderFixedCommitQcStageCarrier",
+            "AdequateLeaderFixedCommitQcDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcWalDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcReceivedReducerDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcDeliveryCandidateDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcIngressDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcPacketDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcRetainedDeadlineKernelProperty",
+            "AdequateLeaderFixedCommitQcSixDeadlineKernelProperties",
+            "AdequateLeaderAuthorityDeadlineReceiptCoverageInitProvider",
+            "AdequateLeaderAuthorityDeadlineReceiptCoverageArmingProvider",
+            (
+                "AdequateLeaderAuthorityDeadlineReceiptCoverage"
+                "PreservationOrRetirementProvider"
+            ),
+            "AdequateLeaderAuthorityDeadlineReachabilityInitProvider",
+            "AdequateLeaderAuthorityDeadlineReachabilityStepProvider",
+            "AdequateLeaderAuthorityDeadlineReachabilityArmingProvider",
+            "AdequateLeaderAuthorityDeadlineQuantitativeProviderBundle",
+            (
+                "AdequateLeaderAuthorityDeadlineQuantitativeBundle"
+                "SuppliesArbitraryActiveService"
+            ),
+            (
+                "AdequateLeaderAuthorityDeadlineQuantitativeBundle"
+                "SuppliesDecisionCarry"
+            ),
+        )
+        source_tokens = set(tla_code_tokens(source))
+        resurrected = tuple(
+            token
+            for token in retired_authority_deadline_dependencies
+            if token in source_tokens
+        )
+        if resurrected:
+            errors.append(
+                f"{module}.tla: retired stored-receipt or staged CommitQC "
+                "authority-deadline seams must not be resurrected; "
+                f"present={resurrected!r}"
+            )
+
+        require_operator(
+            "AdequateLeaderAuthorityDeadlineReceiptSet",
+            exact=(
+                "[deadlineReceipt: AsyncFixedCorridorDeadlineReceiptSet, "
+                "subject: Subjects]"
+            ),
+            forbidden=("AsyncActiveFixedCorridorDeadlineReceipts",),
+        )
+        require_operator(
+            "AdequateLeaderAuthorityDeadlineReceipt",
+            exact=(
+                "[deadlineReceipt |-> AsyncFixedCorridorDeadlineReceipt( "
+                "leader, leaderContext, leaderView, startTime), "
+                "subject |-> subject]"
+            ),
+            forbidden=("AsyncActiveFixedCorridorDeadlineReceipts",),
+        )
+        require_operator(
+            "AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow",
+            exact=(
+                "\\A node \\in "
+                "AdequateLeaderFrozenResponsiveRoster(leaderContext): "
+                "receipt.deadlineReceipt.deadline "
+                "<= asyncNodeDeadlines[node]"
             ),
         )
         require_operator(
-            "AdequateLeaderFixedDecisionSourceTargetDeliveryRetentionProvider",
+            "AdequateLeaderAuthorityDeadlineFreshSelfWindowActive",
+            exact=(
+                "/\\ target = leader "
+                "/\\ receipt \\in AdequateLeaderAuthorityDeadlineReceiptSet "
+                "/\\ receipt.deadlineReceipt = "
+                "AsyncFixedCorridorDeadlineReceipt( leader, leaderContext, "
+                "leaderView, receipt.deadlineReceipt.armedAt) "
+                "/\\ AdequateLeaderFrozenTargetCorridor( leader, "
+                "leaderContext, leader, leaderView) "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow( "
+                "leaderContext, receipt) "
+                "/\\ receipt.deadlineReceipt.armedAt <= asyncNow "
+                "/\\ asyncNow < receipt.deadlineReceipt.deadline"
+            ),
+            forbidden=(
+                "AsyncActiveFixedCorridorDeadlineReceipts",
+                "AdequateLeaderAuthorityDeadlineReceiptActive",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderAuthorityDeadlineFixedSubjectWindowActive",
+            exact=(
+                "/\\ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive( "
+                "target, leaderContext, leader, leaderView, receipt) "
+                "/\\ AsyncProposalSubject(leader) = receipt.subject"
+            ),
+        )
+        require_operator(
+            "AdequateLeaderAuthorityDeadlineFreshSource",
+            exact=(
+                "/\\ target = leader "
+                "/\\ receipt = AdequateLeaderAuthorityDeadlineReceipt( "
+                "leader, leaderContext, leaderView, "
+                "receipt.deadlineReceipt.armedAt, "
+                "AsyncProposalSubject(leader)) "
+                "/\\ AdequateLeaderFixedCorridorDeadlineSource( leader, "
+                "leaderContext, leaderView, "
+                "receipt.deadlineReceipt.armedAt, "
+                "receipt.deadlineReceipt.deadline) "
+                "/\\ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive( "
+                "target, leaderContext, leader, leaderView, receipt)"
+            ),
+            forbidden=(
+                "AsyncActiveFixedCorridorDeadlineReceipts",
+                "AdequateLeaderAuthorityDeadlineReceiptActive",
+            ),
+        )
+        require_theorem(
+            "AdequateLeaderAuthorityDeadlineFreshSourceOwnsFrozenRosterWindow",
+            exact_statement=(
+                "\\A target, leaderContext, leader, leaderView, receipt: "
+                "AdequateLeaderAuthorityDeadlineFreshSource( target, "
+                "leaderContext, leader, leaderView, receipt) "
+                "=> "
+                "AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow( "
+                "leaderContext, receipt)"
+            ),
             required=(
-                "AdequateLeaderAuthorityDeadlineLeaderDecisionSource",
-                "TimeoutDecisionKernelSource",
-                "CommitCertificateDelivery",
+                "AdequateLeaderAuthorityDeadlineFreshSource",
+                "AdequateLeaderAuthorityDeadlineFreshSelfWindowActive",
+                "AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow",
+            ),
+        )
+        require_theorem(
+            "AdequateLeaderFreshReceiptOwnsCompatibleConfiguredCeiling",
+            exact_statement=(
+                "\\A target, leaderContext, leader, leaderView, receipt: "
+                "/\\ AdequateLeaderFixedConfiguredDeadlineCompatibility "
+                "/\\ AdequateLeaderAuthorityDeadlineFreshSource( target, "
+                "leaderContext, leader, leaderView, receipt) "
+                "=> /\\ receipt.deadlineReceipt.deadline "
+                "= receipt.deadlineReceipt.armedAt "
+                "+ AsyncFixedCorridorServiceBudget + 1 "
+                "/\\ receipt.deadlineReceipt.armedAt "
+                "< receipt.deadlineReceipt.deadline "
+                "/\\ receipt.deadlineReceipt.armedAt "
+                "+ AdequateLeaderFixedLeaderPipelineClockBudget "
+                "+ AdequateLeaderFixedCommitQcDisseminationClockBudget "
+                "<= receipt.deadlineReceipt.deadline - 1"
+            ),
+            required=(
+                "AdequateLeaderAuthorityDeadlineFreshSource",
+                "AdequateLeaderAuthorityDeadlineReceipt",
+                "AdequateLeaderAuthorityDeadlineFreshSelfWindowActive",
+                "AdequateLeaderFixedCorridorDeadlineSource",
+                "AsyncFixedCorridorDeadlineReceipt",
+                "AdequateLeaderFixedConfiguredDeadlineCompatibility",
+            ),
+            forbidden=retired_authority_deadline_dependencies,
+        )
+        require_operator(
+            "AdequateLeaderFixedDecisionSourceTargetDeliveryRetentionProvider",
+            exact=(
+                "\\A source, target \\in AsyncCurrentResponsiveVoters, "
+                "qc \\in QcRecordSet: DecisionSourceAt(source, qc) "
+                "=> \\/ NodeHasDecision(target) "
+                "\\/ /\\ TimeoutDecisionKernelSource(source, target, qc) "
+                "/\\ CommitCertificateDelivery(source, target, qc)"
             ),
         )
         require_theorem(
@@ -39092,47 +41926,44 @@ def _proof_obligation_architecture_errors(
             required=(
                 "AsyncLiveDecisionAuthorityRetainsExactTargetDelivery",
                 "AdequateLeaderFixedDecisionSourceTargetDeliveryRetentionProviderProperty",
-                "AdequateLeaderAuthorityDeadlineTargetDecision",
+                "AdequateLeaderFixedDecisionSourceTargetDeliveryRetentionProvider",
             ),
         )
 
-        for symbol in (
-            "AdequateLeaderAuthorityDeadlineReceiptCoverageInitProvider",
-            "AdequateLeaderAuthorityDeadlineReceiptCoverageArmingProvider",
-            "AdequateLeaderAuthorityDeadlineReceiptCoveragePreservationOrRetirementProvider",
-        ):
-            require_operator(
-                symbol,
-                required=(
-                    "AdequateLeaderAuthorityDeadlineMatchingReceiptCoverageInvariant"
-                    if symbol.endswith("InitProvider")
-                    else "AdequateLeaderAuthorityDeadlineMatchingReceipt",
-                ),
-            )
-        for symbol in (
-            "AdequateLeaderAuthorityDeadlineReachabilityInitProvider",
-            "AdequateLeaderAuthorityDeadlineReachabilityStepProvider",
-        ):
-            require_operator(
-                symbol,
-                required=(
-                    "AdequateLeaderAuthorityDeadlineActiveReceiptReachabilityInvariant",
-                ),
-            )
         require_operator(
-            "AdequateLeaderAuthorityDeadlineReachabilityArmingProvider",
-            required=(
-                "AdequateLeaderAuthorityDeadlineReceiptReachability",
-                "AsyncActiveFixedCorridorDeadlineReceipts",
+            "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider",
+            exact=(
+                "\\A target \\in ValidatorIds: "
+                "/\\ NodeHasDecision(target) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "=> NodeHasDecision(target)'"
             ),
         )
         require_operator(
             "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider",
-            required=(
+            exact=(
+                "\\A target \\in ValidatorIds, "
+                "leaderContext \\in ContextRecords, "
+                "leader \\in ValidatorIds, "
+                "leaderView \\in Views, "
+                "receipt \\in AdequateLeaderAuthorityDeadlineReceiptSet: "
+                "/\\ AdequateLeaderFrozenTargetCorridor( target, "
+                "leaderContext, leader, leaderView) "
+                "/\\ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive( "
+                "target, leaderContext, leader, leaderView, receipt) "
+                "/\\ ~NodeHasDecision(target) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ asyncNow' < receipt.deadlineReceipt.deadline "
+                "=> \\/ NodeHasDecision(target)' "
+                "\\/ /\\ (AdequateLeaderFrozenTargetCorridor( target, "
+                "leaderContext, leader, leaderView))' "
+                "/\\ "
+                "(AdequateLeaderAuthorityDeadlineFreshSelfWindowActive( "
+                "target, leaderContext, leader, leaderView, receipt))'"
+            ),
+            forbidden=(
+                "AsyncActiveFixedCorridorDeadlineReceipts",
                 "AdequateLeaderAuthorityDeadlineReceiptActive",
-                "AdequateLeaderFrozenTargetCorridor",
-                "NodeHasDecision",
-                "receipt.deadline",
             ),
         )
         require_operator(
@@ -39143,44 +41974,188 @@ def _proof_obligation_architecture_errors(
                 "leaderContext \\in ContextRecords, "
                 "leader \\in ValidatorIds, "
                 "leaderView \\in Views, "
-                "receipt \\in AsyncFixedCorridorDeadlineReceiptSet: "
+                "receipt \\in AdequateLeaderAuthorityDeadlineReceiptSet: "
                 "/\\ AdequateLeaderFrozenTargetCorridor( "
                 "target, leaderContext, leader, leaderView) "
-                "/\\ AdequateLeaderAuthorityDeadlineReceiptActive( "
+                "/\\ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive( "
                 "target, leaderContext, leader, leaderView, receipt) "
-                "=> [](/\\ asyncNow < receipt.deadline "
+                "=> [](/\\ asyncNow < receipt.deadlineReceipt.deadline "
                 "/\\ ~NodeHasDecision(target) "
                 "=> /\\ AdequateLeaderFrozenTargetCorridor( "
                 "target, leaderContext, leader, leaderView) "
-                "/\\ AdequateLeaderAuthorityDeadlineReceiptActive( "
+                "/\\ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive( "
                 "target, leaderContext, leader, leaderView, receipt)))"
+            ),
+            forbidden=(
+                "AsyncActiveFixedCorridorDeadlineReceipts",
+                "AdequateLeaderAuthorityDeadlineReceiptActive",
             ),
         )
 
-        bundle = require_operator(
-            "AdequateLeaderAuthorityDeadlineQuantitativeProviderBundle",
+        require_theorem(
+            "AdequateLeaderAuthorityDeadlineStepCarryPreventsPrematureExit",
+            exact_statement=(
+                "\\A specification: "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty( "
+                "specification) "
+                "=> "
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitSafetyProperty( "
+                "specification)"
+            ),
             required=(
-                "AdequateLeaderFixedConfiguredPipelineBudgetCompatibility",
-                "AdequateLeaderFixedConfiguredDeadlineCompatibility",
-                "AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty",
-                "AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty",
-                "AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty",
-                "AdequateLeaderFixedConcreteOwnerSelectionProviderProperty",
-                "AdequateLeaderFixedPreCandidateConcreteOwnerSelectionProviderProperty",
-                "AdequateLeaderFixedCutPerActionProviderProperty",
-                "AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty",
-                "AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty",
-                "AdequateLeaderFixedCommitQcDeadlineCarryProviderProperty",
-                "AdequateLeaderFixedDecisionSourceTargetDeliveryRetentionProviderProperty",
                 "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty",
-                "AdequateLeaderAuthorityDeadlineReceiptCoverageProviderProperty",
-                "AdequateLeaderAuthorityDeadlineReachabilityProviderProperty",
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty",
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider",
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitSafetyProperty",
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider",
+            ),
+            forbidden=retired_authority_deadline_dependencies,
+        )
+        require_theorem(
+            "AsyncSpecProvidesAdequateLeaderAuthorityDeadlineDecisionRetention",
+            exact_statement=(
+                "\\A initialContext: "
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty( "
+                "AsyncSpecAt(initialContext))"
+            ),
+            required=(
+                "AdequateLeaderAsyncBracketStepPreservesTargetDecision",
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty",
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider",
+            ),
+        )
+        require_theorem(
+            "AdequateLeaderAuthorityDeadlineWindowFollowsAsyncStep",
+            exact_statement=(
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ AsyncProgressOwnershipInvariant "
+                "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+                "=> AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider"
+            ),
+            required=(
+                "DualQuorumIntersectionHasHonest",
+                "AdequateLeaderAsyncBracketStepPreservesTargetDecision",
+                "AsyncFixedCorridorDeadlineAsyncNextClockIsMonotone",
+                "AsyncBracketNextPreservesStrongTypeInvariant",
+                "AsyncBracketNextPreservesProgressOwnership",
+                "AsyncNextPreservesCandidateServiceTombstoneLifecycle",
+                "AdequateLeaderAuthorityDeadlineFreshSelfWindowActive",
+                "AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow",
+                "AdequateLeaderFrozenTargetCorridor",
+                "AdequateLeaderFrozenResponsiveRoster",
+            ),
+            forbidden=retired_authority_deadline_dependencies,
+        )
+        require_theorem(
+            "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep",
+            exact_statement=(
+                "\\A initialContext: "
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty( "
+                "AsyncLiveSpecAt(initialContext))"
+            ),
+            required=(
+                "AsyncLiveSpecProjectsAsyncSpec",
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "AsyncSpecAlwaysProgressOwnershipInvariant",
+                "AsyncSpecAlwaysCandidateServiceTombstoneLifecycle",
+                "AdequateLeaderAuthorityDeadlineWindowFollowsAsyncStep",
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderAuthorityDeadlineFreshSelfSafetyActionProviderProperties",
+            exact=(
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty( "
+                "specification) "
+                "/\\ AdequateLeaderFixedCutPerActionProviderProperty(specification) "
+                "/\\ "
+                "AdequateLeaderFixedSelectedActionClockCarryProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty( "
+                "specification)"
+            ),
+            forbidden=retired_authority_deadline_dependencies,
+        )
+        require_theorem(
+            "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineFreshSelfSafetyActions",
+            exact_statement=(
+                "\\A initialContext: "
+                "AdequateLeaderAuthorityDeadlineFreshSelfSafetyActionProviderProperties( "
+                "AsyncLiveSpecAt(initialContext))"
+            ),
+            required=(
+                "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineImmediateSourceEntry",
+                "AsyncLiveProvidesAdequateLeaderFixedPipelineTokenOwnershipAndTailCarry",
+                "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginHistory",
+                "AsyncLiveProvidesAdequateLeaderFixedCutPerAction",
+                "AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry",
+                "AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep",
+                "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep",
+                "AdequateLeaderAuthorityDeadlineFreshSelfSafetyActionProviderProperties",
+            ),
+        )
+        bundle = require_operator(
+            "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle",
+            exact=(
+                "/\\ ModelConfiguration "
+                "/\\ AdequateLeaderFixedConfiguredPipelineBudgetCompatibility "
+                "/\\ AdequateLeaderFixedConfiguredDeadlineCompatibility "
+                "/\\ (specification => []AsyncStrongTypeInvariant) "
+                "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty( "
+                "specification) "
+                "/\\ AdequateLeaderFixedSubjectReplacementProviderProperties( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty( "
+                "specification) "
+                "/\\ AdequateLeaderFixedCutPerActionProviderProperty(specification) "
+                "/\\ "
+                "AdequateLeaderFixedSelectedActionClockCarryProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty( "
+                "specification) "
+                "/\\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification) "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty( "
+                "specification) "
+                "/\\ "
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty( "
+                "specification)"
             ),
             forbidden=(
                 "AdequateLeaderFixedSelectedOwnerServiceProperty",
                 "AdequateLeaderFixedPreCandidateEntryServiceProperty",
+                "AdequateLeaderFixedPipelineServiceRankClosureProperty",
+                "AdequateLeaderFixedCorridorDeadlineServiceProperty",
                 "AdequateLeaderAuthorityDeadlineStoredReceiptServiceProperty",
                 "AdequateLeaderAuthorityDeadlineActiveReceiptDecisionCarryProperty",
+                "AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty",
+                "AsyncActiveFixedCorridorDeadlineReceipts",
+                *retired_authority_deadline_dependencies,
             ),
         )
         if bundle is not None and _tla_dependency_present(
@@ -39194,26 +42169,85 @@ def _proof_obligation_architecture_errors(
             )
 
         require_theorem(
-            "AdequateLeaderAuthorityDeadlineQuantitativeBundleSuppliesArbitraryActiveService",
+            "AsyncLiveSpecSuppliesAdequateLeaderConfiguredBudget",
+            exact_statement=(
+                "\\A initialContext: AsyncLiveSpecAt(initialContext) "
+                "=> /\\ ModelConfiguration "
+                "/\\ AdequateLeaderFixedConfiguredPipelineBudgetCompatibility "
+                "/\\ AdequateLeaderFixedConfiguredDeadlineCompatibility"
+            ),
             required=(
-                "AdequateLeaderAuthorityDeadlineReachabilityClosesStoredReceiptService",
-                "AdequateLeaderAuthorityDeadlineNoPrematureExitForcesTargetDecision",
-                "AdequateLeaderAuthorityDeadlineExactActiveServiceSuppliesArbitraryReceiptService",
+                "AdequateLeaderFixedConfiguredBudgetCompatibilityIsDischarged",
+                "AsyncLiveSpecAt",
+                "AsyncSpecAt",
+                "AsyncInitAt",
+                "AsyncBaseInitAt",
+                "InitAt",
             ),
         )
         require_theorem(
-            "AdequateLeaderAuthorityDeadlineQuantitativeBundleSuppliesDecisionCarry",
+            "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineDecisionRetention",
             exact_statement=(
-                "\\A specification, initialContext: "
-                "AdequateLeaderAuthorityDeadlineQuantitativeProviderBundle( "
-                "specification, initialContext) "
-                "=> "
-                "AdequateLeaderAuthorityDeadlineActiveReceiptDecisionCarryProperty( "
-                "specification)"
+                "\\A initialContext: "
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty( "
+                "AsyncLiveSpecAt(initialContext))"
             ),
             required=(
-                "AdequateLeaderAuthorityDeadlineQuantitativeBundleSuppliesReceiptAcquisition",
-                "AdequateLeaderAuthorityDeadlineQuantitativeBundleSuppliesArbitraryActiveService",
+                "AsyncLiveSpecProjectsAsyncSpec",
+                "AsyncSpecProvidesAdequateLeaderAuthorityDeadlineDecisionRetention",
+                "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty",
+            ),
+        )
+        require_theorem(
+            (
+                "AsyncLiveSpecSuppliesAdequateLeaderAuthorityDeadline"
+                "FreshSelfQuantitativeProviderBundle"
+            ),
+            exact_statement=(
+                "\\A initialContext: AsyncLiveSpecAt(initialContext) "
+                "=> "
+                "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle( "
+                "AsyncLiveSpecAt(initialContext))"
+            ),
+            required=(
+                "AsyncLiveSpecSuppliesAdequateLeaderConfiguredBudget",
+                "AsyncLiveSpecProjectsAsyncSpec",
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness",
+                "AsyncLiveProvidesAdequateLeaderAuthorityDeadlineImmediateSourceEntry",
+                "AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementProviders",
+                "AsyncLiveProvidesAdequateLeaderFixedPipelineTokenOwnershipAndTailCarry",
+                "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginHistory",
+                "AsyncLiveProvidesAdequateLeaderFixedCutPerAction",
+                "AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry",
+                "AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep",
+                (
+                    "AsyncLiveProvidesAdequateLeaderFixedPipelineOrigin"
+                    "NonDescentEpisodeStep"
+                ),
+                "AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders",
+                (
+                    "AsyncLiveProvidesAdequateLeaderAuthorityDeadline"
+                    "NoPrematureExitStep"
+                ),
+                (
+                    "AsyncLiveProvidesAdequateLeaderAuthorityDeadline"
+                    "DecisionRetention"
+                ),
+                (
+                    "AdequateLeaderAuthorityDeadlineFreshSelf"
+                    "QuantitativeProviderBundle"
+                ),
+            ),
+            forbidden=(
+                "AdequateLeaderFixedSelectedOwnerServiceProperty",
+                "AdequateLeaderFixedPreCandidateEntryServiceProperty",
+                "AdequateLeaderFixedCorridorDeadlineServiceProperty",
+                "AdequateLeaderAuthorityDeadlineStoredReceiptServiceProperty",
+                "AdequateLeaderAuthorityDeadlineActiveReceiptDecisionCarryProperty",
+                "AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty",
+                "AsyncActiveFixedCorridorDeadlineReceipts",
+                *retired_authority_deadline_dependencies,
             ),
         )
 
@@ -40533,6 +43567,1069 @@ def _acyclic_liveness_debt_topology_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
+def _height_productivity_continuation_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin runner ownership across the height-productivity reset corridor."""
+
+    module_paths = {
+        "SumeragiV2HeightProductivityFrontierProofs": (
+            formal_dir / "SumeragiV2HeightProductivityFrontierProofs.tla"
+        ),
+        "SumeragiV2HeightResetBoundaryClosureProofs": (
+            formal_dir / "SumeragiV2HeightResetBoundaryClosureProofs.tla"
+        ),
+        "SumeragiV2AsyncFiniteRunnerEpisodeProofs": (
+            formal_dir / "SumeragiV2AsyncFiniteRunnerEpisodeProofs.tla"
+        ),
+    }
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for module, path in module_paths.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: height-productivity continuation contract must be "
+                "a regular file"
+            )
+            continue
+        try:
+            sources[module] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{path}: cannot read height-productivity continuation "
+                f"contract: {error}"
+            )
+
+    def check_exact(
+        module: str,
+        symbol: str,
+        expected: str,
+        *,
+        theorem: bool,
+    ) -> None:
+        source = sources.get(module)
+        if source is None:
+            return
+        path = module_paths[module]
+        extractor = (
+            _top_level_theorem_body if theorem else _top_level_operator_body
+        )
+        extracted = extractor(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        kind = "theorem" if theorem else "operator"
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed height-productivity continuation "
+                f"{kind} {symbol}"
+            )
+            return
+        body, line = extracted
+        if theorem:
+            body = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                body,
+                maxsplit=1,
+            )[0]
+        observed = " ".join(body.split())
+        expected_normalized = " ".join(expected.split())
+        if observed != expected_normalized:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact reviewed "
+                "height-productivity continuation "
+                f"{kind}; expected {expected_normalized!r}; "
+                f"found {observed!r}"
+            )
+
+    def require_dependencies(
+        module: str,
+        symbol: str,
+        dependencies: tuple[str, ...],
+    ) -> None:
+        source = sources.get(module)
+        if source is None:
+            return
+        path = module_paths[module]
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            return
+        body, line = extracted
+        missing = tuple(
+            dependency
+            for dependency in dependencies
+            if not _tla_dependency_present(body, dependency)
+        )
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain reviewed "
+                "height-productivity continuation dependencies "
+                f"{missing!r}"
+            )
+
+    productivity_module = "SumeragiV2HeightProductivityFrontierProofs"
+    reset_module = "SumeragiV2HeightResetBoundaryClosureProofs"
+    runner_module = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
+
+    exact_operators = {
+        (
+            productivity_module,
+            "HeightProductivityResetBoundary",
+        ): r"""
+            /\ gst
+            /\ ~ResponsiveNodesDecide
+            /\ ~AsyncTickEnabled
+            /\ PostGstClockBlockingOwnerExists
+            /\ \A node \in AsyncCurrentResponsiveVoters:
+                 ~NodeHasDecision(node)
+                   => \/ asyncRunnerPhase[node] = "Runtime"
+                      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                           node)
+        """,
+        (
+            reset_module,
+            "HeightResetNodeRuntimeReady",
+        ): r"""
+            /\ HeightResetNodePending(initialContext, node)
+            /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+        """,
+        (
+            reset_module,
+            "HeightResetNodeProducerContinuationPending",
+        ): r"""
+            /\ HeightResetNodePending(initialContext, node)
+            /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+        """,
+        (
+            reset_module,
+            "HeightResetNodeLocalIngressContinuationPending",
+        ): r"""
+            /\ HeightResetNodePending(initialContext, node)
+            /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+            /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+        """,
+        (
+            runner_module,
+            (
+                "AsyncVoterCandidateProducerContinuation"
+                "LocalIngressResolutionCorridorProperty"
+            ),
+        ): r"""
+            specification
+              => \A node \in AsyncVotersAt(initialContext):
+                   /\ AsyncVoterCandidateProducerContinuationEpisodePending(node)
+                   /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+                     ~>
+                       AsyncVoterCandidateProducerContinuationLocalIngressResolutionGoal(
+                         node)
+        """,
+    }
+    for (module, symbol), expected in exact_operators.items():
+        check_exact(module, symbol, expected, theorem=False)
+
+    exact_theorems = {
+        (
+            productivity_module,
+            "GstUndecidedResponsiveRunNodeIsEnabled",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ gst
+              /\ ~NodeHasDecision(node)
+                => ENABLED PostGstRunNode(node)
+        """,
+        (
+            productivity_module,
+            "LocalOrIngressPostGstRunNodeDecreasesRuntimeReach",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncStrongTypeInvariant
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+              /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+              /\ PostGstRunNode(node)
+                => PostGstRuntimeReachDecreases
+        """,
+        (
+            productivity_module,
+            "GstUndecidedLocalOrIngressRunnerIsImmediatelyProductive",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ gst
+              /\ ~NodeHasDecision(node)
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+              /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+                => ImmediateProductiveFairActionReady
+        """,
+        (
+            productivity_module,
+            "GstUndecidedStateHasImmediateProductivityOrResetBoundary",
+        ): r"""
+            /\ AsyncStrongTypeInvariant
+            /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+            /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+            /\ gst
+            /\ ~ResponsiveNodesDecide
+              => \/ ImmediateProductiveFairActionReady
+                 \/ HeightProductivityResetBoundary
+        """,
+        (
+            productivity_module,
+            "ResetBoundaryCoverageImpliesHeightProductivityFrontier",
+        ): r"""
+            \A initialContext:
+              HeightProductivityResetBoundaryProperty(
+                AsyncLiveSpecAt(initialContext))
+                => HeightProductivityFrontierProperty(
+                     AsyncLiveSpecAt(initialContext))
+        """,
+        (
+            reset_module,
+            "GstResponsiveUnappliedRunNodeIsEnabled",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ gst
+              /\ ~NodeHasApplication(node)
+                => ENABLED PostGstRunNode(node)
+        """,
+        (
+            reset_module,
+            "GstHistoricalRecoveryRunNodeIsEnabled",
+        ): r"""
+            \A node \in asyncHistoricalRecoveryTargets:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ gst
+                => ENABLED PostGstRunHistoricalRecoveryNode(node)
+        """,
+        (
+            reset_module,
+            "DueNodeServiceBlockerIsImmediatelyProductive",
+        ): r"""
+            /\ AsyncStrongTypeInvariant
+            /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+            /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+            /\ gst
+            /\ PostGstNodeServiceBlockers # {}
+              => ImmediateProductiveFairActionReady
+        """,
+        (
+            reset_module,
+            "ResetBoundaryHasImmediateProductivityOrIngressResidual",
+        ): r"""
+            /\ AsyncStrongTypeInvariant
+            /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+            /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+            /\ HeightProductivityResetBoundary
+              => \/ ImmediateProductiveFairActionReady
+                 \/ HeightResetIngressOwnershipResidual
+        """,
+        (
+            reset_module,
+            "UndecidedCurrentVoterWithoutImmediateProductivityIsAtRuntime",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ gst
+              /\ ~NodeHasDecision(node)
+              /\ ~ImmediateProductiveFairActionReady
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+                => asyncRunnerPhase[node] = "Runtime"
+        """,
+        (
+            reset_module,
+            "RuntimePostGstRunNodeIsNonstuttering",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncTypeInvariant
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+              /\ asyncRunnerPhase[node] = "Runtime"
+              /\ PostGstRunNode(node)
+                => <<PostGstRunNode(node)>>_AsyncAllVars
+        """,
+        (
+            reset_module,
+            "RuntimePostGstRunNodeMovesToLocalOrIngress",
+        ): r"""
+            \A node \in AsyncCurrentResponsiveVoters:
+              /\ AsyncStrongTypeInvariant
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+              /\ asyncRunnerPhase[node] = "Runtime"
+              /\ PostGstRunNode(node)
+                => asyncRunnerPhase'[node] \in {"Local", "Ingress"}
+        """,
+        (
+            reset_module,
+            "HeightResetNodeLocalIngressWithoutExitOwnsContinuation",
+        ): r"""
+            \A initialContext:
+              \A node \in AsyncVotersAt(initialContext):
+                /\ HeightResetNodePending(initialContext, node)
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+                  => AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+        """,
+        (
+            reset_module,
+            "HeightResetNodeRuntimeReadyFrame",
+        ): r"""
+            \A initialContext:
+              \A node \in AsyncVotersAt(initialContext):
+                /\ HeightResetNodeRuntimeReady(initialContext, node)
+                /\ AsyncProgressOwnershipInvariant
+                /\ [AsyncNext]_AsyncAllVars
+                  => \/ HeightResetNodeExit(node)'
+                     \/ HeightResetNodeRuntimeReady(initialContext, node)'
+                     \/ <<PostGstRunNode(node)>>_AsyncAllVars
+        """,
+        (
+            reset_module,
+            "HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation",
+        ): r"""
+            \A initialContext:
+              \A node \in AsyncVotersAt(initialContext):
+                /\ HeightResetNodeRuntimeReady(initialContext, node)
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant'
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant'
+                /\ [AsyncNext]_AsyncAllVars
+                /\ <<PostGstRunNode(node)>>_AsyncAllVars
+                  => \/ HeightResetNodeExit(node)'
+                     \/ HeightResetNodeLocalIngressContinuationPending(
+                          initialContext, node)'
+        """,
+        (
+            reset_module,
+            "FairRuntimeReadyReachesExitOrLocalIngressContinuation",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     HeightResetNodeRuntimeReady(initialContext, node)
+                       ~> (HeightResetNodeExit(node)
+                             \/ HeightResetNodeLocalIngressContinuationPending(
+                                  initialContext, node))
+        """,
+        (
+            reset_module,
+            "FairLocalIngressContinuationReachesExit",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     HeightResetNodeLocalIngressContinuationPending(
+                       initialContext, node)
+                       ~> HeightResetNodeExit(node)
+        """,
+        (
+            reset_module,
+            "FairRuntimeReadyReachesExit",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     HeightResetNodeRuntimeReady(initialContext, node)
+                       ~> HeightResetNodeExit(node)
+        """,
+        (
+            reset_module,
+            "FairProducerContinuationReachesExitOrRuntimeReady",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     HeightResetNodeProducerContinuationPending(
+                       initialContext, node)
+                       ~> (HeightResetNodeExit(node)
+                             \/ HeightResetNodeRuntimeReady(initialContext, node))
+        """,
+        (
+            reset_module,
+            "FairProducerContinuationReachesExit",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     HeightResetNodeProducerContinuationPending(
+                       initialContext, node)
+                       ~> HeightResetNodeExit(node)
+        """,
+        (
+            reset_module,
+            "FairRuntimeResetExposesProductivityOrDecision",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     HeightResetNodePending(initialContext, node)
+                       ~> HeightResetNodeExit(node)
+        """,
+        (
+            reset_module,
+            "FairRuntimeResetCoversFixedVoter",
+        ): r"""
+            \A initialContext:
+              AsyncLiveSpecAt(initialContext)
+                => \A node \in AsyncVotersAt(initialContext):
+                     (gst /\ ~ImmediateProductiveFairActionReady)
+                       ~> HeightResetNodeExit(node)
+        """,
+        (
+            runner_module,
+            "AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion",
+        ): r"""
+            \A node \in ValidatorIds:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant
+              /\ gst
+              /\ node \in AsyncCurrentResponsiveVoters
+              /\ ~NodeHasDecision(node)
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+              /\ [AsyncNext]_AsyncAllVars
+                => \/ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                         node)'
+                   \/ <<PostGstRunNode(node)>>_AsyncAllVars
+        """,
+        (
+            runner_module,
+            "AsyncVoterRunnerEpisodeHasNoFreshActiveContinuationReplenishment",
+        ): r"""
+            \A node \in ValidatorIds:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncVoterCandidateProducerContinuationEpisodePending(node)
+              /\ AsyncNext
+                => AsyncVoterCandidateProducerContinuationFreshActiveRecordsAfter(
+                     node) = {}
+        """,
+        (
+            runner_module,
+            "AsyncVoterCandidateProducerContinuationLocalIngressCorridorStep",
+        ): r"""
+            \A node \in ValidatorIds:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ AsyncVoterCandidateProducerContinuationLocalIngressCorridorState(node)
+              /\ [AsyncNext]_AsyncAllVars
+                =>
+                  \/ AsyncVoterCandidateProducerContinuationLocalIngressResolutionGoal(
+                       node)'
+                  \/ AsyncVoterCandidateProducerContinuationLocalIngressCorridorState(
+                       node)'
+        """,
+        (
+            runner_module,
+            (
+                "AsyncSpecProvidesVoterCandidateProducerContinuation"
+                "LocalIngressResolutionCorridor"
+            ),
+        ): r"""
+            \A initialContext:
+              AsyncVoterCandidateProducerContinuationLocalIngressResolutionCorridorProperty(
+                AsyncSpecAt(initialContext), initialContext)
+        """,
+    }
+    for (module, symbol), expected in exact_theorems.items():
+        check_exact(module, symbol, expected, theorem=True)
+
+    dependency_contracts = {
+        (
+            productivity_module,
+            "ResetBoundaryCoverageImpliesHeightProductivityFrontier",
+        ): (
+            "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+            "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
+            "GstUndecidedStateHasImmediateProductivityOrResetBoundary",
+        ),
+        (
+            reset_module,
+            "HeightResetNodeRuntimeReadyFrame",
+        ): (
+            "AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion",
+        ),
+        (
+            reset_module,
+            "HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation",
+        ): (
+            "RuntimePostGstRunNodeMovesToLocalOrIngress",
+            "HeightResetNodeLocalIngressWithoutExitOwnsContinuation",
+        ),
+        (
+            reset_module,
+            "FairRuntimeReadyReachesExitOrLocalIngressContinuation",
+        ): (
+            "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+            "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
+            "HeightResetNodeRuntimeReadyFrame",
+            "HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation",
+        ),
+        (
+            reset_module,
+            "FairLocalIngressContinuationReachesExit",
+        ): (
+            (
+                "AsyncSpecProvidesVoterCandidateProducerContinuation"
+                "LocalIngressResolutionCorridor"
+            ),
+            "HeightResetNodeLocalIngressWithoutExitOwnsContinuation",
+        ),
+        (
+            reset_module,
+            "FairRuntimeReadyReachesExit",
+        ): (
+            "FairRuntimeReadyReachesExitOrLocalIngressContinuation",
+            "FairLocalIngressContinuationReachesExit",
+        ),
+        (
+            reset_module,
+            "FairProducerContinuationReachesExitOrRuntimeReady",
+        ): (
+            (
+                "AsyncSpecProvidesVoterCandidateProducerContinuation"
+                "ResolutionClosure"
+            ),
+        ),
+        (
+            reset_module,
+            "FairProducerContinuationReachesExit",
+        ): (
+            "FairProducerContinuationReachesExitOrRuntimeReady",
+            "FairRuntimeReadyReachesExit",
+        ),
+        (
+            reset_module,
+            "FairRuntimeResetExposesProductivityOrDecision",
+        ): (
+            "FairRuntimeReadyReachesExit",
+            "FairProducerContinuationReachesExit",
+        ),
+        (
+            reset_module,
+            "FairRuntimeResetCoversFixedVoter",
+        ): (
+            "FairRuntimeResetExposesProductivityOrDecision",
+        ),
+        (
+            runner_module,
+            "AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion",
+        ): (
+            "AsyncCandidateProducerContinuationGstExcludesResetReplay",
+            "AsyncCandidateProducerContinuationRunnerResolutionRequired",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+            "PostGstRunNode",
+            "RunNodeWork",
+        ),
+        (
+            runner_module,
+            "AsyncVoterRunnerEpisodeHasNoFreshActiveContinuationReplenishment",
+        ): (
+            "AsyncCandidateProducerContinuationGstExcludesResetReplay",
+            "AsyncVoterCandidateProducerContinuationFreshActiveRecordsAfter",
+            "AsyncVoterCandidateProducerContinuationEpisodePending",
+        ),
+        (
+            runner_module,
+            "AsyncVoterProducerContinuationCompositeRankStepCannotIncrease",
+        ): (
+            "AsyncVoterRunnerEpisodeHasNoFreshActiveContinuationReplenishment",
+        ),
+        (
+            runner_module,
+            (
+                "AsyncSpecProvidesVoterCandidateProducerContinuation"
+                "LocalIngressResolutionCorridor"
+            ),
+        ): (
+            (
+                "AsyncSpecProvidesVoterCandidateProducerContinuation"
+                "ResolutionClosure"
+            ),
+            "AsyncSpecAlwaysStrongTypeInvariant",
+            "AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage",
+            "AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity",
+            (
+                "AsyncVoterCandidateProducerContinuation"
+                "LocalIngressCorridorStep"
+            ),
+        ),
+    }
+    for (module, symbol), dependencies in dependency_contracts.items():
+        require_dependencies(module, symbol, dependencies)
+
+    return errors
+
+
+def _candidate_producer_lifecycle_coverage_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin lifecycle coverage through restart, type, and replay-rank cones."""
+
+    module_paths = {
+        "SumeragiV2AsyncNetwork": formal_dir / "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncRecoveryVoteEpochProofs": (
+            formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+        ),
+        "SumeragiV2AsyncFairServiceProofs": (
+            formal_dir / "SumeragiV2AsyncFairServiceProofs.tla"
+        ),
+        "SumeragiV2AsyncFiniteRunnerEpisodeProofs": (
+            formal_dir / "SumeragiV2AsyncFiniteRunnerEpisodeProofs.tla"
+        ),
+        "SumeragiV2HeightResetBoundaryClosureProofs": (
+            formal_dir / "SumeragiV2HeightResetBoundaryClosureProofs.tla"
+        ),
+    }
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for module, path in module_paths.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: candidate-producer lifecycle coverage contract "
+                "must be a regular file"
+            )
+            continue
+        try:
+            sources[module] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{path}: cannot read candidate-producer lifecycle coverage "
+                f"contract: {error}"
+            )
+
+    def check_exact(
+        module: str,
+        symbol: str,
+        expected: str,
+        *,
+        theorem: bool,
+    ) -> None:
+        source = sources.get(module)
+        if source is None:
+            return
+        path = module_paths[module]
+        extractor = (
+            _top_level_theorem_body if theorem else _top_level_operator_body
+        )
+        extracted = extractor(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        kind = "theorem" if theorem else "operator"
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed candidate-producer lifecycle "
+                f"coverage {kind} {symbol}"
+            )
+            return
+        body, line = extracted
+        if theorem:
+            body = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                body,
+                maxsplit=1,
+            )[0]
+        observed = " ".join(body.split())
+        expected_normalized = " ".join(expected.split())
+        if observed != expected_normalized:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact reviewed "
+                "candidate-producer lifecycle coverage "
+                f"{kind}; expected {expected_normalized!r}; "
+                f"found {observed!r}"
+            )
+
+    def require_dependencies(
+        module: str,
+        symbol: str,
+        dependencies: tuple[str, ...],
+    ) -> None:
+        source = sources.get(module)
+        if source is None:
+            return
+        path = module_paths[module]
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            return
+        body, line = extracted
+        missing = tuple(
+            dependency
+            for dependency in dependencies
+            if not _tla_dependency_present(body, dependency)
+        )
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain reviewed "
+                "candidate-producer lifecycle coverage dependencies "
+                f"{missing!r}"
+            )
+
+    network_module = "SumeragiV2AsyncNetwork"
+    recovery_module = "SumeragiV2AsyncRecoveryVoteEpochProofs"
+    fair_module = "SumeragiV2AsyncFairServiceProofs"
+    runner_module = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
+    reset_module = "SumeragiV2HeightResetBoundaryClosureProofs"
+
+    exact_operators = {
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+        ): r"""
+            \E lifecycle \in state.candidateLifecycleAdmissions:
+              /\ lifecycle.node = record.node
+              /\ lifecycle.origin = record.causalOrigin
+              /\ lifecycle.slot = record.address.slot
+              /\ lifecycle.ordinal = record.ordinal
+        """,
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
+        ): r"""
+            \A record \in state.producerContinuations:
+              record.status \in {"Reserved", "Materialized"}
+                => AsyncCandidateProducerContinuationLifecycleCoveredIn(state, record)
+        """,
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
+        ): r"""
+            AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn(
+              asyncControlServiceState)
+        """,
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationRestartStableTerminalIn",
+        ): r"""
+            /\ record.status = "Terminal"
+            /\ \/ AsyncCandidateProducerContinuationDurableTerminal(record)
+               \/ \E tombstone \in state.candidateTerminalTombstones:
+                    /\ tombstone.node = record.node
+                    /\ tombstone.identity = record.identity
+               \/ ~AsyncCandidateProducerContinuationLifecycleCoveredIn(state, record)
+        """,
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationExactReplayDistance",
+        ): r"""
+            LET record ==
+                  AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(node)
+            IN IF ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+                    \/ AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+               THEN 0
+               ELSE IF record.sourceClass # "Local"
+                    THEN 0
+                    ELSE IF AsyncCandidateProducerContinuationRuntimeReplayCarrier(node)
+                         THEN IF asyncRunnerPhase[node] = "Runtime"
+                              THEN 1
+                              ELSE 2
+                         ELSE IF asyncRunnerPhase[node] = "Local"
+                              THEN 1
+                              ELSE 2
+        """,
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationRunnerCompositeRank",
+        ): r"""
+            3 * AsyncCandidateProducerContinuationRunnerPrefixBudget(node)
+              + AsyncCandidateProducerContinuationExactReplayDistance(node)
+        """,
+        (
+            runner_module,
+            "AsyncVoterCandidateProducerContinuationFrozenCompositeRank",
+        ): r"""
+            3 * AsyncVoterCandidateProducerContinuationFrozenPrefixBudget(node)
+              + AsyncCandidateProducerContinuationExactReplayDistance(node)
+        """,
+    }
+    for (module, symbol), expected in exact_operators.items():
+        check_exact(module, symbol, expected, theorem=False)
+
+    exact_theorems = {
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationRestartStableTerminalPreserved",
+        ): r"""
+            \A state, resetNodes, record:
+              /\ record \in state.producerContinuations
+              /\ AsyncCandidateProducerContinuationRestartStableTerminalIn(
+                   state, record)
+                => record \in
+                     AsyncCandidateProducerContinuationsAfterReset(
+                       state, resetNodes)
+        """,
+        (
+            network_module,
+            (
+                "AsyncControlServiceTransitionPreserves"
+                "CandidateProducerContinuationLifecycleCoverage"
+            ),
+        ): r"""
+            /\ AsyncCandidateProducerContinuationLifecycleCoverageInvariant
+            /\ AsyncControlServiceSlotTransition
+              => AsyncCandidateProducerContinuationLifecycleCoverageInvariant'
+        """,
+        (
+            network_module,
+            (
+                "AsyncBracketNextPreservesCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+        ): r"""
+            /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+            /\ [AsyncNext]_AsyncAllVars
+              => AsyncCandidateProducerContinuationLocalReplayCapacityInvariant'
+        """,
+        (
+            network_module,
+            (
+                "AsyncSpecAlwaysCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+        ): r"""
+            \A initialContext:
+              AsyncSpecAt(initialContext)
+                => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+        """,
+        (
+            recovery_module,
+            "AsyncInitEstablishesStrongTypeInvariant",
+        ): r"""
+            \A initialContext:
+              AsyncInitAt(initialContext) => AsyncStrongTypeInvariant
+        """,
+        (
+            recovery_module,
+            "AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType",
+        ): r"""
+            /\ AsyncTypeInvariant
+            /\ AsyncControlServiceStateTypeInvariant
+            /\ AsyncSchedulerTypeInvariant'
+            /\ AsyncNext
+              => AsyncControlServiceStateTypeInvariant'
+        """,
+        (
+            recovery_module,
+            "AsyncNextPreservesControlServiceStateTypeInvariant",
+        ): r"""
+            /\ AsyncStrongTypeInvariant
+            /\ AsyncNext
+              => AsyncControlServiceStateTypeInvariant'
+        """,
+        (
+            recovery_module,
+            "AsyncNextPreservesStrongTypeInvariant",
+        ): r"""
+            AsyncStrongTypeInvariant /\ AsyncNext
+              => AsyncStrongTypeInvariant'
+        """,
+        (
+            recovery_module,
+            "AsyncBracketNextPreservesStrongTypeInvariant",
+        ): r"""
+            AsyncStrongTypeInvariant /\ [AsyncNext]_AsyncAllVars
+              => AsyncStrongTypeInvariant'
+        """,
+        (
+            fair_module,
+            "AsyncSpecAlwaysStrongTypeInvariant",
+        ): r"""
+            \A initialContext:
+              AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+        """,
+        (
+            runner_module,
+            "AsyncVoterCandidateProducerContinuationCompositeRankIsNatural",
+        ): r"""
+            \A node \in ValidatorIds:
+              /\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+                => /\ AsyncCandidateProducerContinuationExactReplayDistance(node)
+                         \in 0..2
+                   /\ AsyncVoterCandidateProducerContinuationFrozenCompositeRank(node)
+                         \in Nat \ {0}
+        """,
+        (
+            reset_module,
+            "HeightResetNodePendingUnlessExit",
+        ): r"""
+            \A initialContext:
+              \A node \in AsyncVotersAt(initialContext):
+                /\ HeightResetNodePending(initialContext, node)
+                /\ [AsyncNext]_AsyncAllVars
+                  => \/ HeightResetNodePending(initialContext, node)'
+                     \/ HeightResetNodeExit(node)'
+        """,
+    }
+    for (module, symbol), expected in exact_theorems.items():
+        check_exact(module, symbol, expected, theorem=True)
+
+    type_source = sources.get(network_module)
+    if type_source is not None:
+        type_operator = "AsyncControlServiceStateTypeInvariant"
+        extracted = _top_level_operator_body(
+            type_source,
+            type_operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_paths[network_module]}: missing reviewed "
+                f"control-service type operator {type_operator}"
+            )
+        else:
+            body, line = extracted
+            coverage_token = (
+                "AsyncCandidateProducerContinuationLifecycleCoverageInvariant"
+            )
+            occurrences = tla_code_tokens(body).count(coverage_token)
+            if occurrences != 1:
+                errors.append(
+                    f"{module_paths[network_module]}:{line}: "
+                    f"{type_operator} must contain exactly one "
+                    "candidate-producer lifecycle coverage invariant; "
+                    f"found {occurrences}"
+                )
+
+    dependency_contracts = {
+        (
+            network_module,
+            "AsyncCandidateProducerContinuationRestartStableTerminalPreserved",
+        ): (
+            "AsyncCandidateProducerContinuationRestartStableTerminalIn",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+            "AsyncCandidateProducerContinuationsAfterReset",
+        ),
+        (
+            network_module,
+            (
+                "AsyncControlServiceTransitionPreserves"
+                "CandidateProducerContinuationLifecycleCoverage"
+            ),
+        ): (
+            "AsyncCandidateProducerContinuationResetPreservesExactReservation",
+            "AsyncCandidateProducerContinuationStatusIsMonotone",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+        ),
+        (
+            network_module,
+            (
+                "AsyncBracketNextPreservesCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+        ): (
+            (
+                "AsyncNextPreservesCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+        ),
+        (
+            network_module,
+            (
+                "AsyncSpecAlwaysCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+        ): (
+            (
+                "AsyncInitEstablishesCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+            (
+                "AsyncBracketNextPreservesCandidateProducerContinuation"
+                "LocalReplayCapacity"
+            ),
+        ),
+        (
+            recovery_module,
+            "AsyncInitEstablishesStrongTypeInvariant",
+        ): (
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+        ),
+        (
+            recovery_module,
+            "AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType",
+        ): (
+            (
+                "AsyncControlServiceTransitionPreserves"
+                "CandidateProducerContinuationLifecycleCoverage"
+            ),
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
+            "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+        ),
+        (
+            recovery_module,
+            "AsyncNextPreservesControlServiceStateTypeInvariant",
+        ): (
+            "AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType",
+            "AsyncNextPreservesSchedulerType",
+        ),
+        (
+            recovery_module,
+            "AsyncNextPreservesStrongTypeInvariant",
+        ): (
+            "AsyncNextPreservesControlServiceStateTypeInvariant",
+        ),
+        (
+            recovery_module,
+            "AsyncBracketNextPreservesStrongTypeInvariant",
+        ): (
+            "AsyncNextPreservesStrongTypeInvariant",
+        ),
+        (
+            fair_module,
+            "AsyncSpecAlwaysStrongTypeInvariant",
+        ): (
+            "AsyncInitEstablishesStrongTypeInvariant",
+            "AsyncBracketNextPreservesStrongTypeInvariant",
+        ),
+        (
+            runner_module,
+            "AsyncVoterCandidateProducerContinuationCompositeRankIsNatural",
+        ): (
+            "AsyncCandidateProducerContinuationExactReplayDistance",
+            "AsyncVoterCandidateProducerContinuationFrozenCompositeRank",
+            "AsyncCandidateProducerContinuationRunnerResolutionRequired",
+        ),
+        (
+            reset_module,
+            "HeightResetNodePendingUnlessExit",
+        ): (
+            "AsyncBracketNextPreservesStrongTypeInvariant",
+        ),
+    }
+    for (module, symbol), dependencies in dependency_contracts.items():
+        require_dependencies(module, symbol, dependencies)
+
+    return errors
+
+
 def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
     """Require checked scheduler closure and the exact Core-step refinement."""
 
@@ -40573,9 +44670,17 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "\\A initialContext: AsyncInitAt(initialContext) "
                 "=> AsyncServiceActivationPairInvariant"
             ),
+            "AsyncInitEstablishesLeaderWireIngressCarrierOwnership": (
+                "\\A initialContext: AsyncInitAt(initialContext) "
+                "=> AsyncLeaderWireIngressCarrierOwnershipInvariant"
+            ),
             "AsyncNextPreservesServiceActivationPairInvariant": (
                 "/\\ AsyncTypeInvariant /\\ AsyncNext "
                 "=> AsyncServiceActivationPairInvariant'"
+            ),
+            "AsyncNextPreservesLeaderWireIngressCarrierOwnership": (
+                "/\\ AsyncStrongTypeInvariant /\\ AsyncNext "
+                "=> AsyncLeaderWireIngressCarrierOwnershipInvariant'"
             ),
             "AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType": (
                 "/\\ AsyncTypeInvariant "
@@ -40686,14 +44791,19 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "ResponsiveUnappliedRunNodeIsEnabled": (
                 "\\A node \\in AsyncCurrentResponsiveVoters: "
-                "/\\ AsyncTypeInvariant /\\ node \\in up "
+                "/\\ AsyncTypeInvariant "
+                "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+                "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
+                "/\\ node \\in up "
                 "/\\ ~NodeHasApplication(node) "
                 "/\\ RecoveryRunNodeGuard(node) "
                 "=> ENABLED RunNode(node)"
             ),
             "RunNodeWorkConcreteActionCaseSplit": (
                 "\\A node: RunNodeWork(node) "
-                "=> \\/ LocalAdmissionStep(node) "
+                "=> \\/ ResolveRunNodeCandidateProducerContinuation(node) "
+                "\\/ ReplayRunNodeCandidateProducerContinuation(node) "
+                "\\/ LocalAdmissionStep(node) "
                 "\\/ IngressDrainStep(node) "
                 "\\/ SerializedRunnerRuntimeStep(node) "
                 "\\/ SerializedLocalPrecedesServeIngressStep(node) "
@@ -40709,7 +44819,10 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "HistoricalRecoveryRunnerEnabledAfterGst": (
                 "\\A node \\in asyncHistoricalRecoveryTargets: "
-                "/\\ AsyncStrongTypeInvariant /\\ gst "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ AsyncCandidateProducerContinuationExternalCoverageInvariant "
+                "/\\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant "
+                "/\\ gst "
                 "=> ENABLED PostGstRunHistoricalRecoveryNode(node)"
             ),
         })
@@ -40790,7 +44903,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "SerializedRunnerRuntimeStep": (
                 "\\/ SerializedRuntimeStep(node) "
-                "\\/ SerializedRuntimePrecedesServeIngressStep(node)"
+                "\\/ SerializedRuntimePrecedesServeIngressStep(node) "
+                "\\/ AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)"
             ),
             "LocalServeSchedulerStep": (
                 "\\/ LocalAdmissionStep(node) "
@@ -40875,6 +44989,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "/\\ AsyncServiceActivationPairInvariant "
             "/\\ AsyncControlServiceStateTypeInvariant "
             "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
+            "/\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
             "/\\ ReceivedTimeoutVotePoolInvariant "
             "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
             "/\\ AsyncRecoveryExecutionInvariant "
@@ -40945,6 +45060,64 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 errors.append(
                     f"{path}:{line}: {symbol} must cover the exact init/full-"
                     "AsyncNext activation and deadline-writer boundary; "
+                    f"missing={missing!r}"
+                )
+
+        leader_wire_ingress_proof_dependencies = {
+            "AsyncInitEstablishesLeaderWireIngressCarrierOwnership": (
+                "FS_CardinalityType",
+                "AsyncInitAt",
+                "AsyncBaseInitAt",
+                "AsyncTransportInit",
+                "AsyncLeaderWireIngressCarrierOwnershipInvariant",
+                "AsyncLeaderWireIngressCarrierCoordinates",
+                "AsyncLeaderWireLifecycleIngressProtected",
+                "AsyncLeaderWireAdmissionMatchesRecord",
+                "AsyncLeaderWireLifecycleIdentityDerivable",
+                "AsyncChunkExactLifecycleCoordinatesRetained",
+                "IngressLane",
+                "IngressLaneDepth",
+            ),
+            "AsyncNextPreservesLeaderWireIngressCarrierOwnership": (
+                "AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut",
+                "AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix",
+                "AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier",
+                "AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle",
+                "CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner",
+                "LeaderWireIngressDrainNeverInventsRuntimeOwner",
+                "RuntimeLeaderWireCannotRetireMerelyFromIngressPop",
+                "RetireLeaderWireLifecycleRetainsTerminalTombstone",
+                "LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically",
+                "AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal",
+                "LeaderWireIngressAdmissionRefinesLifecycleTransition",
+                "LeaderWireIngressDrainRefinesLifecycleTransition",
+                "LeaderWireLastConsumerRefinesLifecycleTransition",
+                "LeaderWireTerminalRetirementRefinesLifecycleTransition",
+                "LeaderWireRestartReopenRefinesLifecycleTransition",
+            ),
+        }
+        for symbol, required_tokens in (
+            leader_wire_ingress_proof_dependencies.items()
+        ):
+            theorem = _top_level_theorem_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if theorem is None:
+                continue
+            body, line = theorem
+            parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )
+            proof = parts[1] if len(parts) == 2 else ""
+            missing = [
+                token
+                for token in required_tokens
+                if not _tla_dependency_present(proof, token)
+            ]
+            if missing:
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain the exact "
+                    "leader-wire ingress-carrier proof dependencies; "
                     f"missing={missing!r}"
                 )
 
@@ -41064,6 +45237,16 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant "
                     "must use the exact service-activation pair init bridge"
                 )
+            required_leader_wire_init_bridge = (
+                "<2>3d. AsyncLeaderWireIngressCarrierOwnershipInvariant "
+                "BY <1>1, "
+                "AsyncInitEstablishesLeaderWireIngressCarrierOwnership"
+            )
+            if normalized.count(required_leader_wire_init_bridge) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant "
+                    "must use the exact leader-wire ingress-carrier init bridge"
+                )
     scheduler_gate_theorems_with_semantic_strings = {
         "LocalAdmissionStepIsEnabled",
         "UngatedSerializedRuntimeStepIsEnabled",
@@ -41171,6 +45354,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "BY <1>1 DEF AsyncStrongTypeInvariant "
                 "<2>2g. AsyncCertifiedResponseClaimIngressOwnershipInvariant "
                 "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2j. AsyncLeaderWireIngressCarrierOwnershipInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
                 "<2>2h. AsyncControlServiceStateTypeInvariant "
                 "BY <1>1 DEF AsyncStrongTypeInvariant "
                 "<2>2i. AsyncServiceActivationPairInvariant "
@@ -41214,9 +45399,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "BY <1>1, <2>2, <2>2g, "
                 "AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant"
             )
+            expected_leader_wire_ingress_step = (
+                "<2>12. AsyncLeaderWireIngressCarrierOwnershipInvariant' "
+                "BY <1>1, <2>2j, "
+                "AsyncNextPreservesLeaderWireIngressCarrierOwnership"
+            )
             expected_recovery_qed = (
                 "<2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, "
-                "<2>7, <2>8, <2>9, <2>10, <2>11 "
+                "<2>7, <2>8, <2>9, <2>10, <2>11, <2>12 "
                 "DEF AsyncStrongTypeInvariant"
             )
             normalized_body = " ".join(body.split())
@@ -41236,8 +45426,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 errors.append(
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
                     "retain the exact GST-recovery, serialized-busy, "
-                    "certified-response claim-ingress, control-service, and "
-                    "service-activation projections"
+                    "certified-response claim-ingress, leader-wire ingress, "
+                    "control-service, and service-activation projections"
                 )
             if normalized_body.count(expected_service_activation_step) != 1:
                 errors.append(
@@ -41281,12 +45471,19 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     "pass the certified-response claim-ingress projection to "
                     "its exact preservation step"
                 )
+            if normalized_body.count(expected_leader_wire_ingress_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass the leader-wire ingress-carrier projection to its "
+                    "exact preservation step"
+                )
             if normalized_body.count(expected_recovery_qed) != 1:
                 errors.append(
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
                     "make the service-activation pair, control-service, every "
                     "recovery, historical-lock, serialized-busy, GST-recovery, "
-                    "and claim-ingress prime step an exact QED dependency"
+                    "claim-ingress, and leader-wire ingress prime step an exact "
+                    "QED dependency"
                 )
     universally_quantified = re.compile(
         r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
@@ -41472,9 +45669,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "FairProtectedStage4RankDescent": (
                 "\\A initialContext, candidate: \\A position \\in Nat: "
-                "AsyncSpecAt(initialContext) => "
+                "Stage4RefinementFiniteServeEpisodeResidualProperty("
+                " AsyncSpecAt(initialContext)) => "
+                "(AsyncSpecAt(initialContext) => "
                 "(ProtectedOwnedAtServiceRank(candidate, <<4, position>>) "
-                "~> ProtectedRankProgressExit(candidate, <<4, position>>))"
+                "~> ProtectedRankProgressExit( candidate, <<4, position>>)))"
             ),
             "FairStage4AuxOneStep": (
                 "\\A initialContext, candidate, position: "
@@ -41488,9 +45687,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "FairStage4CapacityOneStep": (
                 "\\A initialContext, candidate, position: "
                 "\\A rank \\in Stage4CapacityCarrier: "
-                "AsyncSpecAt(initialContext) => "
+                "Stage4CapacityFiniteServeEpisodeResidualProperty("
+                " AsyncSpecAt(initialContext)) => "
+                "(AsyncSpecAt(initialContext) => "
                 "(Stage4CapacityBlockedAtRank(candidate, position, rank) "
-                "~> Stage4CapacityProgress(candidate, position, rank))"
+                "~> Stage4CapacityProgress(candidate, position, rank)))"
             ),
             "FairProtectedServeStage5RankDescent": (
                 "\\A initialContext, node, job: \\A position \\in Nat: "
@@ -41645,7 +45846,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "Stage4CapacityBlockedStep": (
                 "Stage4CapacityStutterPreserves",
-                "Stage4CapacitySameNodeRunStrictlyProgresses",
+                "Stage4CapacitySameNodeRunProducesOutcome",
                 "Stage4CapacityOtherRunnerPreservesOrProgresses",
                 "Stage4CapacityClockPreservesOrProgresses",
                 "Stage4CapacityDiscoveryPreservesOrProgresses",
@@ -41654,9 +45855,10 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "FairStage4CapacityOneStep": (
                 "PostGstRunNode",
-                "Stage4CapacitySameNodeRunStrictlyProgresses",
+                "Stage4CapacitySameNodeRunProducesOutcome",
                 "Stage4CapacityBlockedStep",
                 "AsyncFairnessAt",
+                "Stage4CapacityFiniteServeEpisodeResidualProperty",
             ),
             "FairNonCompletionCausalCapacityOpens": (
                 "Stage4CapacityRankInCarrier",
@@ -46032,16 +50234,31 @@ def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
         formal_dir / "SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla"
     )
     errors: list[str] = []
-    if not module_path.is_file():
+    if not module_path.is_file() or module_path.is_symlink():
         errors.append(
-            f"{module_path}: missing adequate-leader global-blocker cell mutation"
+            f"{module_path}: adequate-leader global-blocker cell mutation "
+            "must be a regular file"
         )
     else:
         source = module_path.read_text(encoding="utf-8")
+        variable_declarations = re.findall(
+            r"(?m)^VARIABLES?\s+([^\n]+)$", source
+        )
+        if variable_declarations != [
+            "originalOwned, replacementGeneration, selectedCell"
+        ]:
+            errors.append(
+                f"{module_path}: mutation variables must be exactly "
+                "originalOwned, replacementGeneration, selectedCell"
+            )
         expected_operators = {
-            "Cells": '{"Original", "Replacement"}',
+            "vars": (
+                "<<originalOwned, replacementGeneration, selectedCell>>"
+            ),
+            "Cells": '{"Unselected", "Original", "Replacement"}',
             "CellRank": (
-                "IF cell \\in Cells THEN <<2, 1>> ELSE <<3, 1>>"
+                'IF cell \\in {"Original", "Replacement"} '
+                "THEN <<2, 1>> ELSE <<0, 0>>"
             ),
             "TypeInvariant": (
                 "/\\ originalOwned \\in BOOLEAN "
@@ -46049,57 +50266,54 @@ def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
                 "/\\ selectedCell \\in Cells"
             ),
             "SelectedCellHasOriginalRank": (
-                'CellRank(selectedCell) = CellRank("Original")'
+                '\\/ selectedCell = "Unselected" '
+                '\\/ CellRank(selectedCell) = CellRank("Original")'
             ),
-            "RankOnlyInit": (
+            "Init": (
                 "/\\ originalOwned = TRUE "
                 "/\\ replacementGeneration = 0 "
-                '/\\ selectedCell = "Original"'
+                '/\\ selectedCell = "Unselected"'
             ),
             "SelectEqualRankReplacement": (
                 "/\\ originalOwned "
-                '/\\ selectedCell = "Original" '
+                '/\\ selectedCell = "Unselected" '
                 '/\\ selectedCell\' = "Replacement" '
                 "/\\ UNCHANGED <<originalOwned, replacementGeneration>>"
             ),
-            "ServiceAndReplenishReplacement": (
+            "SelectFrozenOriginal": (
                 "/\\ originalOwned "
-                '/\\ selectedCell = "Replacement" '
+                '/\\ selectedCell = "Unselected" '
+                '/\\ selectedCell\' = "Original" '
+                "/\\ UNCHANGED <<originalOwned, replacementGeneration>>"
+            ),
+            "ServiceSelectedCell": (
+                "/\\ originalOwned "
+                '/\\ selectedCell \\in {"Original", "Replacement"} '
+                '/\\ IF selectedCell = "Original" '
+                "THEN /\\ originalOwned' = FALSE "
+                "/\\ UNCHANGED replacementGeneration "
+                "ELSE /\\ originalOwned' = TRUE "
                 "/\\ replacementGeneration' = 1 - replacementGeneration "
-                "/\\ UNCHANGED <<originalOwned, selectedCell>>"
+                "/\\ UNCHANGED selectedCell"
             ),
             "RankOnlyNext": (
                 "SelectEqualRankReplacement \\/ "
-                "ServiceAndReplenishReplacement"
+                "ServiceSelectedCell"
             ),
             "RankOnlySpec": (
-                "/\\ RankOnlyInit "
+                "/\\ Init "
                 "/\\ [][RankOnlyNext]_vars "
                 "/\\ WF_vars(SelectEqualRankReplacement) "
-                "/\\ WF_vars(ServiceAndReplenishReplacement)"
-            ),
-            "ExactCellInit": "RankOnlyInit",
-            "ServiceExactOriginalCell": (
-                "/\\ originalOwned "
-                '/\\ selectedCell = "Original" '
-                "/\\ originalOwned' = FALSE "
-                "/\\ UNCHANGED <<replacementGeneration, selectedCell>>"
-            ),
-            "ChurnReplacementAfterOriginalService": (
-                "/\\ ~originalOwned "
-                "/\\ replacementGeneration' = 1 - replacementGeneration "
-                '/\\ selectedCell\' = "Replacement" '
-                "/\\ UNCHANGED originalOwned"
+                "/\\ WF_vars(ServiceSelectedCell)"
             ),
             "ExactCellNext": (
-                "ServiceExactOriginalCell \\/ "
-                "ChurnReplacementAfterOriginalService"
+                "SelectFrozenOriginal \\/ ServiceSelectedCell"
             ),
             "ExactCellSpec": (
-                "/\\ ExactCellInit "
+                "/\\ Init "
                 "/\\ [][ExactCellNext]_vars "
-                "/\\ WF_vars(ServiceExactOriginalCell) "
-                "/\\ WF_vars(ChurnReplacementAfterOriginalService)"
+                "/\\ WF_vars(SelectFrozenOriginal) "
+                "/\\ WF_vars(ServiceSelectedCell)"
             ),
             "OriginalCellEventuallyReleased": (
                 "originalOwned ~> ~originalOwned"
@@ -46140,9 +50354,10 @@ def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
     }
     for name, expected in config_contracts.items():
         path = formal_dir / name
-        if not path.is_file():
+        if not path.is_file() or path.is_symlink():
             errors.append(
-                f"{path}: missing adequate-leader global-blocker mutation config"
+                f"{path}: adequate-leader global-blocker mutation config "
+                "must be a regular file"
             )
             continue
         if path.read_text(encoding="utf-8") != expected:
@@ -46154,10 +50369,53 @@ def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
     runner_path = (
         repo_root / "scripts" / "formal" / "run_sumeragi_v2_service_rank_mutation.sh"
     )
-    if not runner_path.is_file():
-        errors.append(f"{runner_path}: missing service-rank mutation runner")
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: service-rank mutation runner must be a regular file"
+        )
         return errors
+    if not os.access(runner_path, os.X_OK):
+        errors.append(
+            f"{runner_path}: service-rank mutation runner must be executable"
+        )
     runner = runner_path.read_text(encoding="utf-8")
+    normalized_runner = re.sub(
+        r"[ \t]*\\\r?\n[ \t]*", " ", runner
+    )
+    execution_contracts = {
+        "red": re.compile(
+            r'(?m)^set \+e\n'
+            r'\(\n'
+            r'  cd "\$FORMAL_DIR"\n'
+            r'  "\$\{common\[@\]\}" -metadir '
+            r'"\$run_dir/global-blocker-same-rank-swap" '
+            r'-config adequate_leader_global_blocker_same_rank_swap_bug\.cfg '
+            r'SumeragiV2AdequateLeaderGlobalBlockerCellMutation\.tla\n'
+            r'\) >"\$run_dir/global-blocker-same-rank-swap\.log" 2>&1\n'
+            r'global_blocker_same_rank_swap_status=\$\?\n'
+            r'set -e\n\n'
+            r'\[\[ \$global_blocker_same_rank_swap_status -eq 13 \]\] '
+            r'\|\| \{'
+        ),
+        "green": re.compile(
+            r'(?m)^\(\n'
+            r'  cd "\$FORMAL_DIR"\n'
+            r'  "\$\{common\[@\]\}" -metadir '
+            r'"\$run_dir/global-blocker-exact-cell" '
+            r'-config adequate_leader_global_blocker_exact_cell\.cfg '
+            r'SumeragiV2AdequateLeaderGlobalBlockerCellMutation\.tla\n'
+            r'\) >"\$run_dir/global-blocker-exact-cell\.log" 2>&1\n'
+            r'grep -Fq "Model checking completed\. No error has been found\." '
+            r'"\$run_dir/global-blocker-exact-cell\.log" \|\| \{'
+        ),
+    }
+    for label, pattern in execution_contracts.items():
+        matches = list(pattern.finditer(normalized_runner))
+        if len(matches) != 1:
+            errors.append(
+                f"{runner_path}: global-blocker {label} TLC execution block "
+                f"must occur exactly once; found {len(matches)}"
+            )
     runner_contracts = (
         "-config adequate_leader_global_blocker_same_rank_swap_bug.cfg",
         "-config adequate_leader_global_blocker_exact_cell.cfg",
@@ -52666,7 +56924,7 @@ let has_live_control_predecessor = lane
     .iter()
     .take(index)
     .any(|prior| {
-        fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound)
+        fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound,)
     });
 """,
         "live control predecessor identity must be computed before carrier "
@@ -52678,7 +56936,7 @@ let has_live_control_predecessor = lane
         receive,
         """
 (!has_live_control_predecessor && ingress_barrier_allows).then(|| {
-    (entry.admission_ordinal, Arc::clone(&entry.inbound))
+    (entry.admission_ordinal, Arc::clone(&entry.inbound),)
 })
 """,
         "live control predecessor blocks strict-newer carrier authorization "
@@ -52793,7 +57051,7 @@ None => {
         runtime_path,
         minimum_active,
         """
-let mut minimum = self.ingress.oldest_lifecycle_ordinal()?;
+let mut minimum = self.ingress.oldest_active_lifecycle_ordinal()?;
 let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
 """,
         "global runtime predecessor cut starts with the FIFO minimum",
@@ -58276,6 +62534,806 @@ if total_bytes
     return errors
 
 
+def _shared_tlc_result_contract_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal the common nonzero, success, diagnostic, and footer contract."""
+
+    errors: list[str] = []
+    expected_paths = {
+        SHARED_TLC_RESULT_CONTRACT,
+        *SHARED_TLC_RESULT_CONTRACT_CALLERS,
+    }
+    expected_callers = set(SHARED_TLC_RESULT_CONTRACT_CALLERS)
+    expected_specialized_callers = {
+        "scripts/formal/check_sumeragi_v2_replay_trace.sh",
+        "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+        "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh",
+        "scripts/formal/run_sumeragi_v2_tlc.sh",
+    }
+    specialized_callers = set(SHARED_TLC_RESULT_SPECIALIZED_CALLERS)
+    if (
+        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 31
+        or len(expected_callers) != 31
+    ):
+        errors.append(
+            "shared TLC result-contract caller inventory must contain "
+            "exactly thirty-one unique callers"
+        )
+    if (
+        len(SHARED_TLC_RESULT_SPECIALIZED_CALLERS) != 4
+        or specialized_callers != expected_specialized_callers
+        or not specialized_callers <= expected_callers
+    ):
+        errors.append(
+            "shared TLC result-contract specialized complement must equal "
+            "the replay, item-carrier, liveness-ownership, and aggregate runners"
+        )
+
+    observed_callers: set[str] = set()
+    formal_scripts_dir = repo_root / "scripts" / "formal"
+    if not formal_scripts_dir.is_dir():
+        errors.append(
+            f"{formal_scripts_dir}: shared TLC caller census directory is missing"
+        )
+    else:
+        census_paths = list(
+            formal_scripts_dir.glob("run_sumeragi_v2_*.sh")
+        )
+        census_paths.append(
+            formal_scripts_dir / "check_sumeragi_v2_replay_trace.sh"
+        )
+        for path in census_paths:
+            if not path.is_file():
+                continue
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError as error:
+                errors.append(
+                    f"{path}: shared TLC caller census could not read source: "
+                    f"{error}"
+                )
+                continue
+            if "tlc2.TLC" in source:
+                observed_callers.add(
+                    path.relative_to(repo_root).as_posix()
+                )
+    if observed_callers != expected_callers:
+        errors.append(
+            "shared TLC result-contract caller census must classify every "
+            "TLC-launching Sumeragi runner exactly once; "
+            f"unclassified={sorted(observed_callers - expected_callers)}, "
+            f"missing={sorted(expected_callers - observed_callers)}"
+        )
+
+    digest_paths = set(SHARED_TLC_RESULT_CONTRACT_SHA256)
+    if digest_paths != expected_paths:
+        errors.append(
+            "shared TLC result-contract digest inventory must equal the "
+            f"helper and exact thirty-one callers; "
+            f"missing={sorted(expected_paths - digest_paths)}, "
+            f"extra={sorted(digest_paths - expected_paths)}"
+        )
+    profile_keys = set(SHARED_TLC_RESULT_BRANCH_PROFILES)
+    if profile_keys != expected_callers:
+        errors.append(
+            "shared TLC result-contract branch-profile inventory must equal "
+            f"the exact caller census; missing={sorted(expected_callers - profile_keys)}, "
+            f"extra={sorted(profile_keys - expected_callers)}"
+        )
+    assertion_profile_keys = set(
+        SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES
+    )
+    if assertion_profile_keys != expected_callers:
+        errors.append(
+            "shared TLC result-contract assertion-site inventory must equal "
+            "the exact caller census; "
+            f"missing={sorted(expected_callers - assertion_profile_keys)}, "
+            f"extra={sorted(assertion_profile_keys - expected_callers)}"
+        )
+    branch_profile_digest = hashlib.sha256(
+        json.dumps(
+            SHARED_TLC_RESULT_BRANCH_PROFILES,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        branch_profile_digest
+        != SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256
+    ):
+        errors.append(
+            "shared TLC result-contract branch profiles must retain their "
+            "canonical sealed inventory"
+        )
+    assertion_profile_digest = hashlib.sha256(
+        json.dumps(
+            SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        assertion_profile_digest
+        != SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256
+    ):
+        errors.append(
+            "shared TLC result-contract assertion-site profiles must retain "
+            "their canonical sealed inventory"
+        )
+    for relative, profile in SHARED_TLC_RESULT_BRANCH_PROFILES.items():
+        if (
+            not isinstance(profile, tuple)
+            or len(profile) != 5
+            or any(
+                not isinstance(count, int) or count < 0
+                for count in profile
+            )
+            or sum(profile) == 0
+        ):
+            errors.append(
+                f"{relative}: shared TLC branch profile must contain five "
+                "nonnegative counts and at least one reviewed branch"
+            )
+    for relative, profile in (
+        SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.items()
+    ):
+        if (
+            not isinstance(profile, tuple)
+            or len(profile) != 5
+            or any(
+                not isinstance(count, int) or count < 0
+                for count in profile
+            )
+        ):
+            errors.append(
+                f"{relative}: shared TLC assertion-site profile must contain "
+                "five nonnegative counts"
+            )
+            continue
+        primary_site_count = profile[4]
+        if (relative in specialized_callers) != (
+            primary_site_count == 0
+        ):
+            errors.append(
+                f"{relative}: shared TLC primary-diagnostic assertion site "
+                "must be absent exactly for the four specialized callers"
+            )
+
+    sources: dict[str, str] = {}
+    for relative in sorted(expected_paths):
+        path = repo_root / relative
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: shared TLC result-contract source must be a regular file"
+            )
+            continue
+        if (
+            relative in SHARED_TLC_RESULT_CONTRACT_CALLERS
+            and not os.access(path, os.X_OK)
+        ):
+            errors.append(
+                f"{path}: shared TLC result-contract caller must be executable"
+            )
+        sources[relative] = path.read_text(encoding="utf-8")
+        expected_sha256 = SHARED_TLC_RESULT_CONTRACT_SHA256.get(relative)
+        if expected_sha256 is None:
+            continue
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: shared TLC result-contract source SHA-256 must equal "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+
+    helper_source = sources.get(SHARED_TLC_RESULT_CONTRACT)
+    if helper_source is None:
+        return errors
+    exact_helper_constants = (
+        (
+            "readonly SUMERAGI_V2_TLC_FINISHED_PATTERN="
+            "'^Finished in (([0-9]+d )?([0-9]+h )?"
+            "([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?"
+            "([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
+            "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
+            "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
+            "anchored terminal-footer pattern",
+        ),
+        (
+            'readonly SUMERAGI_V2_TLC_SUCCESS_MARKER="Model checking '
+            'completed. No error has been found."',
+            "exact fixed-success marker",
+        ),
+        (
+            "readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PATTERN="
+            "'^[0-9][0-9,]* states generated, [0-9][0-9,]* "
+            "distinct states found, [0-9][0-9,]* states left on "
+            "queue[.]$'",
+            "anchored full state-summary pattern",
+        ),
+        (
+            "readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PREFIX="
+            "'^[0-9][0-9,]* states generated, [0-9][0-9,]* "
+            "distinct states found'",
+            "anchored state-summary candidate prefix",
+        ),
+        (
+            "readonly SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN="
+            "'^[[:space:]]*(Error:|Deadlock reached([.]|$)|"
+            "Temporal properties were violated[.]$)'",
+            "leading-whitespace failure-diagnostic pattern",
+        ),
+        (
+            "readonly SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN="
+            "'^[[:space:]]*(Error: (Invariant |Action property |"
+            "Temporal properties were violated[.]$|"
+            "Deadlock reached([.]|$))|Deadlock reached([.]|$)|"
+            "Temporal properties were violated[.]$)'",
+            "exact primary-diagnostic pattern",
+        ),
+    )
+    for token, description in exact_helper_constants:
+        if helper_source.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"result contract must retain exactly one {description}"
+            )
+
+    helper_headers = (
+        "sumeragi_v2_tlc_contract_fail() {",
+        "sumeragi_v2_tlc_assert_regular_log() {",
+        "sumeragi_v2_tlc_assert_nonzero_state_space() {",
+        "sumeragi_v2_tlc_assert_terminal() {",
+        "sumeragi_v2_tlc_assert_exact_line() {",
+        "sumeragi_v2_tlc_assert_fixed_success() {",
+    )
+    helper_offsets = [helper_source.find(header) for header in helper_headers]
+    if (
+        any(helper_source.count(header) != 1 for header in helper_headers)
+        or any(offset < 0 for offset in helper_offsets)
+        or helper_offsets != sorted(helper_offsets)
+    ):
+        errors.append(
+            f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC result "
+            "contract must retain the exact ordered helper-function inventory"
+        )
+        return errors
+    helper_sections = {
+        header: helper_source[
+            offset : (
+                helper_offsets[index + 1]
+                if index + 1 < len(helper_offsets)
+                else len(helper_source)
+            )
+        ]
+        for index, (header, offset) in enumerate(
+            zip(helper_headers, helper_offsets)
+        )
+    }
+
+    regular_log_section = helper_sections[
+        "sumeragi_v2_tlc_assert_regular_log() {"
+    ]
+    for token, description in (
+        (
+            'if [[ ! -f "$log" || -L "$log" ]]; then',
+            "regular non-symlink log guard",
+        ),
+        (
+            '"TLC log must be a fresh regular file"',
+            "fresh-log failure diagnostic",
+        ),
+    ):
+        if regular_log_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"regular-log helper must retain exactly one {description}"
+            )
+
+    nonzero_section = helper_sections[
+        "sumeragi_v2_tlc_assert_nonzero_state_space() {"
+    ]
+    for token, description in (
+        (
+            'grep -E "$SUMERAGI_V2_TLC_STATE_SUMMARY_PREFIX" "$log" |\n'
+            "      tail -n 1 || true",
+            "last state-summary candidate parser",
+        ),
+        (
+            'grep -Eq "$SUMERAGI_V2_TLC_STATE_SUMMARY_PATTERN" '
+            '<<<"$state_line" || {',
+            "anchored full state-summary validation",
+        ),
+        (
+            "if ((generated <= 0 || distinct <= 0)); then",
+            "positive generated/distinct state-count guard",
+        ),
+    ):
+        if nonzero_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"nonzero-state helper must retain exactly one {description}"
+            )
+
+    terminal_section = helper_sections[
+        "sumeragi_v2_tlc_assert_terminal() {"
+    ]
+    for token, description in (
+        (
+            'grep -Ec "$SUMERAGI_V2_TLC_FINISHED_PATTERN" "$log" || true',
+            "anchored terminal-marker counter",
+        ),
+        (
+            '[[ "$terminal_count" == 1 ]] || {',
+            "single terminal-marker cardinality guard",
+        ),
+        (
+            "last_nonblank=\"$(awk 'NF { line = $0 } END { print line }' "
+            '"$log")"',
+            "last-nonblank footer extraction",
+        ),
+        (
+            '"$SUMERAGI_V2_TLC_FINISHED_PATTERN" '
+            '<<<"$last_nonblank" || {',
+            "terminal footer position guard",
+        ),
+    ):
+        if terminal_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"terminal helper must retain exactly one {description}"
+            )
+
+    exact_line_section = helper_sections[
+        "sumeragi_v2_tlc_assert_exact_line() {"
+    ]
+    for token, description in (
+        (
+            'marker_count="$(grep -Fxc "$marker" "$log" || true)"',
+            "full-line marker counter",
+        ),
+        (
+            '[[ "$marker_count" == 1 ]] || {',
+            "single full-line marker cardinality guard",
+        ),
+    ):
+        if exact_line_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"exact-line helper must retain exactly one {description}"
+            )
+
+    fixed_success_section = helper_sections[
+        "sumeragi_v2_tlc_assert_fixed_success() {"
+    ]
+    for token, description in (
+        (
+            '[[ "$actual_status" -eq 0 ]] || {',
+            "zero-status guard",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "nonzero-state assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_exact_line \\\n'
+            '    "$label" "$log" "$SUMERAGI_V2_TLC_SUCCESS_MARKER"',
+            "exact success-marker assertion",
+        ),
+        (
+            'grep -Ec "$SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN" '
+            '"$log" ||\n      true',
+            "leading-whitespace failure-diagnostic counter",
+        ),
+        (
+            '[[ "$failure_count" == 0 ]] || {',
+            "zero failure-diagnostic guard",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "terminal-footer assertion",
+        ),
+    ):
+        if fixed_success_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"fixed-success helper must retain exactly one {description}"
+            )
+
+    exact_source_invocation = (
+        'source "${REPO_ROOT}/scripts/formal/'
+        'sumeragi_v2_tlc_result_contract.sh"'
+    )
+    liveness = (
+        "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh"
+    )
+    replay = "scripts/formal/check_sumeragi_v2_replay_trace.sh"
+    liveness_source_invocation = 'source "$TLC_RESULT_CONTRACT"'
+    repo_root_assignment = (
+        'readonly REPO_ROOT="$(cd -- "$(dirname -- '
+        '"${BASH_SOURCE[0]}")/../.." && pwd)"'
+    )
+    replay_repo_root_assignment = (
+        'REPO_ROOT="$(cd -- "$(dirname -- '
+        '"${BASH_SOURCE[0]}")/../.." && pwd)"'
+    )
+    aggregate = "scripts/formal/run_sumeragi_v2_tlc.sh"
+    assertion_site_tokens = (
+        "sumeragi_v2_tlc_assert_fixed_success",
+        "sumeragi_v2_tlc_assert_nonzero_state_space",
+        "sumeragi_v2_tlc_assert_exact_line",
+        "sumeragi_v2_tlc_assert_terminal",
+        "SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN",
+    )
+    for relative in SHARED_TLC_RESULT_CONTRACT_CALLERS:
+        caller_source = sources.get(relative)
+        if caller_source is None:
+            continue
+        path = repo_root / relative
+        source_invocation = (
+            liveness_source_invocation
+            if relative == liveness
+            else exact_source_invocation
+        )
+        root_assignment = (
+            replay_repo_root_assignment
+            if relative == replay
+            else repo_root_assignment
+        )
+        source_offset = caller_source.find(source_invocation)
+        repo_root_offset = caller_source.find(root_assignment)
+        contract_call_matches = list(
+            re.finditer(
+                r"(?<![A-Za-z0-9_])sumeragi_v2_tlc_assert_"
+                r"[A-Za-z0-9_]+(?=\s)",
+                caller_source,
+            )
+        )
+        first_contract_call = (
+            contract_call_matches[0].start()
+            if contract_call_matches
+            else -1
+        )
+        execution_offsets = [
+            offset
+            for offset in (
+                caller_source.find("resolved_java_bin="),
+                caller_source.find("tlc2.TLC"),
+                first_contract_call,
+            )
+            if offset >= 0
+        ]
+        if (
+            caller_source.count(source_invocation) != 1
+            or caller_source.count(root_assignment) != 1
+            or repo_root_offset < 0
+            or source_offset <= repo_root_offset
+            or (
+                execution_offsets
+                and source_offset >= min(execution_offsets)
+            )
+        ):
+            errors.append(
+                f"{path}: shared TLC result contract must be sourced exactly "
+                "once after REPO_ROOT and before Java/TLC validation"
+            )
+        if (
+            relative == replay
+            and caller_source.count(
+                f"{replay_repo_root_assignment}\nreadonly REPO_ROOT"
+            )
+            != 1
+        ):
+            errors.append(
+                f"{path}: replay TLC runner must freeze REPO_ROOT before "
+                "sourcing the shared result contract"
+            )
+        if relative == liveness:
+            for token, description in (
+                (
+                    "readonly TLC_RESULT_CONTRACT="
+                    '"${REPO_ROOT}/scripts/formal/'
+                    'sumeragi_v2_tlc_result_contract.sh"',
+                    "immutable shared-helper path",
+                ),
+                (
+                    '[[ -f "$TLC_RESULT_CONTRACT" ]] || {',
+                    "shared-helper regular-path preflight",
+                ),
+                (
+                    "# shellcheck source=sumeragi_v2_tlc_result_contract.sh",
+                    "shellcheck shared-helper declaration",
+                ),
+            ):
+                if caller_source.count(token) != 1:
+                    errors.append(
+                        f"{path}: specialized liveness TLC runner must "
+                        f"retain exactly one {description}"
+                    )
+        if relative == aggregate:
+            adjacent_source = (
+                f"{repo_root_assignment}\n{exact_source_invocation}\n"
+            )
+            if caller_source.count(adjacent_source) != 1:
+                errors.append(
+                    f"{path}: aggregate TLC runner must source the shared "
+                    "result contract immediately after REPO_ROOT"
+                )
+
+        expected_assertion_sites = (
+            SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.get(relative)
+        )
+        observed_assertion_sites = tuple(
+            len(
+                re.findall(
+                    rf"(?<![A-Za-z0-9_]){re.escape(token)}"
+                    rf"(?![A-Za-z0-9_])",
+                    caller_source,
+                )
+            )
+            for token in assertion_site_tokens
+        )
+        if observed_assertion_sites != expected_assertion_sites:
+            errors.append(
+                f"{path}: shared TLC assertion-site profile must equal "
+                f"{expected_assertion_sites}; found {observed_assertion_sites}"
+            )
+        if (
+            first_contract_call < 0
+            or source_offset < 0
+            or first_contract_call <= source_offset
+        ):
+            errors.append(
+                f"{path}: shared TLC result assertions must execute only "
+                "after the helper is sourced"
+            )
+
+        branch_profile = SHARED_TLC_RESULT_BRANCH_PROFILES.get(relative)
+        if (
+            branch_profile is not None
+            and branch_profile[3] > 0
+            and "Temporal properties were violated." not in caller_source
+        ):
+            errors.append(
+                f"{path}: temporal mutation branches must retain the "
+                "canonical TLC temporal primary diagnostic"
+            )
+
+        if relative not in specialized_callers:
+            variable_primary_guard = re.search(
+                r'\[\[\s+"\$(?:[A-Za-z_][A-Za-z0-9_]*_)?'
+                r'primary_diagnostic_count"\s+-eq\s+1\s+\]\]'
+                r"\s+\|\|\s+\{",
+                caller_source,
+            )
+            inline_primary_guard = re.search(
+                r'\[\[\s*"\$\('
+                r"(?:(?!\)\").)*"
+                r"SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN"
+                r"(?:(?!\)\").)*"
+                r'\)"\s*==\s*1\s*\]\]\s*\|\|\s*\{',
+                caller_source,
+                flags=re.DOTALL,
+            )
+            if (
+                variable_primary_guard is None
+                and inline_primary_guard is None
+            ):
+                errors.append(
+                    f"{path}: non-specialized TLC mutation runner must "
+                    "require exactly one primary failure diagnostic"
+                )
+
+    replay_source = sources.get(replay)
+    if replay_source is not None:
+        for token, description in (
+            (
+                'if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then',
+                "status-12 nonempty witness guard",
+            ),
+            (
+                'sumeragi_v2_tlc_assert_regular_log '
+                '"replay-decision-witness" "$tlc_log"',
+                "fresh regular witness-log assertion",
+            ),
+            (
+                'if ! python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" '
+                '>"$normalized_trace"; then',
+                "strict trace normalizer invocation",
+            ),
+            (
+                'if ! cmp -s "$EXPECTED" "$normalized_trace"; then',
+                "checked-in trace comparison",
+            ),
+            (
+                'bash "$REPO_ROOT/scripts/formal/'
+                'run_sumeragi_v2_harness.sh" --model-replay',
+                "production reducer replay",
+            ),
+        ):
+            if replay_source.count(token) != 1:
+                errors.append(
+                    f"{repo_root / replay}: specialized replay TLC runner "
+                    f"must retain exactly one {description}"
+                )
+
+    item_carrier = (
+        "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh"
+    )
+    item_carrier_source = sources.get(item_carrier)
+    if item_carrier_source is not None:
+        item_diagnostic_pattern = (
+            "'^[[:space:]]*(Error:|Deadlock reached([.]|$)|"
+            "Temporal properties were violated[.]$)'"
+        )
+        item_contract_tokens = (
+            (
+                '[[ "$actual_status" -ne "$expected_status" ]]',
+                1,
+                "exact expected-status comparison",
+            ),
+            (
+                item_diagnostic_pattern,
+                2,
+                "success/configuration failure-diagnostic scans",
+            ),
+            (
+                '[[ "$diagnostic_count" -eq 0 ]] || {',
+                1,
+                "successful-run zero-diagnostic guard",
+            ),
+            (
+                '[[ "$diagnostic_count" -eq 1 ]] || {',
+                1,
+                "configuration-failure single-diagnostic guard",
+            ),
+            (
+                "item_carrier_typing_loose_proposal_source.cfg 151",
+                1,
+                "status-151 configuration-evaluation mutation",
+            ),
+            (
+                "Error: The invariant of "
+                "SelectedTypingImpliesCanonicalProposalCarrier is equal "
+                "to FALSE",
+                1,
+                "exact configuration-evaluation diagnostic",
+            ),
+        )
+        for token, expected_count, description in item_contract_tokens:
+            observed_count = item_carrier_source.count(token)
+            if observed_count != expected_count:
+                errors.append(
+                    f"{repo_root / item_carrier}: specialized item-carrier "
+                    f"TLC runner must retain {expected_count} {description}; "
+                    f"found {observed_count}"
+                )
+
+    liveness_source = sources.get(liveness)
+    if liveness_source is not None:
+        liveness_contract_tokens = (
+            (
+                'if [[ "$expected_status" -eq 12 ]]; then',
+                "status-12 classifier",
+            ),
+            (
+                'elif [[ "$expected_status" -eq 13 ]]; then',
+                "status-13 classifier",
+            ),
+            (
+                '[[ "$expected_primary" =~ '
+                "^Error:\\ Invariant\\ .+\\ is\\ violated\\.$ ]]",
+                "named-invariant primary validation",
+            ),
+            (
+                '[[ "$expected_primary" == '
+                '"Error: Temporal properties were violated." ]]',
+                "canonical temporal primary validation",
+            ),
+            (
+                '[[ "$diagnostic_count" == 2 ]] || {',
+                "exact primary-plus-behavior diagnostic guard",
+            ),
+            (
+                '[[ "$whitespace_prefixed_count" == 0 ]] || {',
+                "zero whitespace-prefixed diagnostic guard",
+            ),
+            (
+                '[[ "$#" == 1 ]] || {',
+                "one-declared-primary guard",
+            ),
+            (
+                'assert_mutation_failure_contract \\\n'
+                '      "$label" "$log" "$expected_status" "$1"',
+                "central failure-contract invocation",
+            ),
+        )
+        for token, description in liveness_contract_tokens:
+            if liveness_source.count(token) != 1:
+                errors.append(
+                    f"{repo_root / liveness}: specialized liveness TLC "
+                    f"runner must retain exactly one {description}"
+                )
+        for token, expected_count, description in (
+            (
+                "'^[[:space:]]*(Error:|Deadlock reached([.]|$)|"
+                "Temporal properties were violated[.]$)'",
+                1,
+                "all-diagnostic scan",
+            ),
+            (
+                "'^[[:space:]]+(Error:|Deadlock reached([.]|$)|"
+                "Temporal properties were violated[.]$)'",
+                1,
+                "whitespace-spoof scan",
+            ),
+        ):
+            observed_count = liveness_source.count(token)
+            if observed_count != expected_count:
+                errors.append(
+                    f"{repo_root / liveness}: specialized liveness TLC "
+                    f"runner must retain {expected_count} {description}; "
+                    f"found {observed_count}"
+                )
+
+    aggregate_source = sources.get(aggregate)
+    if aggregate_source is not None:
+        aggregate_assertion_counts = {
+            "sumeragi_v2_tlc_assert_nonzero_state_space": 1,
+            "sumeragi_v2_tlc_assert_exact_line": 2,
+            "sumeragi_v2_tlc_assert_terminal": 2,
+        }
+        for assertion, expected_count in aggregate_assertion_counts.items():
+            observed_count = len(
+                re.findall(
+                    rf"(?<![A-Za-z0-9_]){re.escape(assertion)}"
+                    rf"(?![A-Za-z0-9_])",
+                    aggregate_source,
+                )
+            )
+            if observed_count != expected_count:
+                errors.append(
+                    f"{repo_root / aggregate}: aggregate TLC component "
+                    f"assertion {assertion} must occur {expected_count} "
+                    f"times; found {observed_count}"
+                )
+        for token, description in (
+            (
+                "/^[[:space:]]*(Error:|Deadlock reached([.]|$)|"
+                "Temporal properties were violated[.]$)/ &&",
+                "locked-Commit unexpected-diagnostic scan",
+            ),
+            (
+                '$0 != "Error: Invariant '
+                'NoRecoveredHistoricalLockedCommitSigning is violated." &&',
+                "locked-Commit named invariant exception",
+            ),
+            (
+                '$0 != "Error: The behavior up to this point is:" {',
+                "locked-Commit behavior diagnostic exception",
+            ),
+            (
+                '[[ "$witness_forbidden_diagnostic_count" == 0 ]] || {',
+                "locked-Commit zero unexpected-diagnostic guard",
+            ),
+            (
+                'grep -Ec "$SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN" \\\n'
+                '        "$tlc_log" || true',
+                "simulation error/deadlock counter",
+            ),
+            (
+                '|| "$error_count" != 0 ]]; then',
+                "simulation zero error/deadlock guard",
+            ),
+        ):
+            if aggregate_source.count(token) != 1:
+                errors.append(
+                    f"{repo_root / aggregate}: aggregate TLC runner must "
+                    f"retain exactly one {description}"
+                )
+    return errors
+
+
 def _liveness_ownership_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
@@ -58600,16 +63658,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     fixed_count = sum(name.endswith("_fixed.cfg") for name in expected_formal)
     mutation_count = sum(name.endswith("_bug.cfg") for name in expected_formal)
     if (
-        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 115
-        or model_count != 27
-        or config_count != 88
-        or fixed_count != 27
-        or mutation_count != 61
+        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 120
+        or model_count != 28
+        or config_count != 92
+        or fixed_count != 28
+        or mutation_count != 64
     ):
         errors.append(
             "liveness-ownership mutation source seal must name exactly "
-            "twenty-seven models, twenty-seven repaired configurations, and "
-            "sixty-one failing configurations; found "
+            "twenty-eight models, twenty-eight repaired configurations, and "
+            "sixty-four failing configurations; found "
             f"models={model_count}, repaired={fixed_count}, "
             f"failing={mutation_count}, configurations={config_count}, "
             f"total={len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS)}"
@@ -58617,7 +63675,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     if digest_names != expected_all:
         errors.append(
             "liveness-ownership mutation digest inventory must equal the "
-            f"exact 116-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact 121-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -59349,6 +64407,129 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 f"found {observed_config!r}"
             )
 
+    replay_capacity_path = (
+        formal_dir / "SumeragiV2ProducerReplayCapacityMutation.tla"
+    )
+    if replay_capacity_path.is_file() and not replay_capacity_path.is_symlink():
+        replay_capacity_source = replay_capacity_path.read_text(
+            encoding="utf-8"
+        )
+        exact_replay_capacity_operators = {
+            "TargetReservationCharge": (
+                'IF targetStatus = "Dormant" THEN 1 ELSE 0'
+            ),
+            "PhysicalAndLatentChargesFitConfiguredCapacity": (
+                "queueDepth + TargetReservationCharge <= Capacity"
+            ),
+            "OrdinaryEnqueuePreservesReplayReservation": (
+                "/\\ queueDepth + 1 + TargetReservationCharge <= Capacity "
+                "/\\ queueDepth' = queueDepth + 1 "
+                '/\\ lastTransition\' = "OrdinaryEnqueue" '
+                "/\\ UNCHANGED <<targetStatus, nextChurnClass, retryParity>>"
+            ),
+            "CapacityBlindOrdinaryEnqueue": (
+                "/\\ queueDepth < Capacity "
+                "/\\ queueDepth' = queueDepth + 1 "
+                '/\\ lastTransition\' = "CapacityBlindEnqueue" '
+                "/\\ UNCHANGED <<targetStatus, nextChurnClass, retryParity>>"
+            ),
+            "ExactReplayAtomicallyConsumesReservation": (
+                '/\\ targetStatus = "Dormant" '
+                "/\\ queueDepth < Capacity "
+                "/\\ queueDepth' = queueDepth + 1 "
+                '/\\ targetStatus\' = "Queued" '
+                '/\\ lastTransition\' = "ExactReplay" '
+                "/\\ UNCHANGED <<nextChurnClass, retryParity>>"
+            ),
+            "ReplayWithoutConsumingReservation": (
+                '/\\ targetStatus = "Dormant" '
+                "/\\ queueDepth < Capacity "
+                "/\\ queueDepth' = queueDepth + 1 "
+                '/\\ targetStatus\' = "Dormant" '
+                '/\\ lastTransition\' = "NonAtomicReplay" '
+                "/\\ UNCHANGED <<nextChurnClass, retryParity>>"
+            ),
+            "FixedRunner": (
+                "\\/ ExactReplayAtomicallyConsumesReservation "
+                "\\/ ServiceExactTarget"
+            ),
+            "FixedSpec": (
+                "/\\ Init /\\ [][FixedNext]_MutationVars "
+                "/\\ WF_MutationVars(FixedRunner)"
+            ),
+            "CapacityBlindSpec": (
+                "/\\ Init /\\ [][CapacityBlindNext]_MutationVars "
+                "/\\ WF_MutationVars(FixedRunner)"
+            ),
+            "NonAtomicReplaySpec": (
+                "/\\ Init /\\ [][NonAtomicReplayNext]_MutationVars"
+            ),
+            "EventuallyExactTargetIsTombstoned": (
+                '<>(targetStatus = "Tombstone")'
+            ),
+        }
+        for symbol, expected_body in exact_replay_capacity_operators.items():
+            extracted = _top_level_operator_body(
+                replay_capacity_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{replay_capacity_path}: missing reviewed producer "
+                    f"replay-capacity mutation operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            observed_body = " ".join(body.split())
+            if observed_body != expected_body:
+                errors.append(
+                    f"{replay_capacity_path}:{line}: producer "
+                    f"replay-capacity mutation operator {symbol} must equal "
+                    f"only {expected_body!r}; found {observed_body!r}"
+                )
+
+    exact_replay_capacity_configs = {
+        "producer_replay_capacity_fixed.cfg": (
+            "SPECIFICATION FixedSpec INVARIANT TypeInvariant "
+            "INVARIANT PhysicalAndLatentChargesFitConfiguredCapacity "
+            "INVARIANT QueuedTargetOwnsOnePhysicalCarrier "
+            "INVARIANT TombstoneCannotResurrect "
+            "PROPERTY EventuallyExactTargetIsTombstoned "
+            "CHECK_DEADLOCK FALSE"
+        ),
+        "producer_replay_capacity_blind_invariant_bug.cfg": (
+            "SPECIFICATION CapacityBlindSpec INVARIANT TypeInvariant "
+            "INVARIANT PhysicalAndLatentChargesFitConfiguredCapacity "
+            "CHECK_DEADLOCK FALSE"
+        ),
+        "producer_replay_capacity_non_atomic_replay_bug.cfg": (
+            "SPECIFICATION NonAtomicReplaySpec INVARIANT TypeInvariant "
+            "INVARIANT PhysicalAndLatentChargesFitConfiguredCapacity "
+            "CHECK_DEADLOCK FALSE"
+        ),
+        "producer_replay_capacity_replenishment_lasso_bug.cfg": (
+            "SPECIFICATION CapacityBlindSpec INVARIANT TypeInvariant "
+            "PROPERTY EventuallyExactTargetIsTombstoned "
+            "CHECK_DEADLOCK FALSE"
+        ),
+    }
+    for name, expected_config in exact_replay_capacity_configs.items():
+        config_path = formal_dir / name
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        config_source = strip_tla_comments(
+            config_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        observed_config = " ".join(config_source.split())
+        if observed_config != expected_config:
+            errors.append(
+                f"{config_path}: producer replay-capacity mutation config "
+                f"must equal only {expected_config!r}; found "
+                f"{observed_config!r}"
+            )
+
     runner_path = repo_root / LIVENESS_OWNERSHIP_MUTATION_RUNNER
     if not runner_path.is_file() or runner_path.is_symlink():
         return errors
@@ -59448,6 +64629,11 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "producer-continuation-causal-rank",
             "SumeragiV2ProducerContinuationCausalRankMutation.tla",
             "producer_continuation_causal_rank_fixed.cfg",
+        ),
+        (
+            "producer-replay-capacity",
+            "SumeragiV2ProducerReplayCapacityMutation.tla",
+            "producer_replay_capacity_fixed.cfg",
         ),
         (
             "representative-live-scope",
@@ -59798,6 +64984,18 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "FrozenCausalEpisodeCannotReplenish",
         ),
         (
+            "producer-replay-capacity-blind-admission",
+            "SumeragiV2ProducerReplayCapacityMutation.tla",
+            "producer_replay_capacity_blind_invariant_bug.cfg",
+            "PhysicalAndLatentChargesFitConfiguredCapacity",
+        ),
+        (
+            "producer-replay-non-atomic-replacement",
+            "SumeragiV2ProducerReplayCapacityMutation.tla",
+            "producer_replay_capacity_non_atomic_replay_bug.cfg",
+            "PhysicalAndLatentChargesFitConfiguredCapacity",
+        ),
+        (
             "representative-live-missing-premise",
             "SumeragiV2RepresentativeLiveScopeMutation.tla",
             "representative_live_scope_missing_premise_bug.cfg",
@@ -59861,6 +65059,13 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "ReceiptAcquisitionAndRetention",
         ),
     }
+    expected_temporal_mutation_cases = {
+        (
+            "producer-replay-capacity-replenishment-lasso",
+            "SumeragiV2ProducerReplayCapacityMutation.tla",
+            "producer_replay_capacity_replenishment_lasso_bug.cfg",
+        ),
+    }
     fixed_pattern = re.compile(
         r'^\s*"([^"|]+)\|([^"|]+\.tla)\|([^"|]+_fixed\.cfg)"\s*$',
         re.MULTILINE,
@@ -59870,21 +65075,96 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
         r'\|([^"|]+)"\s*$',
         re.MULTILINE,
     )
+    temporal_mutation_pattern = re.compile(
+        r'^\s*"([^"|]+)\|([^"|]+\.tla)\|'
+        r'(producer_replay_capacity_replenishment_lasso_bug\.cfg)"\s*$',
+        re.MULTILINE,
+    )
     observed_fixed_cases = set(fixed_pattern.findall(runner_source))
     observed_mutation_cases = set(mutation_pattern.findall(runner_source))
+    observed_temporal_mutation_cases = set(
+        temporal_mutation_pattern.findall(runner_source)
+    )
     if observed_fixed_cases != expected_fixed_cases:
         errors.append(
             f"{runner_path}: repaired case matrix must equal the exact reviewed "
-            f"twenty-seven cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
+            f"twenty-eight cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
             f"extra={sorted(observed_fixed_cases - expected_fixed_cases)}"
         )
     if observed_mutation_cases != expected_mutation_cases:
         errors.append(
             f"{runner_path}: failing case matrix must equal the exact reviewed "
-            "sixty-one config/invariant pairs; "
+            "sixty-three config/invariant pairs; "
             f"missing={sorted(expected_mutation_cases - observed_mutation_cases)}, "
             f"extra={sorted(observed_mutation_cases - expected_mutation_cases)}"
         )
+    if observed_temporal_mutation_cases != expected_temporal_mutation_cases:
+        errors.append(
+            f"{runner_path}: temporal liveness mutation matrix must equal "
+            "the exact reviewed producer replay-capacity lasso; "
+            f"missing={sorted(expected_temporal_mutation_cases - observed_temporal_mutation_cases)}, "
+            f"extra={sorted(observed_temporal_mutation_cases - expected_temporal_mutation_cases)}"
+        )
+    state_helper_header = "assert_nonzero_state_space() {"
+    run_case_header = "run_case() {"
+    fixed_cases_header = "fixed_cases=("
+    state_helper_offset = runner_source.find(state_helper_header)
+    run_case_offset = runner_source.find(run_case_header)
+    fixed_cases_offset = runner_source.find(fixed_cases_header)
+    runner_sections_are_exact = (
+        runner_source.count(state_helper_header) == 1
+        and runner_source.count(run_case_header) == 1
+        and runner_source.count(fixed_cases_header) == 1
+        and state_helper_offset >= 0
+        and state_helper_offset < run_case_offset
+        and run_case_offset < fixed_cases_offset
+    )
+    if not runner_sections_are_exact:
+        errors.append(
+            f"{runner_path}: liveness-ownership runner must retain one exact "
+            "nonzero state-space helper before run_case and the case matrices"
+        )
+    else:
+        state_helper_source = runner_source[
+            state_helper_offset:run_case_offset
+        ]
+        run_case_source = runner_source[run_case_offset:fixed_cases_offset]
+        state_summary_parser = (
+            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
+            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
+            "|| true)\""
+        )
+        positive_state_rejection = (
+            "  if ((generated <= 0 || distinct <= 0)); then"
+        )
+        state_helper_invocation = (
+            '  assert_nonzero_state_space "$label" "$log"'
+        )
+        if (
+            state_helper_source.count(state_summary_parser) != 1
+            or runner_source.count(state_summary_parser) != 1
+        ):
+            errors.append(
+                f"{runner_path}: liveness-ownership nonzero state-space "
+                "helper must retain exactly one exact TLC state-summary parser"
+            )
+        if (
+            state_helper_source.count(positive_state_rejection) != 1
+            or runner_source.count(positive_state_rejection) != 1
+        ):
+            errors.append(
+                f"{runner_path}: liveness-ownership nonzero state-space "
+                "helper must reject generated or distinct TLC state counts "
+                "less than or equal to zero"
+            )
+        if (
+            run_case_source.count(state_helper_invocation) != 1
+            or runner_source.count(state_helper_invocation) != 1
+        ):
+            errors.append(
+                f"{runner_path}: liveness-ownership run_case must invoke the "
+                "nonzero state-space helper exactly once per TLC case"
+            )
     runner_contracts = (
         (
             'readonly TLA2TOOLS_VERSION="1.7.4"',
@@ -59915,12 +65195,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "TLC invariant-violation status check",
         ),
         (
+            'run_case "$label" "$model" "$config" 13 \\',
+            "TLC temporal-violation status check",
+        ),
+        (
             '"Error: Invariant ${invariant} is violated."',
             "exact named invariant marker",
         ),
         (
-            "all 61 liveness-ownership mutations produced their exact named "
-            "counterexamples; repaired models passed",
+            "all 63 invariant and 1 temporal liveness-ownership mutations "
+            "produced their exact named counterexamples; repaired models passed",
             "exact mutation completion marker",
         ),
     )
@@ -59933,13 +65217,19 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     safe_terminal_count = (
         'grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true'
     )
+    safe_state_summary = (
+        "grep -E '^[0-9][0-9,]* states generated, "
+        "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 || true"
+    )
     if (
-        runner_source.count("|| true") != 1
+        runner_source.count("|| true") != 2
         or runner_source.count(safe_terminal_count) != 1
+        or runner_source.count(safe_state_summary) != 1
     ):
         errors.append(
             f"{runner_path}: liveness-ownership runner may suppress only the "
-            "terminal-marker grep status captured by its exact-count assertion"
+            "state-summary and terminal-marker grep statuses captured by its "
+            "exact nonzero/count assertions"
         )
 
     ci_path = repo_root / "ci" / "check_sumeragi_formal.sh"
@@ -59976,7 +65266,7 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
-    """Seal the shared Serve ordinal and older-Runtime/Local mutation pairs."""
+    """Seal all six exact Serve scheduler mutation pairs."""
 
     errors: list[str] = []
     expected_formal = set(SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_ARTIFACTS)
@@ -59986,14 +65276,14 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
     fixed_count = sum(name.endswith("_fixed.cfg") for name in expected_formal)
     mutation_count = sum(name.endswith("_bug.cfg") for name in expected_formal)
     if (
-        len(expected_formal) != 7
+        len(expected_formal) != 13
         or model_count != 1
-        or fixed_count != 3
-        or mutation_count != 3
+        or fixed_count != 6
+        or mutation_count != 6
     ):
         errors.append(
             "Serve scheduler-ordinal mutation source seal must name exactly "
-            "one model, three repaired configurations, and three failing "
+            "one model, six repaired configurations, and six failing "
             "configurations; found "
             f"models={model_count}, repaired={fixed_count}, "
             f"failing={mutation_count}, total={len(expected_formal)}"
@@ -60001,9 +65291,29 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
     if digest_names != expected_all:
         errors.append(
             "Serve scheduler-ordinal digest inventory must equal the exact "
-            "eight-artifact corpus; "
+            "fourteen-artifact corpus; "
             f"missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
+        )
+    expected_runner_sections = (
+        "preflight and SANY execution",
+        "nonzero state-space checker",
+        "TLC status and terminal-marker checker",
+        "six-repaired then six-mutant execution tail",
+    )
+    observed_runner_sections = tuple(
+        section[0]
+        for section in SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256
+        if isinstance(section, tuple) and len(section) == 4
+    )
+    if (
+        len(SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256) != 4
+        or observed_runner_sections != expected_runner_sections
+    ):
+        errors.append(
+            "Serve scheduler-ordinal runner section seal must equal the exact "
+            "four-section fail-closed execution surface; found "
+            f"{observed_runner_sections!r}"
         )
 
     observed_formal: set[str] = set()
@@ -60076,7 +65386,15 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             "{\"Initial\", \"AdmitShared\", \"AdmitSeparate\", "
             "\"DuplicateCoalesced\", \"AdmitSharedLocal\", "
             "\"OlderRuntime\", \"OlderLocal\", \"TargetOnly\", "
-            "\"AlwaysTargetFirst\", \"Drain\", \"DrainLocal\"} "
+            "\"AlwaysTargetFirst\", \"Drain\", \"DrainLocal\", "
+            "\"IngressBeforeLaterContinuation\", "
+            "\"PermittedContinuation\", "
+            "\"IngressAfterPermittedContinuation\", "
+            "\"ContinuationOvertake\", \"ClaimBeforeDormantReplay\", "
+            "\"DormantLogicalOvertake\", "
+            "\"InstallContinuationResidual\", "
+            "\"ContinuationRankedReentry\", \"ClaimAuxProgress\", "
+            "\"RawRankDescent\"} "
             "VARIABLES runnerPhase, timeoutPending, localPending, "
             "ticketActive, ticketIsLater, ticketEpoch, lastDrainedEpoch, "
             "sharedHighWatermarkAdvanced, lastTransition"
@@ -60188,6 +65506,120 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             "<<timeoutPending, localPending, ticketEpoch, "
             "sharedHighWatermarkAdvanced>>"
         ),
+        "ContinuationCutMutationInit": (
+            "/\\ runnerPhase = \"Ingress\" /\\ timeoutPending /\\ "
+            "localPending /\\ ticketActive /\\ ticketIsLater \\in BOOLEAN "
+            "/\\ ticketEpoch = FALSE /\\ lastDrainedEpoch = FALSE /\\ "
+            "~sharedHighWatermarkAdvanced /\\ lastTransition = \"Initial\""
+        ),
+        "AdmittedIngressPrecedesLaterContinuation": (
+            "/\\ timeoutPending /\\ ticketActive /\\ localPending /\\ "
+            "ticketIsLater /\\ timeoutPending' = FALSE /\\ "
+            "ticketActive' = FALSE /\\ sharedHighWatermarkAdvanced' = TRUE "
+            "/\\ lastTransition' = \"IngressBeforeLaterContinuation\" /\\ "
+            "UNCHANGED <<runnerPhase, localPending, ticketIsLater, "
+            "ticketEpoch, lastDrainedEpoch>>"
+        ),
+        "PermittedContinuationPrecedesIngress": (
+            "/\\ timeoutPending /\\ ticketActive /\\ localPending /\\ "
+            "~ticketIsLater /\\ localPending' = FALSE /\\ "
+            "lastTransition' = \"PermittedContinuation\" /\\ UNCHANGED "
+            "<<runnerPhase, timeoutPending, ticketActive, ticketIsLater, "
+            "ticketEpoch, lastDrainedEpoch, sharedHighWatermarkAdvanced>>"
+        ),
+        "AdmittedIngressRunsAfterPermittedContinuation": (
+            "/\\ timeoutPending /\\ ticketActive /\\ ~localPending /\\ "
+            "timeoutPending' = FALSE /\\ ticketActive' = FALSE /\\ "
+            "sharedHighWatermarkAdvanced' = TRUE /\\ lastTransition' = "
+            "\"IngressAfterPermittedContinuation\" /\\ UNCHANGED "
+            "<<runnerPhase, localPending, ticketIsLater, ticketEpoch, "
+            "lastDrainedEpoch>>"
+        ),
+        "LaterContinuationOvertakesAdmittedIngress": (
+            "/\\ timeoutPending /\\ ticketActive /\\ localPending /\\ "
+            "ticketIsLater /\\ lastTransition' = \"ContinuationOvertake\" "
+            "/\\ UNCHANGED <<runnerPhase, timeoutPending, localPending, "
+            "ticketActive, ticketIsLater, ticketEpoch, lastDrainedEpoch, "
+            "sharedHighWatermarkAdvanced>>"
+        ),
+        "ContinuationCutFixedRunner": (
+            "\\/ AdmittedIngressPrecedesLaterContinuation \\/ "
+            "PermittedContinuationPrecedesIngress \\/ "
+            "AdmittedIngressRunsAfterPermittedContinuation"
+        ),
+        "ContinuationOvertakeBugRunner": (
+            "\\/ LaterContinuationOvertakesAdmittedIngress \\/ "
+            "PermittedContinuationPrecedesIngress \\/ "
+            "AdmittedIngressRunsAfterPermittedContinuation"
+        ),
+        "ClaimPhysicalCutMutationInit": (
+            "/\\ runnerPhase = \"Ingress\" /\\ timeoutPending /\\ "
+            "localPending /\\ ticketActive /\\ ticketIsLater /\\ "
+            "ticketEpoch = FALSE /\\ lastDrainedEpoch = FALSE /\\ "
+            "~sharedHighWatermarkAdvanced /\\ lastTransition = \"Initial\""
+        ),
+        "ClaimRunsBeforeFreshDormantCarrier": (
+            "/\\ timeoutPending /\\ localPending /\\ ticketActive /\\ "
+            "ticketIsLater /\\ timeoutPending' = FALSE /\\ "
+            "ticketActive' = FALSE /\\ sharedHighWatermarkAdvanced' = TRUE "
+            "/\\ lastTransition' = \"ClaimBeforeDormantReplay\" /\\ "
+            "UNCHANGED <<runnerPhase, localPending, ticketIsLater, "
+            "ticketEpoch, lastDrainedEpoch>>"
+        ),
+        "DormantLogicalIdentityOvertakesClaim": (
+            "/\\ timeoutPending /\\ localPending /\\ ticketActive /\\ "
+            "ticketIsLater /\\ lastTransition' = \"DormantLogicalOvertake\" "
+            "/\\ UNCHANGED <<runnerPhase, timeoutPending, localPending, "
+            "ticketActive, ticketIsLater, ticketEpoch, lastDrainedEpoch, "
+            "sharedHighWatermarkAdvanced>>"
+        ),
+        "ClaimPhysicalCutFixedRunner": "ClaimRunsBeforeFreshDormantCarrier",
+        "ClaimLogicalOvertakeBugRunner": (
+            "DormantLogicalIdentityOvertakesClaim"
+        ),
+        "ClaimRankedReentryMutationInit": (
+            "/\\ runnerPhase = \"Runtime\" /\\ timeoutPending /\\ "
+            "~localPending /\\ ticketActive /\\ ~ticketIsLater /\\ "
+            "ticketEpoch = FALSE /\\ lastDrainedEpoch = FALSE /\\ "
+            "~sharedHighWatermarkAdvanced /\\ lastTransition = \"Initial\""
+        ),
+        "InstallClaimContinuationResidual": (
+            "/\\ timeoutPending /\\ ticketActive /\\ ~localPending /\\ "
+            "lastTransition = \"Initial\" /\\ ticketActive' = FALSE /\\ "
+            "localPending' = TRUE /\\ lastTransition' = "
+            "\"InstallContinuationResidual\" /\\ UNCHANGED <<runnerPhase, "
+            "timeoutPending, ticketIsLater, ticketEpoch, lastDrainedEpoch, "
+            "sharedHighWatermarkAdvanced>>"
+        ),
+        "ServiceClaimContinuationAndReenterRankedKernel": (
+            "/\\ timeoutPending /\\ ~ticketActive /\\ localPending /\\ "
+            "lastTransition = \"InstallContinuationResidual\" /\\ "
+            "ticketActive' = TRUE /\\ localPending' = FALSE /\\ "
+            "lastTransition' = \"ContinuationRankedReentry\" /\\ UNCHANGED "
+            "<<runnerPhase, timeoutPending, ticketIsLater, ticketEpoch, "
+            "lastDrainedEpoch, sharedHighWatermarkAdvanced>>"
+        ),
+        "ClaimAuxProgressAfterRankedReentry": (
+            "/\\ timeoutPending /\\ ticketActive /\\ ~localPending /\\ "
+            "lastTransition = \"ContinuationRankedReentry\" /\\ "
+            "timeoutPending' = FALSE /\\ ticketActive' = FALSE /\\ "
+            "sharedHighWatermarkAdvanced' = TRUE /\\ lastTransition' = "
+            "\"ClaimAuxProgress\" /\\ UNCHANGED <<runnerPhase, "
+            "localPending, ticketIsLater, ticketEpoch, lastDrainedEpoch>>"
+        ),
+        "RawLowerRankDropsClaimKernel": (
+            "/\\ timeoutPending /\\ ticketActive /\\ ~localPending /\\ "
+            "lastTransition = \"Initial\" /\\ ticketActive' = FALSE /\\ "
+            "lastTransition' = \"RawRankDescent\" /\\ UNCHANGED "
+            "<<runnerPhase, timeoutPending, localPending, ticketIsLater, "
+            "ticketEpoch, lastDrainedEpoch, sharedHighWatermarkAdvanced>>"
+        ),
+        "ClaimRankedReentryFixedRunner": (
+            "\\/ InstallClaimContinuationResidual \\/ "
+            "ServiceClaimContinuationAndReenterRankedKernel \\/ "
+            "ClaimAuxProgressAfterRankedReentry"
+        ),
+        "ClaimRawDescentBugRunner": "RawLowerRankDropsClaimKernel",
         "FixedRunner": (
             "\\/ OlderRuntimePrecedesServeIngress \\/ "
             "TargetOnlyAfterOlderEpisode"
@@ -60262,6 +65694,36 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             "WF_MutationVars(AlwaysTargetFirstRunner) /\\ "
             "WF_MutationVars(DrainExactIngressRecordToLocal)"
         ),
+        "ContinuationCutFixedSpec": (
+            "/\\ ContinuationCutMutationInit /\\ "
+            "[][ContinuationCutFixedRunner]_MutationVars /\\ "
+            "WF_MutationVars(ContinuationCutFixedRunner)"
+        ),
+        "ContinuationOvertakeBugSpec": (
+            "/\\ ContinuationCutMutationInit /\\ "
+            "[][ContinuationOvertakeBugRunner]_MutationVars /\\ "
+            "WF_MutationVars(ContinuationOvertakeBugRunner)"
+        ),
+        "ClaimPhysicalCutFixedSpec": (
+            "/\\ ClaimPhysicalCutMutationInit /\\ "
+            "[][ClaimPhysicalCutFixedRunner]_MutationVars /\\ "
+            "WF_MutationVars(ClaimPhysicalCutFixedRunner)"
+        ),
+        "ClaimLogicalOvertakeBugSpec": (
+            "/\\ ClaimPhysicalCutMutationInit /\\ "
+            "[][ClaimLogicalOvertakeBugRunner]_MutationVars /\\ "
+            "WF_MutationVars(ClaimLogicalOvertakeBugRunner)"
+        ),
+        "ClaimRankedReentryFixedSpec": (
+            "/\\ ClaimRankedReentryMutationInit /\\ "
+            "[][ClaimRankedReentryFixedRunner]_MutationVars /\\ "
+            "WF_MutationVars(ClaimRankedReentryFixedRunner)"
+        ),
+        "ClaimRawDescentBugSpec": (
+            "/\\ ClaimRankedReentryMutationInit /\\ "
+            "[][ClaimRawDescentBugRunner]_MutationVars /\\ "
+            "WF_MutationVars(ClaimRawDescentBugRunner)"
+        ),
         "FreshPostDrainRecordDoesNotReuseImmediateEpoch": (
             "ticketActive => ticketEpoch # lastDrainedEpoch"
         ),
@@ -60286,6 +65748,37 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
         ),
         "EventuallyOlderTimeoutEpisodeRuns": "<>(~timeoutPending)",
         "EventuallyOlderLocalEpisodeRuns": "<>(~localPending)",
+        "LaterContinuationCannotOwnTurnAheadOfAdmittedIngress": (
+            "/\\ timeoutPending /\\ ticketActive /\\ localPending /\\ "
+            "ticketIsLater => lastTransition # \"ContinuationOvertake\""
+        ),
+        "PermittedContinuationRetainsFrozenIngressTarget": (
+            "lastTransition = \"PermittedContinuation\" => /\\ "
+            "timeoutPending /\\ ticketActive /\\ "
+            "~sharedHighWatermarkAdvanced"
+        ),
+        "EventuallyAdmittedIngressRuns": "<>sharedHighWatermarkAdvanced",
+        "FreshDormantReplayUsesPostClaimPhysicalPosition": (
+            "/\\ timeoutPending /\\ localPending /\\ ticketActive => "
+            "ticketIsLater"
+        ),
+        "DormantLogicalIdentityCannotOwnClaimTurn": (
+            "/\\ timeoutPending /\\ localPending /\\ ticketActive /\\ "
+            "ticketIsLater => lastTransition # \"DormantLogicalOvertake\""
+        ),
+        "ClaimCutPersistsUntilAuxProgress": "timeoutPending => ticketActive",
+        "EventuallyClaimRunsBeforeDormantReplay": "<>(~timeoutPending)",
+        "ExplicitContinuationOwnsLowerRankExit": (
+            "/\\ timeoutPending /\\ ~ticketActive => localPending"
+        ),
+        "ContinuationReentryRetainsClaim": (
+            "lastTransition = \"ContinuationRankedReentry\" => /\\ "
+            "timeoutPending /\\ ticketActive /\\ ~localPending"
+        ),
+        "RawRankDescentCannotEraseClaimKernel": (
+            "lastTransition # \"RawRankDescent\""
+        ),
+        "EventuallyClaimAuxProgressAfterContinuation": "<>(~timeoutPending)",
     }
     if module_path.is_file() and not module_path.is_symlink():
         module_source = module_path.read_text(encoding="utf-8")
@@ -60710,6 +66203,72 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             "",
             "CHECK_DEADLOCK FALSE",
         ),
+        "serve_scheduler_continuation_cut_fixed.cfg": (
+            "SPECIFICATION ContinuationCutFixedSpec",
+            "",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT LaterContinuationCannotOwnTurnAheadOfAdmittedIngress",
+            "INVARIANT PermittedContinuationRetainsFrozenIngressTarget",
+            "",
+            "PROPERTY EventuallyAdmittedIngressRuns",
+            "",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "serve_scheduler_continuation_overtake_bug.cfg": (
+            "SPECIFICATION ContinuationOvertakeBugSpec",
+            "",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT PermittedContinuationRetainsFrozenIngressTarget",
+            "",
+            "PROPERTY EventuallyAdmittedIngressRuns",
+            "",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "serve_scheduler_claim_physical_cut_fixed.cfg": (
+            "SPECIFICATION ClaimPhysicalCutFixedSpec",
+            "",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT FreshDormantReplayUsesPostClaimPhysicalPosition",
+            "INVARIANT DormantLogicalIdentityCannotOwnClaimTurn",
+            "INVARIANT ClaimCutPersistsUntilAuxProgress",
+            "",
+            "PROPERTY EventuallyClaimRunsBeforeDormantReplay",
+            "",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "serve_scheduler_claim_logical_overtake_bug.cfg": (
+            "SPECIFICATION ClaimLogicalOvertakeBugSpec",
+            "",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT FreshDormantReplayUsesPostClaimPhysicalPosition",
+            "INVARIANT ClaimCutPersistsUntilAuxProgress",
+            "",
+            "PROPERTY EventuallyClaimRunsBeforeDormantReplay",
+            "",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "serve_scheduler_claim_ranked_reentry_fixed.cfg": (
+            "SPECIFICATION ClaimRankedReentryFixedSpec",
+            "",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT ExplicitContinuationOwnsLowerRankExit",
+            "INVARIANT ContinuationReentryRetainsClaim",
+            "INVARIANT RawRankDescentCannotEraseClaimKernel",
+            "",
+            "PROPERTY EventuallyClaimAuxProgressAfterContinuation",
+            "",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "serve_scheduler_claim_raw_descent_bug.cfg": (
+            "SPECIFICATION ClaimRawDescentBugSpec",
+            "",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT ContinuationReentryRetainsClaim",
+            "",
+            "PROPERTY EventuallyClaimAuxProgressAfterContinuation",
+            "",
+            "CHECK_DEADLOCK FALSE",
+        ),
     }
     for name, expected_lines in cfg_contracts.items():
         path = formal_dir / name
@@ -60731,6 +66290,83 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "must be executable"
             )
         runner_source = runner_path.read_text(encoding="utf-8")
+        runner_lines = runner_source.splitlines()
+        for (
+            section_name,
+            start_marker,
+            end_marker,
+            expected_sha256,
+        ) in SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256:
+            start_indexes = [
+                index
+                for index, line in enumerate(runner_lines)
+                if line == start_marker
+            ]
+            if len(start_indexes) != 1:
+                errors.append(
+                    f"{runner_path}: Serve scheduler-ordinal mutation runner "
+                    f"must retain exactly one {section_name} start marker "
+                    f"{start_marker!r}; found {len(start_indexes)}"
+                )
+                continue
+            start_index = start_indexes[0]
+            if end_marker is None:
+                end_index = len(runner_lines)
+            else:
+                end_indexes = [
+                    index
+                    for index, line in enumerate(runner_lines)
+                    if line == end_marker
+                ]
+                if len(end_indexes) != 1:
+                    errors.append(
+                        f"{runner_path}: Serve scheduler-ordinal mutation "
+                        f"runner must retain exactly one {section_name} end "
+                        f"marker {end_marker!r}; found {len(end_indexes)}"
+                    )
+                    continue
+                end_index = end_indexes[0]
+                if end_index <= start_index:
+                    errors.append(
+                        f"{runner_path}: Serve scheduler-ordinal mutation "
+                        f"runner {section_name} markers are out of order"
+                    )
+                    continue
+            section_source = (
+                "\n".join(runner_lines[start_index:end_index]) + "\n"
+            ).encode("utf-8")
+            observed_sha256 = hashlib.sha256(section_source).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{runner_path}: Serve scheduler-ordinal mutation runner "
+                    f"{section_name} must match exact reviewed SHA-256 "
+                    f"{expected_sha256}; found {observed_sha256}"
+                )
+        expected_config_constants = (
+            'readonly SHARED_FIXED_CONFIG="serve_scheduler_shared_ordinal_fixed.cfg"',
+            'readonly SEPARATE_BUG_CONFIG="serve_scheduler_separate_ordinal_bug.cfg"',
+            'readonly OLDER_FIXED_CONFIG="serve_scheduler_older_runtime_fixed.cfg"',
+            'readonly TARGET_FIRST_BUG_CONFIG="serve_scheduler_always_target_first_bug.cfg"',
+            'readonly OLDER_LOCAL_FIXED_CONFIG="serve_scheduler_older_local_fixed.cfg"',
+            'readonly LOCAL_TARGET_FIRST_BUG_CONFIG="serve_scheduler_local_target_first_bug.cfg"',
+            'readonly CONTINUATION_CUT_FIXED_CONFIG="serve_scheduler_continuation_cut_fixed.cfg"',
+            'readonly CONTINUATION_OVERTAKE_BUG_CONFIG="serve_scheduler_continuation_overtake_bug.cfg"',
+            'readonly CLAIM_PHYSICAL_CUT_FIXED_CONFIG="serve_scheduler_claim_physical_cut_fixed.cfg"',
+            'readonly CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG="serve_scheduler_claim_logical_overtake_bug.cfg"',
+            'readonly CLAIM_RANKED_REENTRY_FIXED_CONFIG="serve_scheduler_claim_ranked_reentry_fixed.cfg"',
+            'readonly CLAIM_RAW_DESCENT_BUG_CONFIG="serve_scheduler_claim_raw_descent_bug.cfg"',
+        )
+        observed_config_constants = tuple(
+            line
+            for line in runner_lines
+            if line.startswith("readonly ") and "_CONFIG=" in line
+        )
+        if observed_config_constants != expected_config_constants:
+            errors.append(
+                f"{runner_path}: Serve scheduler-ordinal mutation runner "
+                "configuration constants must equal the exact reviewed "
+                f"twelve-case matrix; found {observed_config_constants!r}"
+            )
         runner_contracts = (
             ('readonly TLA2TOOLS_VERSION="1.7.4"', "pinned TLA2Tools version"),
             (
@@ -60778,6 +66414,30 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "Local target-first mutant config",
             ),
             (
+                'readonly CONTINUATION_CUT_FIXED_CONFIG="serve_scheduler_continuation_cut_fixed.cfg"',
+                "continuation-cut repaired config",
+            ),
+            (
+                'readonly CONTINUATION_OVERTAKE_BUG_CONFIG="serve_scheduler_continuation_overtake_bug.cfg"',
+                "continuation-overtake mutant config",
+            ),
+            (
+                'readonly CLAIM_PHYSICAL_CUT_FIXED_CONFIG="serve_scheduler_claim_physical_cut_fixed.cfg"',
+                "claim physical-cut repaired config",
+            ),
+            (
+                'readonly CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG="serve_scheduler_claim_logical_overtake_bug.cfg"',
+                "claim logical-overtake mutant config",
+            ),
+            (
+                'readonly CLAIM_RANKED_REENTRY_FIXED_CONFIG="serve_scheduler_claim_ranked_reentry_fixed.cfg"',
+                "claim ranked-reentry repaired config",
+            ),
+            (
+                'readonly CLAIM_RAW_DESCENT_BUG_CONFIG="serve_scheduler_claim_raw_descent_bug.cfg"',
+                "claim raw-descent mutant config",
+            ),
+            (
                 'readonly SANY_SUCCESS_MARKER="Semantic processing of module ${MODEL%.tla}"',
                 "exact SANY completion marker",
             ),
@@ -60802,6 +66462,18 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "zero-status older-Local repaired case",
             ),
             (
+                'continuation_cut_fixed_log="$(run_tlc continuation-cut-fixed "$CONTINUATION_CUT_FIXED_CONFIG" 0)"',
+                "zero-status continuation-cut repaired case",
+            ),
+            (
+                'claim_physical_cut_fixed_log="$(run_tlc claim-physical-cut-fixed "$CLAIM_PHYSICAL_CUT_FIXED_CONFIG" 0)"',
+                "zero-status claim physical-cut repaired case",
+            ),
+            (
+                'claim_ranked_reentry_fixed_log="$(run_tlc claim-ranked-reentry-fixed "$CLAIM_RANKED_REENTRY_FIXED_CONFIG" 0)"',
+                "zero-status claim ranked-reentry repaired case",
+            ),
+            (
                 'separate_bug_log="$(run_tlc separate-ordinal "$SEPARATE_BUG_CONFIG" 13)"',
                 "status-13 separate-ordinal lasso",
             ),
@@ -60812,6 +66484,30 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             (
                 'local_target_first_bug_log="$(run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 13)"',
                 "status-13 Local target-first lasso",
+            ),
+            (
+                'continuation_overtake_bug_log="$(run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 13)"',
+                "status-13 continuation-overtake lasso",
+            ),
+            (
+                'claim_logical_overtake_bug_log="$(run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 13)"',
+                "status-13 claim logical-overtake lasso",
+            ),
+            (
+                'claim_raw_descent_bug_log="$(run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 13)"',
+                "status-13 claim raw-descent lasso",
+            ),
+            (
+                'for log in "$shared_fixed_log" "$older_fixed_log" "$older_local_fixed_log" \\\n'
+                '  "$continuation_cut_fixed_log" "$claim_physical_cut_fixed_log" \\\n'
+                '  "$claim_ranked_reentry_fixed_log"; do',
+                "exact six-case repaired completion set",
+            ),
+            (
+                'for log in "$separate_bug_log" "$target_first_bug_log" "$local_target_first_bug_log" \\\n'
+                '  "$continuation_overtake_bug_log" "$claim_logical_overtake_bug_log" \\\n'
+                '  "$claim_raw_descent_bug_log"; do',
+                "exact six-case mutant completion set",
             ),
             (
                 '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
@@ -60848,13 +66544,15 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "temporal/invariant non-interchangeability check",
             ),
             (
-                "repaired shared Serve scheduler ordinal and older Runtime/Local "
-                "interleave models passed",
+                "repaired shared Serve ordinal, Runtime/Local interleave, "
+                "continuation cut, claim physical cut, and claim ranked re-entry "
+                "models passed",
                 "exact repaired completion summary",
             ),
             (
-                "separate-ordinal and Runtime/Local target-first mutants produced "
-                "exact liveness status 13",
+                "separate ordinal, target-first, continuation/claim overtake, "
+                "and raw claim-rank descent mutants produced exact liveness "
+                "status 13",
                 "exact mutant completion summary",
             ),
         )
@@ -60868,18 +66566,24 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
             'older_fixed_log="$(run_tlc older-runtime-fixed "$OLDER_FIXED_CONFIG" 0)"',
             'older_local_fixed_log="$(run_tlc older-local-fixed "$OLDER_LOCAL_FIXED_CONFIG" 0)"',
+            'continuation_cut_fixed_log="$(run_tlc continuation-cut-fixed "$CONTINUATION_CUT_FIXED_CONFIG" 0)"',
+            'claim_physical_cut_fixed_log="$(run_tlc claim-physical-cut-fixed "$CLAIM_PHYSICAL_CUT_FIXED_CONFIG" 0)"',
+            'claim_ranked_reentry_fixed_log="$(run_tlc claim-ranked-reentry-fixed "$CLAIM_RANKED_REENTRY_FIXED_CONFIG" 0)"',
             'separate_bug_log="$(run_tlc separate-ordinal "$SEPARATE_BUG_CONFIG" 13)"',
             'target_first_bug_log="$(run_tlc always-target-first "$TARGET_FIRST_BUG_CONFIG" 13)"',
             'local_target_first_bug_log="$(run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 13)"',
+            'continuation_overtake_bug_log="$(run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 13)"',
+            'claim_logical_overtake_bug_log="$(run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 13)"',
+            'claim_raw_descent_bug_log="$(run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 13)"',
         )
-        case_offsets = [runner_source.find(case) for case in runner_cases]
-        if any(offset < 0 for offset in case_offsets) or case_offsets != sorted(
-            case_offsets
-        ):
+        observed_runner_cases = tuple(
+            line for line in runner_lines if '"$(run_tlc ' in line
+        )
+        if observed_runner_cases != runner_cases:
             errors.append(
                 f"{runner_path}: Serve scheduler-ordinal mutation cases must "
-                "retain reviewed repaired/repaired/repaired/mutant/mutant/"
-                "mutant order"
+                "equal the exact unguarded six-repaired-then-six-mutant "
+                f"order; found {observed_runner_cases!r}"
             )
         for forbidden in (
             'run_tlc separate-ordinal "$SEPARATE_BUG_CONFIG" 0',
@@ -60888,9 +66592,24 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             'run_tlc always-target-first "$TARGET_FIRST_BUG_CONFIG" 12',
             'run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 0',
             'run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 12',
+            'run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 0',
+            'run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 12',
+            'run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 0',
+            'run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 12',
+            'run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 0',
+            'run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 12',
             'run_tlc separate-ordinal "$SEPARATE_BUG_CONFIG" 13 || true',
             'run_tlc always-target-first "$TARGET_FIRST_BUG_CONFIG" 13 || true',
             'run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 13 || true',
+            'run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 13 || true',
+            'run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 13 || true',
+            'run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 13 || true',
+            'separate_bug_log="$(run_tlc separate-ordinal "$SEPARATE_BUG_CONFIG" 13)" || true',
+            'target_first_bug_log="$(run_tlc always-target-first "$TARGET_FIRST_BUG_CONFIG" 13)" || true',
+            'local_target_first_bug_log="$(run_tlc local-target-first "$LOCAL_TARGET_FIRST_BUG_CONFIG" 13)" || true',
+            'continuation_overtake_bug_log="$(run_tlc continuation-overtake "$CONTINUATION_OVERTAKE_BUG_CONFIG" 13)" || true',
+            'claim_logical_overtake_bug_log="$(run_tlc claim-logical-overtake "$CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG" 13)" || true',
+            'claim_raw_descent_bug_log="$(run_tlc claim-raw-descent "$CLAIM_RAW_DESCENT_BUG_CONFIG" 13)" || true',
             'tla2sany.SANY "$MODEL" || true',
         ):
             if forbidden in runner_source:
@@ -64895,12 +70614,14 @@ def _adequate_leader_scheduler_readiness_source_fidelity_errors(
             "sourceOccurrenceRank \\in "
             "AdequateLeaderTargetOccurrenceRankCarrier, owner \\in "
             "AdequateLeaderFrozenCandidateOwnerUniverse( target, "
-            "leaderContext, leader, leaderView, subject), budget \\in Nat: "
+            "leaderContext, leader, leaderView, subject), known \\in SUBSET "
+            "AdequateLeaderFrozenOwnerUniverse( target, leaderContext, "
+            "leader, leaderView, subject), budget \\in Nat: "
             "/\\ AdequateLeaderTargetProtocolSubjectSource( target, "
             "leaderContext, leader, leaderView, subject) /\\ "
             "AdequateLeaderTargetNonDescentEpisodeBudgetFrontier( target, "
             "leaderContext, leader, leaderView, subject, "
-            "sourceOccurrenceRank, owner, budget) ~> "
+            "sourceOccurrenceRank, owner, known, budget) ~> "
             "AdequateLeaderTargetOccurrenceRankServiceExitGoal( target, "
             "leaderContext, leader, leaderView, subject, "
             "sourceOccurrenceRank, owner)"
@@ -65346,6 +71067,30 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncLeaderWireLifecycleIngressProtected": (
             'record.status = "Ingress"'
+        ),
+        "AsyncLeaderWireEarliestPhysicalIngressRecord": (
+            "CHOOSE record \\in "
+            "AsyncLeaderWireIngressProtectedRecordsAt(node): "
+            "\\A other \\in "
+            "AsyncLeaderWireIngressProtectedRecordsAt(node): "
+            "record.physicalAdmissionOrdinal "
+            "<= other.physicalAdmissionOrdinal"
+        ),
+        "AsyncServeIngressOwnsSharedPhysicalTurn": (
+            "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
+            "/\\ \\/ AsyncLeaderWireIngressProtectedRecordsAt(node) = {} "
+            "\\/ AsyncServeIngressAdmissionOrdinal( node, "
+            "AsyncServeEarliestIngressLifecycleOwnerIdentity(node)) "
+            "<= AsyncLeaderWireEarliestPhysicalIngressRecord( "
+            "node).physicalAdmissionOrdinal"
+        ),
+        "AsyncLeaderWireIngressOwnsSharedPhysicalTurn": (
+            "/\\ AsyncLeaderWireIngressProtectedRecordsAt(node) # {} "
+            "/\\ \\/ AsyncServeIngressLifecycleOwnerIdentities(node) = {} "
+            "\\/ AsyncLeaderWireEarliestPhysicalIngressRecord( "
+            "node).physicalAdmissionOrdinal "
+            "< AsyncServeIngressAdmissionOrdinal( node, "
+            "AsyncServeEarliestIngressLifecycleOwnerIdentity(node))"
         ),
         "AsyncChunkReceiptSet": (
             "[node: ValidatorIds, view: Views, subject: Subjects, "
@@ -68271,7 +74016,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "direct Ingress publication": '!.status = "Ingress"',
             "fresh admission ordinal": (
-                "AsyncNextLeaderWireIngressOrdinal("
+                "AsyncNextLeaderWireLifecycleAdmissionOrdinal( "
                 "item.envelope.recipient)"
             ),
             "fresh scheduler ordinal": (
@@ -68282,11 +74027,20 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 '"Ingress", AsyncLeaderWireIngressPrefixSnapshot('
                 "item.envelope.recipient)"
             ),
+            "replay prefix freeze": (
+                "!.ingressPredecessors = "
+                "AsyncLeaderWireIngressPrefixSnapshot( "
+                "item.envelope.recipient)"
+            ),
+        }
+        required_lifecycle_counts = {
+            label: normalized_lifecycle.count(fragment)
+            for label, fragment in required_lifecycle_fragments.items()
         }
         missing_lifecycle = [
             label
-            for label, fragment in required_lifecycle_fragments.items()
-            if normalized_lifecycle.count(fragment) != 1
+            for label, count in required_lifecycle_counts.items()
+            if count != 1
         ]
         dormant_start = normalized_lifecycle.find(
             "IF AsyncLeaderWireLifecycleExactDormant(item)"
@@ -68304,9 +74058,25 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             for field in (
                 "!.admissionOrdinal",
                 "!.schedulerOrdinal",
-                "!.ingressPredecessors",
             )
             if field in dormant_branch
+        )
+        required_dormant_fragments = (
+            (
+                "!.physicalAdmissionOrdinal = "
+                "AsyncNextIngressPhysicalOrdinal( "
+                "item.envelope.recipient)"
+            ),
+            (
+                "!.ingressPredecessors = "
+                "AsyncLeaderWireIngressPrefixSnapshot( "
+                "item.envelope.recipient)"
+            ),
+            '!.status = "Ingress"',
+        )
+        dormant_fragment_counts = tuple(
+            dormant_branch.count(fragment)
+            for fragment in required_dormant_fragments
         )
         visible_intermediate = tuple(
             token
@@ -68316,6 +74086,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if (
             missing_lifecycle
             or rewritten_dormant_fields
+            or dormant_fragment_counts != (1, 1, 1)
             or visible_intermediate
             or not dormant_branch
         ):
@@ -68323,11 +74094,13 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{lifecycle_line}: "
                 "AsyncLeaderWireLifecycleStateAfterIngressAdmission must "
                 "reactivate exact Dormant ownership directly to Ingress "
-                "without rewriting immutable ordinals or recharging its "
-                "frozen predecessor cutoff, and must fresh-mint "
-                "only after the atomic gates; "
+                "with a fresh physical ordinal and current physical prefix "
+                "without rewriting immutable logical ordinals, and must "
+                "fresh-mint only after the atomic gates; "
                 f"missing={missing_lifecycle!r}, "
+                f"counts={required_lifecycle_counts!r}, "
                 f"rewritten_dormant_fields={rewritten_dormant_fields!r}, "
+                f"dormant_counts={dormant_fragment_counts!r}, "
                 f"visible_intermediate={visible_intermediate!r}"
             )
 
@@ -85169,6 +90942,293 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     return errors
 
 
+def _leader_wire_physical_ingress_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal logical lifecycle identity apart from fresh physical queue order.
+
+    Restart-dormant productive wire retains its durable logical token, but an
+    exact replay owns a newly admitted physical carrier and the source prefix
+    which existed immediately before that carrier.  The shared selector must
+    therefore validate the complete durable logical owner set while choosing
+    the live turn exclusively by physical carrier ordinal.
+    """
+
+    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
+    ingress_path = base / "mod.rs"
+    store_path = base / "serviced_candidate_store.rs"
+    errors: list[str] = []
+    for path, description in (
+        (ingress_path, "fair leader-wire physical ingress implementation"),
+        (store_path, "durable leader-wire logical lifecycle implementation"),
+    ):
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: {description} must be a regular file")
+    if errors:
+        return errors
+
+    ingress_source = ingress_path.read_text(encoding="utf-8")
+    store_source = store_path.read_text(encoding="utf-8")
+
+    gate_set = _require_rust_item(
+        store_path,
+        store_source,
+        "ingress_scheduler_ordinals",
+        errors,
+    )
+    _require_rust_item_context(
+        store_path,
+        gate_set,
+        (("impl", "LeaderWireLifecycleStoreGate"),),
+        "durable leader-wire active logical owner-set projection",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        store_path,
+        gate_set,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "ingress_scheduler_ordinals"
+        ],
+        "durable leader-wire active logical owner-set projection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        store_path,
+        gate_set,
+        """
+state
+    .records
+    .values()
+    .filter(|record| record.status == LeaderWireLifecycleStatus::Ingress)
+    .map(|record| record.token.scheduler_ordinal)
+    .collect()
+""",
+        "durable validation must expose every active logical scheduler owner",
+        errors,
+    )
+
+    dormant_admission = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "fair_v2_ingress_admit_leader_wire",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        dormant_admission,
+        (),
+        "atomic leader-wire lifecycle admission",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        dormant_admission,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "fair_v2_ingress_admit_leader_wire"
+        ],
+        "atomic leader-wire lifecycle admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        dormant_admission,
+        """
+if incumbent_status == FairV2IngressLeaderWireStatus::Dormant && publish_ingress {
+    let ingress_predecessors = state
+        .lanes
+        .iter()
+        .map(|(source, lane)| (source.clone(), lane.entries.len()))
+        .collect();
+    let receipt = gate
+        .admit_ingress(incumbent_token.clone())
+""",
+        "Dormant replay must freeze the complete current physical source prefix "
+        "before durable reactivation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        dormant_admission,
+        """
+incumbent.status = FairV2IngressLeaderWireStatus::Ingress;
+incumbent.ingress_predecessors = ingress_predecessors;
+""",
+        "Dormant replay must install its freshly frozen physical prefix",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        dormant_admission,
+        """
+let ingress_predecessors = state
+    .lanes
+    .iter()
+    .map(|(source, lane)| {
+        (
+            source.clone(),
+            lane.entries
+                .iter()
+                .filter(|entry| entry.admission_ordinal < admission_ordinal)
+                .count(),
+        )
+    })
+    .collect();
+""",
+        "fresh leader-wire admission must freeze every earlier physical source owner",
+        errors,
+    )
+
+    selector = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "try_recv_if_at_checked",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        selector,
+        (("impl", "FairV2Ingress"),),
+        "shared physical fair-ingress selector",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        selector,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "try_recv_if_at_checked"
+        ],
+        "shared physical fair-ingress selector",
+        errors,
+    )
+    for sequence, description in (
+        (
+            """
+let durable_ordinals = state
+    .leader_wire_lifecycle_gate
+    .as_ref()
+    .ok_or_else(|| {
+        "leader-wire selector crossed an unbound durable gate".to_owned()
+    })?
+    .ingress_scheduler_ordinals()?;
+let active_ordinals = active_leader_wire_owners
+    .iter()
+    .map(|record| record.token.scheduler_ordinal)
+    .collect::<BTreeSet<_>>();
+if durable_ordinals != active_ordinals {
+""",
+            "the selector must compare the complete durable and in-memory "
+            "logical Ingress owner sets",
+        ),
+        (
+            """
+for entry in state
+    .lanes
+    .values()
+    .flat_map(|lane| lane.entries.iter())
+{
+    let Some(token) = entry.leader_wire_token.as_ref() else {
+        continue;
+    };
+    if leader_wire_carrier_ordinals
+        .insert(token.clone(), entry.admission_ordinal)
+        .is_some()
+""",
+            "every physical leader-wire carrier must inject into one token owner",
+        ),
+        (
+            """
+let carrier_ordinal = leader_wire_carrier_ordinals
+    .remove(&owner.token)
+    .ok_or_else(|| {
+        "leader-wire selector lost its exact fair-ingress carrier".to_owned()
+    })?;
+active_leader_wire_carriers.push((owner, carrier_ordinal));
+""",
+            "every active logical Ingress owner must consume its one exact "
+            "physical carrier",
+        ),
+        (
+            """
+if !leader_wire_carrier_ordinals.is_empty() {
+    return Err(
+        "leader-wire carrier has no matching active lifecycle owner".to_owned(),
+    );
+}
+active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);
+""",
+            "carrier correspondence must be total before ordering by physical ordinal",
+        ),
+        (
+            """
+match active_leader_wire_carriers.into_iter().next() {
+    Some((owner, carrier_ordinal)) => (Some(owner), Some(carrier_ordinal)),
+    None => (None, None),
+}
+""",
+            "the active leader-wire turn must be the minimum physical carrier",
+        ),
+        (
+            """
+leader_wire_carrier_ordinal
+    .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
+""",
+            "Serve-versus-leader arbitration must compare physical carrier ordinals",
+        ),
+    ):
+        _require_rust_token_sequence(
+            ingress_path,
+            selector,
+            sequence,
+            description,
+            errors,
+        )
+    if selector is not None and _token_sequence_count(
+        rust_code_tokens(selector.source),
+        rust_code_tokens(
+            ".min_by_key(|record| record.token.scheduler_ordinal)"
+        ),
+    ):
+        errors.append(
+            f"{ingress_path}:{selector.line}: shared leader-wire ingress may "
+            "not select by retained logical scheduler ordinal"
+        )
+
+    test_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "mod",
+            "authoritative_runtime_gate_tests",
+        ),
+    )
+    for name, expected_sha256 in (
+        _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256.items()
+    ):
+        item = _require_rust_item(ingress_path, ingress_source, name, errors)
+        _require_rust_item_context(
+            ingress_path,
+            item,
+            test_context,
+            f"leader-wire physical-ingress regression {name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            ingress_path,
+            item,
+            expected_sha256,
+            f"leader-wire physical-ingress regression {name}",
+            errors,
+        )
+
+    return errors
+
+
 def _exact_serve_runtime_episode_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -85250,6 +91310,98 @@ enum CertifiedServeRuntimeEpisodeState {
         "and irreversible complete states",
         errors,
     )
+
+    reservation_items: dict[str, RustItem | None] = {}
+    reservation_context = (("impl", "V2IoCertifiedServeIngressReservation"),)
+    for name, expected_sha256 in (
+        _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256.items()
+    ):
+        matching = [
+            item
+            for item in rust_items(worker_source, name)
+            if item.brace_context == reservation_context
+        ]
+        item = matching[0] if len(matching) == 1 else None
+        if item is None:
+            errors.append(
+                f"{worker_path}: require exactly one real exact-Serve ingress "
+                f"reservation method named {name}; found {len(matching)}"
+            )
+        reservation_items[name] = item
+        _require_rust_item_context(
+            worker_path,
+            item,
+            reservation_context,
+            f"exact-Serve ingress reservation identity seam {name}",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            worker_path,
+            item,
+            expected_sha256,
+            f"exact-Serve ingress reservation identity seam {name}",
+            errors,
+        )
+
+    reservation_barrier = reservation_items.get("barrier")
+    for sequence, description in (
+        (
+            "if self.handed_off.is_none()",
+            "an exact-Serve barrier must retain its live fair-ingress carrier",
+        ),
+        (
+            "let carrier_ordinal = self.carrier_ordinal.ok_or_else",
+            "an exact-Serve barrier must retain its fresh physical carrier ordinal",
+        ),
+        (
+            "if self.id.0 == 0 || carrier_ordinal == 0",
+            "logical and physical exact-Serve ordinals must both remain nonzero",
+        ),
+        (
+            """
+CertifiedServeBarrier {
+    request_hash: self.projection.request_hash,
+    lifecycle_ordinal: self.id.0,
+    carrier_ordinal,
+}
+""",
+            "the runner barrier must project the exact request, lifecycle, and carrier",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            reservation_barrier,
+            sequence,
+            description,
+            errors,
+        )
+
+    reservation_match = reservation_items.get("matches_barrier")
+    for sequence, description in (
+        (
+            "self.id.0 == barrier.lifecycle_ordinal",
+            "episode claims must retain the exact logical Serve ordinal",
+        ),
+        (
+            "self.projection.request_hash == barrier.request_hash",
+            "episode claims must retain the exact Serve request hash",
+        ),
+        (
+            "self.carrier_ordinal == Some(barrier.carrier_ordinal)",
+            "episode claims must retain the selected physical carrier occurrence",
+        ),
+        (
+            "self.handed_off.is_some()",
+            "episode claims must retain the live fair-ingress handoff",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            reservation_match,
+            sequence,
+            description,
+            errors,
+        )
 
     worker_items: dict[str, RustItem | None] = {}
     for owner, name, description in (
@@ -85724,6 +91876,88 @@ self.runtime
             f"exact-Serve runtime seam {name}",
             errors,
         )
+    runtime_minimum = runtime_items.get("minimum_active_lifecycle_ordinal")
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_minimum,
+        "self.ingress.oldest_active_lifecycle_ordinal()",
+        "the complete runtime minimum must include latent Local FIFO reservations",
+        errors,
+    )
+    runtime_uses = runtime_items.get("active_lifecycle_uses_ordinal")
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_uses,
+        "self.ingress.uses_lifecycle_ordinal(lifecycle_ordinal)?",
+        "exact-Serve collision checks must include latent Local FIFO reservations",
+        errors,
+    )
+
+    ingress_context = (
+        (
+            "impl",
+            "<",
+            "C",
+            ":",
+            "ExactRuntimeCommandIdentity",
+            ">",
+            "BoundedIngress",
+            "<",
+            "C",
+            ">",
+        ),
+    )
+    ingress_items: dict[str, RustItem | None] = {}
+    for name, expected_sha256 in (
+        _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256.items()
+    ):
+        matching = [
+            item
+            for item in rust_items(runtime_source, name)
+            if item.brace_context == ingress_context
+        ]
+        item = matching[0] if len(matching) == 1 else None
+        if item is None:
+            errors.append(
+                f"{runtime_path}: require exactly one real bounded-ingress "
+                f"exact-Serve ownership method named {name}; found {len(matching)}"
+            )
+        ingress_items[name] = item
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            ingress_context,
+            f"exact-Serve bounded-ingress ownership seam {name}",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            expected_sha256,
+            f"exact-Serve bounded-ingress ownership seam {name}",
+            errors,
+        )
+    _require_rust_token_sequence(
+        runtime_path,
+        ingress_items.get("oldest_active_lifecycle_ordinal"),
+        """
+self.dormant_local_fifo_reservations.iter().try_fold(
+    command_minimum,
+""",
+        "latent Local FIFO reservations must participate in the oldest active owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        ingress_items.get("uses_lifecycle_ordinal"),
+        """
+self.dormant_local_fifo_reservations
+    .iter()
+    .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)
+""",
+        "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
+        errors,
+    )
     runtime_compare = runtime_items.get(
         "older_lifecycle_predates_exact_serve"
     )
@@ -85860,6 +92094,39 @@ else {
             errors,
         )
 
+    runtime_test_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "mod",
+            "tests",
+        ),
+    )
+    for name, expected_sha256 in (
+        _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256.items()
+    ):
+        item = _require_rust_item(runtime_path, runtime_source, name, errors)
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            runtime_test_context,
+            f"exact-Serve latent-replay regression {name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            expected_sha256,
+            f"exact-Serve latent-replay regression {name}",
+            errors,
+        )
+
     return errors
 
 
@@ -85878,6 +92145,11 @@ def _local_runner_service_contract_source_fidelity_errors(
 
     errors = _exact_serve_runtime_episode_production_source_fidelity_errors(
         repo_root
+    )
+    errors.extend(
+        _leader_wire_physical_ingress_production_source_fidelity_errors(
+            repo_root
+        )
     )
     obligations = ledger.get("obligations")
     runtime_entries = (
@@ -93284,7 +99556,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             exact_statement=(
                 "/\\ IndexedLiveChainSpec "
                 "/\\ IndexedGstEventuallyCondition "
-                "/\\ IndexedLocalAdequateLeaderSemanticKernelProperty "
+                "/\\ IndexedLocalAdequateLeaderDecisionConvergenceProperty "
                 "=> IndexedHeightLivenessProperty"
             ),
             required_proof_tokens=(
@@ -93297,17 +99569,18 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
         )
         require_liveness_theorem(
-            "IndexedHeightLivenessFromAuthorityCarryAndExposureProofs",
+            "IndexedHeightLivenessFromFixedDeadlineDisseminationAndExposureProofs",
             exact_statement=(
                 "/\\ IndexedLiveChainSpec "
                 "/\\ IndexedGstEventuallyCondition "
-                "/\\ "
-                "IndexedLocalAdequateLeaderAuthorityBoundDecisionCarryProperty "
+                "/\\ IndexedLocalAdequateLeaderFixedDeadlineAnd"
+                "ResponsiveDisseminationProperty "
                 "/\\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty "
                 "=> IndexedHeightLivenessProperty"
             ),
             required_proof_tokens=(
-                "IndexedAdequateLeaderAuthorityCarryAndExposureSupplyLocalSemanticKernel",
+                "IndexedAdequateLeaderFixedDeadlineDisseminationAnd"
+                "ExposureSupplyLocalConvergence",
                 "IndexedHeightLivenessFromHistoricalReleaseResidualsAndSuccessorProofs",
             ),
         )
@@ -93317,6 +99590,12 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ IndexedLiveChainSpec "
                 "/\\ IndexedGstEventuallyCondition "
                 "=> IndexedHeightLivenessProperty"
+            ),
+            required_proof_tokens=(
+                "IndexedLiveChainSpecProvidesLocalAdequateLeaderFixedDeadlineAnd"
+                "ResponsiveDissemination",
+                "IndexedLiveChainSpecProvidesLocalAdequateLeaderFreshSelfCorridorExposure",
+                "IndexedHeightLivenessFromFixedDeadlineDisseminationAndExposureProofs",
             ),
         )
 
@@ -93806,8 +100085,8 @@ def _production_liveness_release_inventory_errors(
             f"({_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT} total lines)"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 381:
-        errors.append("internal release-regression seal must contain exactly 381 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 383:
+        errors.append("internal release-regression seal must contain exactly 383 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -94480,21 +100759,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory therefore contains 782 tests across 39 modules.\n"
+            "current inventory therefore contains 806 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "782-test, 39-module inventory. The complete source-sealed\n"
+            "806-test, 39-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory therefore contains 782 exact tests "
+            "current source-bound inventory therefore contains 806 exact tests "
             "across\n39 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
@@ -95607,13 +101886,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "dd40226dee2b05dc4763c2c50ad26163dddeb9d1bb1d1417cd7157c31c20414a"
+        "1e144f784c02f945d6a258a4bea6d683d8d5285c04d08db343847d2b77dac0b8"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "bdc97dc6d54243f4887a1794e76e5d96969a83ab4986548fccff8ef9dc2ad45f"
+        "d84a426c7d967091e27a3fba79b9c1e0becf8dbe44a7dfe80f30ec150f4198a8"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "afdfb8a69492d30ee3af986954ef1a6600eb569396b077c79ce2907ee4f29411"
+        "23a2ba99f0c4aa466780bcad440e21fb45c813af40d8163927af749b1eedf902"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "b0a35d3ed66c22fa6b37fc4cd0155ebcfb00de47afeb6ddf89f609f3bbdc70e0"
@@ -97726,6 +104005,7 @@ def validate_ledger(
 
     module_sources, module_errors = _module_sources(formal_dir)
     errors.extend(module_errors)
+    errors.extend(_shared_tlc_result_contract_source_fidelity_errors(ROOT_DIR))
     errors.extend(_release_proof_dependency_coverage_errors(formal_dir))
     errors.extend(_resume_vote_witness_errors(formal_dir))
     errors.extend(_retired_liveness_errors(formal_dir))
@@ -97740,6 +104020,12 @@ def validate_ledger(
     errors.extend(_async_spec_shape_errors(formal_dir))
     errors.extend(_acyclic_liveness_debt_topology_errors(formal_dir))
     errors.extend(_async_proof_architecture_errors(formal_dir))
+    errors.extend(
+        _height_productivity_continuation_contract_errors(formal_dir)
+    )
+    errors.extend(
+        _candidate_producer_lifecycle_coverage_contract_errors(formal_dir)
+    )
     errors.extend(_application_completion_source_fidelity_errors(formal_dir))
     errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
     errors.extend(_effective_lock_acquisition_source_fidelity_errors(formal_dir))
@@ -97831,6 +104117,12 @@ def validate_ledger(
     errors.extend(_serve_lifecycle_temporal_contract_errors(formal_dir))
     errors.extend(
         _async_candidate_producer_continuation_contract_errors(formal_dir)
+    )
+    errors.extend(
+        _historical_candidate_producer_continuation_contract_errors(formal_dir)
+    )
+    errors.extend(
+        _ordinary_candidate_producer_deadlock_contract_errors(formal_dir)
     )
     errors.extend(
         _adequate_leader_producer_origin_contract_errors(formal_dir)

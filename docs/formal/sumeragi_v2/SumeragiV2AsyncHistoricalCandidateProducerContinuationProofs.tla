@@ -21,8 +21,10 @@ therefore includes every immutable causal predecessor and active continuation
 at or before the target ordinal.  A Ready historical recovery turn consumes
 one lifecycle stage of the minimum selected record; a Local replay turn is a
 separate finite non-descent episode which only publishes that record's stored
-carrier.  Equal-rank replacement and later producer work cannot refill the
-prefix.
+carrier.  If an older physical lifecycle acquires the serialized ingress turn
+during either episode, runner eligibility hands off to the explicit ingress-cut
+residual; clearing that barrier is not counted as continuation progress.
+Equal-rank replacement and later producer work cannot refill the prefix.
 
 No generic observer/voter fairness is introduced here.  Membership in
 `asyncHistoricalRecoveryTargets` supplies the existing historical-runner
@@ -58,6 +60,21 @@ HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty(
            ~> HistoricalCandidateProducerContinuationPrefixDescentGoal(
                 node, record, status, budget)
 
+HistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCutProperty(
+    specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          record \in AsyncCandidateProducerContinuationRecordSet,
+          status \in {"Reserved", "Materialized"},
+          budget \in
+            AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+         HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
+           node, record, status, budget)
+           ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                    node, record, status, budget)
+               \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                    node, record, status, budget)
+
 HistoricalCandidateProducerContinuationFrozenPrefixClosureProperty(
     specification) ==
   specification
@@ -89,7 +106,7 @@ HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
     node, record, distance) ==
   /\ HistoricalCandidateProducerContinuationSelectedAtStatus(
        node, record, "Reserved")
-  /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(node)
   /\ record.sourceClass = "Local"
   /\ distance \in 1..2
   /\ distance =
@@ -97,9 +114,10 @@ HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
 
 HistoricalCandidateProducerContinuationLocalReplayProgress(
     node, record, distance) ==
-  \/ AsyncCandidateProducerContinuationResolutionReady(node)
+  \/ AsyncCandidateProducerContinuationRunnerResolutionReady(node)
   \/ AsyncCandidateProducerContinuationTargetStatusExit(
        record.identity, "Reserved")
+  \/ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
   \/ \E lower \in SetLessThan(distance, OpToRel(<, Nat), Nat):
        HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
          node, record, lower)
@@ -112,9 +130,11 @@ HistoricalCandidateProducerContinuationLocalReplayClosureProperty(
           distance \in 1..2:
          HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
            node, record, distance)
-           ~> AsyncCandidateProducerContinuationResolutionReady(node)
+           ~> AsyncCandidateProducerContinuationRunnerResolutionReady(node)
                  \/ AsyncCandidateProducerContinuationTargetStatusExit(
                       record.identity, "Reserved")
+                 \/ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                      node)
 
 HistoricalCandidateProducerContinuationLocalReplayDescentProperty(
     specification) ==
@@ -131,7 +151,7 @@ HistoricalCandidateProducerContinuationFrozenPrefixReady(
     node, record, status, budget) ==
   /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
        node, record, status, budget)
-  /\ AsyncCandidateProducerContinuationResolutionReady(node)
+  /\ AsyncCandidateProducerContinuationRunnerResolutionReady(node)
 
 HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode(
     node, record, status, budget, selected, distance) ==
@@ -141,6 +161,50 @@ HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode(
        node, record, status, budget)
   /\ HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
        node, selected, distance)
+
+(***************************************************************************
+Ingress-cut residual.
+
+The historical target remains a member of the global durable continuation
+set while an earlier admitted ingress lifecycle owns the serialized runner.
+It is therefore not a target exit when the runner-eligible projection is
+empty.  The residual freezes the original continuation-prefix budget and
+hands the earlier physical lifecycle to the separate finite ingress corridor.
+That corridor may return only to this same framed prefix, to a strictly lower
+prefix, or to the exact target-status exit; clearing the barrier is not itself
+advertised as continuation progress.
+***************************************************************************)
+
+HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+    node, record, status, budget) ==
+  /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
+       node, record, status, budget)
+  /\ ~HistoricalCandidateProducerContinuationPrefixDescentGoal(
+       node, record, status, budget)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+
+HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+    node, record, status, budget) ==
+  /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
+       node, record, status, budget)
+  /\ ~HistoricalCandidateProducerContinuationPrefixDescentGoal(
+       node, record, status, budget)
+  /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+
+HistoricalCandidateProducerContinuationIngressCutClosureProperty(
+    specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          record \in AsyncCandidateProducerContinuationRecordSet,
+          status \in {"Reserved", "Materialized"},
+          budget \in
+            AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+         HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+           node, record, status, budget)
+           ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                    node, record, status, budget)
+               \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+                    node, record, status, budget)
 
 THEOREM HistoricalCandidateProducerContinuationFrozenPrefixRankIsFinite ==
   \A node \in ValidatorIds,
@@ -199,6 +263,7 @@ THEOREM HistoricalCandidateProducerContinuationLocalReplayStepCannotReplenish ==
      record \in AsyncCandidateProducerContinuationRecordSet,
      distance \in 1..2:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
     /\ HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
          node, record, distance)
@@ -217,7 +282,10 @@ BY HistoricalCandidateProducerContinuationStepPersistsOrExits,
        HistoricalCandidateProducerContinuationSelectedAtStatus,
        HistoricalCandidateProducerContinuationAtStatus,
        AsyncCandidateProducerContinuationTargetStatusExit,
-       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationRecordsForIdentity,
        AsyncCandidateProducerContinuationRecordsForIdentityIn,
@@ -260,7 +328,8 @@ BY HistoricalRecoveryRunnerEnabledOrAwaitsExternalContinuationAfterGst,
        HistoricalCandidateProducerContinuationSelectedAtStatus,
        HistoricalCandidateProducerContinuationAtStatus,
        HistoricalRecoveryRunnerBlockedOnExternalContinuation,
-       AsyncCandidateProducerContinuationSelectedResolutionRecord
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord
 
 THEOREM HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish ==
   \A node \in ValidatorIds,
@@ -298,7 +367,7 @@ THEOREM HistoricalCandidateProducerContinuationFairTurnStrictlyDescendsPrefix ==
     /\ AsyncControlServiceSlotTransition
     /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
          node, record, status, budget)
-    /\ AsyncCandidateProducerContinuationResolutionReady(node)
+    /\ AsyncCandidateProducerContinuationRunnerResolutionReady(node)
     /\ PostGstRunHistoricalRecoveryNode(node)
       => HistoricalCandidateProducerContinuationPrefixDescentGoal(
            node, record, status, budget)'
@@ -319,12 +388,18 @@ BY HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay,
        AsyncCandidateProducerContinuationFrozenProducerBudget,
        AsyncCandidateProducerContinuationFrozenProducerTokens,
        AsyncCandidateProducerContinuationFrozenCandidateTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
        AsyncCandidateProducerContinuationFrozenStatusTokens,
        AsyncCandidateProducerContinuationFrozenRecords,
        AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
        AsyncCandidateProducerContinuationCausalWeight,
        AsyncCandidateProducerContinuationTargetAtStatus,
-       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationResolutionPredecessorsFor,
        AsyncCandidateProducerContinuationSelectedResolutionRecord,
@@ -352,6 +427,7 @@ THEOREM HistoricalCandidateProducerContinuationSourceEnablesFairRunner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalCandidateProducerContinuationAtStatus(
          node, record, status)
+    /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ ~HistoricalRecoveryRunnerBlockedOnExternalContinuation(node)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(node)>>_AsyncAllVars
@@ -362,7 +438,7 @@ BY HistoricalRecoveryRunnerEnabledOrAwaitsExternalContinuationAfterGst,
        AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncHistoricalRecoveryTypeInvariant
 
-THEOREM HistoricalCandidateProducerContinuationFrozenPrefixClassifiesReadyOrLocalReplay ==
+THEOREM HistoricalCandidateProducerContinuationFrozenPrefixClassifiesRunnerOrIngressCut ==
   \A node \in ValidatorIds,
      record \in AsyncCandidateProducerContinuationRecordSet,
      status \in {"Reserved", "Materialized"},
@@ -381,7 +457,10 @@ THEOREM HistoricalCandidateProducerContinuationFrozenPrefixClassifiesReadyOrLoca
                distance \in 1..2:
               HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode(
                 node, record, status, budget, selected, distance)
+         \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+              node, record, status, budget)
 BY CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
+   AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
    ExternalCandidateProducerContinuationSelectionIsReady,
    IsaT(1200)
    DEF HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
@@ -392,8 +471,11 @@ BY CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
        HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance,
        HistoricalCandidateProducerContinuationSelectedAtStatus,
        HistoricalCandidateProducerContinuationLocalReplayDistance,
-       AsyncCandidateProducerContinuationResolutionReady,
-       AsyncCandidateProducerContinuationResolutionRequired,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationSelectedResolutionRecord,
        AsyncCandidateProducerContinuationRecordSet,
@@ -409,12 +491,15 @@ THEOREM HistoricalCandidateProducerContinuationFrozenPrefixReadyStepCannotReplen
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ HistoricalCandidateProducerContinuationFrozenPrefixReady(
          node, record, status, budget)
     /\ [AsyncNext]_AsyncAllVars
       => \/ HistoricalCandidateProducerContinuationFrozenPrefixReady(
                node, record, status, budget)'
          \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+              node, record, status, budget)'
+         \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
               node, record, status, budget)'
 BY HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish,
    HistoricalCandidateProducerContinuationStepPersistsOrExits,
@@ -427,8 +512,11 @@ BY HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish,
        HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
        HistoricalCandidateProducerContinuationAtStatus,
        HistoricalCandidateProducerContinuationPrefixDescentGoal,
-       AsyncCandidateProducerContinuationResolutionReady,
-       AsyncCandidateProducerContinuationResolutionRequired,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationSelectedResolutionRecord,
        AsyncCandidateProducerContinuationTargetStatusExit
@@ -464,6 +552,9 @@ BY HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish,
        AsyncCandidateProducerContinuationFrozenProducerBudget,
        AsyncCandidateProducerContinuationFrozenProducerTokens,
        AsyncCandidateProducerContinuationFrozenCandidateTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
        AsyncCandidateProducerContinuationFrozenStatusTokens,
        AsyncCandidateProducerContinuationFrozenRecords,
        AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
@@ -477,7 +568,8 @@ THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationLocalReplayDesce
     HistoricalCandidateProducerContinuationLocalReplayDescentProperty(
       AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
    HistoricalCandidateProducerContinuationLocalReplayStepCannotReplenish,
    HistoricalCandidateProducerContinuationFairLocalReplayDescends,
    HistoricalCandidateProducerContinuationLocalReplayEnablesFairRunner,
@@ -510,11 +602,14 @@ THEOREM AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixReadyE
               AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
            HistoricalCandidateProducerContinuationFrozenPrefixReady(
              node, record, status, budget)
-             ~> HistoricalCandidateProducerContinuationPrefixDescentGoal(
-                  node, record, status, budget)
+             ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                      node, record, status, budget)
+                 \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                      node, record, status, budget)
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
    HistoricalCandidateProducerContinuationFrozenPrefixReadyStepCannotReplenish,
    HistoricalCandidateProducerContinuationFairTurnStrictlyDescendsPrefix,
    HistoricalCandidateProducerContinuationSourceEnablesFairRunner,
@@ -524,6 +619,7 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
        HistoricalCandidateProducerContinuationAtStatus,
        HistoricalCandidateProducerContinuationPrefixDescentGoal,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
        HistoricalRecoveryRunnerBlockedOnExternalContinuation,
        AsyncLiveSpecAt, AsyncFairnessAt
 
@@ -543,9 +639,11 @@ THEOREM AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixLocalR
                        node, record, status, budget)
                  \/ HistoricalCandidateProducerContinuationFrozenPrefixReady(
                       node, record, status, budget)
+                 \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                      node, record, status, budget)
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
    HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish,
    HistoricalCandidateProducerContinuationSelectedLocalExitDropsFrozenPrefix,
    AsyncLiveClosesHistoricalCandidateProducerContinuationLocalReplay,
@@ -555,50 +653,85 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode,
        HistoricalCandidateProducerContinuationFrozenPrefixReady,
        HistoricalCandidateProducerContinuationPrefixDescentGoal,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
        AsyncLiveSpecAt
 
-THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationFrozenPrefixDescent ==
+THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCut ==
   \A initialContext:
-    HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty(
+    HistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCutProperty(
       AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   HistoricalCandidateProducerContinuationFrozenPrefixClassifiesReadyOrLocalReplay,
+   HistoricalCandidateProducerContinuationFrozenPrefixClassifiesRunnerOrIngressCut,
    AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixReadyEpisode,
    AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode,
    AsyncLiveSpecProjectsAsyncSpec,
    PTL, IsaT(1800)
-   DEF HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty,
+   DEF HistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCutProperty,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       HistoricalCandidateProducerContinuationPrefixDescentGoal,
+       HistoricalCandidateProducerContinuationFrozenPrefixReady,
+       HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       AsyncLiveSpecAt
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutClosureDischargesFrozenPrefixDescent ==
+  \A initialContext:
+    HistoricalCandidateProducerContinuationIngressCutClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+      => HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty(
+           AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesHistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCut,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   HistoricalCandidateProducerContinuationFrozenPrefixClassifiesRunnerOrIngressCut,
+   AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixReadyEpisode,
+   AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode,
+   AsyncLiveSpecProjectsAsyncSpec,
+   PTL, IsaT(1800)
+   DEF HistoricalCandidateProducerContinuationIngressCutClosureProperty,
+       HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty,
+       HistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCutProperty,
+       HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
        HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
        HistoricalCandidateProducerContinuationPrefixDescentGoal,
        HistoricalCandidateProducerContinuationFrozenPrefixReady,
        HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode,
        AsyncLiveSpecAt
 
-THEOREM AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefix ==
+THEOREM HistoricalCandidateProducerContinuationIngressCutClosureClosesFrozenPrefix ==
   \A initialContext:
-    HistoricalCandidateProducerContinuationFrozenPrefixClosureProperty(
+    HistoricalCandidateProducerContinuationIngressCutClosureProperty(
       AsyncLiveSpecAt(initialContext))
-BY AsyncLiveProvidesHistoricalCandidateProducerContinuationFrozenPrefixDescent,
+      => HistoricalCandidateProducerContinuationFrozenPrefixClosureProperty(
+           AsyncLiveSpecAt(initialContext))
+BY HistoricalCandidateProducerContinuationIngressCutClosureDischargesFrozenPrefixDescent,
    CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded,
    WellFoundedLeadsTo
-   DEF HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty,
+   DEF HistoricalCandidateProducerContinuationIngressCutClosureProperty,
+       HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty,
        HistoricalCandidateProducerContinuationFrozenPrefixClosureProperty,
        HistoricalCandidateProducerContinuationPrefixDescentGoal,
        AsyncCandidateProducerContinuationPrefixDescentGoal,
        AsyncCandidateProducerContinuationFrozenPrefixRankOrdering,
        AsyncCandidateProducerContinuationFrozenPrefixRankCarrier
 
-THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationResolutionClosure ==
+THEOREM HistoricalCandidateProducerContinuationIngressCutClosureClosesResolution ==
   \A initialContext:
-    HistoricalCandidateProducerContinuationResolutionClosureProperty(
+    HistoricalCandidateProducerContinuationIngressCutClosureProperty(
       AsyncLiveSpecAt(initialContext))
+      => HistoricalCandidateProducerContinuationResolutionClosureProperty(
+           AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    HistoricalCandidateProducerContinuationFrozenPrefixRankIsFinite,
-   AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefix,
+   HistoricalCandidateProducerContinuationIngressCutClosureClosesFrozenPrefix,
    AsyncLiveSpecProjectsAsyncSpec,
    PTL, IsaT(600)
-   DEF HistoricalCandidateProducerContinuationResolutionClosureProperty,
+   DEF HistoricalCandidateProducerContinuationIngressCutClosureProperty,
+       HistoricalCandidateProducerContinuationResolutionClosureProperty,
        HistoricalCandidateProducerContinuationFrozenPrefixClosureProperty,
        HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
        AsyncCandidateProducerContinuationFrozenPrefixRank

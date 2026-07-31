@@ -13,7 +13,6 @@ readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b2
 readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 readonly TLAPM_TLAPS_SHA256="5cc604533e49792c1c3d050a38d845d08d9c209879ca20c86de04975bc4bc563"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly TLC_FP_INDEX="96"
 readonly TLC_SEED="139154308881391968"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -24,6 +23,7 @@ readonly LIVENESS_MUTATION_MODEL="SumeragiV2TypedRolloverHandoffLivenessMutation
 readonly REPEATED_HANDOFF_MUTATION_MODEL="SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"
 readonly REPEATED_HANDOFF_MUTATION_CONFIG="typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 usage() {
   cat <<USAGE
@@ -152,27 +152,6 @@ common=(
   -cleanup -workers 1 -fp "$TLC_FP_INDEX" -seed "$TLC_SEED"
 )
 
-assert_nonzero_state_space() {
-  local label="$1"
-  local log="$2"
-  local state_line
-  local generated
-  local distinct
-  state_line="$(grep -E '^[0-9][0-9,]* states generated, [0-9][0-9,]* distinct states found' "$log" | tail -n 1 || true)"
-  [[ -n "$state_line" ]] || {
-    echo "${label} emitted no TLC state-count summary" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  generated="$(awk '{print $1}' <<<"$state_line" | tr -d ',')"
-  distinct="$(awk '{print $4}' <<<"$state_line" | tr -d ',')"
-  if ((generated <= 0 || distinct <= 0)); then
-    echo "${label} explored a zero-state model: ${state_line}" >&2
-    cat "$log" >&2
-    exit 1
-  fi
-}
-
 run_case() {
   local label="$1"
   local model="$2"
@@ -182,7 +161,7 @@ run_case() {
   local log="${run_dir}/${label}.log"
   local metadir="${run_dir}/${label}/states"
   local actual_status
-  local last_nonblank
+  local primary_diagnostic_count
   mkdir -p "$metadir"
   set +e
   (
@@ -197,18 +176,12 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
-  assert_nonzero_state_space "$label" "$log"
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   for marker in "$@"; do
     if [[ "$(grep -Fxc "$marker" "$log" || true)" != 1 ]]; then
       echo "${label} did not emit exactly one expected marker: ${marker}" >&2
@@ -216,6 +189,18 @@ run_case() {
       exit 1
     fi
   done
+  if [[ "$expected_status" -ne 0 ]]; then
+    primary_diagnostic_count="$(
+      grep -Ec \
+        "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+        "$log" || true
+    )"
+    [[ "$primary_diagnostic_count" -eq 1 ]] || {
+      echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+  fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }
 
@@ -230,7 +215,7 @@ run_case typed-rollover-responsive-restart-restore-liveness \
   "Model checking completed. No error has been found."
 
 readonly INVARIANT_MARKER="Error: Invariant TypedRolloverSafetyInvariant is violated."
-readonly TEMPORAL_MARKER="Temporal properties were violated."
+readonly TEMPORAL_MARKER="Error: Temporal properties were violated."
 readonly EXPECTED_MATRIX_MUTATION_COUNT=42
 readonly EXPECTED_LIVENESS_MUTATION_COUNT=2
 readonly EXPECTED_MUTATION_COUNT=45

@@ -1537,15 +1537,16 @@ impl LeaderWireLifecycleStoreGate {
         Ok(Self::restore_from_state(&state))
     }
 
-    /// Earliest physical-ingress scheduler owner.
+    /// Logical scheduler ordinals of every durable Ingress owner.
     ///
     /// Runtime and Terminal records have crossed this selector cut. Restored
     /// active records have no surviving physical carrier, so they remain
     /// replay-dormant and are excluded until exact retransmission passes
-    /// capacity checks and `admit_ingress` reactivates them. The caller compares
-    /// this value with the certified-Serve reservation minimum; ties are
-    /// resolved by the existing Serve-first selector.
-    pub(crate) fn earliest_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
+    /// capacity checks and `admit_ingress` reactivates them. These immutable
+    /// logical identities validate the in-memory owner set; they do not order
+    /// physical carriers because a replay-dormant owner retains its old
+    /// scheduler ordinal while acquiring a fresh ingress occurrence.
+    pub(crate) fn ingress_scheduler_ordinals(&self) -> Result<BTreeSet<u128>, String> {
         let state = self
             .state
             .lock()
@@ -1555,7 +1556,18 @@ impl LeaderWireLifecycleStoreGate {
             .values()
             .filter(|record| record.status == LeaderWireLifecycleStatus::Ingress)
             .map(|record| record.token.scheduler_ordinal)
-            .min())
+            .collect())
+    }
+
+    /// Minimum logical scheduler ordinal among durable Ingress owners.
+    ///
+    /// This projection is useful for diagnostics and lifecycle tests only.
+    /// Fair ingress must select by the owners' live physical carrier ordinals;
+    /// a restored exact retry can have the oldest logical identity and the
+    /// newest physical occurrence.
+    #[cfg(test)]
+    pub(crate) fn earliest_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
+        Ok(self.ingress_scheduler_ordinals()?.into_iter().next())
     }
 
     /// Look up an exact semantic retry before allocating another scheduler

@@ -30,9 +30,9 @@ use super::{
     serviced_candidate_store::{
         LeaderWireRecoveryAuthority, ProducerContinuationAddress, ProducerContinuationHandoffToken,
         ProducerContinuationIdentity, ProducerContinuationRecord, ProducerContinuationReservation,
-        ProducerContinuationStatus, ProducerContinuationTerminalToken,
-        SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, ServicedCandidateKey, ServicedCandidateStore,
-        serviced_candidate_stage_for_kind_code,
+        ProducerContinuationSourceClass, ProducerContinuationStatus,
+        ProducerContinuationTerminalToken, SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE,
+        ServicedCandidateKey, ServicedCandidateStore, serviced_candidate_stage_for_kind_code,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
 };
@@ -3275,6 +3275,99 @@ impl SumeragiV2Adapter {
         admission_ordinal.map_or(Dormant::Absent, |admission_ordinal| Dormant::Exact {
             admission_ordinal,
         })
+    }
+
+    /// Return the restart-dormant Local stages which already reserve a
+    /// completion-FIFO position.
+    ///
+    /// Timeout replay remains a non-FIFO clock root. Authenticated transport
+    /// and pre-store reconstructed-body work retain their separate physical
+    /// owners, so neither class consumes a local FIFO reservation here.
+    pub(crate) fn dormant_local_fifo_reservations(
+        &self,
+    ) -> Result<Vec<super::v2_runtime::RuntimeDormantLocalFifoReservation>, String> {
+        let expected_dormant = self
+            .producer_continuations
+            .iter()
+            .filter_map(|(address, record)| {
+                (record.status() != ProducerContinuationStatus::Terminal).then_some(*address)
+            })
+            .collect::<BTreeSet<_>>();
+        if expected_dormant != self.restored_dormant_producer_continuations {
+            return Err(
+                "restart-dormant producer index disagreed with active snapshot records".to_owned(),
+            );
+        }
+
+        let mut lifecycle_ordinals = BTreeMap::<Hash, u128>::new();
+        let mut reservations = BTreeSet::new();
+        for address in &self.restored_dormant_producer_continuations {
+            let record = self
+                .producer_continuations
+                .get(address)
+                .ok_or_else(|| "restart-dormant producer record was missing".to_owned())?;
+            if record.status() != ProducerContinuationStatus::Reserved
+                || record.identity().address() != *address
+                || self.durable_producer_continuations.get(address) != Some(record)
+            {
+                return Err(
+                    "restart-dormant producer record was not exact durable Reserved metadata"
+                        .to_owned(),
+                );
+            }
+            let identity = record.identity();
+            let lifecycle_key = identity.causal_lifecycle_key();
+            let admission_ordinal = identity.admission_ordinal();
+            match lifecycle_ordinals.insert(lifecycle_key, admission_ordinal) {
+                Some(existing) if existing != admission_ordinal => {
+                    return Err(
+                        "restart-dormant producer lifecycle changed its immutable ordinal"
+                            .to_owned(),
+                    );
+                }
+                Some(_) | None => {}
+            }
+            let stage = ServicedCandidateStage::from_code(identity.stage()).ok_or_else(|| {
+                "restart-dormant producer carried an unknown service stage".to_owned()
+            })?;
+            let expected_source = producer_parent_replay_source_for_stage(stage);
+            let source_exact = matches!(
+                (expected_source, record.source_class()),
+                (
+                    ProducerParentReplaySource::ConditionalResponsiveTransport,
+                    ProducerContinuationSourceClass::ConditionalTransport
+                ) | (
+                    ProducerParentReplaySource::VolatileBodyReconstruction,
+                    ProducerContinuationSourceClass::VolatileBody
+                ) | (
+                    ProducerParentReplaySource::DurableBodyPipeline
+                        | ProducerParentReplaySource::SafetyWal
+                        | ProducerParentReplaySource::DurableDecision,
+                    ProducerContinuationSourceClass::Local
+                )
+            );
+            if !source_exact {
+                return Err("restart-dormant producer changed its physical replay class".to_owned());
+            }
+            if matches!(
+                stage,
+                ServicedCandidateStage::LocalProposalReady
+                    | ServicedCandidateStage::BodyStored
+                    | ServicedCandidateStage::ValidationCompleted
+                    | ServicedCandidateStage::ApplicationCompleted
+            ) && !reservations.insert(
+                super::v2_runtime::RuntimeDormantLocalFifoReservation::completion(
+                    lifecycle_key,
+                    admission_ordinal,
+                    identity.stage(),
+                ),
+            ) {
+                return Err(
+                    "restart-dormant Local producer duplicated one FIFO reservation".to_owned(),
+                );
+            }
+        }
+        Ok(reservations.into_iter().collect())
     }
 
     /// Snapshot the exact reducer-owned facts which constrain local proposal
@@ -11342,6 +11435,13 @@ mod tests {
                 .restored_dormant_producer_continuations
                 .contains(&restored_address)
         );
+        assert!(
+            restarted
+                .dormant_local_fifo_reservations()
+                .expect("validate restored timeout metadata")
+                .is_empty(),
+            "a restart-dormant timeout remains a non-FIFO clock root"
+        );
 
         let lifecycle_ordinals =
             super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(1);
@@ -11357,6 +11457,11 @@ mod tests {
             )
             .expect("construct the restarted serialized runtime");
         assert!(startup.is_empty());
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            6,
+            "the non-FIFO timeout root cannot consume completion capacity"
+        );
         runtime
             .arm_live_clocks(started_at)
             .expect("arm the restarted runtime");

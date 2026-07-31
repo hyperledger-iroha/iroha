@@ -98,7 +98,7 @@ use super::{
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
-        authenticate_certified_body_request_identity,
+        authenticate_certified_body_request, authenticate_certified_body_request_identity,
     },
 };
 use crate::{
@@ -290,7 +290,7 @@ const LOCAL_IO_CONTROL_RESERVE: usize = 1;
 const CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
 const CERTIFIED_SERVE_STATE_FILE: &str = "certified-serve-state.norito";
 const CERTIFIED_SERVE_STATE_MAGIC: &[u8; 8] = b"SUMV2SRV";
-const CERTIFIED_SERVE_STATE_VERSION: u16 = 2;
+const CERTIFIED_SERVE_STATE_VERSION: u16 = 5;
 const CERTIFIED_SERVE_STATE_HASH_BYTES: usize = 32;
 const CERTIFIED_SERVE_STATE_HEADER_BYTES: usize =
     CERTIFIED_SERVE_STATE_MAGIC.len() + 2 + 8 + CERTIFIED_SERVE_STATE_HASH_BYTES;
@@ -299,10 +299,11 @@ const CERTIFIED_SERVE_TOMBSTONE_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
 
 /// Immutable height-local owner of one exact certified-body Serve lifecycle.
 ///
-/// The ordinal is minted once, before fair ingress releases the request, and
-/// is retained through queueing, execution, completion, and the terminal
-/// replay tombstone. The high-watermark and completed identities are persisted
-/// under the height context's existing storage root before external exposure.
+/// The ordinal is minted once as part of hidden fair-ingress acceptance and is
+/// retained through physical carrier replacement, queueing, execution,
+/// completion, and the terminal replay tombstone. The high-watermark and exact
+/// identity are persisted under the height context's existing storage root
+/// before external exposure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) struct CertifiedServeLifecycleId {
     admission_ordinal: u128,
@@ -348,18 +349,48 @@ struct PersistedCertifiedServeLifecycle {
     request: wire::CertifiedBodyRequest,
 }
 
+/// Bounded deterministic negative outcome for an exact Serve lifecycle.
+///
+/// Free-form validation text is deliberately excluded from durable state.
+/// These tags name only outcomes which cannot become serviceable through a
+/// later transport retry at the same immutable height context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(crate) enum CertifiedServeNegativeOutcome {
+    /// The authenticated request carried a quorum certificate rejected by the
+    /// frozen height verifier.
+    InvalidCertificate,
+    /// This process is not one of the certificate's frozen retention owners.
+    LocalRetentionAuthorityAbsent,
+    /// A replayed durable Core Decision names another exact subject.
+    SupersededByDurableDecision(wire::BlockSubject),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct PersistedCertifiedServeNegativeTombstone {
+    lifecycle_id: CertifiedServeLifecycleId,
+    owner: CertifiedServeOwnerKey,
+    request: wire::CertifiedBodyRequest,
+    outcome: CertifiedServeNegativeOutcome,
+}
+
 /// Durable pre-selector owner of one authenticated exact Serve request.
 ///
-/// The record remains after its volatile fair-ingress carrier disappears.
-/// An exact retransmission therefore resumes the same immutable ingress
-/// ordinal while that physical occurrence remains undrained, while a restart
-/// never exposes route or runnable work which was not itself durably retained.
-/// Once an occurrence drains, the logical Serve lifecycle remains retained but
-/// a later wire retransmission receives a fresh scheduler ordinal.
+/// While the process is live, an unserved logical lifecycle must be backed by
+/// exactly one volatile fair-ingress carrier. Losing that carrier is fail-stop
+/// evidence; a wire retry cannot repair or resume its consumed position.
+/// Restart cannot assume that any particular requester is responsive, even
+/// when it is in the frozen roster, so production startup discharges every
+/// restored lifecycle or terminal replay occurrence before exposing any
+/// producer. Its physical ticket is consumed in that same source-sealed batch;
+/// no requester retransmission is needed to clear debt. Inside one
+/// uninterrupted process, a drained nonterminal lifecycle remains retained
+/// without its consumed scheduler ticket until local service seals it.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeIngressWaiter {
     ingress_ordinal: u128,
+    lifecycle_id: CertifiedServeLifecycleId,
     owner: CertifiedServeOwnerKey,
     request: wire::CertifiedBodyRequest,
 }
@@ -374,6 +405,7 @@ struct PersistedCertifiedServeState {
     next_lifecycle_admission_ordinal: u128,
     ingress_waiters: Vec<PersistedCertifiedServeIngressWaiter>,
     unsealed_lifecycles: Vec<PersistedCertifiedServeLifecycle>,
+    negative_tombstones: Vec<PersistedCertifiedServeNegativeTombstone>,
     terminal_tombstones: Vec<PersistedCertifiedServeTombstone>,
 }
 
@@ -387,6 +419,7 @@ impl PersistedCertifiedServeState {
             next_lifecycle_admission_ordinal: 0,
             ingress_waiters: Vec::new(),
             unsealed_lifecycles: Vec::new(),
+            negative_tombstones: Vec::new(),
             terminal_tombstones: Vec::new(),
         }
     }
@@ -509,11 +542,13 @@ impl CertifiedServeStateStore {
         }
         if state.ingress_waiters.len() > self.max_tombstones
             || state.terminal_tombstones.len() > self.max_tombstones
+            || state.negative_tombstones.len() > self.max_tombstones
             || state.unsealed_lifecycles.len() > self.max_tombstones
             || state
                 .ingress_waiters
                 .len()
                 .checked_add(state.terminal_tombstones.len())
+                .and_then(|records| records.checked_add(state.negative_tombstones.len()))
                 .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
                 .is_none_or(|records| records > self.max_tombstones.saturating_mul(3))
         {
@@ -525,7 +560,8 @@ impl CertifiedServeStateStore {
         if state
             .terminal_tombstones
             .len()
-            .checked_add(state.unsealed_lifecycles.len())
+            .checked_add(state.negative_tombstones.len())
+            .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
             .is_none_or(|records| records > self.max_tombstones.saturating_mul(2))
         {
             return Err(format!(
@@ -542,17 +578,20 @@ impl CertifiedServeStateStore {
             || state.height != self.height
             || state.ingress_waiters.len() > self.max_tombstones
             || state.terminal_tombstones.len() > self.max_tombstones
+            || state.negative_tombstones.len() > self.max_tombstones
             || state.unsealed_lifecycles.len() > self.max_tombstones
             || state
                 .ingress_waiters
                 .len()
                 .checked_add(state.terminal_tombstones.len())
+                .and_then(|records| records.checked_add(state.negative_tombstones.len()))
                 .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
                 .is_none_or(|records| records > self.max_tombstones.saturating_mul(3))
             || state
                 .terminal_tombstones
                 .len()
-                .checked_add(state.unsealed_lifecycles.len())
+                .checked_add(state.negative_tombstones.len())
+                .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
                 .is_none_or(|records| records > self.max_tombstones.saturating_mul(2))
         {
             return Err("Sumeragi v2 Serve state crossed its immutable store geometry".to_owned());
@@ -718,14 +757,13 @@ pub(crate) enum CertifiedServePrepareError {
     Service(String),
 }
 
-fn combine_certified_serve_abort_error(
-    primary: String,
-    abort: Result<(), String>,
-) -> String {
+fn combine_certified_serve_abort_error(primary: String, abort: Result<(), String>) -> String {
     match abort {
         Ok(()) => primary,
         Err(abort_error) => {
-            format!("{primary}; additionally failed to abort the exact Serve handoff: {abort_error}")
+            format!(
+                "{primary}; additionally failed to abort the exact Serve handoff: {abort_error}"
+            )
         }
     }
 }
@@ -746,6 +784,10 @@ struct CertifiedServeIngressProjection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CertifiedServeIngressReservationState {
     Provisional,
+    /// The serialized runner completed a deterministic rejection while the
+    /// exact fair carrier was still selected. Physical drain persists this
+    /// outcome and retires the scheduler ticket in one transaction.
+    DeterministicallyRejected(CertifiedServeNegativeOutcome),
     Prepared(CertifiedServeLifecycleId),
     /// Fair ingress durably removed this exact physical occurrence, while the
     /// volatile handoff remains installed until Commit or Abort consumes the
@@ -769,19 +811,23 @@ enum CertifiedServeRuntimeEpisodeState {
 #[derive(Debug)]
 struct V2IoCertifiedServeIngressReservation {
     id: CertifiedServeIngressReservationId,
+    /// Immutable logical Serve identity allocated before this raw occurrence
+    /// becomes selector-visible. Unlike `id`, this survives physical drain and
+    /// any later post-drain replay of an already terminal lifecycle.
+    lifecycle_id: CertifiedServeLifecycleId,
     projection: CertifiedServeIngressProjection,
     request: wire::CertifiedBodyRequest,
     state: CertifiedServeIngressReservationState,
     handed_off: Option<Arc<AtomicBool>>,
     /// Volatile fair-ingress occurrence order for the currently attached
-    /// carrier. Retries retain `id` but receive a fresh fair occurrence, so
-    /// selecting by this value cannot move a late retry ahead of an already
-    /// queued carrier.
+    /// carrier. A post-drain replay receives both a fresh `id` and a fresh
+    /// carrier ordinal. An undrained occurrence never changes either value.
     carrier_ordinal: Option<u64>,
     /// Bounded older-runtime closure for this exact ticket occurrence.
     ///
     /// Each claimed turn admits or services at most one strictly older owner.
-    /// Exact carrier retries retain the state with the immutable ordinal.
+    /// A lost carrier closes the height instead of resuming this state from a
+    /// requester retry.
     runtime_episode: CertifiedServeRuntimeEpisodeState,
 }
 
@@ -798,13 +844,15 @@ impl V2IoCertifiedServeIngressReservation {
         }
         Ok(CertifiedServeBarrier {
             request_hash: self.projection.request_hash,
-            lifecycle_ordinal: self.id.0,
+            scheduler_ordinal: self.id.0,
+            lifecycle_id: self.lifecycle_id,
             carrier_ordinal,
         })
     }
 
     fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
-        self.id.0 == barrier.lifecycle_ordinal
+        self.id.0 == barrier.scheduler_ordinal
+            && self.lifecycle_id == barrier.lifecycle_id
             && self.projection.request_hash == barrier.request_hash
             && self.carrier_ordinal == Some(barrier.carrier_ordinal)
             && self.handed_off.is_some()
@@ -815,7 +863,8 @@ impl V2IoCertifiedServeIngressReservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CertifiedServeBarrier {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
-    lifecycle_ordinal: u128,
+    scheduler_ordinal: u128,
+    lifecycle_id: CertifiedServeLifecycleId,
     carrier_ordinal: u64,
 }
 
@@ -825,9 +874,14 @@ impl CertifiedServeBarrier {
         self.request_hash
     }
 
-    /// Actor-global immutable lifecycle ordinal of this logical ticket.
-    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
-        self.lifecycle_ordinal
+    /// Actor-global scheduler ordinal of this physical ingress ticket.
+    pub(crate) const fn scheduler_ordinal(self) -> u128 {
+        self.scheduler_ordinal
+    }
+
+    /// Immutable logical Serve lifecycle retained by every retransmission.
+    pub(crate) const fn lifecycle_id(self) -> CertifiedServeLifecycleId {
+        self.lifecycle_id
     }
 
     /// Fresh process-local position of the currently attached fair carrier.
@@ -892,21 +946,28 @@ impl std::fmt::Debug for CertifiedServeIngressGate {
 pub(crate) struct CertifiedServeIngressReservation {
     gate: CertifiedServeIngressGate,
     id: CertifiedServeIngressReservationId,
+    lifecycle_id: CertifiedServeLifecycleId,
     handed_off: Arc<AtomicBool>,
 }
 
 impl CertifiedServeIngressReservation {
+    /// Actor-global scheduler ordinal retained by this exact Serve occurrence.
+    pub(crate) const fn scheduler_ordinal(&self) -> u128 {
+        self.id.0
+    }
+
     /// Return whether this volatile fair owner is the selected barrier ticket.
     pub(crate) fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
-        self.id.0 == barrier.lifecycle_ordinal
+        self.id.0 == barrier.scheduler_ordinal && self.lifecycle_id == barrier.lifecycle_id
     }
 
     /// Publish physical dequeue before fair ingress removes this carrier.
     ///
     /// On failure the caller must retain the ingress entry. On success Drop is
-    /// inert: the queue either retired a provisional occurrence immediately or
-    /// retained a prepared volatile handoff whose durable snapshot is already
-    /// free of the consumed physical ordinal.
+    /// inert: the queue either atomically retired a deterministic negative
+    /// outcome or retained a prepared volatile handoff whose durable snapshot
+    /// is already free of the consumed physical ordinal. A Provisional
+    /// current-height occurrence is rejected and cannot leave fair ingress.
     pub(crate) fn publish_physical_drain(&self) -> Result<(), String> {
         self.gate
             .queue
@@ -942,12 +1003,22 @@ impl CertifiedServeIngressGate {
         Arc::ptr_eq(&self.queue, &other.queue)
     }
 
+    /// Return whether this gate shares the supplied actor-global ordinal source.
+    pub(crate) fn shares_lifecycle_ordinals(&self, source: &RuntimeLifecycleOrdinalSource) -> bool {
+        self.queue.lifecycle_ordinals.ptr_eq(source)
+    }
+
+    /// Mint one ordinary fair-ingress lifecycle from the shared actor source.
+    pub(crate) fn reserve_ordinary_lifecycle_ordinal(&self) -> Result<u128, String> {
+        self.queue.lifecycle_ordinals.reserve_one()
+    }
+
     /// Return the exact live carrier currently selected by this gate.
     pub(crate) fn selected_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
     }
 
-    /// Return the least scheduler ordinal owned by an admitted Serve carrier.
+    /// Return the least scheduler ordinal owned by an admitted Serve request.
     ///
     /// The selected off-queue reservation and every bounded waiter are part of
     /// one immutable admission prefix.  Fair ingress compares this value with
@@ -972,6 +1043,79 @@ impl CertifiedServeIngressGate {
         Ok(earliest)
     }
 
+    /// Return the least durable owner ordinal whose physical carrier is absent.
+    ///
+    /// Production startup discharges restored owners before exposing this
+    /// gate. A dormant owner observed by the live runner is therefore
+    /// invariant evidence: it forces restart so startup can terminalize the
+    /// lifecycle locally. Test-only preserved snapshots use this query to
+    /// inspect crash cuts; production liveness never waits for retransmission.
+    pub(crate) fn dormant_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
+        let state = self.queue.lock();
+        let mut dormant = None;
+        let mut reservations_by_lifecycle = BTreeMap::new();
+        for reservation in state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+        {
+            let has_handoff = reservation.handed_off.is_some();
+            let has_carrier = reservation.carrier_ordinal.is_some();
+            if has_handoff != has_carrier {
+                return Err(
+                    "Sumeragi v2 Serve waiter split its volatile carrier ownership".to_owned(),
+                );
+            }
+            if reservation.lifecycle_id.request_hash != reservation.projection.request_hash
+                || HashOf::new(&reservation.request) != reservation.lifecycle_id.request_hash
+            {
+                return Err(
+                    "Sumeragi v2 Serve waiter changed its immutable lifecycle identity".to_owned(),
+                );
+            }
+            let ownership = reservations_by_lifecycle
+                .entry(reservation.lifecycle_id)
+                .or_insert((0_usize, false));
+            ownership.0 = ownership.0.saturating_add(1);
+            ownership.1 |= has_handoff;
+            if !has_handoff {
+                if !matches!(
+                    reservation.state,
+                    CertifiedServeIngressReservationState::Provisional
+                ) {
+                    return Err(
+                        "Sumeragi v2 dormant Serve waiter retained a prepared handoff".to_owned(),
+                    );
+                }
+                dormant = Some(
+                    dormant.map_or(reservation.id.0, |current: u128| {
+                        current.min(reservation.id.0)
+                    }),
+                );
+            }
+        }
+        for (lifecycle_id, tracked) in &state.serves {
+            if tracked.state != V2IoServeState::AwaitingRetry {
+                continue;
+            }
+            let exactly_one_matching_reservation = reservations_by_lifecycle
+                .get(lifecycle_id)
+                .is_some_and(|(count, _)| *count == 1);
+            if !exactly_one_matching_reservation {
+                // A legacy/corrupt snapshot may retain only the logical
+                // lifecycle after consuming its physical ticket. Report its
+                // admission ordinal as a deterministic diagnostic when no
+                // scheduler ordinal survives; the runner latches restart and
+                // startup reconstructs the terminal outcome locally.
+                dormant = Some(dormant.map_or(
+                    lifecycle_id.admission_ordinal,
+                    |current: u128| current.min(lifecycle_id.admission_ordinal),
+                ));
+            }
+        }
+        Ok(dormant)
+    }
+
     /// Reserve one internal future-slot ticket for a raw exact occurrence.
     ///
     /// # Errors
@@ -991,9 +1135,18 @@ impl CertifiedServeIngressGate {
                 // Historical requests are authenticated and authorized against
                 // their immutable persisted HeightContext by `v2_block_sync`.
                 // They do not consume the active height's exact-Serve ordinal
-                // or capacity geometry.
+                // or capacity geometry. A dormant active target closes this
+                // admission cut so the runner restarts into local discharge;
+                // historical service never waits for its requester to repair it.
                 authenticate_certified_body_request_identity(request, &request.requester)
                     .map_err(|_| CertifiedServeIngressReserveError::Rejected)?;
+                if self
+                    .dormant_ingress_scheduler_ordinal()
+                    .map_err(|_| CertifiedServeIngressReserveError::Closed)?
+                    .is_some()
+                {
+                    return Err(CertifiedServeIngressReserveError::Closed);
+                }
                 return Ok(None);
             }
             if request.round.height > context.height {
@@ -1381,11 +1534,14 @@ struct V2IoTrackedWork {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoServeState {
-    /// Durable unsealed lifecycle restored after a same-height restart.
+    /// Durable unsealed lifecycle admitted before selector visibility or
+    /// reconstructed inside production startup before queue exposure.
     ///
     /// It owns semantic request/family identity and its original ordinal, but
-    /// no volatile route, physical admission unit, or runnable command. The
-    /// exact retry resumes this lifecycle instead of minting another.
+    /// no runnable command until its selected physical carrier is prepared.
+    /// Production startup locally discharges restored instances to a response
+    /// or negative terminal; only test-preserved crash snapshots expose one
+    /// without a live reservation.
     AwaitingRetry,
     /// Authenticated ingress owns the least future auxiliary slot. All later
     /// ordinary I/O admission is saturated until predecessors release it.
@@ -1397,6 +1553,9 @@ enum V2IoServeState {
     Active,
     CompletionPending,
     Terminal,
+    /// Durable negative terminal. Exact transport retries are rejected before
+    /// reserving another actor-global scheduler ordinal.
+    Rejected(CertifiedServeNegativeOutcome),
     /// The local QC retention-owner contract was violated. Consensus is
     /// fail-stopped; this state is never eligible for transport resurrection.
     Failed,
@@ -1559,6 +1718,337 @@ fn v2_io_command_channel(
     )
 }
 
+enum CertifiedServeRestartDischarge<'a> {
+    Production {
+        key_pair: &'a KeyPair,
+        validator_set_pops: &'a [Vec<u8>],
+    },
+    #[cfg(test)]
+    PreserveFixtureState,
+}
+
+fn fully_authenticate_persisted_certified_serve_request(
+    context: &wire::HeightContext,
+    request: wire::CertifiedBodyRequest,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<AuthenticatedCertifiedBodyRequest, String> {
+    let requester = request.requester.clone();
+    authenticate_certified_body_request(context, request, &requester, |context, certificate| {
+        wire::finality::verify_quorum_certificate_with_validator_pops(
+            context,
+            certificate,
+            validator_set_pops,
+        )
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn validate_persisted_certified_serve_terminal_outcomes(
+    persisted: &PersistedCertifiedServeState,
+    context: &wire::HeightContext,
+    local_validator: Option<wire::ValidatorIndex>,
+    durable_decided_subject: Option<wire::BlockSubject>,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), String> {
+    for tombstone in &persisted.terminal_tombstones {
+        fully_authenticate_persisted_certified_serve_request(
+            context,
+            tombstone.request.clone(),
+            validator_set_pops,
+        )
+        .map_err(|error| {
+            format!("durable successful Serve tombstone failed full authentication: {error}")
+        })?;
+        if local_validator != Some(tombstone.response_responder)
+            || local_validator.is_none_or(|responder| {
+                tombstone
+                    .request
+                    .certificate
+                    .signers
+                    .binary_search(&responder)
+                    .is_err()
+            })
+        {
+            return Err(
+                "durable successful Serve tombstone changed local retention authority".to_owned(),
+            );
+        }
+    }
+    for tombstone in &persisted.negative_tombstones {
+        let authenticated = fully_authenticate_persisted_certified_serve_request(
+            context,
+            tombstone.request.clone(),
+            validator_set_pops,
+        );
+        let expected = match (tombstone.outcome, authenticated) {
+            (
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(claimed),
+                Ok(_),
+            ) if durable_decided_subject == Some(claimed)
+                && tombstone.request.subject != claimed =>
+            {
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(claimed)
+            }
+            (CertifiedServeNegativeOutcome::InvalidCertificate, Err(_)) => {
+                CertifiedServeNegativeOutcome::InvalidCertificate
+            }
+            (CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent, Ok(_))
+                if local_validator.is_none_or(|responder| {
+                    tombstone
+                        .request
+                        .certificate
+                        .signers
+                        .binary_search(&responder)
+                        .is_err()
+                }) =>
+            {
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent
+            }
+            _ => {
+                return Err(
+                    "durable negative Serve tombstone does not match its reconstructed authority"
+                        .to_owned(),
+                );
+            }
+        };
+        if tombstone.outcome != expected {
+            return Err(
+                "durable negative Serve tombstone changed its deterministic outcome".to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn discharge_restored_certified_serve_lifecycles(
+    store: &CertifiedServeStateStore,
+    persisted: &mut PersistedCertifiedServeState,
+    context: &wire::HeightContext,
+    local_validator: Option<wire::ValidatorIndex>,
+    durable_decided_subject: Option<wire::BlockSubject>,
+    body_store: &V2BodyStore,
+    key_pair: &KeyPair,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), String> {
+    if let Some(responder) = local_validator {
+        let responder_index = usize::try_from(responder)
+            .map_err(|_| "local Serve responder index is not representable".to_owned())?;
+        let expected = context
+            .roster
+            .get(responder_index)
+            .ok_or_else(|| "local Serve responder is outside the frozen roster".to_owned())?
+            .validator
+            .clone();
+        if expected != PeerId::new(key_pair.public_key().clone()) {
+            return Err(
+                "local Serve signing key does not match its frozen validator index".to_owned(),
+            );
+        }
+    }
+    if let Some(decided) = durable_decided_subject {
+        for tombstone in persisted.terminal_tombstones.clone() {
+            if tombstone.request.subject == decided {
+                continue;
+            }
+            let family = CertifiedServeFamilyKey {
+                requester: tombstone.request.requester.clone(),
+                phase: tombstone.request.certificate.phase,
+            };
+            if persisted.unsealed_lifecycles.iter().any(|lifecycle| {
+                CertifiedServeFamilyKey {
+                    requester: lifecycle.request.requester.clone(),
+                    phase: lifecycle.request.certificate.phase,
+                } == family
+            }) {
+                // The current unsealed successor and this displaced response
+                // form one restart transaction. Discharging the successor
+                // below atomically prunes the predecessor and publishes the
+                // final family outcome; converting the predecessor alone
+                // would create a crash-visible duplicate negative family.
+                continue;
+            }
+            fully_authenticate_persisted_certified_serve_request(
+                context,
+                tombstone.request.clone(),
+                validator_set_pops,
+            )
+            .map_err(|error| {
+                format!(
+                    "durable successful Serve tombstone superseded by Decision failed authentication: {error}"
+                )
+            })?;
+            let mut next = persisted.clone();
+            let before = next.terminal_tombstones.len();
+            next.terminal_tombstones
+                .retain(|retained| retained.lifecycle_id != tombstone.lifecycle_id);
+            if next.terminal_tombstones.len().checked_add(1) != Some(before) {
+                return Err(
+                    "durable Decision did not consume exactly one superseded Serve response"
+                        .to_owned(),
+                );
+            }
+            next.negative_tombstones
+                .push(PersistedCertifiedServeNegativeTombstone {
+                    lifecycle_id: tombstone.lifecycle_id,
+                    owner: tombstone.owner,
+                    request: tombstone.request,
+                    outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
+                });
+            next.negative_tombstones
+                .sort_by_key(|negative| negative.lifecycle_id);
+            store.persist(&next)?;
+            *persisted = next;
+        }
+    }
+    validate_persisted_certified_serve_terminal_outcomes(
+        persisted,
+        context,
+        local_validator,
+        durable_decided_subject,
+        validator_set_pops,
+    )?;
+    let scheduler_by_lifecycle = persisted
+        .ingress_waiters
+        .iter()
+        .map(|waiter| (waiter.lifecycle_id, waiter.ingress_ordinal))
+        .collect::<BTreeMap<_, _>>();
+    let mut discharge_order = persisted.unsealed_lifecycles.clone();
+    discharge_order.sort_by_key(|lifecycle| {
+        (
+            scheduler_by_lifecycle
+                .get(&lifecycle.lifecycle_id)
+                .copied()
+                .unwrap_or(u128::MAX),
+            lifecycle.lifecycle_id,
+        )
+    });
+
+    for lifecycle in discharge_order {
+        if !persisted
+            .unsealed_lifecycles
+            .iter()
+            .any(|retained| retained.lifecycle_id == lifecycle.lifecycle_id)
+        {
+            return Err(
+                "Sumeragi v2 startup discharge lost an unsealed lifecycle owner".to_owned(),
+            );
+        }
+        let authenticated = fully_authenticate_persisted_certified_serve_request(
+            context,
+            lifecycle.request.clone(),
+            validator_set_pops,
+        );
+        let negative = match &authenticated {
+            Err(_) => Some(CertifiedServeNegativeOutcome::InvalidCertificate),
+            Ok(_) if durable_decided_subject
+                .is_some_and(|decided| lifecycle.request.subject != decided) =>
+            {
+                Some(CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                    durable_decided_subject
+                        .expect("superseded startup lifecycle has a durable Decision"),
+                ))
+            }
+            Ok(_) if local_validator.is_none_or(|responder| {
+                lifecycle
+                    .request
+                    .certificate
+                    .signers
+                    .binary_search(&responder)
+                    .is_err()
+            }) =>
+            {
+                Some(CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent)
+            }
+            Ok(_) => None,
+        };
+
+        let mut next = persisted.clone();
+        next.ingress_waiters
+            .retain(|waiter| waiter.lifecycle_id != lifecycle.lifecycle_id);
+        let before_unsealed = next.unsealed_lifecycles.len();
+        next.unsealed_lifecycles
+            .retain(|retained| retained.lifecycle_id != lifecycle.lifecycle_id);
+        if next.unsealed_lifecycles.len().checked_add(1) != Some(before_unsealed) {
+            return Err(
+                "Sumeragi v2 startup discharge did not consume exactly one lifecycle".to_owned(),
+            );
+        }
+        let family = CertifiedServeFamilyKey {
+            requester: lifecycle.request.requester.clone(),
+            phase: lifecycle.request.certificate.phase,
+        };
+        next.terminal_tombstones.retain(|tombstone| {
+            CertifiedServeFamilyKey {
+                requester: tombstone.request.requester.clone(),
+                phase: tombstone.request.certificate.phase,
+            } != family
+        });
+        next.negative_tombstones.retain(|tombstone| {
+            CertifiedServeFamilyKey {
+                requester: tombstone.request.requester.clone(),
+                phase: tombstone.request.certificate.phase,
+            } != family
+        });
+
+        if let Some(outcome) = negative {
+            next.negative_tombstones
+                .push(PersistedCertifiedServeNegativeTombstone {
+                    lifecycle_id: lifecycle.lifecycle_id,
+                    owner: lifecycle.owner.clone(),
+                    request: lifecycle.request.clone(),
+                    outcome,
+                });
+            next.negative_tombstones
+                .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        } else {
+            let authenticated = authenticated
+                .expect("non-negative startup Serve lifecycle has an authenticated request");
+            let completion = serve_certified_body(
+                body_store,
+                key_pair,
+                local_validator,
+                lifecycle.lifecycle_id,
+                authenticated,
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to discharge restored serviceable Serve lifecycle {}: {error}",
+                    lifecycle.lifecycle_id.admission_ordinal
+                )
+            })?;
+            let V2IoCompletion::CertifiedResponse { response, .. } = completion else {
+                return Err(
+                    "restored Serve discharge returned a non-response completion".to_owned(),
+                );
+            };
+            next.terminal_tombstones
+                .push(PersistedCertifiedServeTombstone {
+                    lifecycle_id: lifecycle.lifecycle_id,
+                    owner: lifecycle.owner.clone(),
+                    request: lifecycle.request.clone(),
+                    response_manifest: response.manifest,
+                    response_responder: response.responder,
+                    response_signature: response.signature,
+                });
+            next.terminal_tombstones
+                .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        }
+
+        // No queue or producer is exposed until the entire bounded batch is
+        // complete. Each individual terminal transition is durable before the
+        // next scheduler-ordered record is considered.
+        store.persist(&next)?;
+        *persisted = next;
+    }
+
+    if !persisted.unsealed_lifecycles.is_empty() || !persisted.ingress_waiters.is_empty() {
+        return Err(
+            "Sumeragi v2 startup discharge left requester-dependent Serve ownership".to_owned(),
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn persistent_v2_io_command_channel(
     capacity: usize,
@@ -1569,16 +2059,46 @@ fn persistent_v2_io_command_channel(
     root: &Path,
     context: &wire::HeightContext,
     local_validator: Option<wire::ValidatorIndex>,
+    durable_decided_subject: Option<wire::BlockSubject>,
     body_store: &V2BodyStore,
     lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    restart_discharge: CertifiedServeRestartDischarge<'_>,
 ) -> Result<(V2IoCommandSender, V2IoCommandReceiver), String> {
     let serve_family_capacity = certified_serve_family_capacity(
         roster_serve_capacity,
         observer_source_capacity,
         observer_per_source_capacity,
     )?;
-    let (store, persisted) = CertifiedServeStateStore::open(root, context, serve_family_capacity)?;
+    let (store, mut persisted) =
+        CertifiedServeStateStore::open(root, context, serve_family_capacity)?;
     lifecycle_ordinals.advance_past(persisted.next_ingress_reservation_ordinal)?;
+    let _ = restore_certified_serve_tombstones(
+        context,
+        local_validator,
+        body_store,
+        roster_serve_capacity,
+        observer_source_capacity,
+        observer_per_source_capacity,
+        serve_family_capacity,
+        &persisted,
+    )?;
+    match restart_discharge {
+        CertifiedServeRestartDischarge::Production {
+            key_pair,
+            validator_set_pops,
+        } => discharge_restored_certified_serve_lifecycles(
+            &store,
+            &mut persisted,
+            context,
+            local_validator,
+            durable_decided_subject,
+            body_store,
+            key_pair,
+            validator_set_pops,
+        )?,
+        #[cfg(test)]
+        CertifiedServeRestartDischarge::PreserveFixtureState => {}
+    }
     let (serves, serve_by_request, serve_by_family, serve_replacements, serve_ingress_waiters) =
         restore_certified_serve_tombstones(
             context,
@@ -1724,17 +2244,20 @@ fn restore_certified_serve_tombstones(
         || persisted.height != context.height
         || persisted.ingress_waiters.len() > serve_family_capacity
         || persisted.unsealed_lifecycles.len() > serve_family_capacity
+        || persisted.negative_tombstones.len() > serve_family_capacity
         || persisted.terminal_tombstones.len() > serve_family_capacity
         || persisted
             .ingress_waiters
             .len()
             .checked_add(persisted.unsealed_lifecycles.len())
+            .and_then(|records| records.checked_add(persisted.negative_tombstones.len()))
             .and_then(|records| records.checked_add(persisted.terminal_tombstones.len()))
             .is_none_or(|records| records > serve_family_capacity.saturating_mul(3))
         || persisted
             .unsealed_lifecycles
             .len()
-            .checked_add(persisted.terminal_tombstones.len())
+            .checked_add(persisted.negative_tombstones.len())
+            .and_then(|records| records.checked_add(persisted.terminal_tombstones.len()))
             .is_none_or(|records| records > serve_family_capacity.saturating_mul(2))
     {
         return Err(
@@ -1811,6 +2334,68 @@ fn restore_certified_serve_tombstones(
         };
         if serves.insert(unsealed.lifecycle_id, tracked).is_some() {
             return Err("Sumeragi v2 durable unsealed lifecycle is duplicated".to_owned());
+        }
+    }
+
+    prior_lifecycle_id = None;
+    for tombstone in &persisted.negative_tombstones {
+        validate_persisted_serve_identity(
+            context,
+            roster_serve_capacity,
+            observer_source_capacity,
+            observer_per_source_capacity,
+            persisted.next_lifecycle_admission_ordinal,
+            tombstone.lifecycle_id,
+            &tombstone.owner,
+            &tombstone.request,
+            &mut roster_requesters,
+            &mut observer_sources,
+            &mut observer_requesters_by_source,
+        )?;
+        if prior_lifecycle_id.is_some_and(|prior| prior >= tombstone.lifecycle_id) {
+            return Err(
+                "Sumeragi v2 durable negative Serve tombstones are not in canonical lifecycle order"
+                    .to_owned(),
+            );
+        }
+        prior_lifecycle_id = Some(tombstone.lifecycle_id);
+        if !all_lifecycle_ids.insert(tombstone.lifecycle_id)
+            || !all_request_hashes.insert(tombstone.lifecycle_id.request_hash)
+        {
+            return Err("Sumeragi v2 durable negative Serve identity is duplicated".to_owned());
+        }
+        let request = &tombstone.request;
+        let family = CertifiedServeFamilyKey {
+            requester: request.requester.clone(),
+            phase: request.certificate.phase,
+        };
+        if !all_families.insert(family.clone())
+            || serve_by_request
+                .insert(tombstone.lifecycle_id.request_hash, tombstone.lifecycle_id)
+                .is_some()
+            || serve_by_family
+                .insert(family, tombstone.lifecycle_id)
+                .is_some()
+        {
+            return Err(
+                "Sumeragi v2 durable negative Serve tombstones contain a duplicate family"
+                    .to_owned(),
+            );
+        }
+        let tracked = V2IoTrackedServe {
+            owner: tombstone.owner.clone(),
+            request: request.clone(),
+            recipient: request.requester.clone(),
+            phase: request.certificate.phase,
+            round: request.round,
+            subject: request.subject,
+            state: V2IoServeState::Rejected(tombstone.outcome),
+            reply_routes: None,
+            ingress_ownership: None,
+            terminal: None,
+        };
+        if serves.insert(tombstone.lifecycle_id, tracked).is_some() {
+            return Err("Sumeragi v2 durable negative Serve lifecycle is duplicated".to_owned());
         }
     }
 
@@ -1963,6 +2548,7 @@ fn restore_certified_serve_tombstones(
 
     let mut serve_ingress_waiters = BTreeMap::new();
     let mut waiter_by_family = BTreeMap::new();
+    let mut waiter_lifecycle_ids = BTreeSet::new();
     let mut prior_ingress_ordinal = None;
     for waiter in &persisted.ingress_waiters {
         if waiter.ingress_ordinal == 0
@@ -1974,17 +2560,24 @@ fn restore_certified_serve_tombstones(
             );
         }
         prior_ingress_ordinal = Some(waiter.ingress_ordinal);
-        validate_persisted_serve_request_owner(
+        validate_persisted_serve_identity(
             context,
             roster_serve_capacity,
             observer_source_capacity,
             observer_per_source_capacity,
+            persisted.next_lifecycle_admission_ordinal,
+            waiter.lifecycle_id,
             &waiter.owner,
             &waiter.request,
             &mut roster_requesters,
             &mut observer_sources,
             &mut observer_requesters_by_source,
         )?;
+        if !waiter_lifecycle_ids.insert(waiter.lifecycle_id) {
+            return Err(
+                "Sumeragi v2 durable Serve waiters duplicate one logical lifecycle".to_owned(),
+            );
+        }
         let request_hash = HashOf::new(&waiter.request);
         let family = CertifiedServeFamilyKey {
             requester: waiter.request.requester.clone(),
@@ -2002,40 +2595,26 @@ fn restore_certified_serve_tombstones(
                 "Sumeragi v2 durable Serve union exceeds its derived family bound".to_owned(),
             );
         }
-        if let Some(lifecycle_id) = serve_by_family.get(&family).copied() {
-            let tracked = serves.get(&lifecycle_id).ok_or_else(|| {
-                "durable Serve family index lost its lifecycle while restoring its waiter"
-                    .to_owned()
-            })?;
-            if tracked.owner != waiter.owner
-                || tracked.round.context_id != waiter.request.round.context_id
-                || tracked.round.height != waiter.request.round.height
-            {
-                return Err(
-                    "durable Serve waiter changed its retained lifecycle owner or context"
-                        .to_owned(),
-                );
-            }
-            if lifecycle_id.request_hash != request_hash {
-                if waiter.request.round.view <= tracked.round.view
-                    || !matches!(
-                        tracked.state,
-                        V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
-                    )
-                    || serve_replacements.contains_key(&lifecycle_id)
-                {
-                    return Err(
-                        "durable Serve waiter is not a strict admissible family successor"
-                            .to_owned(),
-                    );
-                }
-            } else if waiter.request != tracked.request {
-                return Err("durable Serve waiter changed exact bytes for its lifecycle".to_owned());
-            }
+        if serve_by_request.get(&request_hash) != Some(&waiter.lifecycle_id)
+            || serve_by_family.get(&family) != Some(&waiter.lifecycle_id)
+        {
+            return Err(
+                "durable Serve waiter lost its atomically admitted logical lifecycle".to_owned(),
+            );
+        }
+        let tracked = serves.get(&waiter.lifecycle_id).ok_or_else(|| {
+            "durable Serve waiter lifecycle is missing while restoring exact ingress".to_owned()
+        })?;
+        if tracked.owner != waiter.owner || tracked.request != waiter.request {
+            return Err(
+                "durable Serve waiter changed its retained lifecycle owner or exact bytes"
+                    .to_owned(),
+            );
         }
         let id = CertifiedServeIngressReservationId(waiter.ingress_ordinal);
         let reservation = V2IoCertifiedServeIngressReservation {
             id,
+            lifecycle_id: waiter.lifecycle_id,
             projection: CertifiedServeIngressProjection {
                 request_hash,
                 requester: waiter.request.requester.clone(),
@@ -2198,6 +2777,9 @@ impl V2IoCommandQueue {
         let Some(store) = self.serve_state_store.as_ref() else {
             return Ok(());
         };
+        let admitted_lifecycle_id = admitted_unsealed
+            .as_ref()
+            .map(|(lifecycle_id, _, _)| *lifecycle_id);
         let mut ingress_waiters = BTreeMap::new();
         let mut retired_ingress_seen = false;
         for reservation in state
@@ -2208,6 +2790,9 @@ impl V2IoCommandQueue {
             let request_hash = HashOf::new(&reservation.request);
             if reservation.id.0 == 0
                 || reservation.id.0 > next_ingress_reservation_ordinal
+                || reservation.lifecycle_id.admission_ordinal == 0
+                || reservation.lifecycle_id.admission_ordinal > next_lifecycle_admission_ordinal
+                || reservation.lifecycle_id.request_hash != request_hash
                 || reservation.projection.request_hash != request_hash
                 || reservation.projection.requester != reservation.request.requester
                 || reservation.projection.round != reservation.request.round
@@ -2216,6 +2801,23 @@ impl V2IoCommandQueue {
             {
                 return Err(
                     "Sumeragi v2 Serve waiter changed its durable ingress projection".to_owned(),
+                );
+            }
+            if state.serve_by_request.get(&request_hash) != Some(&reservation.lifecycle_id)
+                && admitted_lifecycle_id != Some(reservation.lifecycle_id)
+            {
+                return Err(
+                    "Sumeragi v2 Serve waiter lost its atomically admitted lifecycle".to_owned(),
+                );
+            }
+            if matches!(
+                reservation.state,
+                CertifiedServeIngressReservationState::Prepared(lifecycle_id)
+                    | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(lifecycle_id)
+                    if lifecycle_id != reservation.lifecycle_id
+            ) {
+                return Err(
+                    "Sumeragi v2 Serve waiter changed lifecycle during physical handoff".to_owned(),
                 );
             }
             if matches!(
@@ -2233,6 +2835,7 @@ impl V2IoCommandQueue {
             }
             let persisted = PersistedCertifiedServeIngressWaiter {
                 ingress_ordinal: reservation.id.0,
+                lifecycle_id: reservation.lifecycle_id,
                 owner: reservation.projection.owner.clone(),
                 request: reservation.request.clone(),
             };
@@ -2246,30 +2849,45 @@ impl V2IoCommandQueue {
             );
         }
         let mut unsealed_lifecycles = BTreeMap::new();
+        let mut negative_tombstones = BTreeMap::new();
         let mut terminal_tombstones = BTreeMap::new();
         for (lifecycle_id, tracked) in &state.serves {
-            let Some(V2IoServeTerminal::Response(response)) = tracked.terminal.as_ref() else {
-                unsealed_lifecycles.insert(
-                    *lifecycle_id,
-                    PersistedCertifiedServeLifecycle {
-                        lifecycle_id: *lifecycle_id,
-                        owner: tracked.owner.clone(),
-                        request: tracked.request.clone(),
-                    },
-                );
-                continue;
-            };
-            terminal_tombstones.insert(
-                *lifecycle_id,
-                PersistedCertifiedServeTombstone {
-                    lifecycle_id: *lifecycle_id,
-                    owner: tracked.owner.clone(),
-                    request: tracked.request.clone(),
-                    response_manifest: response.manifest.clone(),
-                    response_responder: response.responder,
-                    response_signature: response.signature.clone(),
-                },
-            );
+            match (tracked.state, tracked.terminal.as_ref()) {
+                (_, Some(V2IoServeTerminal::Response(response))) => {
+                    terminal_tombstones.insert(
+                        *lifecycle_id,
+                        PersistedCertifiedServeTombstone {
+                            lifecycle_id: *lifecycle_id,
+                            owner: tracked.owner.clone(),
+                            request: tracked.request.clone(),
+                            response_manifest: response.manifest.clone(),
+                            response_responder: response.responder,
+                            response_signature: response.signature.clone(),
+                        },
+                    );
+                }
+                (V2IoServeState::Rejected(outcome), None) => {
+                    negative_tombstones.insert(
+                        *lifecycle_id,
+                        PersistedCertifiedServeNegativeTombstone {
+                            lifecycle_id: *lifecycle_id,
+                            owner: tracked.owner.clone(),
+                            request: tracked.request.clone(),
+                            outcome,
+                        },
+                    );
+                }
+                (_, None) => {
+                    unsealed_lifecycles.insert(
+                        *lifecycle_id,
+                        PersistedCertifiedServeLifecycle {
+                            lifecycle_id: *lifecycle_id,
+                            owner: tracked.owner.clone(),
+                            request: tracked.request.clone(),
+                        },
+                    );
+                }
+            }
         }
         if let Some((lifecycle_id, owner, request)) = admitted_unsealed {
             if lifecycle_id.request_hash != HashOf::new(request) {
@@ -2288,6 +2906,12 @@ impl V2IoCommandQueue {
                 CertifiedServeFamilyKey {
                     requester: lifecycle.request.requester.clone(),
                     phase: lifecycle.request.certificate.phase,
+                } != admitted_family
+            });
+            negative_tombstones.retain(|_, tombstone| {
+                CertifiedServeFamilyKey {
+                    requester: tombstone.request.requester.clone(),
+                    phase: tombstone.request.certificate.phase,
                 } != admitted_family
             });
             unsealed_lifecycles.insert(
@@ -2326,6 +2950,22 @@ impl V2IoCommandQueue {
                         );
                     }
                 }
+                None if matches!(previous.state, V2IoServeState::Rejected(_)) => {
+                    if restore_displaced_for == Some(*replacement_id) {
+                        let V2IoServeState::Rejected(outcome) = previous.state else {
+                            unreachable!("negative replacement state was matched above")
+                        };
+                        negative_tombstones.insert(
+                            *previous_id,
+                            PersistedCertifiedServeNegativeTombstone {
+                                lifecycle_id: *previous_id,
+                                owner: previous.owner.clone(),
+                                request: previous.request.clone(),
+                                outcome,
+                            },
+                        );
+                    }
+                }
                 None => {
                     return Err(
                         "Sumeragi v2 Serve replacement crossed a non-retired unsealed owner"
@@ -2333,6 +2973,23 @@ impl V2IoCommandQueue {
                     );
                 }
             }
+        }
+        // A deterministic negative is itself the current family high-watermark.
+        // Once that outcome is published, any displaced response predecessor
+        // is no longer a replay candidate. A strictly higher request may later
+        // replace the negative tombstone through the normal bounded successor
+        // transaction.
+        for negative in negative_tombstones.values() {
+            let negative_family = CertifiedServeFamilyKey {
+                requester: negative.request.requester.clone(),
+                phase: negative.request.certificate.phase,
+            };
+            terminal_tombstones.retain(|_, tombstone| {
+                CertifiedServeFamilyKey {
+                    requester: tombstone.request.requester.clone(),
+                    phase: tombstone.request.certificate.phase,
+                } != negative_family
+            });
         }
         if let Some(replacement_id) = restore_displaced_for {
             if !state.serve_replacements.contains_key(&replacement_id) {
@@ -2359,6 +3016,12 @@ impl V2IoCommandQueue {
                     phase: tombstone.request.certificate.phase,
                 } != sealed_family
             });
+            negative_tombstones.retain(|_, tombstone| {
+                CertifiedServeFamilyKey {
+                    requester: tombstone.request.requester.clone(),
+                    phase: tombstone.request.certificate.phase,
+                } != sealed_family
+            });
             unsealed_lifecycles.remove(&lifecycle_id);
             terminal_tombstones.insert(
                 lifecycle_id,
@@ -2374,15 +3037,18 @@ impl V2IoCommandQueue {
         }
         if ingress_waiters.len() > self.serve_family_capacity
             || unsealed_lifecycles.len() > self.serve_family_capacity
+            || negative_tombstones.len() > self.serve_family_capacity
             || terminal_tombstones.len() > self.serve_family_capacity
             || ingress_waiters
                 .len()
                 .checked_add(unsealed_lifecycles.len())
+                .and_then(|records| records.checked_add(negative_tombstones.len()))
                 .and_then(|records| records.checked_add(terminal_tombstones.len()))
                 .is_none_or(|records| records > self.serve_family_capacity.saturating_mul(3))
             || unsealed_lifecycles
                 .len()
-                .checked_add(terminal_tombstones.len())
+                .checked_add(negative_tombstones.len())
+                .and_then(|records| records.checked_add(terminal_tombstones.len()))
                 .is_none_or(|records| records > self.serve_family_capacity.saturating_mul(2))
         {
             return Err(
@@ -2397,6 +3063,7 @@ impl V2IoCommandQueue {
             next_lifecycle_admission_ordinal,
             ingress_waiters: ingress_waiters.into_values().collect(),
             unsealed_lifecycles: unsealed_lifecycles.into_values().collect(),
+            negative_tombstones: negative_tombstones.into_values().collect(),
             terminal_tombstones: terminal_tombstones.into_values().collect(),
         })
     }
@@ -2423,20 +3090,20 @@ impl V2IoCommandQueue {
             }),
             "a consumed Serve occurrence cannot re-enter selector waiters"
         );
-        let next = state
-            .serve_ingress_waiters
-            .iter()
-            .filter_map(|(id, reservation)| {
-                reservation
-                    .carrier_ordinal
-                    .zip(reservation.handed_off.as_ref())
-                    .map(|(carrier_ordinal, _)| (*id, carrier_ordinal))
-            })
-            .min_by_key(|(id, carrier_ordinal)| (*carrier_ordinal, id.0))
-            .map(|(id, _)| id);
-        let Some(next) = next else {
+        let Some((&next, reservation)) = state.serve_ingress_waiters.first_key_value() else {
             return false;
         };
+        assert_eq!(
+            reservation.handed_off.is_some(),
+            reservation.carrier_ordinal.is_some(),
+            "Serve waiter cannot split its volatile carrier ownership"
+        );
+        if reservation.handed_off.is_none() {
+            // Production treats this as fail-stop evidence and restarts into
+            // local startup discharge. Keeping the head unpromoted here also
+            // makes crash-cut fixtures preserve the immutable admission order.
+            return false;
+        }
         let reservation = state
             .serve_ingress_waiters
             .remove(&next)
@@ -2460,17 +3127,32 @@ impl V2IoCommandQueue {
             "a consumed Serve occurrence cannot enter selector waiters"
         );
         let id = reservation.id;
-        if state.serve_ingress_reservation.is_none() && state.serve_barrier.is_none() {
-            state.serve_ingress_reservation = Some(reservation);
-        } else {
-            assert!(
-                state
-                    .serve_ingress_waiters
-                    .insert(id, reservation)
-                    .is_none(),
-                "new Serve ingress waiter ordinal is unique"
-            );
+        assert!(
+            state
+                .serve_ingress_waiters
+                .insert(id, reservation)
+                .is_none(),
+            "new Serve ingress waiter ordinal is unique"
+        );
+        let _ = Self::promote_next_serve_ingress_waiter(state);
+    }
+
+    fn awaiting_retry_lifecycles_are_backed_once(state: &V2IoCommandQueueState) -> bool {
+        let mut reservations_by_lifecycle = BTreeMap::new();
+        for reservation in state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+        {
+            let count = reservations_by_lifecycle
+                .entry(reservation.lifecycle_id)
+                .or_insert(0_usize);
+            *count = count.saturating_add(1);
         }
+        state.serves.iter().all(|(lifecycle_id, tracked)| {
+            tracked.state != V2IoServeState::AwaitingRetry
+                || reservations_by_lifecycle.get(lifecycle_id) == Some(&1)
+        })
     }
 
     fn detach_selected_serve_ingress_carrier(
@@ -2647,6 +3329,13 @@ impl V2IoCommandQueue {
         if !state.sender_open || !state.receiver_open {
             return Err(CertifiedServeIngressReserveError::Closed);
         }
+        if !Self::awaiting_retry_lifecycles_are_backed_once(&state) {
+            // This check is under the same lock as ordinal allocation. A raw
+            // retry therefore cannot race the runner's dormant-owner poll,
+            // mint a replacement ticket, and mask an admitted lifecycle whose
+            // sole physical owner was lost.
+            return Err(CertifiedServeIngressReserveError::Closed);
+        }
         if state.producer_episode_active {
             // The runner claimed this finite episode while holding the same
             // mutex and may still acquire I/O ownership. Do not mint or attach
@@ -2684,28 +3373,36 @@ impl V2IoCommandQueue {
                     .get(&retained_waiter_id)
                     .expect("indexed Serve waiter remains installed")
             };
+            let retained_is_live =
+                retained.handed_off.is_some() && retained.carrier_ordinal.is_some();
+            let retained_is_dormant =
+                retained.handed_off.is_none() && retained.carrier_ordinal.is_none();
+            if !retained_is_live && !retained_is_dormant {
+                return Err(CertifiedServeIngressReserveError::Closed);
+            }
             if retained.projection.request_hash == request_hash {
-                if &retained.request != request {
+                let lifecycle_id = retained.lifecycle_id;
+                if lifecycle_id.request_hash != request_hash
+                    || &retained.request != request
+                    || state.serve_by_request.get(&request_hash) != Some(&lifecycle_id)
+                {
                     return Err(CertifiedServeIngressReserveError::Rejected);
                 }
-                if retained.handed_off.is_some() || retained.carrier_ordinal.is_some() {
+                if retained_is_live {
                     return Err(CertifiedServeIngressReserveError::Busy);
                 }
-                let handed_off = Arc::new(AtomicBool::new(false));
-                let retained = state
-                    .serve_ingress_waiters
-                    .get_mut(&retained_waiter_id)
-                    .expect("a dormant retained waiter cannot be selected");
-                retained.handed_off = Some(Arc::clone(&handed_off));
-                retained.carrier_ordinal = Some(carrier_ordinal);
-                let _ = Self::promote_next_serve_ingress_waiter(&mut state);
-                return Ok(CertifiedServeIngressReservation {
-                    gate: CertifiedServeIngressGate {
-                        queue: Arc::clone(self),
-                    },
-                    id: retained_waiter_id,
-                    handed_off,
-                });
+                // Production startup never exposes a restored dormant owner.
+                // Seeing one in a live queue means its physical carrier was
+                // lost after admission. Close this ingress attempt so the
+                // runner fail-stops and restarts into local terminalization;
+                // do not make correctness depend on requester retransmission.
+                return Err(CertifiedServeIngressReserveError::Closed);
+            }
+            if retained_is_dormant {
+                // A distinct request cannot repair an invariant-broken dormant
+                // family. Force restart so the admitted target is terminalized
+                // locally before any successor is considered.
+                return Err(CertifiedServeIngressReserveError::Closed);
             }
             if retained.projection.round.context_id != request.round.context_id
                 || retained.projection.round.height != request.round.height
@@ -2713,24 +3410,18 @@ impl V2IoCommandQueue {
             {
                 return Err(CertifiedServeIngressReserveError::Rejected);
             }
-            if retained.handed_off.is_some() || retained.carrier_ordinal.is_some() {
-                return Err(CertifiedServeIngressReserveError::Busy);
-            }
-            if let Some(existing_id) = state.serve_by_family.get(&family).copied() {
-                let Some(existing) = state.serves.get(&existing_id) else {
-                    state.sender_open = false;
-                    drop(state);
-                    self.ready.notify_all();
-                    return Err(CertifiedServeIngressReserveError::Closed);
-                };
-                if !matches!(
-                    existing.state,
-                    V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
-                ) || state.serve_replacements.contains_key(&existing_id)
-                {
-                    return Err(CertifiedServeIngressReserveError::Busy);
-                }
-            }
+            // A live target owns the family until its current physical
+            // occurrence drains. Signed higher-view traffic is bounded
+            // contention, not fail-stop evidence.
+            return Err(CertifiedServeIngressReserveError::Busy);
+        }
+
+        if state.serve_ingress_waiters.values().any(|reservation| {
+            reservation.handed_off.is_none() || reservation.carrier_ordinal.is_none()
+        }) {
+            // No packet may acquire a physical position around invariant-broken
+            // dormant debt. The runner restarts into local startup discharge.
+            return Err(CertifiedServeIngressReserveError::Closed);
         }
 
         let inherited_owner = state
@@ -2754,7 +3445,8 @@ impl V2IoCommandQueue {
             return Err(CertifiedServeIngressReserveError::Rejected);
         }
 
-        if let Some(existing_id) = state.serve_by_family.get(&family).copied() {
+        let replacement_id = if let Some(existing_id) = state.serve_by_family.get(&family).copied()
+        {
             let Some(existing) = state.serves.get(&existing_id) else {
                 // A broken high-watermark index cannot safely authorize another
                 // producer. Close producer admission while the receiver drains
@@ -2770,15 +3462,65 @@ impl V2IoCommandQueue {
                 if !same_height_context || request.round.view <= existing.round.view {
                     return Err(CertifiedServeIngressReserveError::Rejected);
                 }
+                // `AwaitingRetry` is an admitted but unserved logical target.
+                // A later view may replace a completed response or negative
+                // tombstone, never a lifecycle still awaiting local service.
                 if !matches!(
                     existing.state,
-                    V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
-                ) || state.serve_replacements.contains_key(&existing_id)
+                    V2IoServeState::Terminal | V2IoServeState::Rejected(_)
+                )
+                    || state.serve_replacements.contains_key(&existing_id)
                 {
                     return Err(CertifiedServeIngressReserveError::Busy);
                 }
+                Some(existing_id)
+            } else {
+                if &existing.request != request || existing.owner != owner {
+                    return Err(CertifiedServeIngressReserveError::Rejected);
+                }
+                if matches!(existing.state, V2IoServeState::Rejected(_)) {
+                    // A deterministic negative outcome is a durable family
+                    // tombstone, not another producer episode. Reject before
+                    // touching the actor-global scheduler ordinal source.
+                    return Err(CertifiedServeIngressReserveError::Rejected);
+                }
+                None
             }
+        } else {
+            None
+        };
+        let existing_lifecycle_id = state.serve_by_request.get(&request_hash).copied();
+        let indexed_family_lifecycle_id = state.serve_by_family.get(&family).copied();
+        if existing_lifecycle_id != indexed_family_lifecycle_id
+            && (existing_lifecycle_id.is_some()
+                || indexed_family_lifecycle_id
+                    .is_some_and(|lifecycle_id| lifecycle_id.request_hash == request_hash))
+        {
+            state.sender_open = false;
+            drop(state);
+            self.ready.notify_all();
+            return Err(CertifiedServeIngressReserveError::Closed);
         }
+        let (lifecycle_id, lifecycle_is_new, next_lifecycle_admission_ordinal) =
+            if let Some(lifecycle_id) = existing_lifecycle_id {
+                (lifecycle_id, false, state.next_serve_admission_ordinal)
+            } else {
+                let Some(admission_ordinal) = state.next_serve_admission_ordinal.checked_add(1)
+                else {
+                    state.sender_open = false;
+                    drop(state);
+                    self.ready.notify_all();
+                    return Err(CertifiedServeIngressReserveError::Closed);
+                };
+                (
+                    CertifiedServeLifecycleId {
+                        admission_ordinal,
+                        request_hash,
+                    },
+                    true,
+                    admission_ordinal,
+                )
+            };
         let ordinal = match self.lifecycle_ordinals.reserve_one() {
             Ok(ordinal) if ordinal > state.next_serve_ingress_reservation_ordinal => ordinal,
             Ok(_) | Err(_) => {
@@ -2797,13 +3539,14 @@ impl V2IoCommandQueue {
         let handed_off = Arc::new(AtomicBool::new(false));
         let reservation = V2IoCertifiedServeIngressReservation {
             id,
+            lifecycle_id,
             projection: CertifiedServeIngressProjection {
                 request_hash,
                 requester: request.requester.clone(),
                 round: request.round,
                 subject: request.subject,
                 phase: request.certificate.phase,
-                owner,
+                owner: owner.clone(),
             },
             request: request.clone(),
             state: CertifiedServeIngressReservationState::Provisional,
@@ -2811,21 +3554,19 @@ impl V2IoCommandQueue {
             carrier_ordinal: Some(carrier_ordinal),
             runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,
         };
-        let displaced_waiter = retained_waiter_id
-            .and_then(|retained_waiter_id| state.serve_ingress_waiters.remove(&retained_waiter_id));
         Self::insert_serve_ingress_waiter(&mut state, reservation);
         if let Err(reason) = self.persist_serve_state(
             &state,
             ordinal,
-            state.next_serve_admission_ordinal,
+            next_lifecycle_admission_ordinal,
             None,
-            None,
+            lifecycle_is_new.then_some((lifecycle_id, &owner, request)),
             None,
             None,
         ) {
             iroha_logger::error!(
                 %reason,
-                "failed to persist the Sumeragi v2 Serve ingress high-watermark"
+                "failed to persist the atomic Sumeragi v2 Serve ingress lifecycle"
             );
             if state
                 .serve_ingress_reservation
@@ -2836,25 +3577,74 @@ impl V2IoCommandQueue {
             } else {
                 let _ = state.serve_ingress_waiters.remove(&id);
             }
-            if let Some(displaced) = displaced_waiter {
-                assert!(
-                    state
-                        .serve_ingress_waiters
-                        .insert(displaced.id, displaced)
-                        .is_none()
-                );
-            }
             state.sender_open = false;
             drop(state);
             self.ready.notify_all();
             return Err(CertifiedServeIngressReserveError::Closed);
         }
         state.next_serve_ingress_reservation_ordinal = ordinal;
+        state.next_serve_admission_ordinal = next_lifecycle_admission_ordinal;
+        if lifecycle_is_new {
+            let replaced_owner = replacement_id.map(|previous| {
+                let retired = state
+                    .serves
+                    .remove(&previous)
+                    .expect("validated Serve family remains indexed until raw replacement");
+                assert!(matches!(
+                    retired.state,
+                    V2IoServeState::AwaitingRetry
+                        | V2IoServeState::Terminal
+                        | V2IoServeState::Rejected(_)
+                ));
+                assert_eq!(
+                    state.serve_by_request.remove(&previous.request_hash),
+                    Some(previous)
+                );
+                assert_eq!(state.serve_by_family.remove(&family), Some(previous));
+                (previous, retired)
+            });
+            assert!(
+                state
+                    .serves
+                    .insert(
+                        lifecycle_id,
+                        V2IoTrackedServe {
+                            owner,
+                            request: request.clone(),
+                            recipient: request.requester.clone(),
+                            phase: request.certificate.phase,
+                            round: request.round,
+                            subject: request.subject,
+                            state: V2IoServeState::AwaitingRetry,
+                            reply_routes: None,
+                            ingress_ownership: None,
+                            terminal: None,
+                        },
+                    )
+                    .is_none(),
+                "new raw Serve lifecycle ordinal is unique"
+            );
+            assert_eq!(
+                state.serve_by_request.insert(request_hash, lifecycle_id),
+                None
+            );
+            assert_eq!(state.serve_by_family.insert(family, lifecycle_id), None);
+            if let Some((previous, retired)) = replaced_owner {
+                assert!(
+                    state
+                        .serve_replacements
+                        .insert(lifecycle_id, (previous, retired))
+                        .is_none(),
+                    "one raw Serve replacement has one displaced family owner"
+                );
+            }
+        }
         Ok(CertifiedServeIngressReservation {
             gate: CertifiedServeIngressGate {
                 queue: Arc::clone(self),
             },
             id,
+            lifecycle_id,
             handed_off,
         })
     }
@@ -2866,7 +3656,33 @@ impl V2IoCommandQueue {
         if !state.sender_open || !state.receiver_open {
             return Err("Sumeragi v2 I/O worker is disconnected".to_owned());
         }
-        if state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some() {
+        let mut live_reservations_by_lifecycle = BTreeMap::new();
+        for reservation in state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+            .filter(|reservation| {
+                reservation.handed_off.is_some() && reservation.carrier_ordinal.is_some()
+            })
+        {
+            let count = live_reservations_by_lifecycle
+                .entry(reservation.lifecycle_id)
+                .or_insert(0_usize);
+            *count = count.saturating_add(1);
+        }
+        if state.serves.iter().any(|(lifecycle_id, tracked)| {
+            tracked.state == V2IoServeState::AwaitingRetry
+                && live_reservations_by_lifecycle.get(lifecycle_id) != Some(&1)
+        }) {
+            return Err(
+                "Sumeragi v2 I/O producer episode found an unbacked AwaitingRetry Serve lifecycle"
+                    .to_owned(),
+            );
+        }
+        if state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some()
+        {
             return Ok(None);
         }
         if state.producer_episode_active {
@@ -2909,17 +3725,18 @@ impl V2IoCommandQueue {
             | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(lifecycle_id) => {
                 Some(lifecycle_id)
             }
-            CertifiedServeIngressReservationState::Provisional => None,
+            CertifiedServeIngressReservationState::Provisional
+            | CertifiedServeIngressReservationState::DeterministicallyRejected(_) => None,
         };
-        if prepared_lifecycle.is_some_and(|lifecycle_id| state.serve_barrier == Some(lifecycle_id)) {
+        if prepared_lifecycle.is_some_and(|lifecycle_id| state.serve_barrier == Some(lifecycle_id))
+        {
             // Rollback publishes its retry-only snapshot before changing any
             // queue state. Failure here intentionally panics out of Drop:
             // detaching after a failed durable write would expose a partial
             // transaction, while fail-stop leaves the exact handoff intact
             // for process restart.
-            self.rollback_serve_barrier(&mut state).expect(
-                "unhanded exact-ingress reservation rolls its Serve transaction back",
-            );
+            self.rollback_serve_barrier(&mut state)
+                .expect("unhanded exact-ingress reservation rolls its Serve transaction back");
         }
         if matches!(
             reservation_state,
@@ -2938,6 +3755,40 @@ impl V2IoCommandQueue {
         if promoted {
             self.ready.notify_all();
         }
+    }
+
+    fn stage_selected_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let reservation = state.serve_ingress_reservation.as_mut().ok_or_else(|| {
+            "deterministic Serve rejection lost its selected ingress occurrence".to_owned()
+        })?;
+        if reservation.lifecycle_id.request_hash != request_hash
+            || reservation.projection.request_hash != request_hash
+        {
+            return Err(
+                "deterministic Serve rejection changed the selected exact request".to_owned(),
+            );
+        }
+        match reservation.state {
+            CertifiedServeIngressReservationState::Provisional => {
+                reservation.state =
+                    CertifiedServeIngressReservationState::DeterministicallyRejected(outcome);
+            }
+            CertifiedServeIngressReservationState::DeterministicallyRejected(retained)
+                if retained == outcome => {}
+            CertifiedServeIngressReservationState::DeterministicallyRejected(_)
+            | CertifiedServeIngressReservationState::Prepared(_)
+            | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_) => {
+                return Err(
+                    "deterministic Serve rejection crossed another handoff outcome".to_owned(),
+                );
+            }
+        }
+        Ok(())
     }
 
     fn publish_serve_ingress_physical_drain(
@@ -2961,12 +3812,71 @@ impl V2IoCommandQueue {
                 "fair ingress attempted to drain one Serve occurrence more than once".to_owned(),
             );
         }
+        if matches!(
+            reservation_state,
+            CertifiedServeIngressReservationState::Provisional
+        ) {
+            return Err(
+                "current-height certified-body ingress requires a prepared response or deterministic negative outcome before physical drain"
+                    .to_owned(),
+            );
+        }
+
+        let rejected_lifecycle = match reservation_state {
+            CertifiedServeIngressReservationState::DeterministicallyRejected(outcome) => {
+                let lifecycle_id = state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .expect("validated rejected Serve occurrence remains selected")
+                    .lifecycle_id;
+                let tracked = state.serves.get_mut(&lifecycle_id).ok_or_else(|| {
+                    "deterministically rejected Serve occurrence lost its logical lifecycle"
+                        .to_owned()
+                })?;
+                let previous_state = tracked.state;
+                let previous_terminal = tracked.terminal.clone();
+                let admissible = (previous_state == V2IoServeState::AwaitingRetry
+                    && previous_terminal.is_none())
+                    || (matches!(
+                        outcome,
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(_)
+                    ) && previous_state == V2IoServeState::Terminal
+                        && matches!(
+                            previous_terminal.as_ref(),
+                            Some(V2IoServeTerminal::Response(_))
+                        ));
+                if !admissible || HashOf::new(&tracked.request) != lifecycle_id.request_hash {
+                    return Err(
+                        "deterministically rejected Serve occurrence crossed a non-terminalizable lifecycle"
+                            .to_owned(),
+                    );
+                }
+                tracked.state = V2IoServeState::Rejected(outcome);
+                tracked.terminal = None;
+                let previous_reply_routes = tracked.reply_routes.take();
+                let previous_ingress_ownership = tracked.ingress_ownership.take();
+                Some((
+                    lifecycle_id,
+                    previous_state,
+                    previous_terminal,
+                    previous_reply_routes,
+                    previous_ingress_ownership,
+                ))
+            }
+            CertifiedServeIngressReservationState::Prepared(_)
+            | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_) => None,
+            CertifiedServeIngressReservationState::Provisional => {
+                unreachable!("provisional physical drain was rejected above")
+            }
+        };
 
         // This write is the physical-dequeue transaction. It runs while both
         // fair ingress and the Serve queue still retain the exact carrier, so
         // an I/O failure leaves the ingress entry selectable for a later
-        // checked attempt. A crash after success cannot restore this ordinal.
-        self.persist_serve_state(
+        // checked attempt. Deterministic rejection and physical retirement are
+        // encoded in this same snapshot, so neither a crash nor an exact retry
+        // can recreate the consumed scheduler occurrence.
+        if let Err(error) = self.persist_serve_state(
             &state,
             state.next_serve_ingress_reservation_ordinal,
             state.next_serve_admission_ordinal,
@@ -2974,10 +3884,37 @@ impl V2IoCommandQueue {
             None,
             None,
             Some(reservation_id),
-        )?;
+        ) {
+            if let Some((
+                lifecycle_id,
+                previous_state,
+                previous_terminal,
+                previous_reply_routes,
+                previous_ingress_ownership,
+            )) = rejected_lifecycle
+            {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("failed rejection persistence retains its lifecycle");
+                tracked.state = previous_state;
+                tracked.terminal = previous_terminal;
+                tracked.reply_routes = previous_reply_routes;
+                tracked.ingress_ownership = previous_ingress_ownership;
+            }
+            return Err(error);
+        }
+        if let Some((lifecycle_id, _, _, _, _)) = rejected_lifecycle {
+            // The durable negative snapshot already discarded any displaced
+            // response/negative predecessor for this family. Retire the
+            // in-memory rollback owner only after that atomic write succeeds,
+            // so a strict higher-view successor may replace the negative
+            // high-watermark.
+            let _ = state.serve_replacements.remove(&lifecycle_id);
+        }
 
         let promoted = match reservation_state {
-            CertifiedServeIngressReservationState::Provisional => {
+            CertifiedServeIngressReservationState::DeterministicallyRejected(_) => {
                 Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id)
             }
             CertifiedServeIngressReservationState::Prepared(lifecycle_id) => {
@@ -2991,6 +3928,9 @@ impl V2IoCommandQueue {
             }
             CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_) => {
                 unreachable!("duplicate physical drain was rejected above")
+            }
+            CertifiedServeIngressReservationState::Provisional => {
+                unreachable!("provisional physical drain was rejected above")
             }
         };
         drop(state);
@@ -3167,19 +4107,24 @@ impl V2IoCommandQueue {
             | V2IoServeState::Active
             | V2IoServeState::CompletionPending
             | V2IoServeState::Terminal
+            | V2IoServeState::Rejected(_)
             | V2IoServeState::Failed => {
                 unreachable!("uncommitted Serve state was validated above");
             }
         }
 
-        // The on-disk representation deliberately records every unsealed
-        // lifecycle as retry-only. Republish it before the volatile FIFO owner
-        // disappears so a crash cannot recreate runnable work that fair
-        // ingress never committed.
-        let restore_displaced = state
-            .serve_replacements
-            .contains_key(&lifecycle_id)
-            .then_some(lifecycle_id);
+        // Raw fair-ingress admission already committed both this lifecycle and
+        // its replacement tombstone before the carrier became visible. It must
+        // roll back only to retry-only ownership. The cfg-test/internal
+        // pre-gate path (`prepare_serve(None)`) remains transactional and may
+        // restore its displaced terminal owner when aborted before admission.
+        let raw_admission_committed = state
+            .serve_ingress_reservation
+            .as_ref()
+            .is_some_and(|reservation| reservation.lifecycle_id == lifecycle_id);
+        let restore_displaced = (!raw_admission_committed
+            && state.serve_replacements.contains_key(&lifecycle_id))
+        .then_some(lifecycle_id);
         self.persist_serve_state(
             state,
             state.next_serve_ingress_reservation_ordinal,
@@ -3197,7 +4142,11 @@ impl V2IoCommandQueue {
                 .expect("validated Serve placeholder remains queued")
         });
         let _ = state.pending_serve_requests.remove(&lifecycle_id);
-        if let Some((previous_id, previous)) = state.serve_replacements.remove(&lifecycle_id) {
+        if restore_displaced.is_some() {
+            let (previous_id, previous) = state
+                .serve_replacements
+                .remove(&lifecycle_id)
+                .expect("validated pre-gate replacement retains its displaced owner");
             let current = state
                 .serves
                 .remove(&lifecycle_id)
@@ -3247,18 +4196,19 @@ impl V2IoCommandQueue {
             .serve_ingress_reservation
             .as_ref()
             .map(|reservation| (reservation.id, reservation.state));
-        let settled_ingress = selected_ingress.is_some_and(|(reservation_id, reservation_state)| {
-            if matches!(
-                reservation_state,
-                CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
-            ) {
-                let _ =
-                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
-            } else {
-                let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
-            }
-            true
-        });
+        let settled_ingress =
+            selected_ingress.is_some_and(|(reservation_id, reservation_state)| {
+                if matches!(
+                    reservation_state,
+                    CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
+                ) {
+                    let _ =
+                        Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
+                } else {
+                    let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+                }
+                true
+            });
         drop(state);
         if rolled_back || settled_ingress {
             self.ready.notify_all();
@@ -3270,6 +4220,15 @@ impl V2IoCommandQueue {
         let state = self.lock();
         let ingress = state.serve_ingress_reservation.as_ref();
         let ingress_hash = ingress.map(|reservation| reservation.projection.request_hash);
+        if let Some(reservation) = ingress
+            && (state
+                .serve_by_request
+                .get(&reservation.projection.request_hash)
+                != Some(&reservation.lifecycle_id)
+                || !state.serves.contains_key(&reservation.lifecycle_id))
+        {
+            return Err("Sumeragi v2 Serve barrier lost its raw-admission lifecycle".to_owned());
+        }
         let Some(lifecycle_id) = state.serve_barrier else {
             return ingress
                 .map(V2IoCertifiedServeIngressReservation::barrier)
@@ -3296,7 +4255,8 @@ impl V2IoCommandQueue {
             "Sumeragi v2 active-height Serve barrier lost its ingress lifecycle ordinal".to_owned()
         })?;
         let barrier = reservation.barrier()?;
-        if barrier.request_hash != lifecycle_id.request_hash {
+        if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != lifecycle_id
+        {
             return Err("Sumeragi v2 Serve barrier changed its lifecycle request".to_owned());
         }
         Ok(Some(barrier))
@@ -3310,6 +4270,17 @@ impl V2IoCommandQueue {
             .serve_ingress_reservation
             .as_ref()
             .map(|reservation| reservation.projection.request_hash);
+        if let Some(reservation) = state.serve_ingress_reservation.as_ref()
+            && (state
+                .serve_by_request
+                .get(&reservation.projection.request_hash)
+                != Some(&reservation.lifecycle_id)
+                || !state.serves.contains_key(&reservation.lifecycle_id))
+        {
+            return Err(
+                "Sumeragi v2 Serve barrier hash lost its raw-admission lifecycle".to_owned(),
+            );
+        }
         let Some(lifecycle_id) = state.serve_barrier else {
             return Ok(ingress_hash);
         };
@@ -3441,6 +4412,7 @@ impl V2IoCommandQueue {
             | V2IoServeState::Active
             | V2IoServeState::CompletionPending
             | V2IoServeState::Terminal
+            | V2IoServeState::Rejected(_)
             | V2IoServeState::Failed => {
                 Err("Sumeragi v2 Serve barrier crossed a non-admission lifecycle state".to_owned())
             }
@@ -3453,6 +4425,7 @@ impl V2IoCommandQueue {
         state.sender_open
             && state.receiver_open
             && state.serve_ingress_reservation.is_none()
+            && state.serve_ingress_waiters.is_empty()
             && state.serve_barrier.is_none()
             && state.commands.len() < self.capacity
             && self.admission.has_capacity(class)
@@ -3460,6 +4433,7 @@ impl V2IoCommandQueue {
 
     fn prepare_serve(
         &self,
+        expected_lifecycle_id: Option<CertifiedServeLifecycleId>,
         proposed_owner: CertifiedServeOwnerKey,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
@@ -3485,6 +4459,16 @@ impl V2IoCommandQueue {
         if !state.sender_open || !state.receiver_open {
             return Err(CertifiedServePrepareError::Service(
                 "Sumeragi v2 I/O worker is disconnected".to_owned(),
+            ));
+        }
+        if let Some(expected_lifecycle_id) = expected_lifecycle_id
+            && (expected_lifecycle_id.request_hash != request_hash
+                || expected_lifecycle_id.admission_ordinal == 0
+                || expected_lifecycle_id.admission_ordinal > state.next_serve_admission_ordinal
+                || state.serve_by_request.get(&request_hash) != Some(&expected_lifecycle_id))
+        {
+            return Err(CertifiedServePrepareError::Service(
+                "raw certified-body admission lost its immutable Serve lifecycle".to_owned(),
             ));
         }
         let _ = self.materialize_serve_barrier(&mut state);
@@ -3559,6 +4543,9 @@ impl V2IoCommandQueue {
                 V2IoServeState::Failed => Err(CertifiedServePrepareError::Service(
                     "Sumeragi v2 Serve retention contract already failed".to_owned(),
                 )),
+                V2IoServeState::Rejected(_) => Err(CertifiedServePrepareError::Rejected(
+                    "certified-body request already has a durable negative outcome".to_owned(),
+                )),
                 V2IoServeState::Queued
                 | V2IoServeState::Active
                 | V2IoServeState::CompletionPending
@@ -3569,6 +4556,11 @@ impl V2IoCommandQueue {
                     ingress_reservation_id: None,
                 }),
             };
+        }
+        if expected_lifecycle_id.is_some() {
+            return Err(CertifiedServePrepareError::Service(
+                "raw certified-body admission attempted to mint a replacement lifecycle".to_owned(),
+            ));
         }
         // The least admitted future-slot owner freezes every later ordinary
         // I/O producer until it acquires and commits its physical position.
@@ -3614,16 +4606,18 @@ impl V2IoCommandQueue {
                         .to_owned(),
                 ));
             }
+            // An unsealed `AwaitingRetry` owner is still the admitted target.
+            // A completed response or deterministic negative tombstone may
+            // yield its family high-watermark to a strictly newer view.
             if !matches!(
                 tracked.state,
-                V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
+                V2IoServeState::Terminal | V2IoServeState::Rejected(_)
             ) {
                 return Err(CertifiedServePrepareError::Backpressure);
             }
-            // Higher views replace either a terminal lifecycle or an unsealed
-            // retry-only lifecycle, but retain the original roster/source
-            // capacity charge. Route migration cannot multiply owner slots or
-            // resurrect an older lifecycle.
+            // A higher view replaces only a terminal lifecycle and retains the
+            // original roster/source capacity charge. Route migration cannot
+            // multiply owner slots or resurrect an older lifecycle.
             (Some(existing), tracked.owner.clone())
         } else {
             // Prepare and Commit are independent high-watermark families but
@@ -3726,7 +4720,9 @@ impl V2IoCommandQueue {
                 .expect("Serve high-watermark remains indexed until replacement");
             assert!(matches!(
                 retired.state,
-                V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
+                V2IoServeState::AwaitingRetry
+                    | V2IoServeState::Terminal
+                    | V2IoServeState::Rejected(_)
             ));
             assert_eq!(
                 state.serve_by_request.remove(&previous.request_hash),
@@ -3810,7 +4806,7 @@ impl V2IoCommandQueue {
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         let request_hash = request.request_hash();
         let request_value = request.request();
-        let retained_owner = {
+        let (retained_owner, expected_lifecycle_id) = {
             let state = self.lock();
             let reservation = state.serve_ingress_reservation.as_ref().ok_or_else(|| {
                 CertifiedServePrepareError::Service(
@@ -3827,7 +4823,11 @@ impl V2IoCommandQueue {
                         .to_owned(),
                 ));
             }
-            if reservation.projection.request_hash != request_hash
+            if reservation.lifecycle_id.request_hash != request_hash
+                || reservation.lifecycle_id.admission_ordinal == 0
+                || reservation.lifecycle_id.admission_ordinal > state.next_serve_admission_ordinal
+                || state.serve_by_request.get(&request_hash) != Some(&reservation.lifecycle_id)
+                || reservation.projection.request_hash != request_hash
                 || reservation.projection.requester != request_value.requester
                 || reservation.projection.round != request_value.round
                 || reservation.projection.subject != request_value.subject
@@ -3856,7 +4856,10 @@ impl V2IoCommandQueue {
                     "certified-body ingress reservation changed exact request ownership".to_owned(),
                 ));
             }
-            reservation.projection.owner.clone()
+            (
+                reservation.projection.owner.clone(),
+                reservation.lifecycle_id,
+            )
         };
         let expected = CertifiedServeIngressProjection {
             request_hash,
@@ -3867,24 +4870,41 @@ impl V2IoCommandQueue {
             owner: retained_owner.clone(),
         };
 
-        let mut prepared = self.prepare_serve(retained_owner, request);
+        let mut prepared = self.prepare_serve(Some(expected_lifecycle_id), retained_owner, request);
         let mut state = self.lock();
         let backpressure_lifecycle =
             matches!(&prepared, Err(CertifiedServePrepareError::Backpressure))
                 .then(|| state.serve_by_request.get(&request_hash).copied())
                 .flatten();
+        let backpressure_lifecycle_valid = backpressure_lifecycle.is_none_or(|lifecycle_id| {
+            lifecycle_id == expected_lifecycle_id
+                && state.serve_barrier == Some(expected_lifecycle_id)
+        });
         let Some(reservation) = state.serve_ingress_reservation.as_mut() else {
             return Err(CertifiedServePrepareError::Service(
                 "certified-body ingress lost its atomic reservation during preparation".to_owned(),
             ));
         };
-        if reservation.projection != expected {
+        if reservation.projection != expected
+            || reservation.lifecycle_id != expected_lifecycle_id
+            || !backpressure_lifecycle_valid
+        {
             return Err(CertifiedServePrepareError::Service(
-                "certified-body ingress reservation changed during preparation".to_owned(),
+                "certified-body ingress lifecycle changed during preparation".to_owned(),
             ));
+        }
+        if let Err(CertifiedServePrepareError::Rejected(reason)) = &prepared {
+            prepared = Err(CertifiedServePrepareError::Service(format!(
+                "authenticated raw Serve handoff crossed an impossible identity rejection: {reason}"
+            )));
         }
         match &mut prepared {
             Ok(admission) => {
+                if admission.lifecycle_id != expected_lifecycle_id {
+                    return Err(CertifiedServePrepareError::Service(
+                        "certified-body preparation returned another logical lifecycle".to_owned(),
+                    ));
+                }
                 reservation.state =
                     CertifiedServeIngressReservationState::Prepared(admission.lifecycle_id);
                 admission.ingress_reservation_id = Some(reservation.id);
@@ -3895,9 +4915,10 @@ impl V2IoCommandQueue {
                         CertifiedServeIngressReservationState::Prepared(lifecycle_id);
                 }
             }
-            Err(
-                CertifiedServePrepareError::Rejected(_) | CertifiedServePrepareError::Service(_),
-            ) => {}
+            Err(CertifiedServePrepareError::Rejected(_)) => {
+                unreachable!("raw identity rejection was converted to fail-stop service error")
+            }
+            Err(CertifiedServePrepareError::Service(_)) => {}
         }
         prepared
     }
@@ -3917,6 +4938,7 @@ impl V2IoCommandQueue {
                 "prepared certified-body Serve lost its ingress reservation".to_owned()
             })?;
             if reservation.id != reservation_id
+                || reservation.lifecycle_id != admission.lifecycle_id
                 || reservation.state
                     != CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(
                         admission.lifecycle_id,
@@ -3927,8 +4949,9 @@ impl V2IoCommandQueue {
                 );
             }
         } else if state.serve_ingress_reservation.is_some() {
-            // Production current-height admissions are minted only by
-            // `prepare_reserved_serve` under this same queue mutex. An
+            // Production current-height lifecycle identity is minted by raw
+            // gate admission, while `prepare_reserved_serve` is the only path
+            // that transfers its physical carrier into the I/O FIFO. An
             // ingress-free token is therefore an internal/pre-gate caller and
             // may not cross an unrelated selected physical owner.
             return Err(
@@ -3957,12 +4980,9 @@ impl V2IoCommandQueue {
                 "Sumeragi v2 Serve commit lost its future-slot barrier identity".to_owned(),
             );
         }
-        let tracked = state
-            .serves
-            .get(&admission.lifecycle_id)
-            .ok_or_else(|| {
-                "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
-            })?;
+        let tracked = state.serves.get(&admission.lifecycle_id).ok_or_else(|| {
+            "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
+        })?;
         match admission.kind {
             CertifiedServeAdmissionKind::New if tracked.state != V2IoServeState::Reserved => {
                 return Err(
@@ -3984,33 +5004,31 @@ impl V2IoCommandQueue {
             _ => {}
         }
 
-        let (merged_reply_routes, merged_ingress_ownership) =
-            if let (Some(retained_routes), Some(retained_ownership)) = (
-                tracked.reply_routes.as_ref(),
-                tracked.ingress_ownership.as_ref(),
-            ) {
-                let mut route_candidate = retained_routes.clone();
-                let receipt = route_candidate
-                    .merge_observed_with_receipt(&reply_routes)
-                    .map_err(|error| {
-                        format!(
-                            "invalid authenticated route on exact Sumeragi v2 Serve retry: {error}"
-                        )
-                    })?;
-                let mut ownership_candidate = retained_ownership.clone();
-                let merged_routes = ownership_candidate
-                    .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
-                    .ok_or_else(|| {
-                        "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
-                    })?;
-                (merged_routes, ownership_candidate)
-            } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
-                (reply_routes, ingress_ownership)
-            } else {
-                return Err(
-                    "Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned(),
-                );
-            };
+        let (merged_reply_routes, merged_ingress_ownership) = if let (
+            Some(retained_routes),
+            Some(retained_ownership),
+        ) = (
+            tracked.reply_routes.as_ref(),
+            tracked.ingress_ownership.as_ref(),
+        ) {
+            let mut route_candidate = retained_routes.clone();
+            let receipt = route_candidate
+                .merge_observed_with_receipt(&reply_routes)
+                .map_err(|error| {
+                    format!("invalid authenticated route on exact Sumeragi v2 Serve retry: {error}")
+                })?;
+            let mut ownership_candidate = retained_ownership.clone();
+            let merged_routes = ownership_candidate
+                .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
+                .ok_or_else(|| {
+                    "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
+                })?;
+            (merged_routes, ownership_candidate)
+        } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
+            (reply_routes, ingress_ownership)
+        } else {
+            return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
+        };
 
         let committed = match tracked.state {
             V2IoServeState::AwaitingRetry => {
@@ -4042,6 +5060,9 @@ impl V2IoCommandQueue {
                         response,
                     },
                 }
+            }
+            V2IoServeState::Rejected(_) => {
+                return Err("Sumeragi v2 Serve request has a durable negative outcome".to_owned());
             }
             V2IoServeState::Failed => {
                 return Err("Sumeragi v2 Serve retention contract failed".to_owned());
@@ -4084,6 +5105,7 @@ impl V2IoCommandQueue {
                     .to_owned()
             })?;
             if reservation.id != reservation_id
+                || reservation.lifecycle_id != admission.lifecycle_id
                 || reservation.state
                     != CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(
                         admission.lifecycle_id,
@@ -4319,8 +5341,9 @@ impl V2IoCommandQueue {
                         | CertifiedServeRuntimeEpisodeState::Complete => None,
                     }
                 });
-        let exact_target_active =
-            state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some();
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
         if exact_target_active && exact_predecessor_ordinal.is_none() {
             return Err(V2IoTrySendError::Full(command));
         }
@@ -4559,11 +5582,9 @@ impl V2IoCommandQueue {
                 reservation_state,
                 CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
             ) {
-                let _ =
-                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
+                let _ = Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
             } else {
-                let _ =
-                    Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+                let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
             }
         }
         for reservation in state.serve_ingress_waiters.values_mut() {
@@ -4593,6 +5614,7 @@ impl V2IoCommandQueue {
                 V2IoServeState::AwaitingRetry
                 | V2IoServeState::CompletionPending
                 | V2IoServeState::Terminal
+                | V2IoServeState::Rejected(_)
                 | V2IoServeState::Failed => {}
                 V2IoServeState::PendingCapacity => {
                     unreachable!("the sole uncommitted Serve barrier was retired above");
@@ -4633,7 +5655,7 @@ impl V2IoCommandSender {
         owner: CertifiedServeOwnerKey,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
-        self.queue.prepare_serve(owner, request)
+        self.queue.prepare_serve(None, owner, request)
     }
 
     fn prepare_reserved_serve(
@@ -4642,6 +5664,15 @@ impl V2IoCommandSender {
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         self.queue.prepare_reserved_serve(owner, request)
+    }
+
+    fn stage_selected_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.queue
+            .stage_selected_serve_rejection(request_hash, outcome)
     }
 
     fn try_begin_producer_episode(&self) -> Result<Option<CertifiedServeProducerEpisode>, String> {
@@ -5019,6 +6050,8 @@ impl V2IoHandle {
         serve_state_root: &Path,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        validator_set_pops: &[Vec<u8>],
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
         observer_serve_capacity: usize,
@@ -5042,8 +6075,13 @@ impl V2IoHandle {
             serve_state_root,
             &context,
             local_validator,
+            durable_decided_subject,
             &body_store,
             lifecycle_ordinals,
+            CertifiedServeRestartDischarge::Production {
+                key_pair: &key_pair,
+                validator_set_pops,
+            },
         )?;
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
@@ -5297,6 +6335,15 @@ impl V2IoHandle {
         self.command_tx.prepare_reserved_serve(owner, request)
     }
 
+    fn stage_selected_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.command_tx
+            .stage_selected_serve_rejection(request_hash, outcome)
+    }
+
     fn try_begin_producer_episode(&self) -> Result<Option<CertifiedServeProducerEpisode>, String> {
         self.command_tx.try_begin_producer_episode()
     }
@@ -5305,6 +6352,11 @@ impl V2IoHandle {
         CertifiedServeIngressGate {
             queue: Arc::clone(&self.command_tx.queue),
         }
+    }
+
+    fn dormant_serve_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
+        self.certified_serve_ingress_gate()
+            .dormant_ingress_scheduler_ordinal()
     }
 
     fn serve_barrier_request_hash(
@@ -11438,6 +12490,7 @@ impl ProductionV2Services {
     pub(crate) fn start(
         context: wire::HeightContext,
         initial_tag: EventTag,
+        durable_decided_subject: Option<wire::BlockSubject>,
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
@@ -11525,6 +12578,7 @@ impl ProductionV2Services {
         )?;
         std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
+        let certified_serve_validator_set_pops = validator_set_pops.clone();
         let apply_service = V2ApplyService::new(
             state,
             queue,
@@ -11544,6 +12598,8 @@ impl ProductionV2Services {
             &context_chunk_root,
             key_pair.clone(),
             local_validator,
+            durable_decided_subject,
+            &certified_serve_validator_set_pops,
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
@@ -11841,9 +12897,10 @@ impl ProductionV2Services {
 
     /// Reserve an immutable Serve lifecycle before fair ingress releases it.
     ///
-    /// A new request installs a non-runnable placeholder at the physical FIFO
-    /// tail. Exact retries reuse their existing lifecycle even while the
-    /// auxiliary prefix is full.
+    /// A new request atomically installs a durable non-runnable lifecycle and
+    /// future-slot ticket. Predicate-time preparation materializes its physical
+    /// FIFO placeholder; exact retries reuse the original lifecycle even while
+    /// the auxiliary prefix is full.
     pub(crate) fn certified_serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
@@ -11911,6 +12968,38 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())
     }
 
+    /// Return the least admitted Serve owner waiting for an exact physical retry.
+    pub(crate) fn dormant_certified_serve_ingress_scheduler_ordinal(
+        &self,
+    ) -> Result<Option<u128>, String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .dormant_serve_ingress_scheduler_ordinal()
+    }
+
+    /// Latch process restart when a carrierless live Serve lifecycle appears.
+    ///
+    /// Production startup locally discharges every restored lifecycle before
+    /// constructing this service. A later dormant owner therefore proves that
+    /// a live physical carrier was lost; continuing would reintroduce
+    /// requester-dependent liveness.
+    pub(crate) fn fail_closed_dormant_certified_serve(
+        &mut self,
+        scheduler_ordinal: u128,
+    ) -> String {
+        let reason = format!(
+            "Sumeragi v2 Serve lifecycle {scheduler_ordinal} lost its live physical carrier; restart is required for local discharge"
+        );
+        self.output_guard.activate_restart_required();
+        self.fatal_reason = Some(reason.clone());
+        iroha_logger::error!(
+            scheduler_ordinal,
+            "Sumeragi v2 Serve lifecycle became dormant after startup"
+        );
+        reason
+    }
+
     /// Start one finite local-producer episode if no exact ingress ticket owns
     /// the next runner turn.
     pub(crate) fn try_begin_certified_serve_producer_episode(
@@ -11928,6 +13017,11 @@ impl ProductionV2Services {
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         let Some(responder) = self.local_validator else {
+            self.stage_certified_serve_rejection(
+                request.request_hash(),
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+            )
+            .map_err(CertifiedServePrepareError::Service)?;
             return Err(CertifiedServePrepareError::Rejected(
                 "local observer has no certified-body Serve authority".to_owned(),
             ));
@@ -11939,6 +13033,11 @@ impl ProductionV2Services {
             .binary_search(&responder)
             .is_err()
         {
+            self.stage_certified_serve_rejection(
+                request.request_hash(),
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+            )
+            .map_err(CertifiedServePrepareError::Service)?;
             return Err(CertifiedServePrepareError::Rejected(
                 "local validator is not a certified-body retention owner".to_owned(),
             ));
@@ -11964,6 +13063,20 @@ impl ProductionV2Services {
             CertifiedServeOwnerKey::AuthenticatedSource(authenticated_via.clone())
         };
         io.prepare_reserved_serve(owner, request)
+    }
+
+    /// Stage a deterministic negative outcome while the exact fair carrier is
+    /// still selected. The following checked physical drain persists the
+    /// tombstone and scheduler-ticket retirement atomically.
+    pub(crate) fn stage_certified_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .stage_selected_serve_rejection(request_hash, outcome)
     }
 
     /// Queue an authenticated certified-body request with every independent return route.
@@ -12344,9 +13457,9 @@ impl ProductionV2Services {
                 }
                 Ok(disposition)
             }
-            OrphanPayloadChunkBufferResult::ProductiveRetentionConflict => Err(
-                "bounded orphan storage could not retain an exact leader-wire owner".to_owned(),
-            ),
+            OrphanPayloadChunkBufferResult::ProductiveRetentionConflict => {
+                Err("bounded orphan storage could not retain an exact leader-wire owner".to_owned())
+            }
         }
     }
 
@@ -12405,9 +13518,7 @@ impl ProductionV2Services {
             || chunk.bytes.is_empty()
             || chunk_len > u64::from(self.context.da_layout.chunk_size_bytes)
         {
-            return OrphanPayloadChunkBufferResult::Disposition(
-                PayloadChunkDisposition::Rejected,
-            );
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
         let mut replaced_proofless = None;
         if let Some(buffered) = self.orphan_chunks.get_mut(&manifest_hash) {
@@ -12419,9 +13530,7 @@ impl ProductionV2Services {
                 let incumbent_productive = existing
                     .ingress_ownership
                     .as_ref()
-                    .is_some_and(|ownership| {
-                        ownership.leader_wire_runtime_receipt().is_some()
-                    });
+                    .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some());
                 if productive_owner && !incumbent_productive {
                     let Some(candidate) = ingress_ownership else {
                         return OrphanPayloadChunkBufferResult::ProductiveRetentionConflict;
@@ -12459,18 +13568,13 @@ impl ProductionV2Services {
             // productive, manifest-bound owner replaces a proofless reordered
             // claim in the same slot. Otherwise the conflict cannot be
             // resolved until an existing productive owner retires.
-            if let Some(position) = buffered
-                .iter()
-                .position(|existing| {
-                    existing.sender == sender && existing.chunk.index == chunk.index
-                })
-            {
+            if let Some(position) = buffered.iter().position(|existing| {
+                existing.sender == sender && existing.chunk.index == chunk.index
+            }) {
                 let incumbent_productive = buffered[position]
                     .ingress_ownership
                     .as_ref()
-                    .is_some_and(|ownership| {
-                        ownership.leader_wire_runtime_receipt().is_some()
-                    });
+                    .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some());
                 if productive_owner && !incumbent_productive {
                     replaced_proofless = buffered.remove(position);
                 } else {
@@ -12485,11 +13589,9 @@ impl ProductionV2Services {
             }
         }
         if let Some(replaced) = replaced_proofless {
-            let replaced_bytes =
-                u64::try_from(replaced.chunk.bytes.len()).unwrap_or(u64::MAX);
+            let replaced_bytes = u64::try_from(replaced.chunk.bytes.len()).unwrap_or(u64::MAX);
             self.orphan_chunk_count = self.orphan_chunk_count.saturating_sub(1);
-            self.orphan_chunk_bytes =
-                self.orphan_chunk_bytes.saturating_sub(replaced_bytes);
+            self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(replaced_bytes);
             if self
                 .orphan_chunks
                 .get(&manifest_hash)
@@ -12500,8 +13602,7 @@ impl ProductionV2Services {
         }
         while productive_owner
             && (self.orphan_chunk_count >= self.max_orphan_chunks
-                || self.orphan_chunk_bytes.saturating_add(chunk_len)
-                    > self.max_orphan_chunk_bytes)
+                || self.orphan_chunk_bytes.saturating_add(chunk_len) > self.max_orphan_chunk_bytes)
         {
             if !self.evict_one_proofless_orphan_chunk() {
                 return OrphanPayloadChunkBufferResult::ProductiveRetentionConflict;
@@ -12510,9 +13611,7 @@ impl ProductionV2Services {
         if self.orphan_chunk_count >= self.max_orphan_chunks
             || self.orphan_chunk_bytes.saturating_add(chunk_len) > self.max_orphan_chunk_bytes
         {
-            return OrphanPayloadChunkBufferResult::Disposition(
-                PayloadChunkDisposition::Rejected,
-            );
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
         let buffered = self.orphan_chunks.entry(manifest_hash).or_default();
         buffered.push_back(BufferedPayloadChunk {
@@ -12526,19 +13625,19 @@ impl ProductionV2Services {
     }
 
     fn evict_one_proofless_orphan_chunk(&mut self) -> bool {
-        let selected = self.orphan_chunks.iter().find_map(|(manifest_hash, chunks)| {
-            chunks
-                .iter()
-                .position(|buffered| {
-                    buffered
-                        .ingress_ownership
-                        .as_ref()
-                        .is_none_or(|ownership| {
+        let selected = self
+            .orphan_chunks
+            .iter()
+            .find_map(|(manifest_hash, chunks)| {
+                chunks
+                    .iter()
+                    .position(|buffered| {
+                        buffered.ingress_ownership.as_ref().is_none_or(|ownership| {
                             ownership.leader_wire_runtime_receipt().is_none()
                         })
-                })
-                .map(|position| (*manifest_hash, position))
-        });
+                    })
+                    .map(|position| (*manifest_hash, position))
+            });
         let Some((manifest_hash, position)) = selected else {
             return false;
         };
@@ -12595,9 +13694,7 @@ impl ProductionV2Services {
                             .leader_wire_ingress
                             .mark_leader_wire_volatile_terminal(runtime)
                     {
-                        if let Err(tail_error) =
-                            self.retire_buffered_payload_chunk_tail(chunks)
-                        {
+                        if let Err(tail_error) = self.retire_buffered_payload_chunk_tail(chunks) {
                             return Err(format!(
                                 "{error}; additionally failed to retire buffered payload tail: {tail_error}"
                             ));
@@ -12624,9 +13721,7 @@ impl ProductionV2Services {
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        if let Err(tail_error) =
-                            self.retire_buffered_payload_chunk_tail(chunks)
-                        {
+                        if let Err(tail_error) = self.retire_buffered_payload_chunk_tail(chunks) {
                             return Err(format!(
                                 "{error}; additionally failed to retire buffered payload tail: {tail_error}"
                             ));
@@ -15761,10 +16856,182 @@ pub(super) mod tests {
             root,
             context,
             Some(0),
+            None,
             body_store,
             RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            CertifiedServeRestartDischarge::PreserveFixtureState,
         )?;
         Ok((sender, receiver, admission))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn production_persistent_test_io_command_channel(
+        capacity: usize,
+        root: &Path,
+        context: &wire::HeightContext,
+        body_store: &V2BodyStore,
+        key_pair: &KeyPair,
+        validator_set_pops: &[Vec<u8>],
+        local_validator: Option<wire::ValidatorIndex>,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    ) -> Result<(V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>), String> {
+        let admission = V2IoAdmission::unbounded_for_tests();
+        let (sender, receiver) = persistent_v2_io_command_channel(
+            capacity,
+            context.roster.len(),
+            capacity.max(1),
+            capacity.max(1),
+            Arc::clone(&admission),
+            root,
+            context,
+            local_validator,
+            durable_decided_subject,
+            body_store,
+            lifecycle_ordinals,
+            CertifiedServeRestartDischarge::Production {
+                key_pair,
+                validator_set_pops,
+            },
+        )?;
+        Ok((sender, receiver, admission))
+    }
+
+    fn persist_unsealed_serve_fixture(
+        root: &Path,
+        context: &wire::HeightContext,
+        request: &AuthenticatedCertifiedBodyRequest,
+        owner: CertifiedServeOwnerKey,
+        lifecycle_ordinal: u128,
+        scheduler_ordinal: Option<u128>,
+    ) -> CertifiedServeLifecycleId {
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
+            .expect("fixture Serve family capacity");
+        let (store, mut persisted) =
+            CertifiedServeStateStore::open(root, context, family_capacity)
+                .expect("open fixture durable Serve state");
+        let lifecycle_id = CertifiedServeLifecycleId {
+            admission_ordinal: lifecycle_ordinal,
+            request_hash: request.request_hash(),
+        };
+        persisted.next_lifecycle_admission_ordinal = persisted
+            .next_lifecycle_admission_ordinal
+            .max(lifecycle_ordinal);
+        if let Some(scheduler_ordinal) = scheduler_ordinal {
+            persisted.next_ingress_reservation_ordinal = persisted
+                .next_ingress_reservation_ordinal
+                .max(scheduler_ordinal);
+            persisted
+                .ingress_waiters
+                .push(PersistedCertifiedServeIngressWaiter {
+                    ingress_ordinal: scheduler_ordinal,
+                    lifecycle_id,
+                    owner: owner.clone(),
+                    request: request.request().clone(),
+                });
+            persisted
+                .ingress_waiters
+                .sort_by_key(|waiter| waiter.ingress_ordinal);
+        }
+        persisted
+            .unsealed_lifecycles
+            .push(PersistedCertifiedServeLifecycle {
+                lifecycle_id,
+                owner,
+                request: request.request().clone(),
+            });
+        persisted
+            .unsealed_lifecycles
+            .sort_by_key(|lifecycle| lifecycle.lifecycle_id);
+        store
+            .persist(&persisted)
+            .expect("persist fixture unsealed Serve lifecycle");
+        lifecycle_id
+    }
+
+    fn persist_terminal_serve_fixture(
+        root: &Path,
+        context: &wire::HeightContext,
+        request: &AuthenticatedCertifiedBodyRequest,
+        owner: CertifiedServeOwnerKey,
+        lifecycle_ordinal: u128,
+        response: &wire::CertifiedBodyResponse,
+    ) -> CertifiedServeLifecycleId {
+        assert_eq!(response.request_hash, request.request_hash());
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            root,
+            context,
+            request,
+            owner.clone(),
+            lifecycle_ordinal,
+            None,
+        );
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
+            .expect("fixture Serve family capacity");
+        let (store, mut persisted) =
+            CertifiedServeStateStore::open(root, context, family_capacity)
+                .expect("reopen fixture durable Serve state");
+        persisted
+            .unsealed_lifecycles
+            .retain(|lifecycle| lifecycle.lifecycle_id != lifecycle_id);
+        persisted
+            .terminal_tombstones
+            .push(PersistedCertifiedServeTombstone {
+                lifecycle_id,
+                owner,
+                request: request.request().clone(),
+                response_manifest: response.manifest.clone(),
+                response_responder: response.responder,
+                response_signature: response.signature.clone(),
+            });
+        persisted
+            .terminal_tombstones
+            .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        store
+            .persist(&persisted)
+            .expect("persist fixture terminal Serve lifecycle");
+        lifecycle_id
+    }
+
+    fn persist_negative_serve_fixture(
+        root: &Path,
+        context: &wire::HeightContext,
+        request: &AuthenticatedCertifiedBodyRequest,
+        owner: CertifiedServeOwnerKey,
+        lifecycle_ordinal: u128,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> CertifiedServeLifecycleId {
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            root,
+            context,
+            request,
+            owner.clone(),
+            lifecycle_ordinal,
+            None,
+        );
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
+            .expect("fixture Serve family capacity");
+        let (store, mut persisted) =
+            CertifiedServeStateStore::open(root, context, family_capacity)
+                .expect("reopen fixture durable Serve state");
+        persisted
+            .unsealed_lifecycles
+            .retain(|lifecycle| lifecycle.lifecycle_id != lifecycle_id);
+        persisted
+            .negative_tombstones
+            .push(PersistedCertifiedServeNegativeTombstone {
+                lifecycle_id,
+                owner,
+                request: request.request().clone(),
+                outcome,
+            });
+        persisted
+            .negative_tombstones
+            .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        store
+            .persist(&persisted)
+            .expect("persist fixture negative Serve lifecycle");
+        lifecycle_id
     }
 
     fn authenticated_serve_request(
@@ -15805,6 +17072,64 @@ pub(super) mod tests {
             Ok::<(), &'static str>(())
         })
         .expect("authenticate certified Serve fixture")
+    }
+
+    fn production_authenticated_serve_request(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        requester_key: &KeyPair,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        phase: wire::GlobalPhase,
+        signer_indices: &[usize],
+    ) -> (AuthenticatedCertifiedBodyRequest, Vec<Vec<u8>>) {
+        let mut authenticated =
+            authenticated_serve_request(context, requester_key, round, subject, phase);
+        let signers = signer_indices
+            .iter()
+            .map(|index| u32::try_from(*index).expect("fixture signer index fits u32"))
+            .collect::<Vec<_>>();
+        let vote_preimage = wire::Vote {
+            round: authenticated.request().certificate.round,
+            proposal_round: authenticated.request().certificate.proposal_round,
+            phase: authenticated.request().certificate.phase,
+            subject: authenticated.request().certificate.subject,
+            execution_commitment: authenticated.request().certificate.execution_commitment,
+            signer: *signers.first().expect("production Serve fixture has a signer"),
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signature_shares = signer_indices
+            .iter()
+            .map(|index| {
+                Signature::new(keys[*index].private_key(), &vote_preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_share_refs = signature_shares
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        authenticated.request.certificate.signers = signers;
+        authenticated.request.certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_share_refs)
+                .expect("aggregate production Serve fixture certificate");
+        authenticated.request.signature = Signature::new(
+            requester_key.private_key(),
+            &authenticated.request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        authenticated.request_hash = HashOf::new(&authenticated.request);
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator proof of possession")
+            })
+            .collect();
+        (authenticated, validator_pops)
     }
 
     fn certified_serve_response(
@@ -15971,13 +17296,17 @@ pub(super) mod tests {
         request: &wire::CertifiedBodyRequest,
         authenticated_via: PeerId,
     ) -> InboundBlockMessage {
-        InboundBlockMessage::from_transport(
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via.clone());
+        let route = routes.mint_via(request.requester.clone(), authenticated_via.clone());
+        InboundBlockMessage::try_from_transport_with_reply_route(
             BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
             )),
             request.requester.clone(),
             authenticated_via,
+            route,
         )
+        .expect("fixture exact Serve route matches requester and authenticated hop")
     }
 
     fn certified_serve_inbound_with_route(
@@ -16563,13 +17892,7 @@ pub(super) mod tests {
             last_status: None,
             fatal_reason: None,
             output_guard: ConsensusOutputGuard::isolated(),
-            leader_wire_ingress: Arc::new(FairV2Ingress::new(
-                1,
-                1024 * 1024,
-                1024 * 1024,
-                0,
-                0,
-            )),
+            leader_wire_ingress: Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
             clean_teardown: true,
         };
         (service, keys)
@@ -25089,6 +26412,7 @@ pub(super) mod tests {
             proposal.subject,
             wire::GlobalPhase::Prepare,
         );
+        let via = context.roster[3].validator.clone();
         let via = service.context.roster[0].validator.clone();
         let (command_tx, _command_rx, admission) = test_io_command_channel(4);
         for expected in 1_u128..=4 {
@@ -25110,7 +26434,7 @@ pub(super) mod tests {
             .serve_barrier()
             .expect("inspect repeated-claim barrier")
             .expect("admitted exact request owns a barrier");
-        assert_eq!(barrier.lifecycle_ordinal(), 5);
+        assert_eq!(barrier.scheduler_ordinal(), 5);
         assert_eq!(
             command_tx
                 .queue
@@ -25192,7 +26516,7 @@ pub(super) mod tests {
         assert!(matches!(
             service.take_exact_serve_predecessor_completion(
                 true,
-                barrier.lifecycle_ordinal()
+                barrier.scheduler_ordinal()
             ),
             IoCompletionTake {
                 completion: Some(PendingServiceCompletion::Io {
@@ -25221,7 +26545,7 @@ pub(super) mod tests {
             completion:
                 Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
             retained_runtime: false,
-        } = service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal())
+        } = service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal())
         else {
             panic!("the second turn must select the same-rank replacement owner");
         };
@@ -25230,7 +26554,7 @@ pub(super) mod tests {
             .complete_body_reconstruction_fetch(&task)
             .expect("retire second strictly older source");
         assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal()),
+            service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal()),
             IoCompletionTake {
                 completion: None,
                 retained_runtime: false,
@@ -25255,7 +26579,7 @@ pub(super) mod tests {
             "later-rank completion remains outside runtime until after target ingress"
         );
         assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal()),
+            service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal()),
             IoCompletionTake {
                 completion: None,
                 retained_runtime: false,
@@ -25309,7 +26633,7 @@ pub(super) mod tests {
             .serve_barrier()
             .expect("inspect the exact barrier")
             .expect("the admitted target owns a barrier");
-        assert_eq!(barrier.lifecycle_ordinal(), 2);
+        assert_eq!(barrier.scheduler_ordinal(), 2);
         assert!(
             command_tx
                 .claim_serve_runtime_episode(barrier)
@@ -26795,7 +28119,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn selected_serve_target_excludes_later_ingress_without_waiting_for_its_prefix() {
+    fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_ingress() {
         let (service, keys) = fixture();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
@@ -26869,6 +28193,40 @@ pub(super) mod tests {
                 .is_none(),
             "a post-target occurrence cannot enter the selected Serve union"
         );
+        assert!(
+            ingress
+                .try_recv_if(|inbound| {
+                    matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload:
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if HashOf::new(candidate) == request.request_hash()
+                    )
+                })
+                .is_none(),
+            "a predicate which rejects the predecessor cannot select the exact target"
+        );
+        let predecessor = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload:
+                            wire::ConsensusMessageV2Payload::CommitCertificateRequest(candidate),
+                        ..
+                    }) if candidate.height == predecessor_height
+                )
+            })
+            .expect("the finite frozen predecessor remains separately serviceable");
+        assert!(matches!(
+            predecessor.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(candidate),
+                ..
+            }) if candidate.height == predecessor_height
+        ));
 
         let mut prepared = None;
         let mut target = ingress
@@ -26892,7 +28250,7 @@ pub(super) mod tests {
                 }
                 is_target
             })
-            .expect("the exact target remains a rank goal beside its frozen prefix");
+            .expect("the exact target becomes eligible after its frozen prefix drains");
         let admission = prepared.expect("target predicate prepared its exact reservation");
         let ownership = target
             .take_ingress_ownership()
@@ -26908,19 +28266,26 @@ pub(super) mod tests {
                 .expect("commit selected Serve target"),
             CertifiedServeCommit::Queued
         ));
-        assert_eq!(ingress.len(), 2);
+        assert_eq!(ingress.len(), 1);
     }
 
     #[test]
     fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle() {
         let (service, keys) = fixture();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
             &keys[1],
             proposal.round,
             proposal.subject,
             wire::GlobalPhase::Prepare,
+        );
+        let response = certified_serve_response(
+            &request,
+            payload.manifest().clone(),
+            canonical_wire,
+            &keys[0],
         );
         let requester = request.request().requester.clone();
         let via = service.context.roster[0].validator.clone();
@@ -26935,7 +28300,7 @@ pub(super) mod tests {
             unreachable!("leader fixture is a v2 envelope");
         };
 
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let (command_tx, command_rx, _admission) = test_io_command_channel(4);
         let leader_scheduler_ordinal = (1_u128..=41)
             .map(|expected| {
                 let ordinal = command_tx
@@ -27073,7 +28438,9 @@ pub(super) mod tests {
                 service.context.height,
             )
             .expect("bind the restored leader lifecycle to the shared source");
-        ingress.open().expect("open the combined production ingress");
+        ingress
+            .open()
+            .expect("open the combined production ingress");
 
         let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
         let route = route_fixture.mint_via(requester.clone(), via.clone());
@@ -27089,14 +28456,11 @@ pub(super) mod tests {
             .selected_barrier()
             .expect("inspect the bound Serve gate")
             .expect("the exact Serve request owns the selected barrier");
-        assert_eq!(serve_barrier.lifecycle_ordinal(), 42);
+        assert_eq!(serve_barrier.scheduler_ordinal(), 42);
         assert_eq!(serve_barrier.carrier_ordinal(), 8);
 
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                leader_message,
-                Some(proposer),
-            )),
+            ingress.try_push(InboundBlockMessage::new(leader_message, Some(proposer),)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let leader_carrier_ordinal = {
@@ -27105,7 +28469,10 @@ pub(super) mod tests {
                 .leader_wire_lifecycles
                 .get(&leader_token.slot)
                 .expect("reactivated leader lifecycle remains indexed");
-            assert_eq!(record.status, super::super::FairV2IngressLeaderWireStatus::Ingress);
+            assert_eq!(
+                record.status,
+                super::super::FairV2IngressLeaderWireStatus::Ingress
+            );
             assert_eq!(record.token, leader_token);
             state
                 .lanes
@@ -27117,7 +28484,7 @@ pub(super) mod tests {
         };
         assert_eq!(leader_carrier_ordinal, 9);
         assert!(
-            serve_barrier.lifecycle_ordinal() > leader_token.scheduler_ordinal(),
+            serve_barrier.scheduler_ordinal() > leader_token.scheduler_ordinal(),
             "the retained leader scheduler identity is older than the selected Serve identity"
         );
         assert!(
@@ -27148,7 +28515,7 @@ pub(super) mod tests {
             "an older retained scheduler identity cannot cross the earlier Serve carrier"
         );
 
-        let (_admission, committed) = drain_and_commit_gated_serve(
+        let (admission, committed) = drain_and_commit_gated_serve(
             &ingress,
             &command_tx,
             CertifiedServeOwnerKey::Roster(requester),
@@ -27160,6 +28527,26 @@ pub(super) mod tests {
                 .selected_barrier()
                 .expect("inspect Serve gate after physical retirement")
                 .is_none()
+        );
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Serve {
+                lifecycle_id,
+                ..
+            }) if lifecycle_id == admission.lifecycle_id
+        ));
+        command_rx
+            .complete_serve_response(admission.lifecycle_id, &response)
+            .expect("seal exact Serve response before later leader I/O");
+        command_tx
+            .acknowledge_serve_completion(
+                admission.lifecycle_id,
+                V2IoServeTerminal::Response(response),
+            )
+            .expect("retain the drained logical request as a terminal tombstone");
+        assert!(
+            command_tx.queue.lock().serves.is_empty(),
+            "acknowledged Serve leaves no recreatable live lifecycle"
         );
 
         let mut leader = ingress
@@ -27189,6 +28576,22 @@ pub(super) mod tests {
         ingress
             .mark_leader_wire_volatile_terminal(runtime)
             .expect("retire the validated leader runtime owner");
+        command_tx
+            .try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(720),
+                    subject: proposal.subject,
+                },
+            )
+            .expect("leader-caused I/O becomes admissible only after Serve terminalization");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(720),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -27253,8 +28656,13 @@ pub(super) mod tests {
                 CertifiedServeIngressReservationState::Provisional
             );
             assert_eq!(reservation.projection.request_hash, request.request_hash());
+            assert_eq!(reservation.lifecycle_id.admission_ordinal, 1);
+            assert_eq!(
+                reservation.lifecycle_id.request_hash,
+                request.request_hash()
+            );
             assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 1);
         }
         assert_eq!(
             command_tx
@@ -27266,7 +28674,7 @@ pub(super) mod tests {
             .serve_barrier()
             .expect("inspect exact actor-global barrier")
             .expect("provisional target retains its barrier");
-        assert_eq!(first_barrier.lifecycle_ordinal(), 1);
+        assert_eq!(first_barrier.scheduler_ordinal(), 1);
         assert_eq!(first_barrier.carrier_ordinal(), 1);
         let stale_carrier = CertifiedServeBarrier {
             carrier_ordinal: first_barrier
@@ -27348,6 +28756,7 @@ pub(super) mod tests {
                 "the first live fair carrier remains the selected exact target"
             );
             assert_eq!(state.serve_ingress_waiters.len(), 1);
+            assert_eq!(state.next_serve_admission_ordinal, 2);
         }
         assert!(
             command_tx
@@ -27411,7 +28820,7 @@ pub(super) mod tests {
                 state.next_serve_ingress_reservation_ordinal, 2,
                 "promotion moves a frozen waiter without minting a replacement"
             );
-            assert_eq!(state.next_serve_admission_ordinal, 1);
+            assert_eq!(state.next_serve_admission_ordinal, 2);
         }
         assert!(
             command_tx
@@ -27575,6 +28984,7 @@ pub(super) mod tests {
             &request,
         );
         assert!(matches!(first_commit, CertifiedServeCommit::Queued));
+        assert_eq!(first_barrier.lifecycle_id(), first_admission.lifecycle_id);
         assert!(command_tx.queue.lock().serve_ingress_waiters.is_empty());
 
         assert!(matches!(
@@ -27590,7 +29000,12 @@ pub(super) mod tests {
             .expect("inspect post-drain retransmission barrier")
             .expect("post-drain retransmission owns a fresh barrier");
         assert_eq!(retry_barrier.request_hash(), first_barrier.request_hash());
-        assert!(retry_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal());
+        assert!(retry_barrier.scheduler_ordinal() > first_barrier.scheduler_ordinal());
+        assert_eq!(
+            retry_barrier.lifecycle_id(),
+            first_barrier.lifecycle_id(),
+            "fresh physical scheduler ownership retains immutable logical lineage"
+        );
         assert!(
             retry_barrier.carrier_ordinal() > first_barrier.carrier_ordinal(),
             "a drained exact retransmission receives a fresh physical carrier position"
@@ -27690,11 +29105,24 @@ pub(super) mod tests {
             ingress.try_push(ordinary(context.height.saturating_add(2), &later_source)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
+        let predecessor = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload:
+                            wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
+                        ..
+                    }) if request.height == context.height.saturating_add(1)
+                )
+            })
+            .expect("drain the frozen physical predecessor before testing target publication");
+        assert_eq!(predecessor.sender(), Some(&predecessor_source));
         let admitted = fair_ingress_accounting_snapshot(&ingress);
         assert_eq!(
             admitted.ready.len(),
-            3,
-            "fixture must cover rejected, failing, and later ready sources"
+            2,
+            "fixture must cover the failing target and later ready source"
         );
         let barrier = command_tx
             .serve_barrier()
@@ -27748,7 +29176,7 @@ pub(super) mod tests {
                     .as_ref()
                     .map(|reservation| (reservation.id.0, reservation.state)),
                 Some((
-                    barrier.lifecycle_ordinal(),
+                    barrier.scheduler_ordinal(),
                     CertifiedServeIngressReservationState::Prepared(lifecycle_id),
                 )),
                 "failed publication leaves the selected physical occurrence live"
@@ -27766,7 +29194,7 @@ pub(super) mod tests {
             persisted
                 .ingress_waiters
                 .iter()
-                .any(|waiter| waiter.ingress_ordinal == barrier.lifecycle_ordinal()),
+                .any(|waiter| waiter.ingress_ordinal == barrier.scheduler_ordinal()),
             "failed publication must not consume the durable ingress occurrence"
         );
         {
@@ -27777,10 +29205,7 @@ pub(super) mod tests {
                     .serve_ingress_reservation
                     .as_ref()
                     .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|serve| serve.state),
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
                 state.commands.len(),
             );
             assert!(
@@ -27796,10 +29221,7 @@ pub(super) mod tests {
                     .serve_ingress_reservation
                     .as_ref()
                     .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|serve| serve.state),
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
                 state.commands.len(),
             );
             assert_eq!(
@@ -27869,7 +29291,7 @@ pub(super) mod tests {
             persisted
                 .ingress_waiters
                 .iter()
-                .all(|waiter| waiter.ingress_ordinal != barrier.lifecycle_ordinal()),
+                .all(|waiter| waiter.ingress_ordinal != barrier.scheduler_ordinal()),
             "successful checked dequeue publishes retirement before returning"
         );
         let ingress_ownership = inbound
@@ -27895,7 +29317,1551 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn durable_provisional_dequeue_cannot_restore_consumed_ordinal() {
+    fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrier() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[3].validator.clone();
+        let body_root = TempDir::new().expect("negative rollback body root");
+        let serve_root = TempDir::new().expect("negative rollback Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                .expect("open negative rollback queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(invalid.request(), via.clone())),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect negative rollback barrier")
+            .expect("invalid raw admission owns a selected occurrence");
+        let fair_before = fair_ingress_accounting_snapshot(&ingress);
+        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let durable_before = fs::read(&state_path).expect("read pre-rejection Serve snapshot");
+        let temporary_state = state_path.with_extension("norito.tmp");
+
+        let error = ingress
+            .try_recv_if_checked(|inbound| {
+                let selected = matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                        ..
+                    }) if HashOf::new(candidate) == invalid.request_hash()
+                );
+                if !selected {
+                    return false;
+                }
+                command_tx
+                    .stage_selected_serve_rejection(
+                        invalid.request_hash(),
+                        CertifiedServeNegativeOutcome::InvalidCertificate,
+                    )
+                    .expect("stage deterministic invalid-certificate outcome");
+                fs::create_dir(&temporary_state)
+                    .expect("block atomic negative Serve-state publication");
+                true
+            })
+            .expect_err("failed negative publication retains the exact fair carrier");
+        assert!(
+            error.contains("failed to create Sumeragi v2 Serve temporary state"),
+            "unexpected negative publication error: {error}"
+        );
+        assert_eq!(
+            fair_ingress_accounting_snapshot(&ingress),
+            fair_before,
+            "failed negative publication cannot consume or reorder the fair carrier"
+        );
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(
+                state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .map(|reservation| (reservation.id.0, reservation.state)),
+                Some((
+                    barrier.scheduler_ordinal(),
+                    CertifiedServeIngressReservationState::DeterministicallyRejected(
+                        CertifiedServeNegativeOutcome::InvalidCertificate,
+                    ),
+                )),
+                "the selected negative outcome remains staged for an exact retry"
+            );
+            let tracked = state
+                .serves
+                .get(&barrier.lifecycle_id())
+                .expect("failed publication retains the logical lifecycle");
+            assert_eq!(tracked.state, V2IoServeState::AwaitingRetry);
+            assert!(tracked.terminal.is_none());
+            assert!(tracked.reply_routes.is_none());
+            assert!(tracked.ingress_ownership.is_none());
+        }
+        assert_eq!(
+            fs::read(&state_path).expect("reload failed negative publication"),
+            durable_before,
+            "failed negative publication cannot alter the last durable snapshot"
+        );
+
+        fs::remove_dir(&temporary_state).expect("unblock negative Serve-state publication");
+        let drained = ingress
+            .try_recv_if_checked(|inbound| {
+                let selected = matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                        ..
+                    }) if HashOf::new(candidate) == invalid.request_hash()
+                );
+                if selected {
+                    command_tx
+                        .stage_selected_serve_rejection(
+                            invalid.request_hash(),
+                            CertifiedServeNegativeOutcome::InvalidCertificate,
+                        )
+                        .expect("retain the exact staged negative outcome");
+                }
+                selected
+            })
+            .expect("retry publishes negative retirement")
+            .expect("retry drains the retained exact carrier");
+        drop(drained);
+        {
+            let state = command_tx.queue.lock();
+            assert!(state.serve_ingress_reservation.is_none());
+            let tracked = state
+                .serves
+                .get(&barrier.lifecycle_id())
+                .expect("successful publication retains one negative tombstone");
+            assert_eq!(
+                tracked.state,
+                V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
+            );
+            assert!(tracked.terminal.is_none());
+            assert!(tracked.reply_routes.is_none());
+            assert!(tracked.ingress_ownership.is_none());
+        }
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("negative rollback fixture retains a durable store")
+            .load(&context)
+            .expect("reload successful negative publication");
+        assert!(persisted.ingress_waiters.is_empty());
+        assert!(persisted.unsealed_lifecycles.is_empty());
+        assert_eq!(
+            persisted
+                .negative_tombstones
+                .iter()
+                .map(|tombstone| (tombstone.lifecycle_id, tombstone.outcome))
+                .collect::<Vec<_>>(),
+            vec![(
+                barrier.lifecycle_id(),
+                CertifiedServeNegativeOutcome::InvalidCertificate,
+            )]
+        );
+        let actor_ordinal_after_negative = command_tx
+            .queue
+            .lifecycle_ordinals
+            .next_ordinal_for_test();
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(invalid.request(), via)),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(
+            command_tx
+                .queue
+                .lifecycle_ordinals
+                .next_ordinal_for_test(),
+            actor_ordinal_after_negative,
+            "an exact negative retry cannot consume another actor-global ordinal"
+        );
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire negative rollback gate");
+    }
+
+    #[test]
+    fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detected() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let body_root = TempDir::new().expect("provisional guard body root");
+        let serve_root = TempDir::new().expect("provisional guard Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                .expect("open provisional guard queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                via.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect provisional guard barrier")
+            .expect("current-height request owns one raw reservation");
+        let before = fair_ingress_accounting_snapshot(&ingress);
+        let error = ingress
+            .try_recv_if_checked(|_| true)
+            .expect_err("untyped current-height Serve drain must fail closed");
+        assert!(
+            error.contains(
+                "requires a prepared response or deterministic negative outcome before physical drain"
+            ),
+            "unexpected provisional-drain rejection: {error}"
+        );
+        assert_eq!(
+            fair_ingress_accounting_snapshot(&ingress),
+            before,
+            "the mechanical guard retains the exact physical carrier"
+        );
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect live provisional owner"),
+            None,
+            "a live raw admission is backed by exactly one physical carrier"
+        );
+
+        {
+            let mut state = command_tx.queue.lock();
+            let removed = state
+                .serve_ingress_reservation
+                .take()
+                .expect("mutation removes the raw reservation");
+            assert_eq!(removed.lifecycle_id, barrier.lifecycle_id());
+            assert_eq!(
+                state
+                    .serves
+                    .get(&barrier.lifecycle_id())
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::AwaitingRetry)
+            );
+        }
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("detect legacy unbacked AwaitingRetry shape"),
+            Some(barrier.lifecycle_id().admission_ordinal),
+            "the loop-facing invariant reports logical debt even when no waiter survives"
+        );
+        let actor_ordinal_before_retry = command_tx
+            .queue
+            .lifecycle_ordinals
+            .next_ordinal_for_test();
+        let lifecycle_ordinal_before_retry =
+            command_tx.queue.lock().next_serve_admission_ordinal;
+        assert!(matches!(
+            gate.reserve(request.request(), &via, true, 99),
+            Err(CertifiedServeIngressReserveError::Closed)
+        ));
+        assert_eq!(
+            command_tx
+                .queue
+                .lifecycle_ordinals
+                .next_ordinal_for_test(),
+            actor_ordinal_before_retry,
+            "an exact retry cannot mint an actor-global owner around unbacked debt"
+        );
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_ordinal_before_retry,
+            "an exact retry cannot mint or mask a logical lifecycle around unbacked debt"
+        );
+        assert!(
+            command_tx
+                .try_begin_producer_episode()
+                .expect_err("direct producers cannot cross unbacked AwaitingRetry debt")
+                .contains("unbacked AwaitingRetry"),
+            "the queue lock enforces the same invariant between runner polls"
+        );
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire provisional guard gate");
+    }
+
+    #[test]
+    fn live_waiter_rejects_higher_view_without_restart_or_ordinal_mutation() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let higher = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view.saturating_add(1),
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
+        let gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        let retained = gate
+            .reserve(request.request(), &via, true, 10)
+            .expect("reserve the original exact owner")
+            .expect("current-height request owns one physical reservation");
+        let barrier_before = command_tx
+            .serve_barrier()
+            .expect("inspect live exact owner")
+            .expect("the original exact owner is selected");
+        let actor_ordinal_before = command_tx
+            .queue
+            .lifecycle_ordinals
+            .next_ordinal_for_test();
+        let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
+
+        assert!(matches!(
+            gate.reserve(higher.request(), &via, true, 11),
+            Err(CertifiedServeIngressReserveError::Busy)
+        ));
+        assert_eq!(
+            command_tx
+                .queue
+                .lifecycle_ordinals
+                .next_ordinal_for_test(),
+            actor_ordinal_before,
+            "live higher-view contention cannot mint an actor-global owner"
+        );
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_ordinal_before,
+            "live higher-view contention cannot replace the admitted lifecycle"
+        );
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("reinspect live exact owner"),
+            Some(barrier_before),
+            "higher-view traffic cannot dislodge the selected physical owner"
+        );
+        assert!(command_tx.queue.lock().sender_open);
+        assert!(command_tx.queue.lock().receiver_open);
+        drop(retained);
+    }
+
+    #[test]
+    fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
+        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect mutation fixture barrier")
+            .expect("exact request owns one selected barrier");
+        let mutated_ordinal = gate
+            .reserve_ordinary_lifecycle_ordinal()
+            .expect("mint a distinct but source-valid mutation ordinal");
+        assert_ne!(mutated_ordinal, barrier.scheduler_ordinal());
+        {
+            let mut state = ingress.state.lock();
+            let entry = state
+                .lanes
+                .values_mut()
+                .flat_map(|lane| lane.entries.iter_mut())
+                .next()
+                .expect("mutation fixture retains one fair carrier");
+            let inbound = Arc::make_mut(&mut entry.inbound);
+            let ownership = inbound
+                .ingress_ownership
+                .as_mut()
+                .expect("fair carrier retains exact ownership");
+            ownership.first.lifecycle_ordinal = Some(mutated_ordinal);
+            ownership.latest.lifecycle_ordinal = Some(mutated_ordinal);
+            assert!(
+                ownership.validate_exact(),
+                "the mutation weakens only the reservation/evidence binding"
+            );
+        }
+
+        let error = ingress
+            .try_recv_if_checked(|_| true)
+            .expect_err("checked dequeue must reject the mismatched lifecycle owner");
+        assert!(
+            error.contains("Serve carrier ownership disagreed with its reserved lifecycle ordinal"),
+            "unexpected lifecycle-binding rejection: {error}"
+        );
+        assert_eq!(ingress.len(), 1);
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("failed mutation dequeue retains the durable barrier"),
+            Some(barrier)
+        );
+
+        {
+            let mut state = ingress.state.lock();
+            let entry = state
+                .lanes
+                .values_mut()
+                .flat_map(|lane| lane.entries.iter_mut())
+                .next()
+                .expect("failed mutation dequeue retains the fair carrier");
+            let inbound = Arc::make_mut(&mut entry.inbound);
+            let ownership = inbound
+                .ingress_ownership
+                .as_mut()
+                .expect("retained carrier keeps ownership");
+            ownership.first.lifecycle_ordinal = Some(barrier.scheduler_ordinal());
+            ownership.latest.lifecycle_ordinal = Some(barrier.scheduler_ordinal());
+            assert!(ownership.validate_exact());
+        }
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire restored mutation fixture");
+    }
+
+    #[test]
+    fn restored_serviceable_lifecycle_seals_response_before_exposing_producers() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let body_root = TempDir::new().expect("startup-discharge body root");
+        let serve_root = TempDir::new().expect("startup-discharge Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
+        body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain canonical startup-discharge body");
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(7),
+        );
+        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        let (command_tx, command_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                None,
+                lifecycle_ordinals.clone(),
+            )
+            .expect("startup locally discharges valid retained Serve owner");
+        {
+            let state = command_tx.queue.lock();
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serve_ingress_reservation.is_none());
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
+                Some(V2IoServeState::Terminal)
+            );
+            assert_eq!(state.next_serve_admission_ordinal, 1);
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 7);
+        }
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("production fixture has durable Serve store")
+            .load(&context)
+            .expect("reload startup-discharge response");
+        assert!(persisted.ingress_waiters.is_empty());
+        assert!(persisted.unsealed_lifecycles.is_empty());
+        assert!(persisted.negative_tombstones.is_empty());
+        assert_eq!(persisted.terminal_tombstones.len(), 1);
+
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let replay_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect startup response replay barrier")
+            .expect("response replay owns one fresh physical occurrence");
+        assert_eq!(replay_barrier.lifecycle_id(), lifecycle_id);
+        assert!(replay_barrier.scheduler_ordinal() > 7);
+        let (admission, replay) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            &request,
+        );
+        assert_eq!(admission.lifecycle_id, lifecycle_id);
+        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire startup-discharge replay gate");
+    }
+
+    #[test]
+    fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapshot() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+
+        let missing_body_root = TempDir::new().expect("missing-body root");
+        let missing_serve_root = TempDir::new().expect("missing-body Serve root");
+        let missing_body_store =
+            V2BodyStore::open(missing_body_root.path(), context.clone())
+                .expect("open empty missing-body store");
+        persist_unsealed_serve_fixture(
+            missing_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(3),
+        );
+        let missing_state_path = missing_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let missing_before =
+            fs::read(&missing_state_path).expect("read pre-discharge missing-body snapshot");
+        let missing_result = production_persistent_test_io_command_channel(
+            4,
+            missing_serve_root.path(),
+            &context,
+            &missing_body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        );
+        let Err(missing_error) = missing_result else {
+            panic!("missing canonical body must fail startup discharge")
+        };
+        assert!(
+            missing_error.contains("failed to discharge restored serviceable Serve lifecycle"),
+            "unexpected missing-body startup error: {missing_error}"
+        );
+        assert_eq!(
+            fs::read(&missing_state_path).expect("reload missing-body Serve snapshot"),
+            missing_before,
+            "a missing canonical body cannot publish a terminal Serve transition"
+        );
+
+        let corrupt_body_root = TempDir::new().expect("corrupt-body root");
+        let corrupt_serve_root = TempDir::new().expect("corrupt-body Serve root");
+        let mut corrupt_body_store =
+            V2BodyStore::open(corrupt_body_root.path(), context.clone())
+                .expect("open corrupt-body store");
+        corrupt_body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("store canonical body before corrupting its final frame");
+        let context_directory = corrupt_body_root
+            .path()
+            .join(hex::encode(context.id().0.as_ref()));
+        let final_body_path = fs::read_dir(&context_directory)
+            .expect("list corrupt-body context directory")
+            .map(|entry| entry.expect("read corrupt-body directory entry").path())
+            .find(|path| path.extension().and_then(|value| value.to_str()) == Some("norito"))
+            .expect("find durable body frame");
+        let mut corrupt_bytes =
+            fs::read(&final_body_path).expect("read durable body frame before corruption");
+        *corrupt_bytes
+            .last_mut()
+            .expect("durable body frame is non-empty") ^= 0x80;
+        fs::write(&final_body_path, corrupt_bytes).expect("corrupt durable body frame");
+        persist_unsealed_serve_fixture(
+            corrupt_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(4),
+        );
+        let corrupt_state_path = corrupt_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let corrupt_before =
+            fs::read(&corrupt_state_path).expect("read pre-discharge corrupt-body snapshot");
+        let corrupt_result = production_persistent_test_io_command_channel(
+            4,
+            corrupt_serve_root.path(),
+            &context,
+            &corrupt_body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        );
+        let Err(corrupt_error) = corrupt_result else {
+            panic!("corrupt canonical body must fail startup discharge")
+        };
+        assert!(
+            corrupt_error.contains("failed to discharge restored serviceable Serve lifecycle"),
+            "unexpected corrupt-body startup error: {corrupt_error}"
+        );
+        assert_eq!(
+            fs::read(&corrupt_state_path).expect("reload corrupt-body Serve snapshot"),
+            corrupt_before,
+            "a corrupt canonical body cannot publish a terminal Serve transition"
+        );
+    }
+
+    #[test]
+    fn restored_serviceable_lifecycle_rejects_wrong_local_signing_key_before_mutation() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let body_root = TempDir::new().expect("wrong-key body root");
+        let serve_root = TempDir::new().expect("wrong-key Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain canonical wrong-key fixture body");
+        persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(6),
+        );
+        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let before = fs::read(&state_path).expect("read wrong-key Serve snapshot");
+        let result = production_persistent_test_io_command_channel(
+            4,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[1],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        );
+        let Err(error) = result else {
+            panic!("mismatched local validator key must fail startup")
+        };
+        assert!(
+            error.contains("signing key does not match its frozen validator index"),
+            "unexpected wrong-key startup error: {error}"
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("reload wrong-key Serve snapshot"),
+            before,
+            "the key/index binding is checked before any response is signed or persisted"
+        );
+    }
+
+    #[test]
+    fn restored_invalid_qc_is_negative_and_exact_retry_consumes_no_new_ordinal() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let body_root = TempDir::new().expect("invalid startup body root");
+        let serve_root = TempDir::new().expect("invalid startup Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open empty body store");
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &invalid,
+            CertifiedServeOwnerKey::Roster(invalid.request().requester.clone()),
+            1,
+            Some(5),
+        );
+        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        let (command_tx, _command_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                None,
+                lifecycle_ordinals,
+            )
+            .expect("startup negatively terminalizes invalid QC");
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .serves
+                .get(&lifecycle_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::InvalidCertificate
+            ))
+        );
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        let ordinal_before = command_tx
+            .queue
+            .lock()
+            .next_serve_ingress_reservation_ordinal;
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                invalid.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        let state = command_tx.queue.lock();
+        assert_eq!(
+            state.next_serve_ingress_reservation_ordinal, ordinal_before,
+            "negative exact retry is rejected before reserving a scheduler ordinal"
+        );
+        assert_eq!(state.next_serve_admission_ordinal, 1);
+        drop(state);
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("production fixture has durable Serve store")
+            .load(&context)
+            .expect("reload invalid-QC negative");
+        assert_eq!(
+            persisted
+                .negative_tombstones
+                .iter()
+                .map(|tombstone| tombstone.outcome)
+                .collect::<Vec<_>>(),
+            vec![CertifiedServeNegativeOutcome::InvalidCertificate]
+        );
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire invalid-QC negative gate");
+    }
+
+    #[test]
+    fn restored_valid_qc_without_local_retention_authority_is_negative() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        for (case, local_validator, signers) in [
+            ("observer", None, vec![0, 1, 2, 3]),
+            ("non-signer", Some(0), vec![1, 2, 3]),
+        ] {
+            let (request, validator_pops) = production_authenticated_serve_request(
+                &context,
+                &keys,
+                &keys[1],
+                proposal.round,
+                proposal.subject,
+                wire::GlobalPhase::Prepare,
+                &signers,
+            );
+            let body_root = TempDir::new().expect("nonowner startup body root");
+            let serve_root = TempDir::new().expect("nonowner startup Serve root");
+            let body_store = V2BodyStore::open(body_root.path(), context.clone())
+                .expect("open empty nonowner body store");
+            let lifecycle_id = persist_unsealed_serve_fixture(
+                serve_root.path(),
+                &context,
+                &request,
+                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                1,
+                Some(3),
+            );
+            let (command_tx, _command_rx, _admission) =
+                production_persistent_test_io_command_channel(
+                    4,
+                    serve_root.path(),
+                    &context,
+                    &body_store,
+                    &keys[0],
+                    &validator_pops,
+                    local_validator,
+                    None,
+                    RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+                )
+                .unwrap_or_else(|error| panic!("{case} startup discharge failed: {error}"));
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lock()
+                    .serves
+                    .get(&lifecycle_id)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent
+                )),
+                "{case} must deterministically negative-terminalize the lifecycle"
+            );
+        }
+    }
+
+    #[test]
+    fn restored_negative_outcome_tags_must_match_reconstructed_authority() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let (valid, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let foreign_decision = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"foreign durable Decision tag mutation",
+            )),
+            ..proposal.subject
+        };
+        let other_decision = wire::BlockSubject {
+            payload_hash: Hash::new(b"other durable Decision tag mutation"),
+            ..foreign_decision
+        };
+        let body_root = TempDir::new().expect("negative-tag body root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open empty body store");
+        for (case, request, outcome, durable_decided_subject) in [
+            (
+                "invalid certificate tagged as missing authority",
+                &invalid,
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+                None,
+            ),
+            (
+                "valid certificate tagged as invalid",
+                &valid,
+                CertifiedServeNegativeOutcome::InvalidCertificate,
+                None,
+            ),
+            (
+                "local signer tagged as missing authority",
+                &valid,
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+                None,
+            ),
+            (
+                "supersession tag without Decision",
+                &valid,
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(foreign_decision),
+                None,
+            ),
+            (
+                "supersession tag equal to request subject",
+                &valid,
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(proposal.subject),
+                Some(proposal.subject),
+            ),
+            (
+                "supersession tag names another Decision",
+                &valid,
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(foreign_decision),
+                Some(other_decision),
+            ),
+        ] {
+            let serve_root = TempDir::new().expect("negative-tag Serve root");
+            persist_negative_serve_fixture(
+                serve_root.path(),
+                &context,
+                request,
+                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                1,
+                outcome,
+            );
+            let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+            let before = fs::read(&state_path).expect("read mutated negative snapshot");
+            let result = production_persistent_test_io_command_channel(
+                4,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                durable_decided_subject,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            );
+            let Err(error) = result else {
+                panic!("{case} must fail source-bound negative validation")
+            };
+            assert!(
+                error.contains(
+                    "durable negative Serve tombstone does not match its reconstructed authority"
+                ),
+                "{case} produced an unexpected error: {error}"
+            );
+            assert_eq!(
+                fs::read(&state_path).expect("reload rejected negative tag"),
+                before,
+                "{case} cannot mutate durable Serve state"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let higher_round = wire::ConsensusRound {
+            view: proposal.round.view + 1,
+            ..proposal.round
+        };
+        let (higher, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            higher_round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        fully_authenticate_persisted_certified_serve_request(
+            &context,
+            higher.request().clone(),
+            &validator_pops,
+        )
+        .expect("strict higher fixture has a valid production QC");
+        let body_root = TempDir::new().expect("negative successor body root");
+        let serve_root = TempDir::new().expect("negative successor Serve root");
+        let (higher_manifest, _) = encode_payload(
+            &context,
+            higher_round,
+            proposal.subject,
+            &canonical_wire,
+        )
+        .expect("encode strict higher canonical body")
+        .into_parts();
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        body_store
+            .store(higher_manifest.clone(), canonical_wire.clone())
+            .expect("retain strict higher canonical body");
+        let response =
+            certified_serve_response(&higher, higher_manifest, canonical_wire, &keys[0]);
+        let negative_id = persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &invalid,
+            CertifiedServeOwnerKey::Roster(invalid.request().requester.clone()),
+            1,
+            Some(4),
+        );
+        let (command_tx, command_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                None,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("install initial invalid-QC negative");
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .serves
+                .get(&negative_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::InvalidCertificate
+            ))
+        );
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                invalid.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .next_serve_ingress_reservation_ordinal,
+            4
+        );
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                higher.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect strict negative successor")
+            .expect("strict higher view owns one fresh occurrence");
+        assert_eq!(barrier.scheduler_ordinal(), 5);
+        assert_eq!(barrier.lifecycle_id().admission_ordinal, 2);
+        assert_ne!(barrier.lifecycle_id(), negative_id);
+        {
+            let state = command_tx.queue.lock();
+            assert!(!state.serves.contains_key(&negative_id));
+            assert_eq!(
+                state
+                    .serve_by_family
+                    .get(&CertifiedServeFamilyKey {
+                        requester: higher.request().requester.clone(),
+                        phase: higher.request().certificate.phase,
+                    })
+                    .copied(),
+                Some(barrier.lifecycle_id())
+            );
+        }
+        let (admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(higher.request().requester.clone()),
+            &higher,
+        );
+        assert_eq!(admission.lifecycle_id, barrier.lifecycle_id());
+        assert!(matches!(committed, CertifiedServeCommit::Queued));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                if lifecycle_id == admission.lifecycle_id
+        ));
+        command_rx
+            .complete_serve_response(admission.lifecycle_id, &response)
+            .expect("seal strict higher response");
+        command_tx
+            .acknowledge_serve_completion(
+                admission.lifecycle_id,
+                V2IoServeTerminal::Response(response),
+            )
+            .expect("acknowledge strict higher response");
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire strict negative-successor gate");
+        drop(ingress);
+        drop(command_rx);
+        drop(command_tx);
+
+        let (restart_tx, _restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                None,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("restart validates the strict higher terminal");
+        assert_eq!(
+            restart_tx
+                .queue
+                .lock()
+                .serves
+                .get(&barrier.lifecycle_id())
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Terminal)
+        );
+        let (restart_ingress, restart_gate) = gated_fair_ingress(&context, &restart_tx);
+        let actor_ordinal_before_old_retry =
+            restart_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        assert!(matches!(
+            restart_ingress.try_push(certified_serve_inbound(
+                invalid.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(
+            restart_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_before_old_retry,
+            "the displaced lower negative cannot resurrect after successor restart"
+        );
+        assert!(matches!(
+            restart_ingress.try_push(certified_serve_inbound(
+                higher.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            restart_tx
+                .serve_barrier()
+                .expect("inspect restarted higher replay")
+                .expect("higher terminal replay owns one fresh occurrence")
+                .lifecycle_id(),
+            barrier.lifecycle_id()
+        );
+        restart_ingress.close();
+        restart_ingress
+            .unbind_certified_serve_gate(&restart_gate)
+            .expect("retire restarted strict higher gate");
+    }
+
+    #[test]
+    fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        fully_authenticate_persisted_certified_serve_request(
+            &context,
+            request.request().clone(),
+            &validator_pops,
+        )
+        .expect("supersession fixture request has a valid production QC");
+        let decided_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"durable Decision superseding retained Serve response",
+            )),
+            payload_hash: Hash::new(b"durable Decision exact payload"),
+            ..proposal.subject
+        };
+        assert_ne!(decided_subject, proposal.subject);
+        let body_root = TempDir::new().expect("superseded response body root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        body_store
+            .store(payload.manifest().clone(), canonical_wire.clone())
+            .expect("retain canonical body for response reconstruction");
+        let response = certified_serve_response(
+            &request,
+            payload.manifest().clone(),
+            canonical_wire,
+            &keys[0],
+        );
+
+        let live_serve_root = TempDir::new().expect("live supersession Serve root");
+        let live_lifecycle_id = {
+            let (command_tx, command_rx, _admission) = persistent_test_io_command_channel(
+                4,
+                live_serve_root.path(),
+                &context,
+                &body_store,
+            )
+            .expect("open live supersession queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            let via = context.roster[3].validator.clone();
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let (admission, committed) = drain_and_commit_gated_serve(
+                &ingress,
+                &command_tx,
+                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                &request,
+            );
+            assert!(matches!(committed, CertifiedServeCommit::Queued));
+            assert!(matches!(
+                command_rx.try_recv(),
+                Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                    if lifecycle_id == admission.lifecycle_id
+            ));
+            command_rx
+                .complete_serve_response(admission.lifecycle_id, &response)
+                .expect("seal the exact certified-body response");
+            command_tx
+                .acknowledge_serve_completion(
+                    admission.lifecycle_id,
+                    V2IoServeTerminal::Response(response.clone()),
+                )
+                .expect("acknowledge the exact certified-body response");
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("terminal response remains indexed");
+                assert_eq!(tracked.state, V2IoServeState::Terminal);
+                assert!(tracked.terminal.is_some());
+                assert!(tracked.reply_routes.is_some());
+                assert!(tracked.ingress_ownership.is_some());
+            }
+
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let superseding_occurrence = command_tx
+                .serve_barrier()
+                .expect("inspect live supersession barrier")
+                .expect("terminal replay owns one physical occurrence");
+            assert_eq!(
+                superseding_occurrence.lifecycle_id(),
+                admission.lifecycle_id
+            );
+            let fair_before_supersession = fair_ingress_accounting_snapshot(&ingress);
+            let state_path = live_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+            let durable_before_supersession =
+                fs::read(&state_path).expect("read terminal response before supersession");
+            let temporary_state = state_path.with_extension("norito.tmp");
+            let error = ingress
+                .try_recv_if_checked(|inbound| {
+                    let selected = matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload:
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if HashOf::new(candidate) == request.request_hash()
+                    );
+                    if selected {
+                        command_tx
+                            .stage_selected_serve_rejection(
+                                request.request_hash(),
+                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                                    decided_subject,
+                                ),
+                            )
+                            .expect("stage Decision supersession before fault injection");
+                        fs::create_dir(&temporary_state)
+                            .expect("block atomic supersession publication");
+                    }
+                    selected
+                })
+                .expect_err("failed supersession publication retains the terminal replay");
+            assert!(
+                error.contains("failed to create Sumeragi v2 Serve temporary state"),
+                "unexpected supersession publication error: {error}"
+            );
+            assert_eq!(
+                fair_ingress_accounting_snapshot(&ingress),
+                fair_before_supersession,
+                "failed supersession publication retains the exact fair carrier"
+            );
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("failed supersession retains the response lifecycle");
+                assert_eq!(tracked.state, V2IoServeState::Terminal);
+                assert_eq!(
+                    tracked.terminal.as_ref(),
+                    Some(&V2IoServeTerminal::Response(response.clone()))
+                );
+                assert!(
+                    tracked.reply_routes.is_some() && tracked.ingress_ownership.is_some(),
+                    "failed supersession restores response transport ownership"
+                );
+                assert_eq!(
+                    state
+                        .serve_ingress_reservation
+                        .as_ref()
+                        .map(|reservation| reservation.state),
+                    Some(
+                        CertifiedServeIngressReservationState::DeterministicallyRejected(
+                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                                decided_subject,
+                            ),
+                        ),
+                    )
+                );
+            }
+            assert_eq!(
+                fs::read(&state_path).expect("reload failed supersession snapshot"),
+                durable_before_supersession,
+                "failed supersession cannot alter the terminal durable snapshot"
+            );
+            fs::remove_dir(&temporary_state).expect("unblock supersession publication");
+            let drained = ingress
+                .try_recv_if_checked(|inbound| {
+                    let selected = matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload:
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if HashOf::new(candidate) == request.request_hash()
+                    );
+                    if selected {
+                        command_tx
+                            .stage_selected_serve_rejection(
+                                request.request_hash(),
+                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                                    decided_subject,
+                                ),
+                            )
+                            .expect("stage the fully authenticated Decision supersession");
+                    }
+                    selected
+                })
+                .expect("publish live Decision supersession")
+                .expect("drain live superseded replay");
+            drop(drained);
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("negative terminal remains indexed");
+                assert_eq!(
+                    tracked.state,
+                    V2IoServeState::Rejected(
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                            decided_subject,
+                        ),
+                    )
+                );
+                assert!(tracked.terminal.is_none());
+                assert!(
+                    tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none(),
+                    "Decision supersession retires stale response transport ownership"
+                );
+                assert!(state.serve_ingress_reservation.is_none());
+            }
+            let persisted = command_tx
+                .queue
+                .serve_state_store
+                .as_ref()
+                .expect("live supersession retains a durable store")
+                .load(&context)
+                .expect("reload live supersession");
+            assert!(persisted.terminal_tombstones.is_empty());
+            assert_eq!(
+                persisted
+                    .negative_tombstones
+                    .iter()
+                    .map(|tombstone| (tombstone.lifecycle_id, tombstone.outcome))
+                    .collect::<Vec<_>>(),
+                vec![(
+                    admission.lifecycle_id,
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                )]
+            );
+            let actor_ordinal_after_negative = command_tx
+                .queue
+                .lifecycle_ordinals
+                .next_ordinal_for_test();
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via)),
+                Err(FairV2IngressPushError::Rejected(_))
+            ));
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lifecycle_ordinals
+                    .next_ordinal_for_test(),
+                actor_ordinal_after_negative
+            );
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("retire live supersession gate");
+            admission.lifecycle_id
+        };
+
+        let (live_restart_tx, _live_restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                live_serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("restart validates the live supersession outcome");
+        assert_eq!(
+            live_restart_tx
+                .queue
+                .lock()
+                .serves
+                .get(&live_lifecycle_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+            ))
+        );
+
+        let terminal_serve_root = TempDir::new().expect("startup terminal supersession root");
+        let terminal_lifecycle_id = persist_terminal_serve_fixture(
+            terminal_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            &response,
+        );
+        let (terminal_restart_tx, _terminal_restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                terminal_serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("startup converts a superseded response before producer exposure");
+        assert_eq!(
+            terminal_restart_tx
+                .queue
+                .lock()
+                .serves
+                .get(&terminal_lifecycle_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+            ))
+        );
+
+        let raw_serve_root = TempDir::new().expect("post-Decision raw admission root");
+        let raw_lifecycle_id = persist_unsealed_serve_fixture(
+            raw_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(9),
+        );
+        let (raw_restart_tx, _raw_restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                raw_serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("post-Decision raw admission is terminalized during startup");
+        {
+            let state = raw_restart_tx.queue.lock();
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serve_ingress_reservation.is_none());
+            assert_eq!(
+                state
+                    .serves
+                    .get(&raw_lifecycle_id)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_retargeted_reply_capability_is_rejected_before_serve_admission() {
         let (service, keys) = fixture();
         let context = service.context.clone();
         let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
@@ -27907,80 +30873,862 @@ pub(super) mod tests {
             wire::GlobalPhase::Prepare,
         );
         let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("provisional-drain body root");
-        let serve_root = TempDir::new().expect("provisional-drain Serve root");
+        let body_root = TempDir::new().expect("route-less Serve body root");
+        let serve_root = TempDir::new().expect("route-less Serve state root");
         let body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                .expect("open route-less Serve queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        let actor_ordinal_before = command_tx
+            .queue
+            .lifecycle_ordinals
+            .next_ordinal_for_test();
+        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.request().clone()),
+        ));
+        for _ in 0..2 {
+            let without_route = InboundBlockMessage::from_transport(
+                message.clone(),
+                request.request().requester.clone(),
+                via.clone(),
+            );
+            assert!(matches!(
+                ingress.try_push(without_route),
+                Err(FairV2IngressPushError::Rejected(_))
+            ));
+        }
+        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
+        let wrong_target = context.roster[2].validator.clone();
+        let wrong_route = routes.mint_via(wrong_target, via.clone());
+        let retargeted = InboundBlockMessage {
+            message,
+            sender: Some(request.request().requester.clone()),
+            via: Some(via),
+            reply_routes: Some(
+                NetworkReplyRoutes::try_from_route(wrong_route)
+                    .expect("wrong-target fixture still forms a bounded route set"),
+            ),
+            ingress_ownership: None,
+        };
+        assert!(matches!(
+            ingress.try_push(retargeted),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
         {
+            let state = command_tx.queue.lock();
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert!(state.serves.is_empty());
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serve_ingress_reservation.is_none());
+        }
+        assert_eq!(
+            command_tx
+                .queue
+                .lifecycle_ordinals
+                .next_ordinal_for_test(),
+            actor_ordinal_before,
+            "missing or retargeted reply capabilities are rejected before the actor-global ordinal source"
+        );
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("route-less fixture has durable Serve store")
+            .load(&context)
+            .expect("reload route-less snapshot");
+        assert!(persisted.ingress_waiters.is_empty());
+        assert!(persisted.unsealed_lifecycles.is_empty());
+        assert!(persisted.negative_tombstones.is_empty());
+        assert!(persisted.terminal_tombstones.is_empty());
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire route-less Serve gate");
+    }
+
+    #[test]
+    fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let higher = authenticated_serve_request(
+            &context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view + 1,
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let mut honest_request = authenticated_serve_request(
+            &context,
+            &keys[2],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Commit,
+        )
+        .request()
+        .clone();
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let honest_signers = (0..context.roster.len())
+            .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
+            .collect::<Vec<_>>();
+        let honest_vote_preimage = wire::Vote {
+            round: honest_request.certificate.round,
+            proposal_round: honest_request.certificate.proposal_round,
+            phase: honest_request.certificate.phase,
+            subject: honest_request.certificate.subject,
+            execution_commitment: honest_request.certificate.execution_commitment,
+            signer: honest_signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let honest_signature_shares = honest_signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("fixture signer index fits usize")]
+                        .private_key(),
+                    &honest_vote_preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let honest_signature_share_refs = honest_signature_shares
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        honest_request.certificate.signers = honest_signers;
+        honest_request.certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&honest_signature_share_refs)
+                .expect("aggregate honest Serve certificate");
+        honest_request.signature =
+            Signature::new(keys[2].private_key(), &honest_request.signature_preimage())
+                .payload()
+                .to_vec();
+        let honest = authenticate_certified_body_request(
+            &context,
+            honest_request,
+            &PeerId::new(keys[2].public_key().clone()),
+            |context, certificate| {
+                wire::finality::verify_quorum_certificate_with_validator_pops(
+                    context,
+                    certificate,
+                    &validator_pops,
+                )
+            },
+        )
+        .expect("production verification accepts the distinct honest Serve QC");
+        assert!(
+            authenticate_certified_body_request(
+                &context,
+                invalid.request().clone(),
+                &invalid.request().requester,
+                |context, certificate| {
+                    wire::finality::verify_quorum_certificate_with_validator_pops(
+                        context,
+                        certificate,
+                        &validator_pops,
+                    )
+                },
+            )
+            .is_err(),
+            "the requester signature is valid, but production QC verification must reject the fixture certificate"
+        );
+
+        let via = context.roster[0].validator.clone();
+        let retry_via = context.roster[3].validator.clone();
+        let body_root = TempDir::new().expect("invalid-QC quarantine body root");
+        let serve_root = TempDir::new().expect("invalid-QC quarantine Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let invalid_lifecycle = {
+            let (command_tx, command_rx, _admission) =
+                persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                    .expect("open invalid-QC quarantine queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(invalid.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let invalid_lifecycle = command_tx
+                .serve_barrier()
+                .expect("inspect invalid-QC barrier")
+                .expect("raw invalid-QC admission owns one physical occurrence")
+                .lifecycle_id();
+            assert_eq!(invalid_lifecycle.admission_ordinal, 1);
+
+            let mut reject_invalid_qc = |inbound: &InboundBlockMessage| {
+                let BlockMessage::V2(message) = inbound.message() else {
+                    panic!("invalid-QC fixture changed transport message class")
+                };
+                let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
+                    &message.payload
+                else {
+                    panic!("invalid-QC fixture changed v2 payload class")
+                };
+                assert_eq!(request, invalid.request());
+                let requester = inbound
+                    .sender()
+                    .expect("invalid-QC fixture retains its authenticated requester");
+                assert_eq!(requester, &request.requester);
+                assert!(
+                    authenticate_certified_body_request(
+                        &context,
+                        request.clone(),
+                        requester,
+                        |context, certificate| {
+                            wire::finality::verify_quorum_certificate_with_validator_pops(
+                                context,
+                                certificate,
+                                &validator_pops,
+                            )
+                        },
+                    )
+                    .is_err(),
+                    "checked dequeue must observe production QC rejection before draining"
+                );
+                command_tx
+                    .stage_selected_serve_rejection(
+                        invalid.request_hash(),
+                        CertifiedServeNegativeOutcome::InvalidCertificate,
+                    )
+                    .expect("stage invalid-QC outcome before checked physical drain");
+                true
+            };
+            let rejected = ingress
+                .try_recv_if_checked(&mut reject_invalid_qc)
+                .expect("publish runner-side invalid-QC rejection")
+                .expect("drain the rejected invalid-QC carrier");
+            drop(rejected);
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&invalid_lifecycle)
+                    .expect("invalid family retains one durable quarantine owner");
+                assert_eq!(
+                    tracked.state,
+                    V2IoServeState::Rejected(
+                        CertifiedServeNegativeOutcome::InvalidCertificate
+                    )
+                );
+                assert!(tracked.reply_routes.is_none());
+                assert!(tracked.ingress_ownership.is_none());
+                assert!(tracked.terminal.is_none());
+                assert!(state.serve_barrier.is_none());
+                assert!(state.serve_barrier_predecessors.is_empty());
+                assert!(state.serve_ingress_reservation.is_none());
+                assert!(state.serve_ingress_waiters.is_empty());
+                assert!(state.pending_serve_requests.is_empty());
+                assert!(state.serve_replacements.is_empty());
+                assert!(state.commands.is_empty());
+                assert_eq!(state.serves.len(), 1);
+                assert_eq!(state.serve_by_request.len(), 1);
+                assert_eq!(state.serve_by_family.len(), 1);
+                assert_eq!(state.next_serve_admission_ordinal, 1);
+            }
+            assert!(matches!(
+                command_rx.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+
+            for _ in 0..2 {
+                assert!(matches!(
+                    ingress.try_push(certified_serve_inbound(
+                        invalid.request(),
+                        retry_via.clone()
+                    )),
+                    Err(FairV2IngressPushError::Rejected(_))
+                ));
+                assert_eq!(
+                    command_tx
+                        .queue
+                        .lock()
+                        .next_serve_ingress_reservation_ordinal,
+                    1,
+                    "negative retries cannot mint another physical occurrence"
+                );
+            }
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("retire invalid-QC quarantine gate");
+            invalid_lifecycle
+        };
+
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                .expect("restart invalid-QC quarantine queue");
+        {
+            let state = command_tx.queue.lock();
+            let tracked = state
+                .serves
+                .get(&invalid_lifecycle)
+                .expect("restart retains the exact invalid family owner");
+            assert_eq!(
+                tracked.state,
+                V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::InvalidCertificate
+                )
+            );
+            assert!(tracked.reply_routes.is_none());
+            assert!(tracked.ingress_ownership.is_none());
+            assert!(tracked.terminal.is_none());
+            assert_eq!(state.serves.len(), 1);
+            assert!(state.serve_barrier.is_none());
+            assert!(state.serve_ingress_reservation.is_none());
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.pending_serve_requests.is_empty());
+            assert!(state.commands.is_empty());
+            assert_eq!(state.next_serve_admission_ordinal, 1);
+        }
+        assert!(matches!(
+            command_tx.try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(8_002),
+                    subject: proposal.subject,
+                },
+            ),
+            Ok(())
+        ));
+
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(honest.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let honest_lifecycle = command_tx
+            .serve_barrier()
+            .expect("inspect distinct honest Serve barrier")
+            .expect("distinct honest family retains physical Serve capacity")
+            .lifecycle_id();
+        assert_ne!(honest_lifecycle, invalid_lifecycle);
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(state.serves.len(), 2);
+            assert_eq!(state.serve_by_request.len(), 2);
+            assert_eq!(state.serve_by_family.len(), 2);
+            assert_eq!(state.next_serve_admission_ordinal, 2);
+            assert_eq!(
+                state
+                    .serves
+                    .get(&invalid_lifecycle)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::InvalidCertificate
+                ))
+            );
+            assert_eq!(
+                state
+                    .serves
+                    .get(&honest_lifecycle)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::AwaitingRetry)
+            );
+            assert!(
+                state.commands.iter().any(|command| matches!(
+                    command,
+                    V2IoCommand::LoadCandidate {
+                        acquisition_id: LockedCandidateAcquisitionId(8_002),
+                        subject,
+                    } if *subject == proposal.subject
+                )),
+                "the quarantined Byzantine family cannot consume ordinary honest I/O capacity"
+            );
+        }
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire honest-capacity quarantine gate");
+    }
+
+    #[test]
+    fn durable_raw_admission_restart_locally_seals_before_later_producers() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let higher = authenticated_serve_request(
+            &context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view + 1,
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let via = context.roster[0].validator.clone();
+        let replay_via = context.roster[3].validator.clone();
+        let body_root = TempDir::new().expect("raw-admission restart body root");
+        let serve_root = TempDir::new().expect("raw-admission restart Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain raw-admission restart body");
+
+        let (scheduler_ordinal, lifecycle_id) = {
             let (command_tx, _command_rx, _admission) =
                 persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open provisional-drain queue");
+                    .expect("open pre-crash raw-admission queue");
             let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
             assert!(matches!(
                 ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
-            let drained_ordinal = command_tx
+            let barrier = command_tx
                 .serve_barrier()
-                .expect("inspect provisional drain barrier")
-                .expect("provisional request owns a physical barrier")
-                .lifecycle_ordinal();
-            let inbound = ingress
-                .try_recv_if_checked(|_| true)
-                .expect("publish provisional physical retirement")
-                .expect("drain provisional exact carrier");
-            drop(inbound);
+                .expect("inspect raw-admission barrier")
+                .expect("raw exact admission owns its barrier");
+            assert_eq!(barrier.scheduler_ordinal(), 1);
+            assert_eq!(barrier.lifecycle_id().admission_ordinal, 1);
+            let before_higher = fair_ingress_accounting_snapshot(&ingress);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
+                Err(FairV2IngressPushError::Full(_))
+            ));
+            assert_eq!(
+                fair_ingress_accounting_snapshot(&ingress),
+                before_higher,
+                "a later family view cannot replace an admitted exact raw target"
+            );
             {
                 let state = command_tx.queue.lock();
-                assert!(state.serve_ingress_reservation.is_none());
-                assert!(state.serve_ingress_waiters.is_empty());
-                assert!(state.serves.is_empty());
+                assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
+                assert_eq!(state.next_serve_admission_ordinal, 1);
+                assert_eq!(
+                    state
+                        .serves
+                        .get(&barrier.lifecycle_id())
+                        .map(|tracked| tracked.state),
+                    Some(V2IoServeState::AwaitingRetry)
+                );
             }
             let persisted = command_tx
                 .queue
                 .serve_state_store
                 .as_ref()
-                .expect("fixture retains its Serve state store")
+                .expect("fixture retains durable Serve state")
                 .load(&context)
-                .expect("reload provisional drain snapshot");
-            assert!(
+                .expect("reload raw-admission snapshot");
+            assert_eq!(
                 persisted
                     .ingress_waiters
                     .iter()
-                    .all(|waiter| waiter.ingress_ordinal != drained_ordinal)
+                    .map(|waiter| (waiter.ingress_ordinal, waiter.lifecycle_id))
+                    .collect::<Vec<_>>(),
+                vec![(barrier.scheduler_ordinal(), barrier.lifecycle_id())]
             );
             ingress.close();
             ingress
                 .unbind_certified_serve_gate(&gate)
-                .expect("retire provisional-drain fixture gate");
-        }
+                .expect("detach pre-crash raw carrier");
+            (barrier.scheduler_ordinal(), barrier.lifecycle_id())
+        };
 
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restart after provisional physical drain");
+        let (command_tx, command_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                2,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                None,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("restart locally discharges raw admission");
         {
             let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
+            assert!(
+                state.serve_ingress_waiters.is_empty(),
+                "startup discharge retires every requester-dependent scheduler ticket"
+            );
+            assert_eq!(
+                state.next_serve_ingress_reservation_ordinal,
+                scheduler_ordinal
+            );
+            assert_eq!(
+                state.next_serve_admission_ordinal,
+                lifecycle_id.admission_ordinal
+            );
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
+                Some(V2IoServeState::Terminal)
+            );
         }
         let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect discharged durable admission debt"),
+            None
+        );
+        drop(
+            command_tx
+                .try_begin_producer_episode()
+                .expect("inspect producer admission after startup discharge")
+                .expect("startup discharge exposes later finite producers"),
+        );
+        assert!(command_tx.queue.can_enqueue_as(V2IoAdmissionClass::Control));
         assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            command_tx.try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(8_001),
+                    subject: proposal.subject,
+                },
+            ),
+            Ok(())
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(8_001),
+                ..
+            })
+        ));
+        let unrelated = InboundBlockMessage::from_transport(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                    wire::CommitCertificateRequest {
+                        protocol_version: wire::PROTOCOL_VERSION,
+                        chain_id: context.chain_id.clone(),
+                        context_id: context.id(),
+                        height: context.height.saturating_add(1),
+                        requester: replay_via.clone(),
+                        signature: vec![0x5A],
+                    },
+                ),
+            )),
+            replay_via.clone(),
+            replay_via.clone(),
+        );
+        assert!(matches!(
+            ingress.try_push(unrelated),
             Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(
+            ingress.try_recv_if(|_| true).is_some(),
+            "unrelated traffic drains after local startup service"
+        );
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                replay_via.clone()
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let restored_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect restored raw barrier")
+            .expect("exact retransmission owns a fresh replay occurrence");
+        assert!(restored_barrier.scheduler_ordinal() > scheduler_ordinal);
+        assert_eq!(restored_barrier.lifecycle_id(), lifecycle_id);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("exact head retry clears physical admission debt"),
+            None
+        );
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                replay_via.clone()
+            )),
+            Ok(FairV2IngressPushDisposition::Coalesced)
         ));
         assert_eq!(
             command_tx
                 .serve_barrier()
-                .expect("inspect post-provisional-restart barrier")
-                .expect("retransmission owns a fresh barrier")
-                .lifecycle_ordinal(),
-            2
+                .expect("inspect coalesced restored barrier"),
+            Some(restored_barrier)
         );
+
+        let (admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requester),
+            &request,
+        );
+        assert_eq!(admission.lifecycle_id, lifecycle_id);
+        assert!(matches!(committed, CertifiedServeCommit::Replay { .. }));
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), replay_via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let post_drain = command_tx
+            .serve_barrier()
+            .expect("inspect post-drain exact replay")
+            .expect("post-drain replay owns a fresh scheduler ticket");
+        assert!(post_drain.scheduler_ordinal() > scheduler_ordinal);
+        assert_eq!(post_drain.lifecycle_id(), lifecycle_id);
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_id.admission_ordinal,
+            "physical replay cannot mint another logical Serve lifecycle"
+        );
+
         ingress.close();
         ingress
             .unbind_certified_serve_gate(&gate)
-            .expect("retire post-provisional-restart gate");
+            .expect("retire raw-admission restart fixture gate");
+    }
+
+    #[test]
+    fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let observer = KeyPair::random();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &observer,
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let authenticated_source = PeerId::new(KeyPair::random().public_key().clone());
+        let body_root = TempDir::new().expect("observer-waiter body root");
+        let serve_root = TempDir::new().expect("observer-waiter Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain observer startup-discharge body");
+
+        let (scheduler_ordinal, lifecycle_id) = {
+            let (command_tx, _command_rx, _admission) =
+                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                    .expect("open pre-crash observer queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(
+                    request.request(),
+                    authenticated_source.clone(),
+                )),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let barrier = command_tx
+                .serve_barrier()
+                .expect("inspect observer raw barrier")
+                .expect("observer raw admission owns a scheduler ticket");
+            let persisted = command_tx
+                .queue
+                .serve_state_store
+                .as_ref()
+                .expect("fixture retains durable Serve state")
+                .load(&context)
+                .expect("reload observer raw-admission snapshot");
+            assert_eq!(persisted.ingress_waiters.len(), 1);
+            assert!(matches!(
+                &persisted.ingress_waiters[0].owner,
+                CertifiedServeOwnerKey::AuthenticatedSource(source)
+                    if source == &authenticated_source
+            ));
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("detach pre-crash observer carrier");
+            (barrier.scheduler_ordinal(), barrier.lifecycle_id())
+        };
+
+        let (command_tx, command_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                2,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                None,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("restore and locally service observer raw admission");
+        {
+            let state = command_tx.queue.lock();
+            assert!(
+                state.serve_ingress_waiters.is_empty(),
+                "a non-responsive observer cannot retain global scheduler debt after restore"
+            );
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
+                Some(V2IoServeState::Terminal),
+                "observer scheduler retirement must locally finish the exact lifecycle"
+            );
+            assert_eq!(
+                state.next_serve_ingress_reservation_ordinal,
+                scheduler_ordinal,
+                "retired observer ordinals remain consumed"
+            );
+        }
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("restored fixture retains durable Serve state")
+            .load(&context)
+            .expect("reload locally retired observer snapshot");
+        assert!(
+            persisted.ingress_waiters.is_empty(),
+            "observer scheduler retirement is durable across another crash"
+        );
+        assert!(
+            persisted.unsealed_lifecycles.is_empty()
+                && persisted
+                    .terminal_tombstones
+                    .iter()
+                    .any(|lifecycle| lifecycle.lifecycle_id == lifecycle_id)
+        );
+
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect restored observer scheduler debt"),
+            None
+        );
+        let producer_episode = command_tx
+            .try_begin_producer_episode()
+            .expect("inspect producer admission after observer restore")
+            .expect("external restored debt cannot block local producers");
+        drop(producer_episode);
+        assert!(command_tx.queue.can_enqueue_as(V2IoAdmissionClass::Control));
+        command_tx
+            .try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(8_101),
+                    subject: proposal.subject,
+                },
+            )
+            .expect("local control work proceeds without observer retransmission");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(8_101),
+                ..
+            })
+        ));
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                authenticated_source.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let retry = command_tx
+            .serve_barrier()
+            .expect("inspect post-restore observer retry")
+            .expect("exact observer retry takes a new scheduler position");
+        assert_eq!(retry.lifecycle_id(), lifecycle_id);
+        assert!(retry.scheduler_ordinal() > scheduler_ordinal);
+        let (admission, replay) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::AuthenticatedSource(authenticated_source),
+            &request,
+        );
+        assert_eq!(admission.lifecycle_id, lifecycle_id);
+        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire observer restore fixture gate");
+    }
+
+    #[test]
+    fn durable_raw_waiter_rejects_mutated_logical_lineage() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[0].validator.clone();
+        let body_root = TempDir::new().expect("raw-lineage mutation body root");
+        let serve_root = TempDir::new().expect("raw-lineage mutation Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        {
+            let (command_tx, _command_rx, _admission) =
+                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                    .expect("open raw-lineage queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via)),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("detach raw-lineage carrier");
+        }
+
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 2, 2)
+            .expect("raw-lineage family capacity");
+        let (store, mut persisted) =
+            CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
+                .expect("open raw-lineage durable state");
+        let waiter = persisted
+            .ingress_waiters
+            .first_mut()
+            .expect("raw admission persists one waiter");
+        waiter.lifecycle_id = CertifiedServeLifecycleId {
+            admission_ordinal: 2,
+            request_hash: request.request_hash(),
+        };
+        persisted.next_lifecycle_admission_ordinal = 2;
+        store
+            .persist(&persisted)
+            .expect("publish canonically checksummed lineage mutation");
+
+        let error =
+            match persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store) {
+                Ok(_) => panic!("mutated raw lifecycle lineage must fail closed"),
+                Err(error) => error,
+            };
+        assert!(
+            error.contains("atomically admitted logical lifecycle"),
+            "unexpected raw-lineage rejection: {error}"
+        );
     }
 
     #[test]
@@ -28119,6 +31867,70 @@ pub(super) mod tests {
         );
         assert!(combined.starts_with(&primary));
         assert!(combined.contains("durable rollback failure"));
+    }
+
+    #[test]
+    fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[0].validator.clone();
+        let body_root = TempDir::new().expect("raw-admission failure body root");
+        let serve_root = TempDir::new().expect("raw-admission failure Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                .expect("open raw-admission failure queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        let temporary_state = serve_root
+            .path()
+            .join(CERTIFIED_SERVE_STATE_FILE)
+            .with_extension("norito.tmp");
+        fs::create_dir(&temporary_state).expect("block atomic raw-admission temporary file");
+        let before = fair_ingress_accounting_snapshot(&ingress);
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Err(FairV2IngressPushError::Closed(_))
+        ));
+        let after = fair_ingress_accounting_snapshot(&ingress);
+        assert_eq!(after.last_admission_ordinal, before.last_admission_ordinal);
+        assert_eq!(after.len, before.len);
+        assert_eq!(after.bytes, before.bytes);
+        assert!(!after.open);
+        {
+            let state = command_tx.queue.lock();
+            assert!(!state.sender_open);
+            assert!(state.receiver_open);
+            assert!(state.serve_ingress_reservation.is_none());
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serves.is_empty());
+            assert!(state.serve_by_request.is_empty());
+            assert!(state.serve_by_family.is_empty());
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lifecycle_ordinals
+                    .next_ordinal_for_test()
+                    .expect("inspect fail-closed shared scheduler source"),
+                Some(2),
+                "failed persistence may consume a scheduler candidate, but the closed queue cannot reuse it"
+            );
+        }
+        fs::remove_dir(&temporary_state).expect("unblock raw-admission state path");
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("detach failed raw-admission gate");
     }
 
     #[test]
@@ -28285,7 +32097,7 @@ pub(super) mod tests {
         let active_serve_root = TempDir::new().expect("historical-gate Serve root");
         let active_body_store = V2BodyStore::open(active_body_root.path(), active_context.clone())
             .expect("open active-height body store");
-        let (active_tx, _active_rx, _active_admission) = persistent_test_io_command_channel(
+        let (active_tx, active_rx, _active_admission) = persistent_test_io_command_channel(
             2,
             active_serve_root.path(),
             &active_context,
@@ -28344,36 +32156,29 @@ pub(super) mod tests {
             );
             assert!(state.serve_ingress_waiters.is_empty());
             assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 1);
         }
-        let barrier_hash = active.request_hash();
-        let selected = historical_ingress
-            .try_recv_if(|inbound| {
-                matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
-                        ..
-                    }) if HashOf::new(request) == barrier_hash
-                )
-            })
-            .expect("historical request cannot hide the active exact-Serve target");
-        let BlockMessage::V2(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(selected_request),
-            ..
-        }) = selected.message()
-        else {
-            panic!("mixed selector preserves the current certified request");
-        };
-        assert_eq!(selected_request, active.request());
-        assert_eq!(
+        let (active_admission, active_commit) = drain_and_commit_gated_serve(
+            &historical_ingress,
+            &active_tx,
+            CertifiedServeOwnerKey::Roster(active.request().requester.clone()),
+            &active,
+        );
+        assert!(matches!(active_commit, CertifiedServeCommit::Queued));
+        assert!(matches!(
+            active_rx.try_recv(),
+            Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                if lifecycle_id == active_admission.lifecycle_id
+        ));
+        assert!(
             active_tx
                 .serve_barrier_request_hash()
-                .expect("dequeued unprepared target rolls its reservation back"),
-            None
+                .expect("prepared active target crosses the checked physical cut")
+                .is_none()
         );
         let delivered = historical_ingress
-            .try_recv_if(|_| true)
+            .try_recv_if_checked(|_| true)
+            .expect("historical physical drain cannot fail Serve publication")
             .expect("authenticated historical request reaches context-store service");
         let BlockMessage::V2(wire::ConsensusMessageV2 {
             payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(delivered_request),
@@ -28431,8 +32236,15 @@ pub(super) mod tests {
                 1,
                 "rollover detaches only the volatile carrier"
             );
-            assert!(state.serves.is_empty());
+            assert_eq!(state.serves.len(), 1);
+            assert!(
+                state
+                    .serves
+                    .values()
+                    .all(|tracked| tracked.state == V2IoServeState::AwaitingRetry)
+            );
             assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
+            assert_eq!(state.next_serve_admission_ordinal, 1);
         }
 
         let (second_tx, _second_rx, _second_admission) = test_io_command_channel(2);
@@ -28478,6 +32290,92 @@ pub(super) mod tests {
         assert!(second_tx.queue.lock().serve_ingress_reservation.is_none());
         assert_eq!(second_tx.queue.lock().serve_ingress_waiters.len(), 1);
         drop(first_rx);
+    }
+
+    #[test]
+    fn dormant_serve_waiters_reattach_strictly_by_durable_scheduler_ordinal() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let first = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let second = authenticated_serve_request(
+            &service.context,
+            &keys[2],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        let first_carrier = gate
+            .reserve(first.request(), &via, true, 10)
+            .expect("reserve first exact Serve owner")
+            .expect("current-height request owns a Serve reservation");
+        let second_carrier = gate
+            .reserve(second.request(), &via, true, 11)
+            .expect("reserve second exact Serve owner")
+            .expect("current-height request owns a Serve reservation");
+        let first_scheduler_ordinal = first_carrier.id.0;
+        let second_scheduler_ordinal = second_carrier.id.0;
+        assert!(first_scheduler_ordinal < second_scheduler_ordinal);
+
+        drop(second_carrier);
+        drop(first_carrier);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect carrierless durable head"),
+            Some(first_scheduler_ordinal)
+        );
+        assert!(matches!(
+            gate.reserve(second.request(), &via, true, 20),
+            Err(CertifiedServeIngressReserveError::Busy)
+        ));
+        assert!(
+            command_tx
+                .try_begin_producer_episode()
+                .expect("inspect producer exclusion")
+                .is_none()
+        );
+
+        let resumed_first = gate
+            .reserve(first.request(), &via, true, 21)
+            .expect("reattach durable head")
+            .expect("current-height retry retains Serve reservation");
+        assert_eq!(resumed_first.id.0, first_scheduler_ordinal);
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("inspect selected durable head")
+                .map(|barrier| barrier.scheduler_ordinal()),
+            Some(first_scheduler_ordinal)
+        );
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("second owner remains dormant behind selected head"),
+            Some(second_scheduler_ordinal)
+        );
+        let resumed_second = gate
+            .reserve(second.request(), &via, true, 22)
+            .expect("reattach next durable waiter")
+            .expect("current-height retry retains Serve reservation");
+        assert_eq!(resumed_second.id.0, second_scheduler_ordinal);
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("later carrier cannot replace selected durable head")
+                .map(|barrier| barrier.scheduler_ordinal()),
+            Some(first_scheduler_ordinal)
+        );
+        drop(resumed_second);
+        drop(resumed_first);
     }
 
     #[test]
@@ -28682,6 +32580,250 @@ pub(super) mod tests {
         ingress
             .unbind_certified_serve_gate(&gate)
             .expect("retire full-prefix fixture gate");
+    }
+
+    #[test]
+    fn dormant_exact_head_reattaches_after_saturated_fair_prefix_and_drains_frozen_predecessor() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let requests = [1_usize, 2, 3].map(|index| {
+            authenticated_serve_request(
+                &service.context,
+                &keys[index],
+                proposal.round,
+                proposal.subject,
+                wire::GlobalPhase::Prepare,
+            )
+        });
+        let higher = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view + 1,
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, command_rx, _admission) = test_io_command_channel(4);
+        for ordinal in 710..714 {
+            command_tx
+                .try_send_as(
+                    V2IoAdmissionClass::Auxiliary,
+                    V2IoCommand::LoadCandidate {
+                        acquisition_id: LockedCandidateAcquisitionId(ordinal),
+                        subject: proposal.subject,
+                    },
+                )
+                .expect("install the frozen I/O predecessor prefix");
+        }
+
+        let fair_capacity = fair_v2_ingress_required_capacity(service.context.roster.len(), None)
+            .expect("fixture roster has representable protected-slot geometry");
+        let ingress = FairV2Ingress::new(
+            fair_capacity,
+            5 * 64 * 1024 * 1024,
+            64 * 1024 * 1024,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+        );
+        ingress
+            .configure_roster(
+                service
+                    .context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone()),
+            )
+            .expect("minimum protected-slot geometry fits the fixture roster");
+        ingress.require_certified_serve_gate();
+        let gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        ingress
+            .bind_certified_serve_gate(gate.clone())
+            .expect("bind saturated-prefix Serve gate");
+        ingress.open().expect("open saturated-prefix ingress");
+
+        let fair_predecessor_height = service.context.height.saturating_add(1);
+        let fair_predecessor = InboundBlockMessage::from_transport(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                    wire::CommitCertificateRequest {
+                        protocol_version: wire::PROTOCOL_VERSION,
+                        chain_id: service.context.chain_id.clone(),
+                        context_id: service.context.id(),
+                        height: fair_predecessor_height,
+                        requester: via.clone(),
+                        signature: vec![0xA5],
+                    },
+                ),
+            )),
+            via.clone(),
+            via.clone(),
+        );
+        assert!(matches!(
+            ingress.try_push(fair_predecessor),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        for request in &requests {
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+        assert_eq!(ingress.len(), requests.len() + 1);
+        assert!(
+            ingress
+                .try_recv_if(fair_v2_ingress_is_certified_body_request)
+                .is_none(),
+            "predicate-selective service cannot bypass the saturated Fair predecessor"
+        );
+        let before_full = fair_ingress_accounting_snapshot(&ingress);
+        let serve_high_watermark_before_full = command_tx
+            .queue
+            .lock()
+            .next_serve_ingress_reservation_ordinal;
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
+            Err(FairV2IngressPushError::Full(_))
+        ));
+        assert_eq!(
+            fair_ingress_accounting_snapshot(&ingress),
+            before_full,
+            "Fair capacity rejection cannot mint carrierless Serve ownership"
+        );
+        let first_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect saturated-prefix selected target")
+            .expect("the first exact owner remains selected");
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(state.serve_ingress_waiters.len(), requests.len() - 1);
+            assert_eq!(
+                state.next_serve_ingress_reservation_ordinal, serve_high_watermark_before_full,
+                "Fair capacity rejection cannot advance the durable Serve high-watermark"
+            );
+        }
+
+        // The only production transition which removes an undrained carrier
+        // from a closed height clears every Fair lane under the same lock.
+        // Therefore a dormant head cannot coexist with the saturated volatile
+        // prefix after unbinding.
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("atomically retire the saturated volatile prefix");
+        assert_eq!(ingress.len(), 0);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect carrierless head after prefix retirement"),
+            Some(first_barrier.scheduler_ordinal())
+        );
+        assert!(command_tx.queue.lock().serve_ingress_reservation.is_none());
+
+        ingress
+            .bind_certified_serve_gate(gate.clone())
+            .expect("rebind dormant exact owners to empty ingress");
+        ingress.open().expect("reopen empty ingress");
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
+            Err(FairV2IngressPushError::Full(_))
+        ));
+        assert_eq!(ingress.len(), 0, "dormant debt excludes fresh churn");
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(requests[0].request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("inspect reattached exact head")
+                .map(|barrier| barrier.scheduler_ordinal()),
+            Some(first_barrier.scheduler_ordinal())
+        );
+        assert!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("later exact owners remain dormant")
+                .is_some(),
+            "a later dormant owner must not suppress the selected head's turn"
+        );
+        assert!(
+            command_tx
+                .try_begin_producer_episode()
+                .expect("inspect producer exclusion behind mixed exact ownership")
+                .is_none()
+        );
+
+        let mut saw_backpressure = false;
+        assert!(
+            ingress
+                .try_recv_if(|_| {
+                    match command_tx.prepare_reserved_serve(
+                        CertifiedServeOwnerKey::Roster(requests[0].request().requester.clone()),
+                        requests[0].clone(),
+                    ) {
+                        Err(CertifiedServePrepareError::Backpressure) => {
+                            saw_backpressure = true;
+                            false
+                        }
+                        result => {
+                            panic!("the frozen predecessor must retain exact ownership: {result:?}")
+                        }
+                    }
+                })
+                .is_none()
+        );
+        assert!(saw_backpressure);
+        assert_eq!(ingress.len(), 1);
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(710),
+                ..
+            })
+        ));
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .commands
+                .back()
+                .and_then(V2IoCommand::serve_lifecycle_id),
+            Some(first_barrier.lifecycle_id()),
+            "one released predecessor materializes the exact target behind the finite prefix"
+        );
+
+        let (admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requests[0].request().requester.clone()),
+            &requests[0],
+        );
+        assert_eq!(admission.lifecycle_id, first_barrier.lifecycle_id());
+        assert!(matches!(committed, CertifiedServeCommit::Queued));
+        for ordinal in 711..714 {
+            assert!(matches!(
+                command_rx.try_recv(),
+                Ok(V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(candidate),
+                    ..
+                }) if candidate == ordinal
+            ));
+        }
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Serve {
+                lifecycle_id: drained,
+                ..
+            }) if drained == admission.lifecycle_id
+        ));
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire reopened saturated-prefix fixture");
     }
 
     #[test]
@@ -29162,7 +33304,7 @@ pub(super) mod tests {
             .expect("inspect retransmitted exact request")
             .expect("retransmission reserves a fresh physical carrier");
         assert_eq!(
-            restored_barrier.lifecycle_ordinal(),
+            restored_barrier.scheduler_ordinal(),
             2,
             "restart retains the logical lifecycle but not its drained physical ordinal"
         );
@@ -29239,7 +33381,7 @@ pub(super) mod tests {
                 .serve_barrier()
                 .expect("inspect pre-commit crash barrier")
                 .expect("new request owns a physical barrier")
-                .lifecycle_ordinal();
+                .scheduler_ordinal();
             let mut admission = None;
             let inbound = ingress
                 .try_recv_if_checked(|_| {
@@ -29340,7 +33482,7 @@ pub(super) mod tests {
                 .serve_barrier()
                 .expect("inspect post-crash retransmission")
                 .expect("post-crash retransmission owns a barrier")
-                .lifecycle_ordinal(),
+                .scheduler_ordinal(),
             2,
             "post-crash retransmission receives a fresh physical ordinal"
         );
@@ -29397,7 +33539,7 @@ pub(super) mod tests {
                 .serve_barrier()
                 .expect("inspect drained teardown barrier")
                 .expect("teardown request owns a physical barrier")
-                .lifecycle_ordinal();
+                .scheduler_ordinal();
             let mut prepared = None;
             let inbound = ingress
                 .try_recv_if_checked(|_| {
@@ -29527,9 +33669,7 @@ pub(super) mod tests {
                 .serve_barrier()
                 .expect("inspect coalesced retransmission barrier")
                 .expect("coalesced retransmission owns a fresh physical barrier");
-            assert!(
-                coalesced_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal()
-            );
+            assert!(coalesced_barrier.scheduler_ordinal() > first_barrier.scheduler_ordinal());
             let mut coalesced_admission = None;
             let inbound = ingress
                 .try_recv_if_checked(|_| {
@@ -29588,7 +33728,7 @@ pub(super) mod tests {
                 .expect("reload snapshot after coalesced drain");
             assert!(
                 persisted.ingress_waiters.iter().all(|waiter| {
-                    waiter.ingress_ordinal != coalesced_barrier.lifecycle_ordinal()
+                    waiter.ingress_ordinal != coalesced_barrier.scheduler_ordinal()
                 }),
                 "coalesced physical occurrence is durable before Commit and restart"
             );
@@ -29598,7 +33738,7 @@ pub(super) mod tests {
                 .expect("retire first coalesced-retry gate");
             (
                 first_admission.lifecycle_id,
-                coalesced_barrier.lifecycle_ordinal(),
+                coalesced_barrier.scheduler_ordinal(),
             )
         };
 
@@ -29633,7 +33773,7 @@ pub(super) mod tests {
             .expect("inspect post-coalesced-restart barrier")
             .expect("post-restart retransmission owns a physical barrier");
         assert!(
-            post_restart_barrier.lifecycle_ordinal() > coalesced_ingress_ordinal,
+            post_restart_barrier.scheduler_ordinal() > coalesced_ingress_ordinal,
             "restart retransmission cannot restore the consumed coalesced ordinal"
         );
         let (resumed, committed) = drain_and_commit_gated_serve(
@@ -29686,12 +33826,25 @@ pub(super) mod tests {
         let (store, _) =
             CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
                 .expect("open durable Serve state");
+        let lifecycle_id = CertifiedServeLifecycleId {
+            admission_ordinal: 1,
+            request_hash: request.request_hash(),
+        };
         let mut persisted = PersistedCertifiedServeState::empty(&context);
         persisted.next_ingress_reservation_ordinal = 41;
+        persisted.next_lifecycle_admission_ordinal = 1;
         persisted
             .ingress_waiters
             .push(PersistedCertifiedServeIngressWaiter {
                 ingress_ordinal: 41,
+                lifecycle_id,
+                owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                request: request.request().clone(),
+            });
+        persisted
+            .unsealed_lifecycles
+            .push(PersistedCertifiedServeLifecycle {
+                lifecycle_id,
                 owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
                 request: request.request().clone(),
             });
@@ -29710,8 +33863,10 @@ pub(super) mod tests {
             serve_root.path(),
             &context,
             Some(0),
+            None,
             &body_store,
             lifecycle_ordinals.clone(),
+            CertifiedServeRestartDischarge::PreserveFixtureState,
         )
         .expect("restore waiter with shared actor-global source");
         assert!(
@@ -29837,7 +33992,7 @@ pub(super) mod tests {
                 .serve_barrier()
                 .expect("inspect post-abort retransmission")
                 .expect("post-abort retransmission owns a physical carrier")
-                .lifecycle_ordinal(),
+                .scheduler_ordinal(),
             2,
             "post-abort retransmission must not reuse the drained scheduler ordinal"
         );
@@ -30160,6 +34315,44 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn durable_serve_state_v5_rejects_v4_header_and_payload_layouts() {
+        let (service, _) = fixture();
+        let state = PersistedCertifiedServeState::empty(&service.context);
+        let frame = encode_certified_serve_state_frame(&state, u64::MAX)
+            .expect("encode current durable Serve state");
+        let version_offset = CERTIFIED_SERVE_STATE_MAGIC.len();
+        assert_eq!(
+            u16::from_le_bytes(
+                frame[version_offset..version_offset + 2]
+                    .try_into()
+                    .expect("fixed frame version width")
+            ),
+            5,
+            "negative terminal outcomes own a new fixed codec version"
+        );
+
+        let mut v4_header = frame;
+        v4_header[version_offset..version_offset + 2].copy_from_slice(&4_u16.to_le_bytes());
+        let header_error = decode_certified_serve_state_frame(&v4_header, u64::MAX)
+            .expect_err("the former frame version cannot decode the new waiter layout");
+        assert!(
+            header_error.contains("unsupported version 4"),
+            "unexpected former-header rejection: {header_error}"
+        );
+
+        let mut v4_payload = state;
+        v4_payload.format_version = 4;
+        let v4_payload_frame = encode_certified_serve_state_frame(&v4_payload, u64::MAX)
+            .expect("encode checksummed former payload marker");
+        let payload_error = decode_certified_serve_state_frame(&v4_payload_frame, u64::MAX)
+            .expect_err("the former payload marker cannot claim the new waiter layout");
+        assert!(
+            payload_error.contains("payload uses unsupported version 4"),
+            "unexpected former-payload rejection: {payload_error}"
+        );
+    }
+
+    #[test]
     fn durable_serve_corruption_fails_closed_without_highwater_reset() {
         let (service, keys) = fixture();
         let context = service.context.clone();
@@ -30256,6 +34449,7 @@ pub(super) mod tests {
             next_lifecycle_admission_ordinal: 1,
             ingress_waiters: vec![PersistedCertifiedServeIngressWaiter {
                 ingress_ordinal: 1,
+                lifecycle_id,
                 owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
                 request: request.request().clone(),
             }],
@@ -30264,6 +34458,7 @@ pub(super) mod tests {
                 owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
                 request: request.request().clone(),
             }],
+            negative_tombstones: Vec::new(),
             terminal_tombstones: vec![PersistedCertifiedServeTombstone {
                 lifecycle_id,
                 owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
@@ -30292,6 +34487,223 @@ pub(super) mod tests {
                 .expect("roundtrip maximum-layout durable frame"),
             expected
         );
+    }
+
+    #[test]
+    fn durable_raw_higher_view_drop_retains_admitted_owner_and_displaced_terminal() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let lower = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let higher = authenticated_serve_request(
+            &context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view + 1,
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let response = certified_serve_response(
+            &lower,
+            payload.manifest().clone(),
+            canonical_wire.clone(),
+            &keys[0],
+        );
+        let requester = lower.request().requester.clone();
+        let via = context.roster[0].validator.clone();
+        let body_root = TempDir::new().expect("raw replacement-drop body root");
+        let serve_root = TempDir::new().expect("raw replacement-drop Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
+        body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("persist lower exact body");
+
+        let (lower_id, higher_id, higher_scheduler_ordinal) = {
+            let (command_tx, command_rx, _admission) =
+                persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                    .expect("open raw replacement-drop queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(lower.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let (lower_admission, committed) = drain_and_commit_gated_serve(
+                &ingress,
+                &command_tx,
+                CertifiedServeOwnerKey::Roster(requester.clone()),
+                &lower,
+            );
+            assert!(matches!(committed, CertifiedServeCommit::Queued));
+            assert!(matches!(
+                command_rx.try_recv(),
+                Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                    if lifecycle_id == lower_admission.lifecycle_id
+            ));
+            command_rx
+                .complete_serve_response(lower_admission.lifecycle_id, &response)
+                .expect("seal lower terminal response");
+            command_tx
+                .acknowledge_serve_completion(
+                    lower_admission.lifecycle_id,
+                    V2IoServeTerminal::Response(response.clone()),
+                )
+                .expect("terminalize lower family");
+
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let barrier = command_tx
+                .serve_barrier()
+                .expect("inspect raw higher ticket")
+                .expect("raw higher replacement owns its physical ticket");
+            let higher_admission = command_tx
+                .prepare_reserved_serve(
+                    CertifiedServeOwnerKey::Roster(requester.clone()),
+                    higher.clone(),
+                )
+                .expect("prepare raw higher replacement before physical drain");
+            assert_eq!(higher_admission.lifecycle_id, barrier.lifecycle_id());
+            assert_eq!(
+                higher_admission.ingress_reservation_id,
+                Some(CertifiedServeIngressReservationId(
+                    barrier.scheduler_ordinal()
+                ))
+            );
+            assert!(
+                command_tx
+                    .queue
+                    .lock()
+                    .serve_replacements
+                    .contains_key(&higher_admission.lifecycle_id)
+            );
+
+            // Closing fair ingress drops the still-undrained raw carrier. This
+            // is a rollback to durable retry ownership, not a pre-gate abort.
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("detach prepared raw replacement carrier");
+            {
+                let state = command_tx.queue.lock();
+                assert!(state.serve_barrier.is_none());
+                assert!(state.serve_ingress_reservation.is_none());
+                assert_eq!(
+                    state
+                        .serve_ingress_waiters
+                        .get(&CertifiedServeIngressReservationId(
+                            barrier.scheduler_ordinal()
+                        ))
+                        .map(|waiter| waiter.lifecycle_id),
+                    Some(higher_admission.lifecycle_id)
+                );
+                assert_eq!(
+                    state
+                        .serves
+                        .get(&higher_admission.lifecycle_id)
+                        .map(|serve| serve.state),
+                    Some(V2IoServeState::AwaitingRetry)
+                );
+                assert_eq!(
+                    state
+                        .serve_replacements
+                        .get(&higher_admission.lifecycle_id)
+                        .map(|(previous, serve)| (*previous, serve.state)),
+                    Some((lower_admission.lifecycle_id, V2IoServeState::Terminal))
+                );
+            }
+            let persisted = command_tx
+                .queue
+                .serve_state_store
+                .as_ref()
+                .expect("fixture retains durable Serve state")
+                .load(&context)
+                .expect("reload raw replacement rollback snapshot");
+            assert_eq!(
+                persisted
+                    .ingress_waiters
+                    .iter()
+                    .map(|waiter| (waiter.ingress_ordinal, waiter.lifecycle_id))
+                    .collect::<Vec<_>>(),
+                vec![(barrier.scheduler_ordinal(), higher_admission.lifecycle_id)]
+            );
+            assert_eq!(
+                persisted
+                    .unsealed_lifecycles
+                    .iter()
+                    .map(|lifecycle| lifecycle.lifecycle_id)
+                    .collect::<Vec<_>>(),
+                vec![higher_admission.lifecycle_id]
+            );
+            assert_eq!(
+                persisted
+                    .terminal_tombstones
+                    .iter()
+                    .map(|tombstone| tombstone.lifecycle_id)
+                    .collect::<Vec<_>>(),
+                vec![lower_admission.lifecycle_id]
+            );
+            (
+                lower_admission.lifecycle_id,
+                higher_admission.lifecycle_id,
+                barrier.scheduler_ordinal(),
+            )
+        };
+
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                .expect("restart after raw replacement carrier drop");
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(
+                state.serves.get(&higher_id).map(|serve| serve.state),
+                Some(V2IoServeState::AwaitingRetry)
+            );
+            assert_eq!(
+                state
+                    .serve_replacements
+                    .get(&higher_id)
+                    .map(|(previous, serve)| (*previous, serve.state)),
+                Some((lower_id, V2IoServeState::Terminal))
+            );
+            assert_eq!(
+                state
+                    .serve_ingress_waiters
+                    .get(&CertifiedServeIngressReservationId(
+                        higher_scheduler_ordinal
+                    ))
+                    .map(|waiter| waiter.lifecycle_id),
+                Some(higher_id)
+            );
+        }
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(lower.request(), via.clone())),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(higher.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let resumed = command_tx
+            .serve_barrier()
+            .expect("inspect resumed raw replacement")
+            .expect("exact higher retry reattaches its dormant ticket");
+        assert_eq!(resumed.lifecycle_id(), higher_id);
+        assert_eq!(resumed.scheduler_ordinal(), higher_scheduler_ordinal);
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire resumed raw replacement fixture");
     }
 
     #[test]
@@ -30687,6 +35099,7 @@ pub(super) mod tests {
                     owner: CertifiedServeOwnerKey::AuthenticatedSource(source_b),
                     request: higher.request().clone(),
                 }],
+                negative_tombstones: Vec::new(),
                 terminal_tombstones: vec![PersistedCertifiedServeTombstone {
                     lifecycle_id: lower_id,
                     owner: CertifiedServeOwnerKey::AuthenticatedSource(source_a),
@@ -33559,11 +37972,9 @@ pub(super) mod tests {
         );
         let message = BlockMessage::V2(envelope.clone());
         let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
         let route = route_fixture.mint_via(sender.clone(), hub.clone());
-        let (_, proofless) =
-            fair_ingress_route_owner(message, sender.clone(), hub, route);
+        let (_, proofless) = fair_ingress_route_owner(message, sender.clone(), hub, route);
         let mut productive = proofless.clone();
 
         let token = super::super::FairV2IngressLeaderWireToken {
@@ -33602,35 +38013,33 @@ pub(super) mod tests {
                 0,
                 false,
             );
-        let (gate, _) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &directory.path().join("promoted-orphan.wal"),
-                service.context.id(),
-                service.context.height,
-                owner,
-                service
-                    .context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect(),
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open promoted-orphan lifecycle gate");
+        let (gate, _) = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("promoted-orphan.wal"),
+            service.context.id(),
+            service.context.height,
+            owner,
+            service
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            capacity,
+            service.context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open promoted-orphan lifecycle gate");
         gate.reserve(token.clone())
             .expect("reserve promoted-orphan token");
         gate.mark_ingress(&token)
             .expect("mark promoted-orphan ingress");
-        let runtime_owner =
-            super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
-                token.identity_hash(),
-                token.scheduler_ordinal(),
-            )
-            .expect("construct promoted-orphan runtime owner");
+        let runtime_owner = super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
+            token.identity_hash(),
+            token.scheduler_ordinal(),
+        )
+        .expect("construct promoted-orphan runtime owner");
         let runtime = gate
             .mark_runtime(&token, runtime_owner)
             .expect("mark promoted-orphan runtime");
@@ -33649,11 +38058,7 @@ pub(super) mod tests {
             PayloadChunkDisposition::Buffered
         );
         assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(
-                sender,
-                payload_chunk.clone(),
-                productive,
-            ),
+            service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), productive,),
             PayloadChunkDisposition::Duplicate
         );
         let promoted = service
@@ -34151,10 +38556,7 @@ pub(super) mod tests {
         let first_hash = manifest_hash(b"proofless-eviction-a");
         let second_hash = manifest_hash(b"proofless-eviction-b");
         assert_eq!(
-            service.buffer_orphan_payload_chunk(
-                sender.clone(),
-                chunk(first_hash, 0, b"a", 0),
-            ),
+            service.buffer_orphan_payload_chunk(sender.clone(), chunk(first_hash, 0, b"a", 0),),
             PayloadChunkDisposition::Buffered
         );
         assert_eq!(
@@ -34166,7 +38568,11 @@ pub(super) mod tests {
         assert_eq!(service.orphan_chunk_count, 1);
         assert_eq!(service.orphan_chunk_bytes, 1);
         assert_eq!(
-            service.orphan_chunks.values().map(VecDeque::len).sum::<usize>(),
+            service
+                .orphan_chunks
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
             1
         );
         assert!(service.evict_one_proofless_orphan_chunk());

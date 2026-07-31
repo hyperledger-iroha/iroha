@@ -4076,6 +4076,117 @@ PROOF
          DEF IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
   <1> QED BY <1>1
 
+(***************************************************************************
+Indexed quantitative fixed-deadline lift.
+
+The adequate-leader witness is the exact indexed Async state substitution,
+not a second behavior.  Bracketed product steps project to its `AsyncNext`,
+the composition invariant supplies the concrete ownership/tombstone facts,
+and `IndexedAdequateLeaderLocalFairBehaviorAt` supplies precisely the Tick,
+runner, I/O, ingress, retirement, and producer actions selected by the fixed
+rank.  A fixed-deadline source which is not already decided is also a local
+active-target source, hence all Responsive owners are joined by the existing
+source/activation bridge.  The same argument is applied source-by-source to
+protected starvation and Decision dissemination; an inactive instance owns
+neither source, so its leads-to clause is vacuous.  No indexed height or
+historical-recovery conclusion is used here.
+***************************************************************************)
+THEOREM IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster ==
+  \A initialContext \in AdmissibleContextRecords,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leaderView \in Views,
+     startTime, deadline \in Nat:
+    /\ IndexedCompositionInvariant
+    /\ IndexedAdequateLeaderWitness(initialContext)!
+         AdequateLeaderFixedCorridorDeadlineSource(
+           target, leaderContext, leaderView, startTime, deadline)
+    /\ ~IndexedAdequateLeaderWitness(initialContext)!NodeHasDecision(target)
+      => IndexedAllResponsiveJoined(initialContext)
+BY IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster, Isa
+   DEF IndexedAdequateLeaderWitness!
+         AdequateLeaderFixedCorridorDeadlineSource,
+       IndexedAdequateLeaderWitness!
+         AdequateLeaderFreshSynchronizedTargetCorridor,
+       IndexedAdequateLeaderWitness!
+         AdequateLeaderLocalTargetDecisionSource
+
+THEOREM
+    IndexedLiveChainSpecProvidesLocalAdequateLeaderFixedDeadlineAndResponsiveDissemination ==
+  IndexedLiveChainSpec
+    => IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+PROOF
+  <1>1. ASSUME IndexedLiveChainSpec
+         PROVE
+           IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+    <2>1. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
+    <2>2. []IndexedCompositionInvariant
+      BY <2>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>3. \A initialContext \in AdmissibleContextRecords:
+             [](IndexedAdequateLeaderWitness(initialContext)!
+                  AsyncAllVars = IndexedAsyncStateAt(initialContext))
+      BY <2>2, IndexedAdequateLeaderWitnessVariablesAreExact, PTL
+         DEF IndexedCompositionInvariant
+    <2>4. \A initialContext \in AdmissibleContextRecords:
+             IndexedAdequateLeaderLocalFairBehaviorAt(initialContext)
+      BY <1>1,
+         IndexedLiveChainSpecProvidesAdequateLeaderLocalFairBehavior
+    <2>5. ASSUME NEW initialContext \in AdmissibleContextRecords
+           PROVE IndexedAdequateLeaderWitness(initialContext)!
+                   AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty(
+                     IndexedChainSpec)
+      <3>1. initialContext
+               \in IndexedAdequateLeaderWitness(initialContext)!ContextRecords
+        BY <2>2, Isa
+           DEF IndexedCompositionInvariant,
+               IndexedEveryInstanceAsyncStrongTypeInvariant,
+               IndexedAdequateLeaderWitness!AsyncStrongTypeInvariant,
+               IndexedAdequateLeaderWitness!StrongInductiveInvariant,
+               IndexedAdequateLeaderWitness!Safety,
+               IndexedAdequateLeaderWitness!TypeInvariant,
+               IndexedAdequateLeaderWitness!ModelConfiguration,
+               AdmissibleContextRecords, FrozenContextAdmissible,
+               ContextRecords
+      <3>2. IndexedAdequateLeaderLocalFairBehaviorAt(initialContext)
+        BY <2>4
+      <3>3. [](IndexedAdequateLeaderWitness(initialContext)!
+                  AsyncAllVars = IndexedAsyncStateAt(initialContext))
+        BY <2>3
+      <3> QED
+        BY <1>1, <2>1, <2>2, <3>1, <3>2, <3>3,
+           IndexedLiveChainSpecProvidesLocalAdequateLeaderProofInvariants,
+           IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster,
+           IndexedAdequateLeaderFixedDeadlineSourceJoinsResponsiveRoster,
+           IndexedAllResponsiveJoinedIsStable,
+           IndexedLiveInstanceActivationObligation,
+           IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec,
+           IndexedAdequateLeaderWitness(initialContext)!
+             AsyncLiveSpecSuppliesAdequateLeaderFixedDeadlineAndResponsiveDissemination,
+           PTL, Isa
+           DEF IndexedAdequateLeaderLocalFairBehaviorAt,
+               IndexedAdequateLeaderWitness!
+                 AdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty,
+               IndexedAdequateLeaderWitness!
+                 AdequateLeaderFixedCorridorDeadlineServiceProperty,
+               IndexedAdequateLeaderWitness!
+                 AdequateLeaderFixedCorridorDeadlineSource,
+               IndexedAdequateLeaderWitness!
+                 AdequateLeaderFreshSynchronizedTargetCorridor,
+               IndexedAdequateLeaderWitness!
+                 AdequateLeaderLocalTargetDecisionSource,
+               IndexedAdequateLeaderWitness!StarvationFreedomProperty,
+               IndexedAdequateLeaderWitness!
+                 AdequateLeaderResponsiveDecisionDisseminationProperty,
+               IndexedAdequateLeaderWitness!AsyncLiveSpecAt,
+               IndexedAdequateLeaderWitness!AsyncSpecAt,
+               IndexedAdequateLeaderWitness!AsyncFairnessAt,
+               IndexedAsyncStateAt
+    <2> QED BY <2>5
+         DEF
+           IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
+  <1> QED BY <1>1
+
 THEOREM IndexedAdequateLeaderCompletedProvidersSupplyLocalSemanticKernel ==
   /\ IndexedLiveChainSpec
   /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty

@@ -6,10 +6,17 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLC_RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+
+[[ -f "$TLC_RESULT_CONTRACT" ]] || {
+  echo "shared TLC result contract is required at ${TLC_RESULT_CONTRACT}" >&2
+  exit 1
+}
+# shellcheck source=sumeragi_v2_tlc_result_contract.sh
+source "$TLC_RESULT_CONTRACT"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -74,6 +81,7 @@ models=(
   SumeragiV2EmptyProducerHandoffMutation.tla
   SumeragiV2ProducerOriginReservationMutation.tla
   SumeragiV2ProducerContinuationCausalRankMutation.tla
+  SumeragiV2ProducerReplayCapacityMutation.tla
   SumeragiV2RepresentativeLiveScopeMutation.tla
   SumeragiV2FixedCorridorPhysicalBudgetMutation.tla
   SumeragiV2FixedCorridorActionCreditMutation.tla
@@ -82,6 +90,8 @@ models=(
   SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla
   SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla
   SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla
+  SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla
+  SumeragiV2ServeRestartDormantDebtMutation.tla
 )
 
 for model in "${models[@]}"; do
@@ -101,12 +111,62 @@ for model in "${models[@]}"; do
     exit 1
   }
 done
-echo "[sany] all twenty-seven liveness-ownership mutation models parsed with frozen Java 21.0.12"
+echo "[sany] all ${#models[@]} liveness-ownership mutation models parsed with frozen Java 21.0.12"
 
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC
   -cleanup -workers 1 -fp 87 -seed 772441960364893113
 )
+
+assert_mutation_failure_contract() {
+  local label="$1"
+  local log="$2"
+  local expected_status="$3"
+  local expected_primary="$4"
+  local diagnostic_count
+  local whitespace_prefixed_count
+  if [[ "$expected_status" -eq 12 ]]; then
+    [[ "$expected_primary" =~ ^Error:\ Invariant\ .+\ is\ violated\.$ ]] || {
+      sumeragi_v2_tlc_contract_fail \
+        "$label" "$log" \
+        "status-12 mutation expected a named invariant primary diagnostic"
+    }
+  elif [[ "$expected_status" -eq 13 ]]; then
+    [[ "$expected_primary" == "Error: Temporal properties were violated." ]] || {
+      sumeragi_v2_tlc_contract_fail \
+        "$label" "$log" \
+        "status-13 mutation expected the exact temporal primary diagnostic"
+    }
+  else
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" \
+      "unsupported mutation status ${expected_status}"
+  fi
+  sumeragi_v2_tlc_assert_exact_line \
+    "$label" "$log" "$expected_primary"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$label" "$log" "Error: The behavior up to this point is:"
+  diagnostic_count="$(
+    grep -Ec \
+      '^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
+      "$log" || true
+  )"
+  [[ "$diagnostic_count" == 2 ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" \
+      "mutation TLC log must contain exactly its primary and behavior diagnostics; found ${diagnostic_count}"
+  }
+  whitespace_prefixed_count="$(
+    grep -Ec \
+      '^[[:space:]]+(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
+      "$log" || true
+  )"
+  [[ "$whitespace_prefixed_count" == 0 ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" \
+      "mutation TLC log contained whitespace-prefixed diagnostics"
+  }
+}
 
 run_case() {
   local label="$1"
@@ -116,7 +176,6 @@ run_case() {
   shift 4
   local log="${run_dir}/${label}.log"
   local actual_status
-  local last_nonblank
   set +e
   (
     cd "$FORMAL_DIR"
@@ -130,24 +189,25 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  for marker in "$@"; do
-    if ! grep -Fq "$marker" "$log"; then
-      echo "${label} missed expected marker: ${marker}" >&2
-      cat "$log" >&2
-      exit 1
-    fi
-  done
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
+  if [[ "$expected_status" -eq 12 || "$expected_status" -eq 13 ]]; then
+    [[ "$#" == 1 ]] || {
+      sumeragi_v2_tlc_contract_fail \
+        "$label" "$log" \
+        "mutation case must declare exactly one primary diagnostic"
+    }
+    assert_mutation_failure_contract \
+      "$label" "$log" "$expected_status" "$1"
+  else
+    for marker in "$@"; do
+      sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$marker"
+    done
+  fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }
 
@@ -171,6 +231,7 @@ fixed_cases=(
   "empty-producer-handoff|SumeragiV2EmptyProducerHandoffMutation.tla|empty_producer_handoff_fixed.cfg"
   "producer-origin-reservation|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_fixed.cfg"
   "producer-continuation-causal-rank|SumeragiV2ProducerContinuationCausalRankMutation.tla|producer_continuation_causal_rank_fixed.cfg"
+  "producer-replay-capacity|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_fixed.cfg"
   "representative-live-scope|SumeragiV2RepresentativeLiveScopeMutation.tla|representative_live_scope_fixed.cfg"
   "fixed-corridor-physical-budget|SumeragiV2FixedCorridorPhysicalBudgetMutation.tla|fixed_corridor_physical_budget_fixed.cfg"
   "fixed-corridor-action-credit|SumeragiV2FixedCorridorActionCreditMutation.tla|fixed_corridor_action_credit_fixed.cfg"
@@ -179,13 +240,13 @@ fixed_cases=(
   "adequate-leader-deadline-authority|SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla|adequate_leader_deadline_authority_fixed.cfg"
   "adequate-leader-selected-lifecycle-episode|SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla|adequate_leader_selected_lifecycle_episode_fixed.cfg"
   "fixed-corridor-receipt-acquisition|SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla|fixed_corridor_receipt_acquisition_fixed.cfg"
+  "ordinary-ingress-carrier-rebase|SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla|ordinary_ingress_carrier_rebase_fixed.cfg"
+  "serve-restart-dormant-debt|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_fixed.cfg"
 )
 
 for case_spec in "${fixed_cases[@]}"; do
   IFS='|' read -r label model config <<<"$case_spec"
-  run_case "$label" "$model" "$config" 0 \
-    "Model checking completed. No error has been found." \
-    "states left on queue."
+  run_case "$label" "$model" "$config" 0
 done
 
 mutation_cases=(
@@ -240,6 +301,8 @@ mutation_cases=(
   "producer-origin-new-ordinal|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_new_ordinal_bug.cfg|DepartureContinuationReusesAdmissionOrdinal"
   "producer-origin-duplicate-retry|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_duplicate_retry_bug.cfg|ExactOriginRetryCoalesces"
   "producer-continuation-stage-only-rank|SumeragiV2ProducerContinuationCausalRankMutation.tla|producer_continuation_causal_rank_stage_only_bug.cfg|FrozenCausalEpisodeCannotReplenish"
+  "producer-replay-capacity-blind-admission|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_blind_invariant_bug.cfg|PhysicalAndLatentChargesFitConfiguredCapacity"
+  "producer-replay-non-atomic-replacement|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_non_atomic_replay_bug.cfg|PhysicalAndLatentChargesFitConfiguredCapacity"
   "representative-live-missing-premise|SumeragiV2RepresentativeLiveScopeMutation.tla|representative_live_scope_missing_premise_bug.cfg|ReleaseLiveEvidenceIsRepresentative"
   "fixed-corridor-omitted-lane-cursor|SumeragiV2FixedCorridorPhysicalBudgetMutation.tla|fixed_corridor_physical_budget_omitted_lane_cursor_bug.cfg|PhysicalWindowBudgetCoversIndependentLanesAndCursorResets"
   "fixed-corridor-per-child-recharge|SumeragiV2FixedCorridorActionCreditMutation.tla|fixed_corridor_action_credit_per_child_recharge_bug.cfg|ExactSuccessorHandoffStrictlyConsumesCumulativeActionDebt"
@@ -250,13 +313,32 @@ mutation_cases=(
   "adequate-leader-selected-lifecycle-semantic-shortcut|SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla|adequate_leader_selected_lifecycle_episode_semantic_shortcut_bug.cfg|SelectedLifecycleEpisodeOrPhysicalDescent"
   "fixed-corridor-receipt-prestate-gap|SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla|fixed_corridor_receipt_acquisition_prestate_only_bug.cfg|ReceiptAcquisitionAndRetention"
   "fixed-corridor-receipt-global-retirement|SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla|fixed_corridor_receipt_acquisition_global_retire_bug.cfg|ReceiptAcquisitionAndRetention"
+  "ordinary-ingress-carrier-minimum-rebase|SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla|ordinary_ingress_carrier_rebase_minimum_bug.cfg|BusyDeferredOwnerUsesMinimumCompatibleCarrier"
+  "ordinary-ingress-carrier-identity-mutation|SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla|ordinary_ingress_carrier_rebase_identity_bug.cfg|IdentityMutationCannotCommit"
+  "serve-restart-drops-dormant-debt|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_drop_bug.cfg|RestartRetainsUnsealedServeDebt"
+  "serve-restart-reallocates-logical-ids|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_new_ids_bug.cfg|ExactPredrainRetryReactivatesSameLogicalIds"
+  "serve-restart-resurrects-completed-stage|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_resurrection_bug.cfg|CompletedTombstoneBlocksResurrection"
+  "serve-restart-dormant-producer-churn|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_churn_bug.cfg|DormantDebtBlocksCausalControlCompletionChurn"
+  "serve-restart-later-dormant-retry|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_later_retry_bug.cfg|EarliestDormantWaiterOwnsReactivation"
+  "serve-restart-lifecycle-zero-junk-debt|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_junk_bug.cfg|RestartDropsLifecycleZeroPolicyRejection"
+  "serve-restart-reuses-postdrain-scheduler|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_postdrain_scheduler_bug.cfg|PostDrainRetryRetainsLifecycleWithFreshScheduler"
+  "serve-receiver-close-drops-committed-lifecycle|SumeragiV2ServeRestartDormantDebtMutation.tla|serve_restart_dormant_debt_rollback_bug.cfg|PendingCloseRetainsDormantCommittedSchedulerDebt"
 )
 
 for case_spec in "${mutation_cases[@]}"; do
   IFS='|' read -r label model config invariant <<<"$case_spec"
   run_case "$label" "$model" "$config" 12 \
-    "Error: Invariant ${invariant} is violated." \
-    "Error: The behavior up to this point is:"
+    "Error: Invariant ${invariant} is violated."
 done
 
-echo "[tlc] all 61 liveness-ownership mutations produced their exact named counterexamples; repaired models passed"
+temporal_mutation_cases=(
+  "producer-replay-capacity-replenishment-lasso|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_replenishment_lasso_bug.cfg"
+)
+
+for case_spec in "${temporal_mutation_cases[@]}"; do
+  IFS='|' read -r label model config <<<"$case_spec"
+  run_case "$label" "$model" "$config" 13 \
+    "Error: Temporal properties were violated."
+done
+
+echo "[tlc] all ${#mutation_cases[@]} invariant and ${#temporal_mutation_cases[@]} temporal liveness-ownership mutations produced their exact named counterexamples; all ${#fixed_cases[@]} repaired models passed"

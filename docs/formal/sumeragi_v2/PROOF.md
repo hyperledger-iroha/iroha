@@ -1090,7 +1090,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 782 tests across thirty-nine Rust
+The current pre-network release inventory names 806 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1180,8 +1180,10 @@ lifecycle-store regression binds the full origin/phase/chunk slot product and
 restart-stable terminal coalescing, yielding the 774-test checkpoint. Eight
 runtime/effect/runner regressions now bind Decision/lock retirement,
 same-turn terminal consumption across live and recovery capacity retries, and
-fail-closed authenticated semantic-only Coalesce defense, yielding the current
-782-test, 39-module inventory. The complete source-sealed
+fail-closed authenticated semantic-only Coalesce defense. Subsequent source
+reconciliation and exact-ingress lifecycle, restart, provenance, and
+quarantine regressions bind one logical owner across every physical retry,
+yielding the current 806-test, 39-module inventory. The complete source-sealed
 pre-network corridor
 contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
@@ -1252,7 +1254,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`62846b01b09e3377b768793223e6fc1c3103c6dede907d9169bff8c70610a749`.
+`877ec0909ecfb9c22118b9b976ec87d709e3d8d012cb2d693c8465524405fee5`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

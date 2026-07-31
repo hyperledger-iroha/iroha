@@ -809,6 +809,46 @@ BY CoreStutterRefinesBracketNext, Isa
        SelectedLocalAdmissionAdvance,
        AdmitProducerCompletion, AdmitCausalHead
 
+THEOREM ReplayRunNodeContinuationRefinesCoreBracketNext ==
+  TypeInvariant =>
+    \A node \in ValidatorIds:
+      ReplayRunNodeCandidateProducerContinuation(node) => [Next]_vars
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE \A node \in ValidatorIds:
+                 ReplayRunNodeCandidateProducerContinuation(node)
+                   => [Next]_vars
+    <2>1. ASSUME NEW node \in ValidatorIds,
+                  ReplayRunNodeCandidateProducerContinuation(node)
+           PROVE [Next]_vars
+      <3>1. CASE
+                AsyncCandidateProducerContinuationExactLocalReplayStep(
+                  node)
+        <4>1. UNCHANGED vars
+          BY <3>1
+             DEF AsyncCandidateProducerContinuationExactLocalReplayStep
+        <4> QED BY <4>1, CoreStutterRefinesBracketNext
+      <3>2. CASE
+                AsyncCandidateProducerContinuationReplayTargetOnlyTurn(
+                  node)
+        <4>1. UNCHANGED vars
+          BY <3>2
+             DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn
+        <4> QED BY <4>1, CoreStutterRefinesBracketNext
+      <3>3. CASE
+                AsyncCandidateProducerContinuationExactRuntimeReplayStep(
+                  node)
+        <4>1. RuntimeStep(node)
+          BY <3>3, Isa
+             DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+                 RuntimeStep
+        <4> QED BY <1>1, <2>1, <4>1,
+             RuntimeStepRefinesCoreBracketNext
+      <3> QED BY <2>1, <3>1, <3>2, <3>3
+           DEF ReplayRunNodeCandidateProducerContinuation
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkRefinesCoreBracketNext ==
   TypeInvariant =>
     \A node \in ValidatorIds:
@@ -823,6 +863,10 @@ PROOF
               ResolveRunNodeCandidateProducerContinuation(node)
         BY <3>0, CoreStutterRefinesBracketNext, Isa
            DEF ResolveRunNodeCandidateProducerContinuation, vars
+      <3>0p. CASE
+               ReplayRunNodeCandidateProducerContinuation(node)
+        BY <1>1, <2>1, <3>0p,
+           ReplayRunNodeContinuationRefinesCoreBracketNext
       <3>1. CASE LocalAdmissionStep(node)
         BY <3>1, LocalAdmissionStepRefinesCoreBracketNext
       <3>2. CASE IngressDrainStep(node)
@@ -837,7 +881,8 @@ PROOF
         <4> QED BY <4>1, CoreStutterRefinesBracketNext
       <3>5. CASE SerializedLocalPrecedesServeIngressStep(node)
         BY <3>5, SerializedLocalPredecessorRefinesCoreBracketNext
-      <3> QED BY <2>1, <3>0, <3>1, <3>2, <3>3, <3>4, <3>5
+      <3> QED BY <2>1, <3>0, <3>0p, <3>1, <3>2, <3>3, <3>4,
+                   <3>5
            DEF RunNodeWork
     <2> QED BY <2>1
   <1> QED BY <1>1

@@ -12,11 +12,11 @@ the lower dependency chain.
 The authenticated CertifiedResponse authority used below is route-neutral:
 the response retains the exact signed-request hash and authenticated sent
 occurrence, its archive server owns the response signature, and its cited
-responder is an authenticated frozen-roster archive identity.  The CommitQC
-authorizes the exact subject; it does not restrict service to its signer set.
-Request recipients remain a routing concern in the imported request-owner
-predicate; no theorem below uses a response archive server's membership in
-the request route set.
+responder is an authenticated frozen CommitQC signer.  V5 additionally
+requires the response archive server itself to be a signer which retains the
+canonical body.  Request recipients remain full-roster routing identities;
+non-signers receive the request but publish a typed negative rather than a
+response.
 
 No production action is redefined.  FinalWitnessMonotoneCarrierFrame is a
 proof-only summary of append-only authentication/request history and
@@ -745,7 +745,7 @@ THEOREM SerializedRuntimePreservesResponsiveReplayLineagedCarrier ==
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ ResponsiveReplayLockedBodyLineagedCarrierInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     /\ UNCHANGED AsyncRecoveryVars
     => ResponsiveReplayLockedBodyLineagedCarrierInvariant'
 BY HistoricalLockedBodyExecutableCandidateIsDispatchable,
@@ -797,7 +797,10 @@ BY HistoricalLockedBodyExecutableCandidateIsDispatchable,
        InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
        NoHigherConflictingPrepareKnown, RestartLockedPrepareQCs,
        CommandSuccessorsScheduledAfter,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       RuntimeStep,
        FifoRuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
@@ -827,9 +830,29 @@ THEOREM RunNodeWorkPreservesResponsiveReplayLineagedCarrier ==
 BY LocalAdmissionPreservesResponsiveReplayLineagedCarrier,
    IngressDrainPreservesResponsiveReplayLineagedCarrier,
    SerializedRuntimePreservesResponsiveReplayLineagedCarrier, Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep,
+   DEF RunNodeWork, SerializedRunnerRuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
        ResolveRunNodeCandidateProducerContinuation,
-       AsyncSchedulerExceptCausalControlAndNodeService
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       EnqueueCandidate, CandidateScheduled, ScheduledCandidateSet,
+       AsyncRecoveryVars, SequenceSet, vars
 
 THEOREM RunHistoricalServerEstablishesFinalMonotoneCarrierFrame ==
   \A node \in ValidatorIds:

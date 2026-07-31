@@ -114,8 +114,15 @@ readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
 readonly tlaps_resource_jsonl_copy="${invocation_dir}/tlaps_resource.jsonl"
 readonly tlaps_resource_summary_copy="${invocation_dir}/tlaps_resource_summary.json"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
-readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness/liveness-ownership/historical-discovery-rank mutations, bounded TLC, trace replay, and production Verus"
+readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, all registered adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
 readonly source_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
+readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
+readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
+readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
+readonly source_cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
+readonly source_multilane_apalache_evidence="target/formal/sumeragi_v2/multilane_apalache_evidence.tsv"
+readonly source_tlaps_resource_jsonl="target/formal/sumeragi_v2/tlaps_resource.jsonl"
+readonly source_tlaps_resource_summary="target/formal/sumeragi_v2/tlaps_resource_summary.json"
 cross_tool_obligations="$(
   python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
     --ledger "$source_ledger" \
@@ -124,6 +131,17 @@ cross_tool_obligations="$(
 readonly cross_tool_obligations
 
 verify_identity "before execution"
+# Every copied artifact must be published by this invocation. Remove the exact
+# shared-target outputs first so a skipped producer cannot satisfy the release
+# checks with evidence left by an earlier run.
+rm -f -- \
+  "$source_evidence" \
+  "$source_verus_evidence" \
+  "$source_verus_log" \
+  "$source_cross_tool_evidence" \
+  "$source_multilane_apalache_evidence" \
+  "$source_tlaps_resource_jsonl" \
+  "$source_tlaps_resource_summary"
 readonly SUMERAGI_TLAPS_THREADS=1
 export SUMERAGI_TLAPS_THREADS
 set +e
@@ -143,13 +161,6 @@ if [[ "$marker_count" != 1 || "$last_line" != "$final_marker" ]]; then
   exit 1
 fi
 
-readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
-readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
-readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
-readonly source_cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
-readonly source_multilane_apalache_evidence="target/formal/sumeragi_v2/multilane_apalache_evidence.tsv"
-readonly source_tlaps_resource_jsonl="target/formal/sumeragi_v2/tlaps_resource.jsonl"
-readonly source_tlaps_resource_summary="target/formal/sumeragi_v2/tlaps_resource_summary.json"
 if [[ ! -f "$source_ledger" || -L "$source_ledger" \
   || ! -f "$source_evidence" || -L "$source_evidence" \
   || ! -f "$source_verus_evidence" || -L "$source_verus_evidence" \

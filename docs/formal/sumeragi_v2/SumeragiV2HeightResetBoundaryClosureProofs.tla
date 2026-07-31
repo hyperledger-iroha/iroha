@@ -12,20 +12,22 @@ This leaf discharges every due scheduler owner without confusing a merely
   * a due nonempty I/O turn removes its weight-one blocker;
   * an admissible overdue lane head consumes that exact overdue packet; and
   * candidate and Serve rank descent is retained as an explicit productive
-    fair-action class.
+fair-action class.
 
 The remaining packet case is exact.  An overdue packet can be hidden behind
 an older due packet in the same source lane.  If the lane head is itself
 overdue, it can still be fresh and rejected by the capacity, timeout-byte, or
 transport-completion ownership gates.  Neither case is an immediate
 `PostGstProductiveEffect`, and an idle Runtime-to-Local reset is not promoted
-to one.  Instead, the temporal suffix proves that, while no immediate
-productive action exists, every still-undecided fixed voter is at Runtime;
-its exact weakly fair runner either completes one finite Runtime episode into
-Local or gives an admitted exact Serve owner its target-only Ingress turn.
-Either successor exposes productivity or a durable Decision.  Stable Decision
-receipts are then accumulated by finite induction over the frozen roster.  The
-final equivalence therefore discharges
+to one.  Instead, the temporal suffix splits each still-undecided fixed voter
+between an ordinary Runtime-ready state and an immutable producer-continuation
+episode.  The latter has a separately proved finite rank.  The exact weakly
+fair Runtime turn then reaches Local/Ingress directly or creates one
+continuation whose no-replenishment corridor returns to Local/Ingress before
+the target can be overtaken.  Only the resulting productive action or durable
+Decision closes the reset state.  Stable Decision receipts are then
+accumulated by finite induction over the frozen roster.  The final equivalence
+therefore discharges
 the strictly smaller ingress-ownership residual without relabelling a reset as
 productive work.
 
@@ -296,6 +298,7 @@ THEOREM GstResponsiveUnappliedRunNodeIsEnabled ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ ~NodeHasApplication(node)
     => ENABLED PostGstRunNode(node)
@@ -303,6 +306,7 @@ PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
                 AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 ~NodeHasApplication(node)
          PROVE ENABLED PostGstRunNode(node)
@@ -325,6 +329,7 @@ THEOREM GstHistoricalRecoveryRunNodeIsEnabled ==
   \A node \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
 BY HistoricalRecoveryRunnerEnabledAfterGst
@@ -372,12 +377,14 @@ servers; active historical-recovery targets are necessarily unapplied.
 THEOREM DueNodeServiceBlockerIsImmediatelyProductive ==
   /\ AsyncStrongTypeInvariant
   /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
   /\ gst
   /\ PostGstNodeServiceBlockers # {}
   => ImmediateProductiveFairActionReady
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
               AsyncCandidateProducerContinuationExternalCoverageInvariant,
+              AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
               gst,
               PostGstNodeServiceBlockers # {}
          PROVE ImmediateProductiveFairActionReady
@@ -2126,12 +2133,14 @@ BY DEF HeightResetIngressOwnershipResidual
 THEOREM ResetBoundaryHasImmediateProductivityOrIngressResidual ==
   /\ AsyncStrongTypeInvariant
   /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
   /\ HeightProductivityResetBoundary
   => \/ ImmediateProductiveFairActionReady
      \/ HeightResetIngressOwnershipResidual
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
               AsyncCandidateProducerContinuationExternalCoverageInvariant,
+              AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
               HeightProductivityResetBoundary
          PROVE \/ ImmediateProductiveFairActionReady
                \/ HeightResetIngressOwnershipResidual
@@ -2170,11 +2179,13 @@ Fair Runtime-reset closure.
 The ingress dependency product above explains the concrete packet owners, but
 the temporal reset-boundary exit has a smaller scheduler proof.  In any state
 without an immediately productive action, every still-undecided responsive
-voter must be at Runtime: Local and Ingress are already covered by the strict
-`RuntimeReachRank` certificate.  The exact weakly fair `PostGstRunNode` action
-then returns that voter to Local after ordinary or older Runtime work, or moves
-it directly to Ingress for an admitted exact Serve owner.  Its successor either
-records a Decision or immediately exposes the Local/Ingress certificate.
+voter either has an immutable producer continuation owning its runner or,
+after that finite episode clears, is at Runtime.  The exact weakly fair
+`PostGstRunNode` action then returns that voter to Local after ordinary or
+older Runtime work, or moves it directly to Ingress for an admitted exact
+Serve owner.  A producer continuation created by that turn remains in the
+separate Local/Ingress resolution corridor; it is not called productive
+merely because its finite rank will later drain.
 
 The per-voter result is accumulated over the frozen one-height roster.  Durable
 Decision receipts make each finite prefix stable; no fairness over an
@@ -2192,6 +2203,19 @@ HeightResetNodePending(initialContext, node) ==
   /\ node \in AsyncVotersAt(initialContext)
   /\ ~HeightResetNodeExit(node)
 
+HeightResetNodeRuntimeReady(initialContext, node) ==
+  /\ HeightResetNodePending(initialContext, node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+
+HeightResetNodeProducerContinuationPending(initialContext, node) ==
+  /\ HeightResetNodePending(initialContext, node)
+  /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+
+HeightResetNodeLocalIngressContinuationPending(initialContext, node) ==
+  /\ HeightResetNodePending(initialContext, node)
+  /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+  /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+
 HeightResetDecisionPrefixAt(initialContext, limit) ==
   \A node \in AsyncVotersAt(initialContext) \cap (0..limit):
     NodeHasDecision(node)
@@ -2199,16 +2223,23 @@ HeightResetDecisionPrefixAt(initialContext, limit) ==
 THEOREM UndecidedCurrentVoterWithoutImmediateProductivityIsAtRuntime ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ ~NodeHasDecision(node)
     /\ ~ImmediateProductiveFairActionReady
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     => asyncRunnerPhase[node] = "Runtime"
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 ~NodeHasDecision(node),
-                ~ImmediateProductiveFairActionReady
+                ~ImmediateProductiveFairActionReady,
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
          PROVE asyncRunnerPhase[node] = "Runtime"
     <2>1. /\ AsyncTypeInvariant
            /\ node \in ValidatorIds
@@ -2229,12 +2260,15 @@ PROOF
 THEOREM RuntimePostGstRunNodeIsNonstuttering ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncTypeInvariant
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ asyncRunnerPhase[node] = "Runtime"
     /\ PostGstRunNode(node)
     => <<PostGstRunNode(node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncTypeInvariant,
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node),
                 asyncRunnerPhase[node] = "Runtime",
                 PostGstRunNode(node)
          PROVE <<PostGstRunNode(node)>>_AsyncAllVars
@@ -2265,24 +2299,21 @@ PROOF
     <2> QED BY <2>2, <2>3, <2>4
   <1> QED BY <1>1
 
-THEOREM RuntimePostGstRunNodeExposesProductivityOrDecision ==
+THEOREM RuntimePostGstRunNodeMovesToLocalOrIngress ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
-    /\ AsyncStrongTypeInvariant'
-    /\ gst
-    /\ ~NodeHasDecision(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ asyncRunnerPhase[node] = "Runtime"
     /\ PostGstRunNode(node)
-    => HeightResetNodeExit(node)'
+    => asyncRunnerPhase'[node] \in {"Local", "Ingress"}
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
-                AsyncStrongTypeInvariant',
-                gst,
-                ~NodeHasDecision(node),
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node),
                 asyncRunnerPhase[node] = "Runtime",
                 PostGstRunNode(node)
-         PROVE HeightResetNodeExit(node)'
+         PROVE asyncRunnerPhase'[node] \in {"Local", "Ingress"}
     <2>1. /\ AsyncTypeInvariant
            /\ node \in ValidatorIds
       BY <1>1, AsyncStrongTypeProjectsAsyncType,
@@ -2300,90 +2331,19 @@ PROOF
         BY <2>1, <3>2,
            AsyncServeIngressTargetOnlyTurnJumpsToIngress
       <3> QED BY <2>2, <3>1, <3>2
-    <2>4. /\ gst'
-           /\ AsyncCurrentResponsiveVoters'
-                = AsyncCurrentResponsiveVoters
-      BY <1>1, <2>2, Isa
-         DEF PostGstRunNode, RunNode, RunNodeWork,
-             SerializedLocalPrecedesServeIngressStep,
-             SelectedLocalAdmissionAdvance,
-             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
-             SerializedRuntimePrecedesServeIngressStep,
-             AsyncServeIngressTargetOnlyTurn,
-             AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
-    <2>5. CASE NodeHasDecision(node)'
-      BY <2>5 DEF HeightResetNodeExit
-    <2>6. CASE ~NodeHasDecision(node)'
-      <3>1. ImmediateProductiveFairActionReady'
-        BY <1>1, <2>3, <2>4, <2>6,
-           GstUndecidedLocalOrIngressRunnerIsImmediatelyProductive
-      <3> QED BY <3>1 DEF HeightResetNodeExit
-    <2> QED BY <2>5, <2>6
+    <2> QED BY <2>3
   <1> QED BY <1>1
 
-THEOREM HeightResetNodePendingEnablesFairRuntimeReset ==
-  \A initialContext:
-    \A node \in AsyncVotersAt(initialContext):
-      HeightResetNodePending(initialContext, node)
-        => ENABLED
-             <<PostGstRunNode(node)>>_AsyncAllVars
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                NEW node \in AsyncVotersAt(initialContext),
-                HeightResetNodePending(initialContext, node)
-         PROVE ENABLED
-                 <<PostGstRunNode(node)>>_AsyncAllVars
-    <2>1. /\ node \in AsyncCurrentResponsiveVoters
-           /\ ~NodeHasDecision(node)
-           /\ ~ImmediateProductiveFairActionReady
-      BY <1>1 DEF HeightResetNodePending, HeightResetNodeExit,
-                    OneHeightFrameAt
-    <2>2. asyncRunnerPhase[node] = "Runtime"
-      BY <1>1, <2>1,
-         UndecidedCurrentVoterWithoutImmediateProductivityIsAtRuntime
-         DEF HeightResetNodePending
-    <2>3. ENABLED PostGstRunNode(node)
-      BY <1>1, <2>1, GstUndecidedResponsiveRunNodeIsEnabled
-         DEF HeightResetNodePending
-    <2>4. PostGstRunNode(node)
-             => <<PostGstRunNode(node)>>_AsyncAllVars
-      BY <1>1, <2>1, <2>2,
-         AsyncStrongTypeProjectsAsyncType,
-         RuntimePostGstRunNodeIsNonstuttering
-         DEF HeightResetNodePending
-    <2> QED BY <2>3, <2>4, ENABLEDaxioms
-  <1> QED BY <1>1
-
-THEOREM HeightResetNodePendingRuntimeResetReachesExit ==
+THEOREM HeightResetNodeLocalIngressWithoutExitOwnsContinuation ==
   \A initialContext:
     \A node \in AsyncVotersAt(initialContext):
       /\ HeightResetNodePending(initialContext, node)
-      /\ <<PostGstRunNode(node)>>_AsyncAllVars
-      => HeightResetNodeExit(node)'
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                NEW node \in AsyncVotersAt(initialContext),
-                HeightResetNodePending(initialContext, node),
-                <<PostGstRunNode(node)>>_AsyncAllVars
-         PROVE HeightResetNodeExit(node)'
-    <2>1. /\ node \in AsyncCurrentResponsiveVoters
-           /\ ~NodeHasDecision(node)
-           /\ ~ImmediateProductiveFairActionReady
-      BY <1>1 DEF HeightResetNodePending, HeightResetNodeExit,
-                    OneHeightFrameAt
-    <2>2. asyncRunnerPhase[node] = "Runtime"
-      BY <1>1, <2>1,
-         UndecidedCurrentVoterWithoutImmediateProductivityIsAtRuntime
-         DEF HeightResetNodePending
-    <2>3. PostGstRunNode(node)
-      BY <1>1
-    <2>4. AsyncStrongTypeInvariant'
-      BY <1>1, AsyncBracketNextPreservesStrongTypeInvariant
-         DEF HeightResetNodePending
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4,
-         RuntimePostGstRunNodeExposesProductivityOrDecision
-         DEF HeightResetNodePending
-  <1> QED BY <1>1
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+        => AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+BY GstUndecidedLocalOrIngressRunnerIsImmediatelyProductive, Isa
+   DEF HeightResetNodePending, HeightResetNodeExit, OneHeightFrameAt
 
 THEOREM HeightResetNodePendingUnlessExit ==
   \A initialContext:
@@ -2415,6 +2375,216 @@ PROOF
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
 
+THEOREM HeightResetNodeRuntimeReadyEnablesFairRuntimeReset ==
+  \A initialContext:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ HeightResetNodeRuntimeReady(initialContext, node)
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+        => ENABLED
+             <<PostGstRunNode(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW node \in AsyncVotersAt(initialContext),
+                HeightResetNodeRuntimeReady(initialContext, node),
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+         PROVE ENABLED
+                 <<PostGstRunNode(node)>>_AsyncAllVars
+    <2>1. /\ node \in AsyncCurrentResponsiveVoters
+           /\ ~NodeHasDecision(node)
+           /\ ~ImmediateProductiveFairActionReady
+           /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                node)
+      BY <1>1 DEF HeightResetNodeRuntimeReady,
+                    HeightResetNodePending, HeightResetNodeExit,
+                    OneHeightFrameAt
+    <2>2. asyncRunnerPhase[node] = "Runtime"
+      BY <1>1, <2>1,
+         UndecidedCurrentVoterWithoutImmediateProductivityIsAtRuntime
+         DEF HeightResetNodePending
+    <2>3. ENABLED PostGstRunNode(node)
+      BY <1>1, <2>1, GstUndecidedResponsiveRunNodeIsEnabled
+         DEF HeightResetNodePending
+    <2>4. PostGstRunNode(node)
+             => <<PostGstRunNode(node)>>_AsyncAllVars
+      BY <1>1, <2>1, <2>2,
+         AsyncStrongTypeProjectsAsyncType,
+         RuntimePostGstRunNodeIsNonstuttering
+         DEF HeightResetNodePending
+    <2> QED BY <2>3, <2>4, ENABLEDaxioms
+  <1> QED BY <1>1
+
+THEOREM HeightResetNodeRuntimeReadyFrame ==
+  \A initialContext:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ HeightResetNodeRuntimeReady(initialContext, node)
+      /\ AsyncProgressOwnershipInvariant
+      /\ [AsyncNext]_AsyncAllVars
+      => \/ HeightResetNodeExit(node)'
+         \/ HeightResetNodeRuntimeReady(initialContext, node)'
+         \/ <<PostGstRunNode(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW node \in AsyncVotersAt(initialContext),
+                HeightResetNodeRuntimeReady(initialContext, node),
+                AsyncProgressOwnershipInvariant,
+                [AsyncNext]_AsyncAllVars
+         PROVE \/ HeightResetNodeExit(node)'
+               \/ HeightResetNodeRuntimeReady(initialContext, node)'
+               \/ <<PostGstRunNode(node)>>_AsyncAllVars
+    <2>1. \/ HeightResetNodePending(initialContext, node)'
+           \/ HeightResetNodeExit(node)'
+      BY <1>1, HeightResetNodePendingUnlessExit
+         DEF HeightResetNodeRuntimeReady
+    <2>2. \/ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  node)'
+           \/ <<PostGstRunNode(node)>>_AsyncAllVars
+      BY <1>1,
+         AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion
+         DEF HeightResetNodeRuntimeReady, HeightResetNodePending,
+             HeightResetNodeExit, OneHeightFrameAt
+    <2> QED BY <1>1, <2>1, <2>2
+         DEF HeightResetNodeRuntimeReady
+  <1> QED BY <1>1
+
+THEOREM HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation ==
+  \A initialContext:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ HeightResetNodeRuntimeReady(initialContext, node)
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant'
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant'
+      /\ [AsyncNext]_AsyncAllVars
+      /\ <<PostGstRunNode(node)>>_AsyncAllVars
+      => \/ HeightResetNodeExit(node)'
+         \/ HeightResetNodeLocalIngressContinuationPending(
+              initialContext, node)'
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW node \in AsyncVotersAt(initialContext),
+                HeightResetNodeRuntimeReady(initialContext, node),
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant',
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant',
+                [AsyncNext]_AsyncAllVars,
+                <<PostGstRunNode(node)>>_AsyncAllVars
+         PROVE \/ HeightResetNodeExit(node)'
+               \/ HeightResetNodeLocalIngressContinuationPending(
+                    initialContext, node)'
+    <2>1. /\ node \in AsyncCurrentResponsiveVoters
+           /\ ~NodeHasDecision(node)
+           /\ ~ImmediateProductiveFairActionReady
+           /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                node)
+      BY <1>1 DEF HeightResetNodeRuntimeReady,
+                    HeightResetNodePending, HeightResetNodeExit,
+                    OneHeightFrameAt
+    <2>2. asyncRunnerPhase[node] = "Runtime"
+      BY <1>1, <2>1,
+         UndecidedCurrentVoterWithoutImmediateProductivityIsAtRuntime
+         DEF HeightResetNodePending
+    <2>3. PostGstRunNode(node)
+      BY <1>1
+    <2>4. asyncRunnerPhase'[node] \in {"Local", "Ingress"}
+      BY <1>1, <2>1, <2>2, <2>3,
+         RuntimePostGstRunNodeMovesToLocalOrIngress
+         DEF HeightResetNodePending
+    <2>5. \/ HeightResetNodePending(initialContext, node)'
+           \/ HeightResetNodeExit(node)'
+      BY <1>1, HeightResetNodePendingUnlessExit
+    <2>6. CASE HeightResetNodeExit(node)'
+      BY <2>6
+    <2>7. CASE HeightResetNodePending(initialContext, node)'
+      <3>1.
+        AsyncCandidateProducerContinuationRunnerResolutionRequired(node)'
+        BY <1>1, <2>4, <2>7,
+           HeightResetNodeLocalIngressWithoutExitOwnsContinuation
+      <3> QED BY <2>4, <2>7, <3>1
+           DEF HeightResetNodeLocalIngressContinuationPending
+    <2> QED BY <2>5, <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM FairRuntimeReadyReachesExitOrLocalIngressContinuation ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext):
+           HeightResetNodeRuntimeReady(initialContext, node)
+             ~> (HeightResetNodeExit(node)
+                   \/ HeightResetNodeLocalIngressContinuationPending(
+                        initialContext, node))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+   HeightResetNodeRuntimeReadyEnablesFairRuntimeReset,
+   HeightResetNodeRuntimeReadyFrame,
+   HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation,
+   WF1, PTL, Isa
+   DEF AsyncLiveSpecAt, AsyncSpecAt, AsyncFairnessAt
+
+THEOREM FairLocalIngressContinuationReachesExit ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext):
+           HeightResetNodeLocalIngressContinuationPending(
+             initialContext, node)
+             ~> HeightResetNodeExit(node)
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+   AsyncSpecProvidesVoterCandidateProducerContinuationLocalIngressResolutionCorridor,
+   HeightResetNodePendingUnlessExit,
+   HeightResetNodeLocalIngressWithoutExitOwnsContinuation,
+   PTL, IsaT(600)
+   DEF AsyncVoterCandidateProducerContinuationLocalIngressResolutionCorridorProperty,
+       AsyncVoterCandidateProducerContinuationLocalIngressResolutionGoal,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       HeightResetNodeLocalIngressContinuationPending,
+       HeightResetNodePending, HeightResetNodeExit,
+       OneHeightFrameAt, AsyncLiveSpecAt, AsyncSpecAt
+
+THEOREM FairRuntimeReadyReachesExit ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext):
+           HeightResetNodeRuntimeReady(initialContext, node)
+             ~> HeightResetNodeExit(node)
+BY FairRuntimeReadyReachesExitOrLocalIngressContinuation,
+   FairLocalIngressContinuationReachesExit, PTL
+
+THEOREM FairProducerContinuationReachesExitOrRuntimeReady ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext):
+           HeightResetNodeProducerContinuationPending(
+             initialContext, node)
+             ~> (HeightResetNodeExit(node)
+                   \/ HeightResetNodeRuntimeReady(initialContext, node))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure,
+   HeightResetNodePendingUnlessExit,
+   PTL, Isa
+   DEF AsyncVoterCandidateProducerContinuationResolutionClosureProperty,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       HeightResetNodeProducerContinuationPending,
+       HeightResetNodeRuntimeReady, HeightResetNodePending,
+       HeightResetNodeExit, OneHeightFrameAt,
+       AsyncLiveSpecAt, AsyncSpecAt
+
+THEOREM FairProducerContinuationReachesExit ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext):
+           HeightResetNodeProducerContinuationPending(
+             initialContext, node)
+             ~> HeightResetNodeExit(node)
+BY FairProducerContinuationReachesExitOrRuntimeReady,
+   FairRuntimeReadyReachesExit, PTL
+
 THEOREM FairRuntimeResetExposesProductivityOrDecision ==
   \A initialContext:
     AsyncLiveSpecAt(initialContext)
@@ -2431,27 +2601,24 @@ PROOF
            PROVE AsyncLiveSpecAt(initialContext)
                    => (HeightResetNodePending(initialContext, node)
                          ~> HeightResetNodeExit(node))
-      <3>1. HeightResetNodePending(initialContext, node)
-               /\ ~HeightResetNodeExit(node)
-              => ENABLED
-                   <<PostGstRunNode(node)>>_AsyncAllVars
-        BY <2>1, HeightResetNodePendingEnablesFairRuntimeReset
-      <3>2. HeightResetNodePending(initialContext, node)
-               /\ ~HeightResetNodeExit(node)
-               /\ <<PostGstRunNode(node)>>_AsyncAllVars
-              => HeightResetNodeExit(node)'
-        BY <2>1, HeightResetNodePendingRuntimeResetReachesExit
-      <3>3. HeightResetNodePending(initialContext, node)
-               /\ [AsyncNext]_AsyncAllVars
-              => HeightResetNodePending(initialContext, node)'
-                   \/ HeightResetNodeExit(node)'
-        BY <2>1, HeightResetNodePendingUnlessExit
-      <3>4. AsyncLiveSpecAt(initialContext)
-               => WF_AsyncAllVars(PostGstRunNode(node))
-        BY <2>1 DEF AsyncLiveSpecAt, AsyncSpecAt,
-                       AsyncFairnessAt
-      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
-           DEF AsyncLiveSpecAt, AsyncSpecAt
+      <3>1. AsyncLiveSpecAt(initialContext)
+               => (HeightResetNodeRuntimeReady(initialContext, node)
+                     ~> HeightResetNodeExit(node))
+        BY <2>1, FairRuntimeReadyReachesExit
+      <3>2. AsyncLiveSpecAt(initialContext)
+               => (HeightResetNodeProducerContinuationPending(
+                     initialContext, node)
+                     ~> HeightResetNodeExit(node))
+        BY <2>1, FairProducerContinuationReachesExit
+      <3>3. [](HeightResetNodePending(initialContext, node)
+                 => \/ HeightResetNodeRuntimeReady(
+                          initialContext, node)
+                    \/ HeightResetNodeProducerContinuationPending(
+                         initialContext, node))
+        BY PTL
+           DEF HeightResetNodeRuntimeReady,
+               HeightResetNodeProducerContinuationPending
+      <3> QED BY <3>1, <3>2, <3>3, PTL
     <2> QED BY <2>1
   <1> QED BY <1>1
 
@@ -2746,6 +2913,9 @@ PROOF
       <3>3. []AsyncCandidateProducerContinuationExternalCoverageInvariant
         BY <3>1,
            AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+      <3>3a. []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+        BY <3>1,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
       <3>4. (AsyncStrongTypeInvariant
                /\ HeightResetIngressOwnershipResidual)
                 ~> (ImmediateProductiveFairActionReady
@@ -2756,7 +2926,7 @@ PROOF
                  /\ HeightProductivityResetBoundary
                 => \/ ImmediateProductiveFairActionReady
                    \/ HeightResetIngressOwnershipResidual)
-        BY <3>3,
+        BY <3>3, <3>3a,
            ResetBoundaryHasImmediateProductivityOrIngressResidual,
            PTL
       <3> QED BY <3>2, <3>4, <3>5, PTL

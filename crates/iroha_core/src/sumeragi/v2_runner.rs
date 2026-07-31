@@ -79,8 +79,9 @@ use super::{
     },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::{
-        CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServePrepareError,
-        ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor,
+        CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
+        CertifiedServePrepareError, ExactFanoutOwnership, ProductionV2Services,
+        V2CleanupSupervisor,
         durable_exact_output_handoff_owner_pair,
     },
 };
@@ -1190,9 +1191,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let (exact_output_service_owner, exact_output_transport_owner) =
             durable_exact_output_handoff_owner_pair();
+        let durable_decided_subject = executor.local_proposal_directive()?.decided_subject();
         let mut services = ProductionV2Services::start(
             context.clone(),
             executor.current_tag(),
+            durable_decided_subject,
             validator_set_pops,
             local_peer.clone(),
             local_validator,
@@ -1329,6 +1332,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
         let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
         committed_lane_status_publisher.publish_if_changed(&lane_work);
+        if let Some(scheduler_ordinal) = services
+            .dormant_certified_serve_ingress_scheduler_ordinal()
+            .map_err(V2RunnerError::Service)?
+        {
+            let _ = services.fail_closed_dormant_certified_serve(scheduler_ordinal);
+            return Err(V2RunnerError::RestartRequired);
+        }
         // Seed executor lock ownership from replay before consuming startup
         // effects. Otherwise a recovered lock would look like a live first-lock
         // transition and could retire safe work reconstructed from the same WAL.
@@ -1418,6 +1428,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // poll. It rebuilds the live overlays only at its next semantic
             // deadline or after the published height owner changes.
             liveness_watchdog.poll(Instant::now());
+            if let Some(scheduler_ordinal) = services
+                .dormant_certified_serve_ingress_scheduler_ordinal()
+                .map_err(V2RunnerError::Service)?
+            {
+                let _ = services.fail_closed_dormant_certified_serve(scheduler_ordinal);
+                return Err(V2RunnerError::RestartRequired);
+            }
+            let certified_serve_barrier = services
+                .certified_serve_barrier()
+                .map_err(V2RunnerError::Service)?;
             let now = Instant::now();
             if !recovering_interrupted_tip && now >= next_npos_vrf_retransmit {
                 broadcast_npos_vrf_messages(
@@ -1469,10 +1489,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // dedicated runner turn before completions, runtime work, lock
             // reconciliation, or any other local producer can acquire a later
             // I/O position.
-            if let Some(serve_barrier) = services
-                .certified_serve_barrier()
-                .map_err(V2RunnerError::Service)?
-            {
+            if let Some(serve_barrier) = certified_serve_barrier {
                 // One exact ticket closes its finite older-owner prefix through
                 // bounded turns. Each turn atomically selects at most one
                 // completed causal lifecycle whose immutable ordinal is
@@ -1489,7 +1506,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 {
                     services.drain_exact_serve_runtime_predecessor(
                         &mut executor,
-                        serve_barrier.lifecycle_ordinal(),
+                        serve_barrier.scheduler_ordinal(),
                     )?;
                     // A frozen Control/Serve prefix may still own every
                     // physical I/O unit. Yield this turn until one unit drains
@@ -1499,7 +1516,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // exact target barrier installed.
                     if executor.older_runtime_lifecycle_predates_exact_serve(
                         Instant::now(),
-                        serve_barrier.lifecycle_ordinal(),
+                        serve_barrier.scheduler_ordinal(),
                     )? && services
                         .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
                         .map_err(V2RunnerError::Service)?
@@ -1517,7 +1534,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     older_predecessor_remains = executor
                         .older_runtime_lifecycle_predates_exact_serve(
                             Instant::now(),
-                            serve_barrier.lifecycle_ordinal(),
+                            serve_barrier.scheduler_ordinal(),
                         )?;
                     services
                         .finish_certified_serve_runtime_episode_turn(
@@ -1537,8 +1554,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     if recovering_interrupted_tip {
                         drain_decided_lane_recovery_ingress(
                             &block_rx,
+                            &executor,
+                            &mut services,
                             &mut lane_work,
                             executor.current_tag().view(),
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &context_store,
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
                         )?;
                     } else {
                         drain_v2_ingress(
@@ -1575,8 +1601,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             else {
                 // Exact admission won the queue-locked race after the
                 // observation above. Restart at the dedicated target turn.
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             };
+
+            debug_assert!(startup_effects.is_empty());
 
             // Retry actor-owned output first, but keep servicing bounded
             // reducer and completion sources while one target is unavailable.
@@ -1712,8 +1741,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
                 drain_decided_lane_recovery_ingress(
                     &block_rx,
+                    &executor,
+                    &mut services,
                     &mut lane_work,
                     executor.current_tag().view(),
+                    output_guard.as_ref(),
+                    kura.as_ref(),
+                    &context_store,
+                    &common_config.key_pair,
+                    block_sync_server
+                        .as_mut()
+                        .expect("block-sync server initialized before ingress"),
                 )?;
                 drain_lane_relay_ingress(
                     &lane_relay_rx,
@@ -2595,6 +2633,9 @@ fn drain_v2_ingress(
                     return true;
                 };
                 if message.validate_version().is_err() {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress crossed version validation".to_owned(),
+                    ));
                     return true;
                 }
                 let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
@@ -2602,25 +2643,36 @@ fn drain_v2_ingress(
                 else {
                     return true;
                 };
-                if request.round.height != executor.context().height
-                    || certified_body_request_is_superseded_after_decision(
-                        request,
-                        terminal_subject,
-                        executor.context().height,
-                    )
-                {
+                if request.round.height != executor.context().height {
                     return true;
                 }
+                let superseded_by_decision = certified_body_request_is_superseded_after_decision(
+                    request,
+                    terminal_subject,
+                    executor.context().height,
+                );
                 let Some(sender) = inbound.sender() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its authenticated sender".to_owned(),
+                    ));
                     return true;
                 };
                 let Some(authenticated_via) = inbound.via() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its authenticated source".to_owned(),
+                    ));
                     return true;
                 };
                 let Some(reply_routes) = inbound.reply_routes() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its reply capability".to_owned(),
+                    ));
                     return true;
                 };
                 let Some(ingress_ownership) = inbound.ingress_ownership() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its ownership evidence".to_owned(),
+                    ));
                     return true;
                 };
                 if reply_routes.semantic_target() != sender
@@ -2629,6 +2681,10 @@ fn drain_v2_ingress(
                     || !ingress_ownership.matches_semantic_origin(Some(sender))
                     || !ingress_ownership.matches_reply_routes(Some(reply_routes))
                 {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress changed its transport ownership"
+                            .to_owned(),
+                    ));
                     return true;
                 }
                 let authenticated = match executor
@@ -2636,10 +2692,36 @@ fn drain_v2_ingress(
                 {
                     Ok(authenticated) => authenticated,
                     Err(error) => {
-                        prepared_serve = Some(PreparedCertifiedServe::Rejected(error.to_string()));
+                        prepared_serve = Some(
+                            match services.stage_certified_serve_rejection(
+                                HashOf::new(request),
+                                CertifiedServeNegativeOutcome::InvalidCertificate,
+                            ) {
+                                Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
+                                Err(reason) => PreparedCertifiedServe::Service(reason),
+                            },
+                        );
                         return true;
                     }
                 };
+                if superseded_by_decision {
+                    let decided = terminal_subject.expect(
+                        "Decision supersession requires the durable exact terminal subject",
+                    );
+                    prepared_serve = Some(
+                        match services.stage_certified_serve_rejection(
+                            authenticated.request_hash(),
+                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
+                        ) {
+                            Ok(()) => PreparedCertifiedServe::Rejected(
+                                "certified body request was superseded by durable Decision"
+                                    .to_owned(),
+                            ),
+                            Err(reason) => PreparedCertifiedServe::Service(reason),
+                        },
+                    );
+                    return true;
+                }
                 match services.prepare_certified_request(authenticated_via, authenticated) {
                     Ok(admission) => {
                         prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
@@ -2874,8 +2956,25 @@ fn drain_v2_ingress(
                         // Current-height serving authority narrows to the
                         // exact Decision. A certified losing body remains
                         // useful only before that terminal choice.
-                        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                        continue;
+                        match prepared_serve.take() {
+                            Some(PreparedCertifiedServe::Rejected(reason)) => {
+                                iroha_logger::debug!(
+                                    %reason,
+                                    "retired certified body request superseded by Decision"
+                                );
+                                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+                                continue;
+                            }
+                            Some(PreparedCertifiedServe::Service(reason)) => {
+                                return Err(V2RunnerError::Service(reason));
+                            }
+                            Some(PreparedCertifiedServe::Admitted(_)) | None => {
+                                return Err(V2RunnerError::Service(
+                                    "Decision-superseded certified-body ingress crossed physical drain without its durable negative outcome"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
                     }
                     match prepared_serve.take() {
                         Some(PreparedCertifiedServe::Admitted(admission)) => {
@@ -3013,13 +3112,131 @@ fn drain_v2_ingress(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_decided_lane_recovery_ingress(
     receiver: &FairV2Ingress,
+    executor: &V2EffectExecutor,
+    services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
+    output_guard: &ConsensusOutputGuard,
+    kura: &Kura,
+    context_store: &super::v2_context_store::V2ContextStore,
+    local_key: &KeyPair,
+    block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<(), V2RunnerError> {
-    let Some(inbound) = receiver
-        .try_recv_if_checked(|_| true)
+    let decided_subject = executor
+        .local_proposal_directive()?
+        .decided_subject()
+        .ok_or_else(|| {
+            V2RunnerError::Service(
+                "terminal lane recovery ingress lost its durable Decision subject".to_owned(),
+            )
+        })?;
+    let mut prepared_serve = None;
+    let Some(mut inbound) = receiver
+        .try_recv_if_checked(|inbound| {
+            let BlockMessage::V2(message) = inbound.message() else {
+                return true;
+            };
+            let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+            else {
+                return true;
+            };
+            if message.validate_version().is_err() {
+                prepared_serve = Some(PreparedCertifiedServe::Service(
+                    "terminal recovery Serve ingress crossed version validation".to_owned(),
+                ));
+                return true;
+            }
+            if request.round.height != executor.context().height {
+                return true;
+            }
+            let Some(sender) = inbound.sender() else {
+                prepared_serve = Some(PreparedCertifiedServe::Service(
+                    "terminal recovery Serve ingress lost its authenticated sender".to_owned(),
+                ));
+                return true;
+            };
+            let Some(authenticated_via) = inbound.via() else {
+                prepared_serve = Some(PreparedCertifiedServe::Service(
+                    "terminal recovery Serve ingress lost its authenticated source".to_owned(),
+                ));
+                return true;
+            };
+            let Some(reply_routes) = inbound.reply_routes() else {
+                prepared_serve = Some(PreparedCertifiedServe::Service(
+                    "terminal recovery Serve ingress lost its reply capability".to_owned(),
+                ));
+                return true;
+            };
+            let Some(ingress_ownership) = inbound.ingress_ownership() else {
+                prepared_serve = Some(PreparedCertifiedServe::Service(
+                    "terminal recovery Serve ingress lost its ownership evidence".to_owned(),
+                ));
+                return true;
+            };
+            if reply_routes.semantic_target() != sender
+                || !ingress_ownership.validate_exact()
+                || !ingress_ownership.matches_message(inbound.message())
+                || !ingress_ownership.matches_semantic_origin(Some(sender))
+                || !ingress_ownership.matches_reply_routes(Some(reply_routes))
+            {
+                prepared_serve = Some(PreparedCertifiedServe::Service(
+                    "terminal recovery Serve ingress changed its transport ownership".to_owned(),
+                ));
+                return true;
+            }
+            let authenticated = match executor
+                .authenticate_certified_body_request(request.clone(), sender)
+            {
+                Ok(authenticated) => authenticated,
+                Err(error) => {
+                    prepared_serve = Some(
+                        match services.stage_certified_serve_rejection(
+                            HashOf::new(request),
+                            CertifiedServeNegativeOutcome::InvalidCertificate,
+                        ) {
+                            Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
+                            Err(reason) => PreparedCertifiedServe::Service(reason),
+                        },
+                    );
+                    return true;
+                }
+            };
+            if request.subject != decided_subject {
+                prepared_serve = Some(
+                    match services.stage_certified_serve_rejection(
+                        authenticated.request_hash(),
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                            decided_subject,
+                        ),
+                    ) {
+                        Ok(()) => PreparedCertifiedServe::Rejected(
+                            "terminal recovery Serve request was superseded by durable Decision"
+                                .to_owned(),
+                        ),
+                        Err(reason) => PreparedCertifiedServe::Service(reason),
+                    },
+                );
+                return true;
+            }
+            match services.prepare_certified_request(authenticated_via, authenticated) {
+                Ok(admission) => {
+                    prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
+                    true
+                }
+                Err(CertifiedServePrepareError::Backpressure) => false,
+                Err(CertifiedServePrepareError::Rejected(reason)) => {
+                    prepared_serve = Some(PreparedCertifiedServe::Rejected(reason));
+                    true
+                }
+                Err(CertifiedServePrepareError::Service(reason)) => {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(reason));
+                    true
+                }
+            }
+        })
         .map_err(V2RunnerError::Service)?
     else {
         return Ok(());
@@ -3027,11 +3244,124 @@ fn drain_decided_lane_recovery_ingress(
     if inbound.message().is_lane_local() {
         let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view);
         let _ = lane_work.service_next_historical_recovery()?;
+        return Ok(());
     }
-    // Global traffic for this replayed terminal height is intentionally
-    // dropped. The durable Decision and finality tuple are the only global
-    // authority; only its exact lane carrier may still make progress. One fair
-    // occurrence per outer loop keeps pending Apply/completion work dominant.
+    match prepared_serve {
+        Some(PreparedCertifiedServe::Admitted(admission)) => {
+            let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+                V2RunnerError::Service(
+                    "terminal recovery Serve admission lost its fair ownership".to_owned(),
+                )
+            })?;
+            let (_, _, reply_routes) = inbound.into_message_sender_and_reply_routes();
+            services
+                .serve_certified_request_on_routes(
+                    admission,
+                    reply_routes.ok_or_else(|| {
+                        V2RunnerError::Service(
+                            "terminal recovery Serve admission lost its reply routes".to_owned(),
+                        )
+                    })?,
+                    ingress_ownership,
+                )
+                .map_err(V2RunnerError::Service)?;
+        }
+        Some(PreparedCertifiedServe::Rejected(reason)) => {
+            iroha_logger::debug!(
+                %reason,
+                "retired terminal-recovery certified body request"
+            );
+        }
+        Some(PreparedCertifiedServe::Service(reason)) => {
+            return Err(V2RunnerError::Service(reason));
+        }
+        None => {
+            let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+                V2RunnerError::Service(
+                    "discarded terminal-recovery ingress lost its fair ownership carrier"
+                        .to_owned(),
+                )
+            })?;
+            if !ingress_ownership.validate_exact()
+                || !ingress_ownership.matches_message(inbound.message())
+                || !ingress_ownership.matches_semantic_origin(inbound.sender())
+            {
+                return Err(V2RunnerError::Service(
+                    "discarded terminal-recovery ingress carried altered fair ownership"
+                        .to_owned(),
+                ));
+            }
+            receiver
+                .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+                .map_err(V2RunnerError::Service)?;
+            let (message, sender, reply_routes) =
+                inbound.into_message_sender_and_reply_routes();
+            if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
+                return Err(V2RunnerError::Service(
+                    "discarded terminal-recovery ingress changed its authenticated reply routes"
+                        .to_owned(),
+                ));
+            }
+            if let BlockMessage::V2(message) = message
+                && message.validate_version().is_ok()
+                && let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
+                    message.payload
+                && request.round.height < executor.context().height
+            {
+                let Some(sender) = sender else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+                    return Ok(());
+                };
+                let Some(reply_routes) = reply_routes else {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+                    return Ok(());
+                };
+                if reply_routes.semantic_target() != &sender {
+                    mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+                    return Ok(());
+                }
+                let response_peer = sender.clone();
+                match serve_block_sync_while_guarded(
+                    output_guard,
+                    || {
+                        block_sync_server.serve_historical_body(
+                            kura,
+                            context_store,
+                            request,
+                            &sender,
+                            local_key,
+                        )
+                    },
+                    |response, permit| {
+                        services.post_durable_history_response_on_reply_routes_with_permit(
+                            response_peer,
+                            reply_routes,
+                            ingress_ownership,
+                            response,
+                            permit,
+                        )
+                    },
+                ) {
+                    Ok(()) => {}
+                    Err(error) if is_remote_block_sync_rejection(&error) => {
+                        iroha_logger::debug!(
+                            %error,
+                            "rejected historical certified body request during terminal recovery"
+                        );
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+            }
+        }
+    }
+    // Non-Serve global traffic for this replayed terminal height is
+    // intentionally dropped. The durable Decision and finality tuple are the
+    // only global reducer authority. Current-height Serve traffic is instead
+    // fully authenticated above and atomically terminalized before the carrier
+    // can leave fair ingress. One occurrence per outer loop keeps pending
+    // Apply/completion work dominant.
     Ok(())
 }
 
@@ -4211,6 +4541,19 @@ mod tests {
         },
         sumeragi::LaneRelayMessage,
     };
+
+    #[test]
+    fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
+        let (mut services, _) = super::super::v2_worker::tests::fixture();
+        assert!(!services.exact_output_restart_required_for_test());
+        let reason = services.fail_closed_dormant_certified_serve(41);
+        assert!(reason.contains("41"));
+        assert!(reason.contains("restart is required for local discharge"));
+        assert!(
+            services.exact_output_restart_required_for_test(),
+            "a carrierless live Serve lifecycle must restart into local startup discharge"
+        );
+    }
 
     #[test]
     fn committed_lane_status_publisher_retries_revision_drift_without_publication() {

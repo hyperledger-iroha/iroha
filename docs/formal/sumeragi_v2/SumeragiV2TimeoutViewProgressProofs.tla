@@ -1022,9 +1022,11 @@ THEOREM TimeoutFixedClockDueNodeModeHasEnabledFairAction ==
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
      owner,
      mode \in HistoricalDiscoveryTimedOwnerModeCarrier:
-    TimeoutFixedClockDueNodeOwnerAtMode(
-      source, sourceView, clockValue, deadlineValue,
-      sourceRank, owner, mode)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ TimeoutFixedClockDueNodeOwnerAtMode(
+         source, sourceView, clockValue, deadlineValue,
+         sourceRank, owner, mode)
       => ENABLED
            <<HistoricalDiscoveryDueNodeModeFairAction(
                owner, mode)>>_AsyncAllVars
@@ -1338,8 +1340,12 @@ PROOF
                  ~> TimeoutFixedClockDueNodeModeGoal(
                       source, sourceView, clockValue, deadlineValue,
                       sourceRank, owner, mode)
-    <2>1. []AsyncStrongTypeInvariant
-      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. [](TimeoutFixedClockDueNodeOwnerAtMode(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank, owner, mode)
@@ -4272,6 +4278,8 @@ THEOREM TimeoutEarlierServeSelectedActionEnabledAtEpisode ==
      identity, rank, budget:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
@@ -4506,6 +4514,8 @@ THEOREM AsyncLiveClosesTimeoutEarlierServeExactIngressRankStep ==
       AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    TimeoutEarlierServeLifecycleStepClassificationIsExhaustive,
    TimeoutEarlierServeSelectedActionEnabledAtEpisode,
    TimeoutEarlierServeBracketStepPreservesEpisodeOrGoal,
@@ -7594,6 +7604,8 @@ THEOREM TimeoutFixedClockKnownCandidateHasExactActionOwner ==
         /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
              source, sourceView, clockValue, deadlineValue,
              sourceRank, packet, known, budget)
+        /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+        /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
         /\ <<"Candidate", logicalIdentity>>
              \in TimeoutFixedPacketLiveOwners(packet)
         /\ <<"Candidate", logicalIdentity>> \in known
@@ -7907,6 +7919,8 @@ THEOREM AsyncSpecProvidesTimeoutFixedClockCandidateLifecycleKernel ==
     TimeoutFixedClockCandidateLifecycleKernelProperty(
       AsyncSpecAt(initialContext))
 BY TimeoutFixedClockKnownCandidateHasExactActionOwner,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    AsyncSpecProvidesTimeoutFixedClockCandidateExactRunnerStep,
    AsyncSpecProvidesTimeoutFixedClockCandidateCausalDagBudgetDescent,
    TimeoutFixedClockFiniteCausalDagClosesNonDescentEpisode,
@@ -8247,6 +8261,8 @@ THEOREM TimeoutFixedClockPacketTailHasFrozenConcreteAction ==
         \A budget \in Nat:
           /\ AsyncFrozenContextAt(initialContext)
           /\ PostGstReplayQuarantineExcluded
+          /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+          /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
           /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
                source, sourceView, clockValue, deadlineValue,
                sourceRank, packet, known, budget)
@@ -8268,6 +8284,8 @@ PROOF
                 NEW packet, NEW known, NEW budget \in Nat,
                 AsyncFrozenContextAt(initialContext),
                 PostGstReplayQuarantineExcluded,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 TimeoutFixedClockLifecycleEpisodeAtBudget(
                   source, sourceView, clockValue, deadlineValue,
                   sourceRank, packet, known, budget),
@@ -8607,9 +8625,13 @@ PROOF
     <2>0. /\ initialContext \in ContextRecords
            /\ []AsyncFrozenContextAt(initialContext)
            /\ []PostGstReplayQuarantineExcluded
+           /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysKeepsFrozenContext,
-         AsyncSpecAlwaysExcludesPostGstReplayQuarantine, PTL
+         AsyncSpecAlwaysExcludesPostGstReplayQuarantine,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
          DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
              Safety, TypeInvariant, AsyncFrozenContextAt
     <2>1. ASSUME NEW source \in AsyncCurrentResponsiveVoters,

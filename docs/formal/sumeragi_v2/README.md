@@ -1170,7 +1170,9 @@ resulting checkpoint contained 774 tests. Eight runtime/effect/runner
 regressions now bind Decision/lock retirement of orphaned leader-wire owners,
 same-turn terminal consumption across live and recovery capacity retries, and
 fail-closed rejection of the unreachable semantic-only authenticated
-Coalesce branch. The current inventory therefore contains 782 tests across 39 modules.
+Coalesce branch. Subsequent source reconciliation and exact-ingress lifecycle,
+restart, provenance, and quarantine regressions bind the actor-global logical
+owner separately from every physical queue occurrence. The current inventory therefore contains 806 tests across 39 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 82 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1245,7 +1247,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`62846b01b09e3377b768793223e6fc1c3103c6dede907d9169bff8c70610a749`.
+`877ec0909ecfb9c22118b9b976ec87d709e3d8d012cb2d693c8465524405fee5`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1366,7 +1368,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
-782-test inventory, the pinned harness lock and resolved toolchain, the formal
+806-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
