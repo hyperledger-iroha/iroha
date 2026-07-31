@@ -38,6 +38,16 @@ import {
   NumericV1,
   NumericV1Error,
 } from "./numericV1.js";
+import {
+  LANE_PRIVACY_MERKLE_MAX_DEPTH,
+  PROOF_BOX_MAX_ENCODED_BYTES,
+  canonicalBase64DecodedLength,
+  canonicalizePrehashedBytes,
+  isPortableVerifyingKeyIdField,
+  laneMerkleLeafIndexFitsDepth,
+  proofBoxFitsEncodedBudget,
+  proofBoxMaxProofBytes,
+} from "./proofAttachment.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -1195,133 +1205,39 @@ function normalizeConfidentialEncryptedPayload(value, name) {
 
 function normalizeProofAttachment(value, name) {
   const source = assertPlainObject(value, name);
-  for (const field of [
-    "vk_inline",
-    "vkInline",
-    "verifyingKeyInline",
-    "verifying_key_inline",
-    "vk_reference",
-  ]) {
-    if (Object.prototype.hasOwnProperty.call(source, field)) {
+  const allowedFields = new Set([
+    "backend",
+    "proof",
+    "verifyingKeyRef",
+    "verifyingKeyCommitment",
+    "envelopeHash",
+    "lanePrivacy",
+  ]);
+  for (const field of Object.keys(source)) {
+    if (!allowedFields.has(field)) {
       fail(
         ValidationErrorCode.INVALID_OBJECT,
-        `${name}.${field} is not supported; use verifyingKeyRef`,
+        `${name}.${field} is not supported by the canonical ProofAttachment input`,
         `${name}.${field}`,
       );
     }
   }
-  const backend = assertString(source.backend, `${name}.backend`);
-  const proofAlias = readSingleAlias(
-    source,
-    ["proofBytes", "proof_bytes", "proof", "proof_b64", "proofBase64", "proofB64"],
-    `${name}.proof`,
-    "proof byte",
-  );
-  const rawProof = proofAlias.value;
-  const rawProofIsStructuredObject =
-    rawProof &&
-    typeof rawProof === "object" &&
-    !Array.isArray(rawProof) &&
-    !Buffer.isBuffer(rawProof) &&
-    !ArrayBuffer.isView(rawProof) &&
-    !(rawProof instanceof ArrayBuffer);
-  const proofAliasMayCarryBytes =
-    proofAlias.key === "proofBytes" ||
-    proofAlias.key === "proof_bytes" ||
-    proofAlias.key === "proof" ||
-    proofAlias.key === "proof_b64" ||
-    proofAlias.key === "proofBase64" ||
-    proofAlias.key === "proofB64";
-  const attachmentHasProofBytes = proofAliasMayCarryBytes && !rawProofIsStructuredObject;
-  const structuredProofBox =
-    proofAliasMayCarryBytes && rawProofIsStructuredObject;
+  const backend = normalizePortableProofIdField(source.backend, `${name}.backend`);
+  const proofBytes = normalizeBoundedProofBytes(source.proof, backend, `${name}.proof`);
+  const proofBox = { backend, bytes: proofBytes };
 
-  const verifyRef = readSingleAlias(
-    source,
-    ["verifyingKeyRef", "vkRef", "vk_ref"],
-    `${name}.verifyingKeyRef`,
-    "verifying key reference",
-  ).value;
-  const commitmentInput = readSingleAlias(
-    source,
-    ["verifyingKeyCommitment", "vkCommitment", "vk_commitment"],
-    `${name}.verifyingKeyCommitment`,
-    "verifying key commitment",
-  ).value;
-  const envelopeInput = readSingleAlias(
-    source,
-    ["envelopeHash", "envelope_hash", "proofEnvelopeHash"],
-    `${name}.envelopeHash`,
-    "envelope hash",
-  ).value;
-
-  let proofBox;
-  if (attachmentHasProofBytes) {
-    const proofBackend = assertString(
-      source.backend ?? backend,
-      `${name}.proof.backend`,
-    );
-    proofBox = {
-      backend: proofBackend,
-      bytes: normalizeByteArray(rawProof, `${name}.proof`),
-    };
-  } else if (structuredProofBox) {
-    const allowedProofFields = new Set([
-      "backend",
-      "bytes",
-      "bytes_b64",
-      "bytesBase64",
-      "data",
-      "payload",
-    ]);
-    for (const field of Object.keys(rawProof)) {
-      if (!allowedProofFields.has(field)) {
-        fail(
-          ValidationErrorCode.INVALID_OBJECT,
-          `${name}.proof.${field} is not supported`,
-          `${name}.proof.${field}`,
-        );
-      }
-    }
-    const proofBackend = assertString(
-      rawProof.backend ?? backend,
-      `${name}.proof.backend`,
-    );
-    const proofBytes =
-      rawProof.bytes ??
-      rawProof.bytes_b64 ??
-      rawProof.bytesBase64 ??
-      rawProof.data ??
-      rawProof.payload;
-    proofBox = {
-      backend: proofBackend,
-      bytes: normalizeByteArray(proofBytes, `${name}.proof.bytes`),
-    };
-  } else {
-    const proofBytes = normalizeByteArray(rawProof, `${name}.proof`);
-    proofBox = {
-      backend,
-      bytes: proofBytes,
-    };
-  }
-  if (proofBox.backend !== backend) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name}.proof.backend must match ${name}.backend`,
-      `${name}.proof.backend`,
-    );
-  }
-
-  if (!verifyRef) {
+  if (!Object.prototype.hasOwnProperty.call(source, "verifyingKeyRef")) {
     fail(
       ValidationErrorCode.INVALID_OBJECT,
       `${name} must include verifyingKeyRef`,
       name,
     );
   }
-
   const payload = { backend, proof: proofBox };
-  payload.vk_ref = normalizeVerifyingKeyId(verifyRef, `${name}.verifyingKeyRef`);
+  payload.vk_ref = normalizePortableProofVerifyingKeyId(
+    source.verifyingKeyRef,
+    `${name}.verifyingKeyRef`,
+  );
   if (payload.vk_ref.backend !== backend) {
     fail(
       ValidationErrorCode.INVALID_OBJECT,
@@ -1331,26 +1247,42 @@ function normalizeProofAttachment(value, name) {
   }
 
   const commitment = normalizeOptionalFixedBytes(
-    commitmentInput,
+    source.verifyingKeyCommitment,
     `${name}.verifyingKeyCommitment`,
     32,
   );
   if (commitment) {
+    assertNonZeroProofDigest(commitment, `${name}.verifyingKeyCommitment`);
     payload.vk_commitment = commitment;
   }
   const envelopeHash = normalizeOptionalFixedBytes(
-    envelopeInput,
+    source.envelopeHash,
     `${name}.envelopeHash`,
     32,
   );
   if (envelopeHash) {
+    assertNonZeroProofDigest(envelopeHash, `${name}.envelopeHash`);
+    const expected = Array.from(blake2b256(Buffer.from(proofBytes)));
+    expected[31] |= 1;
+    if (!envelopeHash.every((byte, index) => byte === expected[index])) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.envelopeHash must match the proof bytes`,
+        `${name}.envelopeHash`,
+      );
+    }
     payload.envelope_hash = envelopeHash;
   }
-  const lanePrivacy = source.lanePrivacy ?? source.lane_privacy;
+  const lanePrivacy = source.lanePrivacy;
   if (lanePrivacy !== undefined && lanePrivacy !== null) {
     const lp = assertPlainObject(lanePrivacy, `${name}.lanePrivacy`);
-    const commitmentId = asPositiveInteger(
-      lp.commitmentId ?? lp.commitment_id,
+    assertOnlyProofObjectKeys(
+      lp,
+      ["commitmentId", "merkle"],
+      `${name}.lanePrivacy`,
+    );
+    const commitmentId = asNonNegativeInteger(
+      lp.commitmentId,
       `${name}.lanePrivacy.commitmentId`,
     );
     if (commitmentId > 0xffff) {
@@ -1360,22 +1292,32 @@ function normalizeProofAttachment(value, name) {
         `${name}.lanePrivacy.commitmentId`,
       );
     }
-    const merkle = lp.merkle ?? {
-      leaf: lp.leaf,
-      leafIndex: lp.leafIndex ?? lp.leaf_index,
-      auditPath: lp.auditPath ?? lp.audit_path,
-    };
-    const merklePayload = assertPlainObject(merkle, `${name}.lanePrivacy.merkle`);
+    const merklePayload = assertPlainObject(
+      lp.merkle,
+      `${name}.lanePrivacy.merkle`,
+    );
+    assertOnlyProofObjectKeys(
+      merklePayload,
+      ["leaf", "leafIndex", "auditPath"],
+      `${name}.lanePrivacy.merkle`,
+    );
     const leaf = normalizeFixedBytes(
       merklePayload.leaf,
       `${name}.lanePrivacy.merkle.leaf`,
       32,
     );
     const leafIndex = asNonNegativeInteger(
-      merklePayload.leafIndex ?? merklePayload.leaf_index ?? 0,
+      merklePayload.leafIndex,
       `${name}.lanePrivacy.merkle.leafIndex`,
     );
-    const rawAudit = merklePayload.auditPath ?? merklePayload.audit_path ?? [];
+    if (leafIndex > UINT32_MAX) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name}.lanePrivacy.merkle.leafIndex must fit within a u32`,
+        `${name}.lanePrivacy.merkle.leafIndex`,
+      );
+    }
+    const rawAudit = merklePayload.auditPath;
     if (!Array.isArray(rawAudit)) {
       fail(
         ValidationErrorCode.INVALID_OBJECT,
@@ -1383,10 +1325,13 @@ function normalizeProofAttachment(value, name) {
         `${name}.lanePrivacy.merkle.auditPath`,
       );
     }
-    if (rawAudit.length === 0) {
+    if (
+      rawAudit.length === 0 ||
+      rawAudit.length > LANE_PRIVACY_MERKLE_MAX_DEPTH
+    ) {
       fail(
         ValidationErrorCode.INVALID_OBJECT,
-        `${name}.lanePrivacy.merkle.auditPath must contain at least one sibling`,
+        `${name}.lanePrivacy.merkle.auditPath must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`,
         `${name}.lanePrivacy.merkle.auditPath`,
       );
     }
@@ -1398,12 +1343,21 @@ function normalizeProofAttachment(value, name) {
           `${name}.lanePrivacy.merkle.auditPath[${index}]`,
         );
       }
-      return normalizeFixedBytes(
-        entry,
-        `${name}.lanePrivacy.merkle.auditPath[${index}]`,
-        32,
+      return canonicalizePrehashedBytes(
+        normalizeFixedBytes(
+          entry,
+          `${name}.lanePrivacy.merkle.auditPath[${index}]`,
+          32,
+        ),
       );
     });
+    if (!laneMerkleLeafIndexFitsDepth(leafIndex, auditPath.length)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name}.lanePrivacy.merkle.leafIndex is impossible for the Merkle path depth`,
+        `${name}.lanePrivacy.merkle.leafIndex`,
+      );
+    }
     payload.lane_privacy = {
       commitment_id: commitmentId,
       witness: {
@@ -1419,6 +1373,110 @@ function normalizeProofAttachment(value, name) {
     };
   }
   return payload;
+}
+
+function normalizePortableProofIdField(value, name) {
+  if (!isPortableVerifyingKeyIdField(value)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must use the exact portable verifier-key registry grammar`,
+      name,
+    );
+  }
+  return value;
+}
+
+function normalizePortableProofVerifyingKeyId(value, name) {
+  const object = assertPlainObject(value, name);
+  assertOnlyProofObjectKeys(object, ["backend", "name"], name);
+  return {
+    backend: normalizePortableProofIdField(object.backend, `${name}.backend`),
+    name: normalizePortableProofIdField(object.name, `${name}.name`),
+  };
+}
+
+function assertOnlyProofObjectKeys(value, expectedKeys, name) {
+  const actualKeys = Object.keys(value);
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(value, key))
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must contain exactly ${expectedKeys.join(", ")}`,
+      name,
+    );
+  }
+}
+
+function normalizeBoundedProofBytes(value, backend, name) {
+  const maxProofBytes = proofBoxMaxProofBytes(backend);
+  if (typeof value === "string") {
+    const maxBase64Length = Math.ceil(maxProofBytes / 3) * 4;
+    if (value.length > maxBase64Length) {
+      failProofBoxBudget(name);
+    }
+    let decodedLength;
+    try {
+      decodedLength = canonicalBase64DecodedLength(value, name);
+    } catch {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be canonical standard base64`,
+        name,
+      );
+    }
+    if (decodedLength > maxProofBytes) {
+      failProofBoxBudget(name);
+    }
+    const decoded = Buffer.from(value, "base64");
+    if (decoded.toString("base64") !== value) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be canonical standard base64`,
+        name,
+      );
+    }
+    return Array.from(decoded.values());
+  }
+
+  const declaredLength = proofBinaryByteLength(value);
+  if (declaredLength !== null && declaredLength > maxProofBytes) {
+    failProofBoxBudget(name);
+  }
+  const proof = normalizeByteArray(value, name);
+  if (!proofBoxFitsEncodedBudget(backend, proof.length)) {
+    failProofBoxBudget(name);
+  }
+  return proof;
+}
+
+function proofBinaryByteLength(value) {
+  if (Array.isArray(value) || Buffer.isBuffer(value)) {
+    return value.length;
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return value.byteLength;
+  }
+  return null;
+}
+
+function failProofBoxBudget(name) {
+  fail(
+    ValidationErrorCode.VALUE_OUT_OF_RANGE,
+    `${name} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`,
+    name,
+  );
+}
+
+function assertNonZeroProofDigest(bytes, name) {
+  if (bytes.every((byte) => byte === 0)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be non-zero`,
+      name,
+    );
+  }
 }
 
 function normalizeU32(value, name) {

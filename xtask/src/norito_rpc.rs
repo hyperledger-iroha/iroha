@@ -1,7 +1,7 @@
-//! Compatibility wrappers for Norito RPC fixture tooling.
+//! Focused wrappers for Norito RPC fixture tooling.
 //!
 //! The implementation lives in `norito_codegen_exporter`; these adapters keep
-//! the established `cargo xtask norito-rpc-*` command surface unchanged.
+//! the workspace command dispatcher thin.
 
 use eyre::Result;
 pub use norito_codegen_exporter::FixtureOptions;
@@ -56,15 +56,9 @@ mod tests {
     #[test]
     fn fixture_generation_errors_are_forwarded() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
-        let missing = temp_dir.path().join("missing.json");
-        let options = FixtureOptions::new(
-            Some(missing.clone()),
-            None,
-            Some(temp_dir.path().join("output")),
-            None,
-            false,
-            true,
-        );
+        let output_root = temp_dir.path().join("output");
+        let missing = output_root.join("fixtures/norito_rpc/transaction_payloads.json");
+        let options = FixtureOptions::new(Some(output_root));
 
         let error = generate_fixtures(options).expect_err("missing source fixture must fail");
         assert!(

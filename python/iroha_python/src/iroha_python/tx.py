@@ -1681,6 +1681,60 @@ class TransactionDraft:
             session_transcript_digest,
         )
 
+    def prepare_privacy_zk_x509_identity_presentation_action_v1(
+        self,
+        *,
+        canonical_statement_archive: bytes,
+    ) -> bytes:
+        """Freeze a draft X509 statement and return its transaction intent.
+
+        ``canonical_statement_archive`` must contain the native typed X509
+        statement with a zero transaction-intent field.  The returned digest
+        is the exact intent that an isolated credential prover must bind into
+        the finalized statement and ``X5S1`` proof container.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-X509 presentation action requires an otherwise "
+                "empty transaction draft"
+            )
+        return bytes(
+            self.to_builder().prepare_privacy_zk_x509_identity_presentation_action_v1(
+                canonical_statement_archive,
+            )
+        )
+
+    def sign_privacy_zk_x509_identity_presentation_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        canonical_statement_archive: bytes,
+        credential_proof: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Validate and sign one worker-produced ZK-X509 presentation action.
+
+        The native signer accepts only a canonical, intent-bound typed
+        statement and an exact ``X5S1`` credential proof whose public header is
+        bound to ``canonical_genesis_hash``.  Certificate, CRL, and witness
+        material stays in the isolated prover and never enters this draft.
+        Signing fails closed until the production compiled profile has passed
+        its release-readiness gates; unsigned candidate material is not enough.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-X509 presentation action requires an otherwise "
+                "empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_zk_x509_identity_presentation_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            canonical_statement_archive,
+            credential_proof,
+        )
+
     def sign_privacy_zk_ams_batch_admission_action_v1(
         self,
         private_key: bytes,

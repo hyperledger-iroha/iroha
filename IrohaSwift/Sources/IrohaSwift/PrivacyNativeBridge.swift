@@ -18,21 +18,21 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
     /// Parse one exact canonical label. Aliases and normalized spellings are rejected.
     public init(canonicalLabel: String) throws {
         guard let value = Self(rawValue: canonicalLabel) else {
-            throw PrivacyCapabilityBridgeError.unknownProtocol
+            throw PrivacyCompiledProfileCatalogBridgeError.unknownProtocol
         }
         self = value
     }
 }
 
-public enum PrivacyCapabilityBridgeError: Error, Equatable, Sendable {
+public enum PrivacyCompiledProfileCatalogBridgeError: Error, Equatable, Sendable {
     case nativeUnavailable
     case invalidArchive
     case invalidFixtureBundle
     case unknownProtocol
 }
 
-/// Stable ABI-21 result of validating one typed privacy capability archive.
-public enum PrivacyCapabilityValidationStatusV1: Int32, CaseIterable, Sendable {
+/// Stable ABI-21 result of validating one typed local compiled-profile catalog.
+public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
     case empty = 2
@@ -41,7 +41,7 @@ public enum PrivacyCapabilityValidationStatusV1: Int32, CaseIterable, Sendable {
     case schemaMismatch = 5
     case nonCanonical = 6
     case malformedArchive = 7
-    case invalidSnapshot = 8
+    case invalidCatalog = 8
 }
 
 /// Stable ABI-21 result of validating the Rust-derived exact-12 fixture bundle.
@@ -57,14 +57,15 @@ public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendab
     case invalidBundle = 8
 }
 
-/// Selector-free native privacy metadata and exact-12 fixture surface.
+/// Selector-free local build metadata and exact-12 fixture surface.
 ///
 /// Generic proof request/build/verify dispatch is intentionally absent. Each proof protocol owns
-/// its typed API. This bridge transports the authoritative capability snapshot and the
-/// Rust-derived byte-complete exact-12 KAT bundle.
+/// its typed API. The compiled-profile catalog describes only the current binary and never
+/// establishes network activation or readiness. Fetch a fresh authoritative
+/// `PrivacyCapabilitySnapshotV1` from live Torii before submitting a privacy proof.
 public enum PrivacyNativeBridge {
     public static let requiredBridgeABIVersion: UInt32 = 21
-    public static let nativeArchiveMaximumBytes = 256 * 1024
+    public static let compiledProfileCatalogArchiveMaximumBytes = 256 * 1024
     public static let exact12FixtureBundleMaximumBytes = 2 * 1024 * 1024
 
     public static var isNativeAvailable: Bool {
@@ -76,20 +77,43 @@ public enum PrivacyNativeBridge {
         PrivacyProtocolIdV1.allCases
     }
 
-    /// Return the authoritative typed Norito capability snapshot.
-    public static func capabilitiesArchiveV1() throws -> Data {
+    /// Return this binary's canonical typed Norito compiled-profile catalog.
+    public static func compiledProfileCatalogV1() throws -> Data {
         guard isNativeAvailable,
-              let archive = try NoritoNativeBridge.shared.privacyCapabilitiesV1() else {
-            throw PrivacyCapabilityBridgeError.nativeUnavailable
+              let archive = try NoritoNativeBridge.shared.privacyCompiledProfileCatalogV1() else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
         }
-        return try requireCapabilitiesArchiveV1(archive)
+        return try requireCompiledProfileCatalogV1(archive)
     }
 
-    /// Return the canonical Rust-derived statements and complete envelopes for all twelve rows.
+    /// Validate bytes as the exact compiled-profile catalog of the loaded binary.
+    public static func validateCompiledProfileCatalogV1(
+        _ archive: Data
+    ) throws -> PrivacyCompiledProfileCatalogValidationStatusV1 {
+        guard !archive.isEmpty else {
+            return .empty
+        }
+        guard archive.count <= compiledProfileCatalogArchiveMaximumBytes else {
+            return .archiveTooLarge
+        }
+        guard isNativeAvailable,
+              let rawStatus = NoritoNativeBridge.shared
+                .privacyCompiledProfileCatalogValidationStatusV1(archive) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        guard let status = PrivacyCompiledProfileCatalogValidationStatusV1(
+            rawValue: rawStatus
+        ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidArchive
+        }
+        return status
+    }
+
+    /// Return canonical Rust-derived bytes through signed-transaction and hash layers for all twelve rows.
     public static func exact12FixtureBundleV1() throws -> Data {
         guard isNativeAvailable,
               let archive = try NoritoNativeBridge.shared.privacyExact12FixtureBundleV1() else {
-            throw PrivacyCapabilityBridgeError.nativeUnavailable
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
         }
         return try requireExact12FixtureBundleV1(archive)
     }
@@ -107,27 +131,27 @@ public enum PrivacyNativeBridge {
         guard isNativeAvailable,
               let rawStatus =
               NoritoNativeBridge.shared.privacyExact12FixtureValidationStatusV1(archive) else {
-            throw PrivacyCapabilityBridgeError.nativeUnavailable
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
         }
         guard let status = PrivacyExact12FixtureValidationStatusV1(rawValue: rawStatus) else {
-            throw PrivacyCapabilityBridgeError.invalidFixtureBundle
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidFixtureBundle
         }
         return status
     }
 
-    static func requireCapabilitiesArchiveV1(_ archive: Data) throws -> Data {
+    static func requireCompiledProfileCatalogV1(_ archive: Data) throws -> Data {
         guard !archive.isEmpty,
-              archive.count <= nativeArchiveMaximumBytes,
-              NoritoNativeBridge.shared.privacyCapabilityValidationStatusV1(archive)
-                == PrivacyCapabilityValidationStatusV1.valid.rawValue else {
-            throw PrivacyCapabilityBridgeError.invalidArchive
+              archive.count <= compiledProfileCatalogArchiveMaximumBytes,
+              NoritoNativeBridge.shared.privacyCompiledProfileCatalogValidationStatusV1(archive)
+                == PrivacyCompiledProfileCatalogValidationStatusV1.valid.rawValue else {
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidArchive
         }
         return Data(archive)
     }
 
     static func requireExact12FixtureBundleV1(_ archive: Data) throws -> Data {
         guard try validateExact12FixtureBundleV1(archive) == .valid else {
-            throw PrivacyCapabilityBridgeError.invalidFixtureBundle
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidFixtureBundle
         }
         return Data(archive)
     }

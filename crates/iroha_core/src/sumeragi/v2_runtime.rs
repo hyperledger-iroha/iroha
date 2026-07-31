@@ -12516,7 +12516,7 @@ mod tests {
             .lifecycle_ordinals
             .next_ordinal_for_test()
             .expect("inspect actual shared source before materialization");
-        assert_eq!(competing_ordinal, source_after_reserve);
+        assert_eq!(Some(competing_ordinal), source_after_reserve);
         runtime
             .commit_body_available(retry)
             .expect("materialize the exact retained reservation");

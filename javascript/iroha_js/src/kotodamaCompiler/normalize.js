@@ -1138,7 +1138,7 @@ function validateTriggers(value, entrypointName, label) {
       ["id", "repeats", "filter", "authority", "metadata", "callback"],
       triggerLabel,
     );
-    if (!isCanonicalIdentifier(trigger.id) || ids.has(trigger.id)) {
+    if (!isCanonicalIdentifier(trigger.id, { declaration: true }) || ids.has(trigger.id)) {
       rejectType(`${triggerLabel}.id must be unique and canonical`);
     }
     ids.add(trigger.id);
@@ -1149,6 +1149,12 @@ function validateTriggers(value, entrypointName, label) {
     validateBoundedJson(trigger.metadata, `${triggerLabel}.metadata`);
     requireExactKeys(trigger.callback, ["namespace", "entrypoint"], `${triggerLabel}.callback`);
     requireNullableString(trigger.callback.namespace, `${triggerLabel}.callback.namespace`);
+    if (
+      trigger.callback.namespace !== null
+      && !isCanonicalIdentifier(trigger.callback.namespace, { typeDeclaration: true })
+    ) {
+      rejectType(`${triggerLabel}.callback.namespace must be a canonical type declaration`);
+    }
     if (!isCanonicalEntrypointName(trigger.callback.entrypoint)) {
       rejectType(`${triggerLabel}.callback.entrypoint must be canonical`);
     }

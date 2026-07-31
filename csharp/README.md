@@ -465,13 +465,15 @@ complete verifying-key record equal the normalized request.
 ## Native Privacy Bridge
 
 `Hyperledger.Iroha.Privacy.PrivacyNative` is selector-free.
-`CapabilitiesV1()` returns a CRC-checked canonical
-`PrivacyCapabilitySnapshotV1` Norito archive. `PrivacyProtocolsV1.All` exposes
+`CompiledProfileCatalogV1()` returns this binary's CRC-checked canonical
+`PrivacyCompiledProfileCatalogV1` Norito archive. `PrivacyProtocolsV1.All` exposes
 the closed `PrivacyProtocolIdV1` enum in exact wire order.
+The local catalog contains no governance or readiness state; fetch a fresh
+committed `PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
 `Exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
 and envelopes for all twelve rows; `ValidateExact12FixtureBundleV1(...)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. Native
-availability requires ABI 21, both capability symbols, both exact-12 fixture
+availability requires ABI 21, both compiled-catalog symbols, both exact-12 fixture
 symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.

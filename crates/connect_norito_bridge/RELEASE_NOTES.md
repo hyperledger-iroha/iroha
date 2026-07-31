@@ -15,6 +15,12 @@ The exact-12 privacy KAT ABI is compiled through the narrow
 do not enable the data model's general `test-fixtures` feature, random-key
 feature edge, or block-tampering helpers.
 
+The native privacy metadata ABI exports only the local
+`PrivacyCompiledProfileCatalogV1`. It intentionally has no committed height,
+policy, activation, lifecycle, or readiness projection. SDKs must fetch a
+fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
+submitting a privacy proof.
+
 The archive checksums below are historical and do not establish a current
 ABI-21/revision-1 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source

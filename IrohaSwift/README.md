@@ -1130,13 +1130,17 @@ archive. Do not reconstruct or mutate proof material outside the typed codecs.
 ### Native privacy bridge
 
 `PrivacyNativeBridge` is selector-free.
-`capabilitiesArchiveV1()` returns the canonical typed
-`PrivacyCapabilitySnapshotV1` Norito archive, while `protocolsV1` exposes the
-closed `PrivacyProtocolIdV1` enum in exact wire order.
-`exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
-and envelopes for all twelve rows; `validateExact12FixtureBundleV1(_:)`
+`compiledProfileCatalogV1()` returns this binary's canonical typed
+`PrivacyCompiledProfileCatalogV1` Norito archive, while `protocolsV1` exposes
+the closed `PrivacyProtocolIdV1` enum in exact wire order. The local catalog
+contains no governance or readiness state; fetch a fresh committed
+`PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
+`exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
+envelopes, submit instructions, transaction intents, unsigned payloads, signed
+transactions, and transaction hashes for all twelve rows;
+`validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 21
-availability requires both capability symbols, both exact-12 fixture symbols,
+availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.

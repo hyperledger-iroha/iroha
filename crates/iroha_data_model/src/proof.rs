@@ -24,7 +24,11 @@ use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 
 const MAX_BACKEND_FIELD_BYTES: usize = 4 * 1024;
 const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
-const MAX_LEN_PREFIXED_FIELD_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum canonical encoded size of a [`ProofBox`] nested in a proof attachment.
+pub const PROOF_BOX_MAX_ENCODED_BYTES_V1: usize = 64 * 1024 * 1024;
+/// Fixed canonical field-framing bytes surrounding a `ProofBox` backend and payload.
+pub const PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1: usize = 32;
+const MAX_LEN_PREFIXED_FIELD_BYTES: usize = PROOF_BOX_MAX_ENCODED_BYTES_V1;
 /// Maximum byte length for portable verifier-key registry id fields.
 pub const VERIFYING_KEY_ID_MAX_FIELD_BYTES: usize = 256;
 
@@ -68,10 +72,30 @@ pub struct ProofBox {
     pub bytes: Vec<u8>,
 }
 
+/// Return the largest proof payload that keeps a canonical [`ProofBox`] within
+/// [`PROOF_BOX_MAX_ENCODED_BYTES_V1`] for the supplied UTF-8 backend id.
+///
+/// `None` means the backend and mandatory canonical framing alone exceed the
+/// closed first-release limit.
+#[must_use]
+pub fn proof_box_max_proof_bytes_v1(backend: &str) -> Option<usize> {
+    PROOF_BOX_MAX_ENCODED_BYTES_V1
+        .checked_sub(PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1)?
+        .checked_sub(backend.len())
+}
+
 impl ProofBox {
     /// Construct a new proof container.
     pub fn new(backend: iroha_schema::Ident, bytes: Vec<u8>) -> Self {
         Self { backend, bytes }
+    }
+
+    /// Return the exact canonical encoded length of this proof box.
+    #[must_use]
+    pub fn canonical_encoded_len_v1(&self) -> Option<usize> {
+        PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1
+            .checked_add(self.backend.as_str().len())?
+            .checked_add(self.bytes.len())
     }
 }
 
@@ -477,6 +501,12 @@ impl ProofAttachment {
         } else if self.proof.bytes.is_empty() {
             Some(("proof.bytes", "must be non-empty"))
         } else if self
+            .proof
+            .canonical_encoded_len_v1()
+            .is_none_or(|length| length > PROOF_BOX_MAX_ENCODED_BYTES_V1)
+        {
+            Some(("proof", "canonical encoding exceeds the 64 MiB limit"))
+        } else if self
             .vk_commitment
             .is_some_and(|commitment| commitment.iter().all(|byte| *byte == 0))
         {
@@ -491,6 +521,15 @@ impl ProofAttachment {
             hash != expected
         }) {
             Some(("envelope_hash", "must match proof bytes"))
+        } else if self
+            .lane_privacy
+            .as_ref()
+            .is_some_and(|proof| proof.validate_structure_v1().is_err())
+        {
+            Some((
+                "lane_privacy",
+                "must be a complete canonical bounded Merkle witness",
+            ))
         } else {
             None
         }
@@ -566,6 +605,7 @@ fn proof_attachment_json_proof_box(
             message: "retired base64 proof field is not supported; use bytes".into(),
         });
     }
+    proof_attachment_json_reject_unknown_fields(proof, "proof", &["backend", "bytes"])?;
 
     let backend = proof
         .get("backend")
@@ -575,10 +615,18 @@ fn proof_attachment_json_proof_box(
         .get("bytes")
         .ok_or_else(|| norito::json::Error::missing_field("proof.bytes"))
         .and_then(Vec::<u8>::json_from_value)?;
-    if bytes.len() > MAX_LEN_PREFIXED_FIELD_BYTES {
+    let maximum_proof_bytes = proof_box_max_proof_bytes_v1(backend.as_str()).ok_or_else(|| {
+        norito::json::Error::InvalidField {
+            field: "proof.backend".into(),
+            message: "backend and canonical framing exceed the 64 MiB ProofBox limit".into(),
+        }
+    })?;
+    if bytes.len() > maximum_proof_bytes {
         return Err(norito::json::Error::InvalidField {
             field: "proof.bytes".into(),
-            message: format!("proof bytes exceed the {MAX_LEN_PREFIXED_FIELD_BYTES}-byte limit"),
+            message: format!(
+                "proof bytes exceed the {maximum_proof_bytes}-byte limit for this backend"
+            ),
         });
     }
     Ok(ProofBox::new(backend, bytes))
@@ -605,6 +653,87 @@ fn proof_attachment_json_reject_retired_inline_vk_fields(
 }
 
 #[cfg(feature = "json")]
+fn proof_attachment_json_reject_unknown_fields(
+    object: &norito::json::Map,
+    parent: &str,
+    allowed: &[&str],
+) -> Result<(), norito::json::Error> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        let field = if parent.is_empty() {
+            field.clone()
+        } else {
+            format!("{parent}.{field}")
+        };
+        return Err(norito::json::Error::InvalidField {
+            field,
+            message: "unknown fields are not part of the first-release schema".into(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn proof_attachment_json_lane_privacy(
+    value: &norito::json::Value,
+) -> Result<crate::nexus::LanePrivacyProof, norito::json::Error> {
+    fn object<'a>(
+        value: &'a norito::json::Value,
+        field: &'static str,
+    ) -> Result<&'a norito::json::Map, norito::json::Error> {
+        value
+            .as_object()
+            .ok_or_else(|| norito::json::Error::InvalidField {
+                field: field.into(),
+                message: "expected object".into(),
+            })
+    }
+
+    let lane = object(value, "lane_privacy")?;
+    proof_attachment_json_reject_unknown_fields(
+        lane,
+        "lane_privacy",
+        &["commitment_id", "witness"],
+    )?;
+    if let Some(witness) = lane.get("witness") {
+        let witness = object(witness, "lane_privacy.witness")?;
+        proof_attachment_json_reject_unknown_fields(
+            witness,
+            "lane_privacy.witness",
+            &["kind", "payload"],
+        )?;
+        if let Some(payload) = witness.get("payload") {
+            let payload = object(payload, "lane_privacy.witness.payload")?;
+            proof_attachment_json_reject_unknown_fields(
+                payload,
+                "lane_privacy.witness.payload",
+                &["leaf", "proof"],
+            )?;
+            if let Some(proof) = payload.get("proof") {
+                let proof = object(proof, "lane_privacy.witness.payload.proof")?;
+                proof_attachment_json_reject_unknown_fields(
+                    proof,
+                    "lane_privacy.witness.payload.proof",
+                    &["leaf_index", "audit_path"],
+                )?;
+            }
+        }
+    }
+
+    let proof =
+        <crate::nexus::LanePrivacyProof as norito::json::JsonDeserialize>::json_from_value(value)?;
+    proof
+        .validate_structure_v1()
+        .map_err(|error| norito::json::Error::InvalidField {
+            field: "lane_privacy".into(),
+            message: error.to_string(),
+        })?;
+    Ok(proof)
+}
+
+#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachment {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -628,14 +757,31 @@ impl norito::json::JsonDeserialize for ProofAttachment {
                 proof_attachment_json_reject_retired_inline_vk_fields(nested, Some(field))?;
             }
         }
+        proof_attachment_json_reject_unknown_fields(
+            object,
+            "ProofAttachment",
+            &[
+                "backend",
+                "proof",
+                "vk_ref",
+                "vk_commitment",
+                "envelope_hash",
+                "lane_privacy",
+            ],
+        )?;
+        if let Some(vk_ref) = object.get("vk_ref") {
+            let vk_ref = vk_ref
+                .as_object()
+                .ok_or_else(|| norito::json::Error::InvalidField {
+                    field: "vk_ref".into(),
+                    message: "expected object".into(),
+                })?;
+            proof_attachment_json_reject_unknown_fields(vk_ref, "vk_ref", &["backend", "name"])?;
+        }
 
         let lane_privacy = match object.get("lane_privacy") {
             None | Some(norito::json::Value::Null) => None,
-            Some(value) => Some(
-                <crate::nexus::LanePrivacyProof as norito::json::JsonDeserialize>::json_from_value(
-                    value,
-                )?,
-            ),
+            Some(value) => Some(proof_attachment_json_lane_privacy(value)?),
         };
 
         let backend: Ident = proof_attachment_json_required(object, "backend")?;
@@ -1068,7 +1214,7 @@ impl ProofedCommittedTransaction {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::LaneCommitmentId;
+    use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
 
     use super::*;
 
@@ -1091,6 +1237,25 @@ mod tests {
             .collect::<Vec<_>>()
             .join(", ");
         format!("[{body}]")
+    }
+
+    fn lane_privacy_with_path(
+        leaf_index: u32,
+        audit_path: Vec<Option<HashOf<[u8; 32]>>>,
+    ) -> crate::nexus::LanePrivacyProof {
+        crate::nexus::LanePrivacyProof {
+            commitment_id: LaneCommitmentId::new(5),
+            witness: crate::nexus::LanePrivacyWitness::Merkle(
+                crate::nexus::LanePrivacyMerkleWitness {
+                    leaf: [0xAA; 32],
+                    proof: MerkleProof::from_audit_path(leaf_index, audit_path),
+                },
+            ),
+        }
+    }
+
+    fn canonical_lane_sibling(seed: u8) -> HashOf<[u8; 32]> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
 
     #[test]
@@ -1404,6 +1569,33 @@ mod tests {
     }
 
     #[test]
+    fn proof_attachment_decode_rejects_malformed_lane_privacy_paths() {
+        let sibling = canonical_lane_sibling(0x22);
+        let malformed = [
+            lane_privacy_with_path(0, Vec::new()),
+            lane_privacy_with_path(0, vec![None]),
+            lane_privacy_with_path(2, vec![Some(sibling)]),
+            lane_privacy_with_path(
+                0,
+                vec![Some(sibling); crate::nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1],
+            ),
+        ];
+
+        for lane_privacy in malformed {
+            let mut attachment = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                VerifyingKeyId::new("halo2/ipa", "vk_1"),
+            );
+            attachment.lane_privacy = Some(lane_privacy);
+            let encoded = norito::to_bytes(&attachment).expect("encode malformed lane witness");
+            let error = norito::decode_from_bytes::<ProofAttachment>(&encoded)
+                .expect_err("malformed lane witness must not decode inside an attachment");
+            assert!(error.to_string().contains("lane_privacy"));
+        }
+    }
+
+    #[test]
     fn proof_attachment_decode_rejects_blank_verifying_key_name() {
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
@@ -1528,6 +1720,40 @@ mod tests {
                 "expected error to mention {expected_field}, got {err}"
             );
         }
+    }
+
+    #[test]
+    fn proof_box_canonical_size_limit_accounts_for_backend_and_framing() {
+        let backend = "halo2/ipa::transfer_v1";
+        let proof = ProofBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
+        let canonical = norito::encode_canonical(&proof).expect("canonical ProofBox");
+        assert_eq!(proof.canonical_encoded_len_v1(), Some(canonical.len()));
+        assert_eq!(
+            proof_box_max_proof_bytes_v1(backend),
+            Some(
+                PROOF_BOX_MAX_ENCODED_BYTES_V1
+                    - PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1
+                    - backend.len()
+            )
+        );
+
+        let maximum = proof_box_max_proof_bytes_v1(backend).expect("bounded backend");
+        let mut attachment = ProofAttachment::new_ref(
+            backend.into(),
+            ProofBox::new(backend.into(), vec![0xA5; maximum]),
+            VerifyingKeyId::new(backend, "transfer_v1"),
+        );
+        assert_eq!(
+            attachment.proof.canonical_encoded_len_v1(),
+            Some(PROOF_BOX_MAX_ENCODED_BYTES_V1)
+        );
+        assert_eq!(attachment.structural_error(), None);
+
+        attachment.proof.bytes.push(0x5A);
+        assert_eq!(
+            attachment.structural_error(),
+            Some(("proof", "canonical encoding exceeds the 64 MiB limit"))
+        );
     }
 
     #[test]
@@ -1727,26 +1953,62 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn proof_attachment_json_ignores_unrelated_unknown_members() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof": {
+    fn proof_attachment_json_rejects_unknown_members_at_every_declared_layer() {
+        for json in [
+            r#"{
                 "backend": "halo2/ipa",
-                "bytes": [1, 2, 3],
-                "future_proof_metadata": { "epoch": 7 }
-            },
-            "vk_ref": {
+                "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                "future_attachment_metadata": true
+            }"#,
+            r#"{
                 "backend": "halo2/ipa",
-                "name": "vk_1",
-                "future_registry_metadata": [1, 2, 3]
-            },
-            "vk_reference": { "backend": "halo2/ipa", "name": "vk_shadow" },
-            "future_attachment_metadata": true
-        }"#;
-        let attachment = norito::json::from_str::<ProofAttachment>(json)
-            .expect("unrelated additive members must be ignored");
-        assert_eq!(attachment.proof.bytes, [1, 2, 3]);
-        assert_eq!(attachment.vk_ref.name.as_str(), "vk_1");
+                "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3], "future_proof_metadata": 7 },
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            }"#,
+            r#"{
+                "backend": "halo2/ipa",
+                "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1", "future_registry_metadata": 7 }
+            }"#,
+        ] {
+            let error = norito::json::from_str::<ProofAttachment>(json)
+                .expect_err("unknown first-release member must be rejected");
+            assert!(error.to_string().contains("unknown fields"));
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_requires_exact_structural_lane_privacy() {
+        let sibling = canonical_lane_sibling(0x22);
+        let mut attachment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        );
+        attachment.lane_privacy = Some(lane_privacy_with_path(1, vec![Some(sibling)]));
+        let canonical = norito::json::to_json(&attachment).expect("canonical lane attachment JSON");
+        let decoded = norito::json::from_str::<ProofAttachment>(&canonical)
+            .expect("canonical lane attachment JSON must decode");
+        assert_eq!(decoded, attachment);
+
+        let unknown = canonical.replacen("\"leaf_index\":1", "\"shadow\":0,\"leaf_index\":1", 1);
+        let error = norito::json::from_str::<ProofAttachment>(&unknown)
+            .expect_err("unknown nested lane field must reject");
+        assert!(error.to_string().contains("unknown fields"));
+
+        for malformed in [
+            lane_privacy_with_path(0, Vec::new()),
+            lane_privacy_with_path(0, vec![None]),
+            lane_privacy_with_path(2, vec![Some(sibling)]),
+        ] {
+            attachment.lane_privacy = Some(malformed);
+            let json = norito::json::to_json(&attachment).expect("malformed lane JSON fixture");
+            let error = norito::json::from_str::<ProofAttachment>(&json)
+                .expect_err("malformed lane JSON must reject");
+            assert!(error.to_string().contains("lane_privacy"));
+        }
     }
 
     #[cfg(feature = "json")]

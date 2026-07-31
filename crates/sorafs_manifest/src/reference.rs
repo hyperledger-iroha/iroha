@@ -1246,7 +1246,7 @@ fn decode_repair_bundle_payload<T>(
     generated_at: u64,
 ) -> Result<T, ValidationOutcomeV1>
 where
-    T: for<'decode> norito::NoritoDeserialize<'decode>,
+    T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
     decode_repair_archive_payload::<T>(payload.bytes).map_err(|error| {
         bundle_decode_error(
@@ -3854,21 +3854,9 @@ pub fn validate_repair_payload_bytes(
 
 fn decode_repair_archive_payload<T>(bytes: &[u8]) -> Result<T, norito::Error>
 where
-    T: for<'decode> norito::NoritoDeserialize<'decode>,
+    T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
-    match norito::decode_from_bytes::<T>(bytes) {
-        Ok(value) => Ok(value),
-        Err(primary_error) => {
-            if let Ok(view) = norito::core::from_bytes_view(bytes) {
-                let mut payload = view.as_bytes();
-                if let Ok(value) = <T as norito::codec::Decode>::decode(&mut payload) {
-                    return Ok(value);
-                }
-            }
-            let mut input = bytes;
-            <T as norito::codec::Decode>::decode(&mut input).map_err(|_| primary_error)
-        }
-    }
+    norito::decode_canonical::<T>(bytes)
 }
 
 /// Validates a canonical appeal-finance `CancelAssetLock` V1 Norito payload.
@@ -8791,6 +8779,33 @@ mod tests {
             decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
+    }
+
+    #[test]
+    fn validate_repair_payload_bytes_rejects_alternate_norito_layout() {
+        let task = repair_task_record();
+        let alternate_flags = norito::core::default_encode_flags()
+            ^ norito::core::header_flags::COMPACT_LEN;
+        let bytes = {
+            let _flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            to_bytes(&task).expect("encode task with alternate layout")
+        };
+        let canonical = to_bytes(&task).expect("encode canonical task");
+        assert_ne!(bytes, canonical, "fixture must distinguish layouts");
+        assert!(matches!(
+            decode_repair_archive_payload::<RepairTaskRecordV1>(&bytes),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+
+        let outcome = validate_repair_payload_bytes(
+            RepairValidationPayloadKindV1::TaskRecord,
+            &bytes,
+            "alternate-layout-repair-task.to",
+            28,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
     }
 
     #[test]

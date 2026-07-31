@@ -22,8 +22,8 @@ public enum PrivacyProtocolIdV1
     PqMaspStarkV0,
 }
 
-/// <summary>Stable ABI-21 result of validating one typed privacy capability archive.</summary>
-public enum PrivacyCapabilityValidationStatusV1
+/// <summary>Stable ABI-21 result of validating one typed local compiled-profile catalog.</summary>
+public enum PrivacyCompiledProfileCatalogValidationStatusV1
 {
     Valid = 0,
     NullPointer = 1,
@@ -33,7 +33,7 @@ public enum PrivacyCapabilityValidationStatusV1
     SchemaMismatch = 5,
     NonCanonical = 6,
     MalformedArchive = 7,
-    InvalidSnapshot = 8,
+    InvalidCatalog = 8,
 }
 
 /// <summary>Stable ABI-21 result of validating the Rust-derived exact-12 fixture bundle.</summary>
@@ -107,19 +107,19 @@ public static class PrivacyProtocolsV1
         };
 }
 
-/// <summary>Validated canonical <c>PrivacyCapabilitySnapshotV1</c> Norito archive.</summary>
-public sealed class PrivacyCapabilitiesArchive
+/// <summary>Validated canonical local <c>PrivacyCompiledProfileCatalogV1</c> archive.</summary>
+public sealed class PrivacyCompiledProfileCatalogArchive
 {
     private readonly byte[] _noritoBytes;
 
-    internal PrivacyCapabilitiesArchive(byte[] noritoBytes)
+    internal PrivacyCompiledProfileCatalogArchive(byte[] noritoBytes)
     {
         ArgumentNullException.ThrowIfNull(noritoBytes);
-        if (PrivacyNative.ValidateCapabilitiesV1(noritoBytes)
-            != PrivacyCapabilityValidationStatusV1.Valid)
+        if (PrivacyNative.ValidateCompiledProfileCatalogV1(noritoBytes)
+            != PrivacyCompiledProfileCatalogValidationStatusV1.Valid)
         {
             throw new ArgumentException(
-                "Expected a canonical PrivacyCapabilitySnapshotV1 Norito archive.",
+                "Expected this binary's canonical PrivacyCompiledProfileCatalogV1 archive.",
                 nameof(noritoBytes));
         }
         _noritoBytes = (byte[])noritoBytes.Clone();
@@ -130,7 +130,7 @@ public sealed class PrivacyCapabilitiesArchive
 }
 
 /// <summary>
-/// Validated canonical Rust-derived statement/envelope bytes for every exact-12 privacy row.
+/// Validated canonical Rust-derived bytes through signed-transaction and hash layers for every exact-12 privacy row.
 /// </summary>
 public sealed class PrivacyExact12FixtureBundleArchive
 {
@@ -154,12 +154,13 @@ public sealed class PrivacyExact12FixtureBundleArchive
 }
 
 /// <summary>
-/// Selector-free native privacy metadata and exact-12 fixture surface. Generic proof
-/// request/build/verify dispatch is deliberately absent; proof protocols expose typed APIs.
+/// Selector-free local privacy build metadata and exact-12 fixture surface. The catalog never
+/// establishes network activation or readiness; fetch a fresh authoritative capability snapshot
+/// from live Torii before submitting a privacy proof.
 /// </summary>
 public static class PrivacyNative
 {
-    public const int PrivacyNativeArchiveMaxBytes = 256 * 1024;
+    public const int PrivacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024;
     public const int PrivacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024;
     public const uint RequiredBridgeAbiVersion = 21;
     private const string LibraryName = "connect_norito_bridge";
@@ -175,10 +176,13 @@ public static class PrivacyNative
         try
         {
             var symbolsAvailable = NativeLibrary.TryLoad(LibraryName, out handle)
-                && NativeLibrary.TryGetExport(handle, "iroha_privacy_capabilities_v1", out _)
                 && NativeLibrary.TryGetExport(
                     handle,
-                    "iroha_privacy_validate_capabilities_v1",
+                    "iroha_privacy_compiled_profile_catalog_v1",
+                    out _)
+                && NativeLibrary.TryGetExport(
+                    handle,
+                    "iroha_privacy_validate_compiled_profile_catalog_v1",
                     out _)
                 && NativeLibrary.TryGetExport(
                     handle,
@@ -192,9 +196,9 @@ public static class PrivacyNative
                 && NativeBridgeAbiVersion() == RequiredBridgeAbiVersion;
             return symbolsAvailable
                 && ProbeNativeArchive(
-                    NativeCapabilities,
-                    NativeValidateCapabilities,
-                    PrivacyNativeArchiveMaxBytes)
+                    NativeCompiledProfileCatalog,
+                    NativeValidateCompiledProfileCatalog,
+                    PrivacyCompiledProfileCatalogArchiveMaxBytes)
                 && ProbeNativeArchive(
                     NativeExact12FixtureBundle,
                     NativeValidateExact12FixtureBundle,
@@ -250,7 +254,7 @@ public static class PrivacyNative
     }
 
     /// <summary>
-    /// Returns the canonical Rust-derived statements and complete envelopes for all twelve rows.
+    /// Returns canonical Rust-derived bytes through signed-transaction and hash layers for all twelve rows.
     /// </summary>
     public static PrivacyExact12FixtureBundleArchive Exact12FixtureBundleV1()
     {
@@ -288,30 +292,34 @@ public static class PrivacyNative
         }
     }
 
-    public static PrivacyCapabilitiesArchive CapabilitiesV1()
+    /// <summary>Returns this binary's canonical local compiled-profile catalog.</summary>
+    public static PrivacyCompiledProfileCatalogArchive CompiledProfileCatalogV1()
     {
         if (!IsAvailable())
         {
-            throw new InvalidOperationException("Native privacy capability bridge is unavailable.");
+            throw new InvalidOperationException(
+                "Native privacy compiled-profile catalog is unavailable.");
         }
 
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
-        var status = NativeCapabilities(out pointer, out length);
+        var status = NativeCompiledProfileCatalog(out pointer, out length);
         try
         {
             if (status != 0 || pointer == IntPtr.Zero)
             {
-                throw new InvalidOperationException("Native privacy capability query failed.");
+                throw new InvalidOperationException(
+                    "Native privacy compiled-profile catalog query failed.");
             }
             var count = checked((int)length.ToUInt64());
-            if (count <= 0 || count > PrivacyNativeArchiveMaxBytes)
+            if (count <= 0 || count > PrivacyCompiledProfileCatalogArchiveMaxBytes)
             {
-                throw new InvalidOperationException("Native privacy capability archive is invalid.");
+                throw new InvalidOperationException(
+                    "Native privacy compiled-profile catalog is invalid.");
             }
             var bytes = new byte[count];
             Marshal.Copy(pointer, bytes, 0, count);
-            return new PrivacyCapabilitiesArchive(bytes);
+            return new PrivacyCompiledProfileCatalogArchive(bytes);
         }
         finally
         {
@@ -322,28 +330,33 @@ public static class PrivacyNative
         }
     }
 
-    public static PrivacyCapabilityValidationStatusV1 ValidateCapabilitiesV1(byte[] archive)
+    /// <summary>Validates bytes as the exact compiled-profile catalog of the loaded binary.</summary>
+    public static PrivacyCompiledProfileCatalogValidationStatusV1 ValidateCompiledProfileCatalogV1(
+        byte[] archive)
     {
         ArgumentNullException.ThrowIfNull(archive);
         if (archive.Length == 0)
         {
-            return PrivacyCapabilityValidationStatusV1.Empty;
+            return PrivacyCompiledProfileCatalogValidationStatusV1.Empty;
         }
-        if (archive.Length > PrivacyNativeArchiveMaxBytes)
+        if (archive.Length > PrivacyCompiledProfileCatalogArchiveMaxBytes)
         {
-            return PrivacyCapabilityValidationStatusV1.ArchiveTooLarge;
+            return PrivacyCompiledProfileCatalogValidationStatusV1.ArchiveTooLarge;
         }
         if (!IsAvailable())
         {
-            throw new InvalidOperationException("Native privacy capability bridge is unavailable.");
+            throw new InvalidOperationException(
+                "Native privacy compiled-profile catalog is unavailable.");
         }
-        var code = NativeValidateCapabilities(archive, new UIntPtr((uint)archive.Length));
-        if (!Enum.IsDefined(typeof(PrivacyCapabilityValidationStatusV1), code))
+        var code = NativeValidateCompiledProfileCatalog(
+            archive,
+            new UIntPtr((uint)archive.Length));
+        if (!Enum.IsDefined(typeof(PrivacyCompiledProfileCatalogValidationStatusV1), code))
         {
             throw new InvalidOperationException(
-                "Native privacy capability validation returned an unknown status.");
+                "Native privacy compiled-profile catalog validation returned an unknown status.");
         }
-        return (PrivacyCapabilityValidationStatusV1)code;
+        return (PrivacyCompiledProfileCatalogValidationStatusV1)code;
     }
 
     /// <summary>
@@ -384,15 +397,17 @@ public static class PrivacyNative
 
     [DllImport(
         LibraryName,
-        EntryPoint = "iroha_privacy_capabilities_v1",
+        EntryPoint = "iroha_privacy_compiled_profile_catalog_v1",
         CallingConvention = CallingConvention.Cdecl)]
-    private static extern int NativeCapabilities(out IntPtr output, out UIntPtr outputLength);
+    private static extern int NativeCompiledProfileCatalog(
+        out IntPtr output,
+        out UIntPtr outputLength);
 
     [DllImport(
         LibraryName,
-        EntryPoint = "iroha_privacy_validate_capabilities_v1",
+        EntryPoint = "iroha_privacy_validate_compiled_profile_catalog_v1",
         CallingConvention = CallingConvention.Cdecl)]
-    private static extern int NativeValidateCapabilities(
+    private static extern int NativeValidateCompiledProfileCatalog(
         [In] byte[] archive,
         UIntPtr archiveLength);
 

@@ -22370,7 +22370,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
           permission: "Schedule",
           triggers: [
             {
-              id: "bad-callback",
+              id: "bad_callback",
               repeats: { Indefinitely: null },
               filter: "AQ==",
               callback: { entrypoint: "read" },
@@ -25182,7 +25182,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
     });
     await assert.rejects(
       () => client.getContractManifest("11".repeat(32)),
-      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|retired Kotodama source form/u,
+      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|canonical Kotodama V1 identifier/u,
       label,
     );
   }
@@ -25190,7 +25190,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
   const lowercaseAmount = JSON.parse(JSON.stringify(base));
   const lowercaseTrigger = lowercaseAmount.manifest.entrypoints[0].triggers[0];
   lowercaseTrigger.id = "amount";
-  lowercaseTrigger.callback.namespace = "amount";
+  lowercaseTrigger.callback.namespace = "RemoteLedger";
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createStreamedJsonResponse({
@@ -25202,7 +25202,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
   const accepted = await client.getContractManifest("11".repeat(32));
   const parsedTrigger = accepted?.manifest.entrypoints[0].triggers[0];
   assert.equal(parsedTrigger?.id, "amount");
-  assert.equal(parsedTrigger?.callback.namespace, "amount");
+  assert.equal(parsedTrigger?.callback.namespace, "RemoteLedger");
 });
 
 test("getContractManifest returns null on 404", async () => {
