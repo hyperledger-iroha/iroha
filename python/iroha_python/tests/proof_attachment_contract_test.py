@@ -113,6 +113,29 @@ def test_proof_attachment_rejects_every_retired_alias(retired_field: str) -> Non
 
 
 @pytest.mark.parametrize(
+    ("container", "retired_field"),
+    (
+        ("proof", "bytes_b64"),
+        ("proof", "vk_inline"),
+        ("proof", "verifyingKeyInline"),
+        ("vk_ref", "vk_inline"),
+        ("vk_ref", "verifying_key_inline"),
+        ("vk_ref", "id"),
+        ("vk_ref", "key"),
+        ("vk_ref", "backendId"),
+    ),
+)
+def test_proof_attachment_rejects_nested_retired_alias(
+    container: str,
+    retired_field: str,
+) -> None:
+    proof = attachment()
+    proof[container][retired_field] = b"retired"
+    with pytest.raises(ValueError, match="unknown first-release field"):
+        verify(proof)
+
+
+@pytest.mark.parametrize(
     ("mutate", "error_type", "message"),
     (
         (lambda value: value.update({"shadow": 1}), ValueError, "unknown"),
@@ -181,6 +204,7 @@ def test_proof_attachment_rejects_missing_required_outer_field(field: str) -> No
         ".halo2",
         "halo2_",
         "halo2/:ipa",
+        "a" * 257,
     ),
 )
 def test_proof_attachment_rejects_nonportable_backend(invalid: str) -> None:
@@ -235,6 +259,43 @@ def test_proof_attachment_rejects_backend_mismatch(
         verify(proof)
 
 
+@pytest.mark.parametrize(
+    ("container", "field"),
+    (
+        ("proof", "backend"),
+        ("proof", "bytes"),
+        ("vk_ref", "backend"),
+        ("vk_ref", "name"),
+    ),
+)
+def test_proof_attachment_rejects_missing_nested_required_field(
+    container: str,
+    field: str,
+) -> None:
+    proof = attachment()
+    del proof[container][field]
+    with pytest.raises(ValueError, match=field):
+        verify(proof)
+
+
+@pytest.mark.parametrize(
+    ("container", "field"),
+    (
+        ("proof", "backend"),
+        ("vk_ref", "backend"),
+        ("vk_ref", "name"),
+    ),
+)
+def test_proof_attachment_rejects_nonportable_nested_identifier(
+    container: str,
+    field: str,
+) -> None:
+    proof = attachment()
+    proof[container][field] = "forged/../selector"
+    with pytest.raises(ValueError, match="portable"):
+        verify(proof)
+
+
 def test_proof_attachment_rejects_empty_proof() -> None:
     with pytest.raises(ValueError, match="proof.bytes must be non-empty"):
         verify(attachment(proof_bytes=b""))
@@ -281,6 +342,12 @@ def test_proof_attachment_accepts_complete_bounded_lane_merkle_witness() -> None
     proof["lane_privacy"] = lane_privacy(
         leaf_index=0xFFFF_FFFF,
         audit_path=[bytes([index]) * 32 for index in range(1, 33)],
+    )
+    verify(proof)
+
+    proof["lane_privacy"] = lane_privacy(
+        leaf_index=0,
+        audit_path=[b"s" * 32] * 255,
     )
     verify(proof)
 

@@ -1,3 +1,6 @@
+// Copyright 2026 Hyperledger Iroha Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package org.hyperledger.iroha.sdk.privacy
 
 import java.nio.ByteBuffer
@@ -189,23 +192,23 @@ object PrivacyExact12FixtureCodecV1 {
     const val ROW_COUNT: Int = 12
     const val HASH_BYTES: Int = 32
     const val MAX_ARCHIVE_BYTES: Int = 2 * 1024 * 1024
-    const val MAX_AGGREGATE_NESTED_BYTES: Long = MAX_ARCHIVE_BYTES.toLong()
+    const val MAX_AGGREGATE_NESTED_BYTES: Long = 2L * 1024L * 1024L
     const val MAX_STATEMENT_BYTES: Int = 256 * 1024
     const val MAX_ENVELOPE_BYTES: Int = 512 * 1024
     const val MAX_INSTRUCTION_BYTES: Int = 512 * 1024
     const val MAX_INTENT_PROJECTION_BYTES: Int = 512 * 1024
     const val MAX_UNSIGNED_TRANSACTION_BYTES: Int = 768 * 1024
     const val MAX_SIGNED_TRANSACTION_BYTES: Int = 1024 * 1024
-    private const val MAX_ROW_ENCODED_BYTES: Long = MAX_ARCHIVE_BYTES.toLong()
+    private const val MAX_ROW_ENCODED_BYTES: Long = 2L * 1024L * 1024L
     private const val MAX_WIRE_ID_ENCODED_BYTES: Long = 128L
-    private const val FIXED_HASH_ENCODED_BYTES: Long = HASH_BYTES * 2L
+    private const val FIXED_HASH_ENCODED_BYTES: Long = 32L
     private const val HEADER_PAYLOAD_LENGTH_OFFSET: Int = 23
     private const val HEADER_COMPRESSION_OFFSET: Int = 22
     private const val HEADER_FLAGS_OFFSET: Int = NoritoHeader.HEADER_LENGTH - 1
     private val UINT32_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
     private val STRING_ADAPTER: TypeAdapter<String> = NoritoAdapters.stringAdapter()
     private val RAW_BYTES_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
-    private val FIXED_HASH_ADAPTER: TypeAdapter<ByteArray> = CompactFixedHashAdapter
+    private val FIXED_HASH_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.fixedBytes(HASH_BYTES)
 
     /** Decode a complete canonical archive and reject every alternate representation. */
     @JvmStatic
@@ -378,7 +381,7 @@ object PrivacyExact12FixtureCodecV1 {
             val decodeBudget = requireNotNull(budget)
             val protocolTag = decodeExactSizedField(decoder, UINT32_ADAPTER, 4L, "protocol id")
             val protocols = PrivacyNativeBridge.ProtocolIdV1.values()
-            require(protocolTag in protocols.indices.map(Int::toLong)) {
+            require(protocolTag >= 0L && protocolTag < protocols.size.toLong()) {
                 "unknown exact-12 protocol discriminant: $protocolTag"
             }
             val statement = decodeRawBytesField(decoder, MAX_STATEMENT_BYTES, decodeBudget, "statement")
@@ -441,23 +444,6 @@ object PrivacyExact12FixtureCodecV1 {
                 signed,
                 transactionHash,
             )
-        }
-    }
-
-    private object CompactFixedHashAdapter : TypeAdapter<ByteArray> {
-        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            require(value.size == HASH_BYTES) { "expected $HASH_BYTES hash bytes" }
-            value.forEach { byte ->
-                encoder.writeLength(1L, true)
-                encoder.writeByte(byte.toInt())
-            }
-        }
-
-        override fun decode(decoder: NoritoDecoder): ByteArray = ByteArray(HASH_BYTES) { index ->
-            require(decoder.readLength(true) == 1L) {
-                "hash byte $index must have canonical unit length"
-            }
-            decoder.readByte().toByte()
         }
     }
 

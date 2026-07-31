@@ -30,6 +30,7 @@ from .crypto import (
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
+    _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     _normalize_lane_privacy_attachment,
     build_signed_transaction,
 )
@@ -470,12 +471,20 @@ class TransactionDraft:
         using the shared normalization helper.
         """
 
+        bounded_audit_path: List[bytes] = []
+        for index, sibling in enumerate(audit_path):
+            if index >= _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1:
+                raise ValueError(
+                    "audit_path must contain between 1 and "
+                    f"{_LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+                )
+            bounded_audit_path.append(sibling)
         attachment = _normalize_lane_privacy_attachment(
             {
                 "commitment_id": commitment_id,
                 "leaf": leaf,
                 "leaf_index": leaf_index,
-                "audit_path": list(audit_path),
+                "audit_path": bounded_audit_path,
                 "proof_backend": proof_backend,
                 "proof_bytes": proof_bytes,
                 "verifying_key_name": verifying_key_name,

@@ -111,7 +111,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.tx.SignedTransactionHasherTests",
         "org.hyperledger.iroha.android.tx.TransactionBuilderTests",
         "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests",
-        "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter",
         "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests",
       };
 
