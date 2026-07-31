@@ -1329,14 +1329,23 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "with_driver_and_lifecycle_ordinals": (
         "8b34854604799e519f0e40d85bac7f72564ee67ae94c6731222f45af13bcc863"
     ),
+    "freeze_due_clock_owners": (
+        "f097b1ce583dcb9d94293366cab9828f648c376dd586f7af28635b003f92c855"
+    ),
     "minimum_active_lifecycle_ordinal": (
-        "0c38e2c8725a12a05c06884f8ae22d3ea7c6395243dc08800afdbf4d1190d812"
+        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+    ),
+    "minimum_active_lifecycle_ordinal_excluding": (
+        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "step": (
-        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
+        "82e349d880d8ff39c7438e8c06b301f5abcae332d25265285213a099b7ad8ce3"
+    ),
+    "dispatch_one_fence_dependency": (
+        "1109cb4b250d3115032fc5d5ed196182b53b9020ea4142f0f87e06b197731f00"
     ),
     "dispatch_one_adapter_deferred": (
         "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"

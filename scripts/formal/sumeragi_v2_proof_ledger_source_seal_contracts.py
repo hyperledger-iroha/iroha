@@ -52,6 +52,15 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "deferred_work_is_serviceable": (
         "1036f93b127acad65512fcb095d7f19bdc547f93d22ebebbd227277a0a30405c"
     ),
+    "completion_unblocks_deferred_fence": (
+        "0964e3e5d76ef3f72a240c03c46c3c15a71c52572acaa34784276c97858d3ab7"
+    ),
+    "command_is_blocked_by_deferred_fence": (
+        "05f8139fb6d9566a2749cc01e8e906c180ebca304448d635f2d276a5935f3757"
+    ),
+    "authenticated_command_reaches_fenced_reducer": (
+        "9a4aa6932087f18a3b4897e3946bb40a9e600c99fd4841ebce7a801247ee9835"
+    ),
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
     ),
@@ -66,14 +75,38 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "drive_effects": (
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
+    "pop_fence_completion_with_ownership": (
+        "8fc875ae966aef68a30bec6fb163c10895449a367a9d5731e5e3f8c78594bd64"
+    ),
+    "fence_blocked_lifecycle_owners": (
+        "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
+    ),
+    "freeze_due_clock_owners": (
+        "f097b1ce583dcb9d94293366cab9828f648c376dd586f7af28635b003f92c855"
+    ),
+    "minimum_active_lifecycle_ordinal": (
+        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+    ),
+    "minimum_active_lifecycle_ordinal_excluding": (
+        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+    ),
     "runtime_step": (
-        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
+        "82e349d880d8ff39c7438e8c06b301f5abcae332d25265285213a099b7ad8ce3"
     ),
     "runtime_step_recovery": (
         "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
     ),
     "dispatch_one_adapter_deferred": (
         "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
+    ),
+    "dispatch_one_fence_dependency": (
+        "1109cb4b250d3115032fc5d5ed196182b53b9020ea4142f0f87e06b197731f00"
+    ),
+    "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
+        "7f93137f29f8c8afcf06e45935c979dc10ad786b88e87f617415adc67df0d242"
+    ),
+    "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt": (
+        "89324b884105cbcb609cf18945c41719ff47edeaf315ad3549b316ea0d0744e7"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -1301,7 +1334,10 @@ _EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
     "minimum_active_lifecycle_ordinal": (
-        "0c38e2c8725a12a05c06884f8ae22d3ea7c6395243dc08800afdbf4d1190d812"
+        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+    ),
+    "minimum_active_lifecycle_ordinal_excluding": (
+        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
     ),
     "active_lifecycle_uses_ordinal": (
         "3383cbf7969a7f8d792f56ed9c148c4ca523f6366bfac8c60b53a68af427a4fc"

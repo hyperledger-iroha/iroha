@@ -15381,11 +15381,16 @@ def _serviced_candidate_production_source_fidelity_errors(
         "with_driver_and_lifecycle_ordinals": (
             "with_driver_and_lifecycle_ordinals"
         ),
+        "freeze_due_clock_owners": "freeze_due_clock_owners",
         "minimum_active_lifecycle_ordinal": "minimum_active_lifecycle_ordinal",
+        "minimum_active_lifecycle_ordinal_excluding": (
+            "minimum_active_lifecycle_ordinal_excluding"
+        ),
         "complete_leader_wire_runtime_owner": (
             "complete_leader_wire_runtime_owner"
         ),
         "step": "step",
+        "dispatch_one_fence_dependency": "dispatch_one_fence_dependency",
         "dispatch_one_adapter_deferred": "dispatch_one_adapter_deferred",
     }
     runtime_items = collect_items(
@@ -33643,16 +33648,57 @@ None => {
     _require_rust_token_sequence(
         runtime_path,
         minimum_active,
-        """
-let mut minimum = self.ingress.oldest_active_lifecycle_ordinal()?;
-let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
-""",
-        "global runtime predecessor cut starts with the FIFO minimum",
+        "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+        "the complete runtime predecessor cut excludes no active owner",
+        errors,
+    )
+    minimum_active_excluding = _require_rust_item(
+        runtime_path,
+        runtime_source,
+        "minimum_active_lifecycle_ordinal_excluding",
         errors,
     )
     _require_rust_token_sequence(
         runtime_path,
-        minimum_active,
+        minimum_active_excluding,
+        """
+let _ = self.ingress.oldest_active_lifecycle_ordinal()?;
+let mut minimum = self
+    .ingress
+    .dormant_local_fifo_reservations
+    .iter()
+    .map(|reservation| reservation.admission_ordinal)
+    .min();
+""",
+        "the proof-gated runtime cut validates every FIFO owner and retains "
+        "restart-dormant Local FIFO predecessors",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        minimum_active_excluding,
+        """
+if excluded.iter().any(|blocked| blocked == owner) {
+    return Ok(());
+}
+""",
+        "the proof-gated runtime cut excludes only exact supplied owner aliases",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        minimum_active_excluding,
+        """
+for queued in &self.ingress.commands {
+    observe(&queued.lifecycle_owner()?)?;
+}
+""",
+        "the proof-gated runtime cut observes every physical FIFO owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        minimum_active_excluding,
         """
 for owner in self.deferred_lifecycle_ownership.values() {
     observe(owner)?;
@@ -33663,7 +33709,7 @@ for owner in self.deferred_lifecycle_ownership.values() {
     )
     _require_rust_token_sequence(
         runtime_path,
-        minimum_active,
+        minimum_active_excluding,
         """
 if let Some(ownership) = &self.pending_effect_ownership {
     for effect in ownership {
@@ -46854,6 +46900,21 @@ def _production_causal_fifo_source_fidelity_errors(
                 "adapter deferred-work serviceability fence",
             ),
             (
+                "completion_unblocks_deferred_fence",
+                (("impl", "SumeragiV2Adapter"),),
+                "exact signature-completion dependency proof",
+            ),
+            (
+                "command_is_blocked_by_deferred_fence",
+                (("impl", "SumeragiV2Adapter"),),
+                "exact reducer-fenced queued-command proof",
+            ),
+            (
+                "authenticated_command_reaches_fenced_reducer",
+                (("impl", "SumeragiV2Adapter"),),
+                "authenticated ingress reducer-reachability proof",
+            ),
+            (
                 "ready_to_finish",
                 (("impl", "SumeragiV2Adapter"),),
                 "terminal adapter deferred-debt readiness fence",
@@ -47458,6 +47519,131 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
             errors,
         )
 
+        for item_name, delegate, description in (
+            (
+                "completion_unblocks_deferred_fence",
+                "SumeragiV2Adapter::completion_unblocks_deferred_fence(self, tag, command)",
+                "production exact signature-fence completion delegate",
+            ),
+            (
+                "command_is_blocked_by_deferred_fence",
+                "SumeragiV2Adapter::command_is_blocked_by_deferred_fence(self, tag, command)",
+                "production reducer-fenced command delegate",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == production_driver_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                continue
+            _require_rust_item_context(
+                runtime_path,
+                matching[0],
+                production_driver_context,
+                description,
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                matching[0],
+                delegate,
+                description,
+                errors,
+            )
+
+        bounded_ingress_context = (
+            (
+                "impl",
+                "<",
+                "C",
+                ":",
+                "ExactRuntimeCommandIdentity",
+                ">",
+                "BoundedIngress",
+                "<",
+                "C",
+                ">",
+            ),
+        )
+        observed_fence_ingress_items: dict[str, RustItem | None] = {}
+        for item_name, description in (
+            (
+                "pop_fence_completion_with_ownership",
+                "proof-gated exact fence-completion FIFO removal",
+            ),
+            (
+                "fence_blocked_lifecycle_owners",
+                "proof-gated reducer-fenced FIFO owner snapshot",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == bounded_ingress_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                observed_fence_ingress_items[item_name] = None
+                continue
+            item = matching[0]
+            observed_fence_ingress_items[item_name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                bounded_ingress_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[item_name],
+                description,
+                errors,
+            )
+        require_runtime_item_order(
+            observed_fence_ingress_items.get(
+                "pop_fence_completion_with_ownership"
+            ),
+            (
+                "let _ = self.oldest_lifecycle_ordinal()?;",
+                "let queue_before = self.ownership_projection();",
+                ".position(|queued| queued.class == CommandClass::Completion "
+                "&& matches_fence(queued))",
+                "identity.kind != RuntimeCommandKind::SignatureCompleted",
+                """
+let command = self
+    .commands
+    .remove(index)
+    .expect("selected fence completion remains present");
+""",
+                "debug_assert_eq!(queue_before.len, self.ownership_projection().len + 1);",
+            ),
+            "fence completion removal must validate all FIFO owners, select an "
+            "exact signature completion, and remove only that physical owner",
+        )
+        require_runtime_item_order(
+            observed_fence_ingress_items.get("fence_blocked_lifecycle_owners"),
+            (
+                "let _ = self.oldest_lifecycle_ordinal()?;",
+                "self.commands",
+                ".filter(|queued| is_blocked(queued))",
+                ".map(TaggedCommand::lifecycle_owner)",
+                ".collect()",
+            ),
+            "fence-blocked owner projection must validate the complete queue "
+            "before collecting only driver-proved physical owners",
+        )
+
         runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
         observed_runtime_ingress_items: dict[str, RustItem | None] = {}
         for item_name, digest_name, description in (
@@ -47784,6 +47970,100 @@ if matches!(
                 f"production causal-FIFO regression {name}",
                 errors,
             )
+        fence_runtime_regressions: dict[str, RustItem | None] = {}
+        for name in (
+            "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo",
+            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt",
+        ):
+            item = _require_rust_item(
+                runtime_path,
+                runtime_source,
+                name,
+                errors,
+            )
+            fence_runtime_regressions[name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                runtime_test_context,
+                f"production signature-fence dependency regression {name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[name],
+                f"production signature-fence dependency regression {name}",
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            fence_runtime_regressions.get(
+                "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo"
+            ),
+            """
+assert_eq!(
+    scheduling.selected,
+    RuntimeSelectedOwnerKind::FenceCompletion
+);
+assert!(scheduling.fence_completion_bypass);
+assert!(scheduling.validate_exact().is_ok());
+""",
+            "preowned fenced FIFO regression must retain an exact exceptional "
+            "dependency-bypass carrier",
+            errors,
+        )
+        retransmit_fence_regression = fence_runtime_regressions.get(
+            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            retransmit_fence_regression,
+            """
+runtime
+    .enqueue_signature(prepare_sign_tag, prepare_signature.clone())
+    .expect("enqueue an independently rooted signature callback");
+runtime
+    .enqueue_signature_with_owner(
+        prepare_sign_tag,
+        prepare_signature,
+        &prepare_effect_ownership[0],
+    )
+    .expect("enqueue exact Prepare signature completion");
+""",
+            "retransmit-debt regression must distinguish an independent "
+            "callback from the exact causally owned completion",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            retransmit_fence_regression,
+            """
+assert_eq!(
+    prepare_bypass.selected,
+    RuntimeSelectedOwnerKind::FenceCompletion
+);
+assert!(prepare_bypass.fence_completion_bypass);
+""",
+            "pre-timeout retransmit debt must be opened by an exact fence "
+            "completion bypass",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            retransmit_fence_regression,
+            """
+assert_eq!(
+    timeout_bypass.selected,
+    RuntimeSelectedOwnerKind::FenceCompletion
+);
+assert!(timeout_bypass.fence_completion_bypass);
+""",
+            "post-timeout retransmit debt must be opened by an exact fence "
+            "completion bypass",
+            errors,
+        )
         _require_rust_token_sequence(
             runtime_path,
             causal_runtime_regressions.get(
@@ -47870,6 +48150,21 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
             ),
         )
         runtime_items = (
+            (
+                "freeze_due_clock_owners",
+                "freeze_due_clock_owners",
+                "clock-owner freeze and cached-root alias fence",
+            ),
+            (
+                "minimum_active_lifecycle_ordinal",
+                "minimum_active_lifecycle_ordinal",
+                "complete active-lifecycle minimum wrapper",
+            ),
+            (
+                "minimum_active_lifecycle_ordinal_excluding",
+                "minimum_active_lifecycle_ordinal_excluding",
+                "proof-gated fence dependency minimum",
+            ),
             ("step", "runtime_step", "live serialized runtime step"),
             (
                 "step_recovery",
@@ -47880,6 +48175,11 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 "dispatch_one_adapter_deferred",
                 "dispatch_one_adapter_deferred",
                 "single adapter-deferred runtime dispatcher",
+            ),
+            (
+                "dispatch_one_fence_dependency",
+                "dispatch_one_fence_dependency",
+                "single proof-gated signature-fence dependency dispatcher",
             ),
         )
         observed_runtime_items: dict[str, RustItem | None] = {}
@@ -47907,6 +48207,90 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_items.get("minimum_active_lifecycle_ordinal"),
+            "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+            "the complete production lifecycle minimum excludes no owner",
+            errors,
+        )
+        runtime_minimum_excluding = observed_runtime_items.get(
+            "minimum_active_lifecycle_ordinal_excluding"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_minimum_excluding,
+            """
+let _ = self.ingress.oldest_active_lifecycle_ordinal()?;
+let mut minimum = self
+    .ingress
+    .dormant_local_fifo_reservations
+    .iter()
+    .map(|reservation| reservation.admission_ordinal)
+    .min();
+""",
+            "proof-gated lifecycle exclusion must validate every FIFO owner "
+            "and retain every restart-dormant Local FIFO reservation",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_minimum_excluding,
+            """
+if excluded.iter().any(|blocked| blocked == owner) {
+    return Ok(());
+}
+""",
+            "proof-gated lifecycle exclusion must remove only exact supplied "
+            "owner aliases",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_minimum_excluding,
+            """
+for queued in &self.ingress.commands {
+    observe(&queued.lifecycle_owner()?)?;
+}
+""",
+            "proof-gated lifecycle exclusion must project every physical FIFO owner",
+            errors,
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("step"),
+            (
+                "self.freeze_due_clock_owners(now)",
+                "self.dispatch_one_fence_dependency(now)?",
+                "self.dispatch_one_adapter_deferred(now)?",
+                "let selected_round_tag = self.round_tag;",
+            ),
+            "live scheduling must freeze clock owners, service one exact fence "
+            "dependency, then service ordinary adapter debt before arbitration",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("dispatch_one_fence_dependency"),
+            (
+                "if self.driver.deferred_work_is_serviceable()",
+                "let active_deferred = self.driver.all_deferred_admission_ordinals();",
+                "let global_minimum = self.minimum_active_lifecycle_ordinal()",
+                ".fence_blocked_lifecycle_owners(",
+                ".minimum_active_lifecycle_ordinal_excluding(&blocked_dependency_owners)",
+                ".pop_fence_completion_with_ownership(",
+                "driver.completion_unblocks_deferred_fence(queued.tag, &queued.command)",
+                "let dispatch = match self.driver.dispatch(command)",
+                "if dispatch.retry_unadmitted",
+                "self.accept_driver_dispatch(dispatch, &owner)?",
+                "RuntimeSelectedOwnerKind::FenceCompletion",
+                "self.retain_effect_ownership(",
+                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+                "self.driver.acknowledge_producer_handoff(token, evidence)",
+                "self.complete_leader_wire_runtime_owner(",
+                "self.observe_effects(now, &effects)",
+            ),
+            "the signature-fence dispatcher must prove the dependency edge, "
+            "remove one exact completion, transfer every successor, and retire "
+            "the producer in one serialized macro-step",
+        )
         observed_runtime_ownership_items: dict[str, RustItem | None] = {}
         for item_name, description in (
             (
@@ -70603,8 +70987,34 @@ self.runtime
     _require_rust_token_sequence(
         runtime_path,
         runtime_minimum,
-        "self.ingress.oldest_active_lifecycle_ordinal()",
-        "the complete runtime minimum must include latent Local FIFO reservations",
+        "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+        "the exact-Serve runtime minimum must exclude no active owner",
+        errors,
+    )
+    runtime_minimum_excluding = runtime_items.get(
+        "minimum_active_lifecycle_ordinal_excluding"
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_minimum_excluding,
+        "let _ = self.ingress.oldest_active_lifecycle_ordinal()?;",
+        "the exact-Serve runtime minimum must deeply validate every FIFO and "
+        "latent Local FIFO owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_minimum_excluding,
+        """
+let mut minimum = self
+    .ingress
+    .dormant_local_fifo_reservations
+    .iter()
+    .map(|reservation| reservation.admission_ordinal)
+    .min();
+""",
+        "the exact-Serve runtime minimum must retain latent Local FIFO "
+        "reservations as unconditional predecessors",
         errors,
     )
     runtime_uses = runtime_items.get("active_lifecycle_uses_ordinal")
