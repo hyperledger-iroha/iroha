@@ -69,6 +69,7 @@ PROFILES = {
             "HOME",
             "IROHA_NATIVE_LIBRARY_PATH",
             "IROHA_REQUIRE_KAGEMUSHA_NATIVE",
+            "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION",
             "JAVA_HOME",
             "LANG",
             "LC_ALL",

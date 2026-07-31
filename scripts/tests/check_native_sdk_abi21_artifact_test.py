@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from scripts import check_native_sdk_abi21_artifact as checker
+from scripts import run_mobile_hermetic_command as hermetic_runner
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -520,7 +521,7 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
         'export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;',
         '"connectNoritoBridgeAbiVersion"',
         '"sorafsValidateAppealFinanceCancelAssetLockJson"',
-        "sourceTreeClean !== true",
+        "buildProvenance.source_tree_clean !== true",
     ):
         assert token in node_copy
 
@@ -696,4 +697,8 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
     assert "sys.version_info[:2] != (3, 12)" in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
+    assert (
+        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
+        in hermetic_runner.PROFILES["gradle-jvm"]
+    )
     assert "--sdk c-jni" in jni_lane
